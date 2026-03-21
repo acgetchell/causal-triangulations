@@ -1,6 +1,6 @@
-# causal-dynamical-triangulations
+# causal-triangulations
 
-[![CI](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/ci.yml/badge.svg)](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/ci.yml) [![rust-clippy analyze](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/rust-clippy.yml/badge.svg)](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/rust-clippy.yml) [![Codecov](https://codecov.io/gh/acgetchell/causal-dynamical-triangulations/graph/badge.svg?token=CsbOJBypGC)](https://codecov.io/gh/acgetchell/causal-dynamical-triangulations) [![Kani CI](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/kani.yml/badge.svg)](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/kani.yml) [![Audit dependencies](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/audit.yml/badge.svg)](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/audit.yml)
+[![CI](https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml) [![rust-clippy analyze](https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml) [![Codecov](https://codecov.io/gh/acgetchell/causal-triangulations/graph/badge.svg?token=CsbOJBypGC)](https://codecov.io/gh/acgetchell/causal-triangulations) [![Kani CI](https://github.com/acgetchell/causal-triangulations/actions/workflows/kani.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/kani.yml) [![Audit dependencies](https://github.com/acgetchell/causal-triangulations/actions/workflows/audit.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/audit.yml)
 
 Causal Dynamical Triangulations for quantum gravity in [Rust], built on fast Delaunay triangulation primitives.
 
@@ -42,8 +42,8 @@ We welcome contributions! Here's a 30-second quickstart:
 
 ```bash
 # Clone and setup
-git clone https://github.com/acgetchell/causal-dynamical-triangulations.git
-cd causal-dynamical-triangulations
+git clone https://github.com/acgetchell/causal-triangulations.git
+cd causal-triangulations
 
 # Traditional approach
 cargo build && cargo test
@@ -84,7 +84,7 @@ just run-example     # Basic simulation
 See [`examples/basic_cdt.rs`](examples/basic_cdt.rs) for a complete working example:
 
 ```rust
-use causal_dynamical_triangulations::{
+use causal_triangulations::{
     CdtConfig, MetropolisConfig, ActionConfig, MetropolisAlgorithm,
     geometry::CdtTriangulation2D,
 };
@@ -173,7 +173,7 @@ cargo kani --harness verify_action_config
 cargo kani --harness verify_regge_action_properties
 ```
 
-**Toolchain note:** Kani ships its own pinned nightly and does not read `rust-toolchain.toml`. We install `kani-verifier` 0.66.0 (bundled rustc 1.93.0-nightly) for reproducibility; regular builds/tests continue to use the workspace MSRV (1.93.0).
+**Toolchain note:** Kani ships its own pinned nightly and does not read `rust-toolchain.toml`. We install `kani-verifier` 0.66.0 (bundled rustc 1.94.0-nightly) for reproducibility; regular builds/tests continue to use the workspace MSRV (1.94.0).
 
 ### Workflow behavior
 

@@ -18,7 +18,7 @@
 //!
 //! ```rust,no_run
 //! // Example would require command line arguments, so we skip execution
-//! use causal_dynamical_triangulations::{CdtConfig, run_simulation};
+//! use causal_triangulations::{CdtConfig, run_simulation};
 //! // CdtConfig requires configuration, so this is marked no_run
 //! ```
 
@@ -56,9 +56,9 @@ pub mod geometry {
     // Type aliases for common backend combinations
     /// 2D Delaunay backend (most common configuration).
     ///
-    /// Uses `f64` coordinates; the `i32` type parameters are the per-vertex and per-cell data
-    /// payloads.
-    pub type DelaunayBackend2D = backends::delaunay::DelaunayBackend<i32, i32, 2>;
+    /// Uses `f64` coordinates with `()` vertex data and `i32` cell data.
+    /// CDT metadata is tracked separately by [`CdtTriangulation`](crate::cdt::triangulation::CdtTriangulation).
+    pub type DelaunayBackend2D = backends::delaunay::DelaunayBackend<(), i32, 2>;
 
     /// Default backend type for 2D CDT simulations
     pub type DefaultBackend = DelaunayBackend2D;
@@ -85,6 +85,9 @@ pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
 pub use cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig, SimulationResultsBackend};
 pub use config::{CdtConfig, TestConfig};
 pub use errors::{CdtError, CdtResult};
+
+use cdt::metropolis::Measurement;
+use std::time::Duration;
 
 // Trait-based triangulation (recommended)
 pub use cdt::triangulation::CdtTriangulation;
@@ -156,9 +159,6 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<cdt::metropolis::Simulati
         Ok(results)
     } else {
         // Just return basic simulation results with the triangulation
-        use cdt::metropolis::Measurement;
-        use std::time::Duration;
-
         let initial_action = config.to_action_config().calculate_action(
             u32::try_from(triangulation.vertex_count()).unwrap_or_default(),
             u32::try_from(triangulation.edge_count()).unwrap_or_default(),

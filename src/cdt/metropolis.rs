@@ -5,6 +5,7 @@
 
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveType};
+use crate::geometry::traits::TriangulationQuery;
 use num_traits::cast::NumCast;
 use std::time::Instant;
 
@@ -122,8 +123,6 @@ impl MetropolisAlgorithm {
         &mut self,
         triangulation: crate::geometry::CdtTriangulation2D,
     ) -> SimulationResultsBackend {
-        use crate::geometry::traits::TriangulationQuery;
-
         let start_time = Instant::now();
         let mut steps = Vec::new();
         let mut measurements = Vec::new();

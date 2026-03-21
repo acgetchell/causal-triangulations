@@ -11,9 +11,11 @@
     clippy::uninlined_format_args
 )]
 
-use causal_dynamical_triangulations::cdt::triangulation::CdtTriangulation;
+use causal_triangulations::cdt::triangulation::CdtTriangulation;
 
-/// Test a seed with given parameters and return Euler characteristic if valid
+/// Test a seed with given parameters and return Euler characteristic if valid.
+///
+/// Accepts χ=1 (planar with boundary, typical for random point sets) or χ=2 (closed surface).
 fn test_seed(seed: u64, vertices: u32, timeslices: u32) -> Option<(i32, usize, usize, usize)> {
     match CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed) {
         Ok(tri) => {
@@ -22,8 +24,8 @@ fn test_seed(seed: u64, vertices: u32, timeslices: u32) -> Option<(i32, usize, u
             let f = tri.face_count() as i32;
             let euler = v - e + f;
 
-            // We specifically want Euler characteristic = 2 for closed triangulations
-            if euler == 2 {
+            // Accept Euler characteristic 1 (planar with boundary) or 2 (closed surface)
+            if euler == 1 || euler == 2 {
                 Some((euler, v as usize, e as usize, f as usize))
             } else {
                 None
@@ -51,7 +53,7 @@ fn main() {
 
         let mut good_seeds = Vec::new();
 
-        // Test seeds from 1 to 1000 to find Euler characteristic = 2
+        // Test seeds from 1 to 1000 to find valid Euler characteristic (1 or 2)
         for seed in 1..=1000 {
             if let Some((euler, v, e, f)) = test_seed(seed, *vertices, *timeslices) {
                 good_seeds.push((seed, euler, v, e, f));
@@ -69,7 +71,7 @@ fn main() {
         }
 
         if good_seeds.is_empty() {
-            println!("  ❌ No seeds with Euler=2 found in range 1-1000");
+            println!("  ❌ No seeds with valid Euler characteristic found in range 1-1000");
         } else {
             println!("  ✅ Found {} valid seeds", good_seeds.len());
             println!("  Recommended seed: {}", good_seeds[0].0);

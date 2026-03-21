@@ -6,7 +6,7 @@
 //! - Run a basic CDT simulation
 //! - Extract and display results
 
-use causal_dynamical_triangulations::{CdtConfig, CdtTriangulation, MetropolisAlgorithm};
+use causal_triangulations::{CdtConfig, CdtTriangulation, MetropolisAlgorithm};
 use log::{LevelFilter, info};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

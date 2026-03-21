@@ -1,5 +1,5 @@
 # shellcheck disable=SC2148
-# Justfile for causal-dynamical-triangulations development workflow
+# Justfile for causal-triangulations development workflow
 # Install just: https://github.com/casey/just
 # Usage: just <command> or just --list
 
@@ -51,7 +51,7 @@ _ensure-taplo:
 _ensure-typos:
     #!/usr/bin/env bash
     set -euo pipefail
-    command -v typos >/dev/null || { echo "❌ 'typos' not found. See 'just setup' or install: cargo install typos-cli"; exit 1; }
+    command -v typos >/dev/null || { echo "❌ 'typos' not found. See 'just setup-tools' or install: cargo install typos-cli"; exit 1; }
 
 # Internal helper: ensure uv is installed
 _ensure-uv:
@@ -117,13 +117,13 @@ check-fast:
 
 # CI simulation: comprehensive validation (matches .github/workflows/ci.yml)
 # Runs: checks + all tests (Rust + Python) + examples + bench compile
-ci: check bench-compile test-all
+ci: check bench-compile test-all examples
     @echo "🎯 CI checks complete!"
 
 # CI with performance baseline
 ci-baseline tag="ci":
-    {{just_executable()}} ci
-    {{just_executable()}} perf-baseline {{tag}}
+    just ci
+    just perf-baseline {{tag}}
 
 # Clean build artifacts
 clean:
@@ -164,7 +164,7 @@ examples:
     ./scripts/run_all_examples.sh
 
 # Fix (mutating): apply formatters/auto-fixes
-fix: toml-fmt fmt python-fix shell-fmt markdown-fix
+fix: toml-fmt fmt python-fix shell-fmt markdown-fix yaml-fix
     @echo "✅ Fixes applied!"
 
 fmt:
@@ -235,7 +235,7 @@ kani-fast:
 # All linting: code + documentation + configuration
 lint: lint-code lint-docs lint-config
 
-# Code linting: Rust (fmt-check, clippy, docs) + Python (ruff, ty, mypy) + Shell scripts
+# Code linting: Rust (fmt-check, clippy, docs) + Python (ruff, ty) + Shell scripts
 lint-code: fmt-check clippy doc-check python-lint shell-lint
 
 # Configuration validation: JSON, TOML, YAML, GitHub Actions workflows
@@ -298,9 +298,10 @@ perf-report file="": _ensure-uv
 perf-trends days="7": _ensure-uv
     uv run performance-analysis --trends {{days}}
 
-python-check: _ensure-uv python-typecheck
+python-check: _ensure-uv
     uv run ruff format --check scripts/
     uv run ruff check scripts/
+    just python-typecheck
 
 # Python code quality
 python-fix: _ensure-uv
@@ -311,7 +312,6 @@ python-lint: python-check
 
 python-typecheck: _ensure-uv
     uv run ty check scripts/
-    cd scripts && uv run mypy . --exclude tests
 
 # Running the binary
 run *args:
@@ -330,61 +330,13 @@ run-simulation:
 # cspell:ignore oldname newname
 
 # Development setup
-setup:
+setup: setup-tools
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "Setting up causal-dynamical-triangulations development environment..."
-    echo "Note: Rust toolchain and components are managed by rust-toolchain.toml"
+    echo "Setting up causal-triangulations development environment..."
+    echo "Note: Rust toolchain and components managed by rust-toolchain.toml"
     echo ""
-    echo "Installing Rust components..."
-    rustup component add clippy rustfmt rust-docs rust-src
-    echo ""
-    echo "Additional tools (will check if installed):"
-    for tool in uv actionlint shfmt shellcheck jq taplo yamllint dprint typos cargo-tarpaulin git-cliff; do
-        if command -v "$tool" &> /dev/null; then
-            echo "  ✓ $tool installed"
-        else
-            echo "  ✗ $tool NOT installed"
-            case "$tool" in
-                uv)
-                    echo "    Install: https://github.com/astral-sh/uv"
-                    echo "    macOS: brew install uv"
-                    echo "    Linux/WSL: curl -LsSf https://astral.sh/uv/install.sh | sh"
-                    ;;
-                actionlint|yamllint)
-                    echo "    macOS: brew install $tool"
-                    echo "    pip: pip install $tool"
-                    echo "    uv: uv tool install $tool"
-                    ;;
-                shfmt|shellcheck|jq|taplo)
-                    echo "    macOS: brew install $tool"
-                    if [ "$tool" = "taplo" ]; then
-                        echo "    Or: cargo install taplo-cli"
-                    fi
-                    ;;
-                dprint)
-                    echo "    Install: cargo install dprint"
-                    ;;
-                typos)
-                    echo "    Install: cargo install typos-cli"
-                    ;;
-                cargo-tarpaulin)
-                    echo "    Install: cargo install cargo-tarpaulin"
-                    ;;
-                git-cliff)
-                    echo "    macOS: brew install git-cliff"
-                    echo "    Or: cargo install git-cliff"
-                    ;;
-            esac
-        fi
-    done
-    echo ""
-    if ! command -v uv &> /dev/null; then
-        echo "❌ 'uv' is required but not installed. Please install it first (see instructions above)."
-        exit 1
-    fi
-    echo ""
-    echo "Installing Python tooling (ruff, mypy, pytest, and related dependencies)..."
+    echo "Installing Python tooling..."
     uv sync --group dev
     echo ""
     kani_version="0.66.0"
@@ -400,6 +352,127 @@ setup:
     echo "Building project..."
     cargo build
     echo "✅ Setup complete! Run 'just help-workflows' to see available commands."
+
+# Development tooling installation (best-effort)
+setup-tools:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "🔧 Ensuring tooling required by just recipes is installed..."
+    echo ""
+
+    os="$(uname -s || true)"
+
+    have() { command -v "$1" >/dev/null 2>&1; }
+
+    install_with_brew() {
+        local formula="$1"
+        if brew list --versions "$formula" >/dev/null 2>&1; then
+            echo "  ✓ $formula (brew)"
+        else
+            echo "  ⏳ Installing $formula (brew)..."
+            HOMEBREW_NO_AUTO_UPDATE=1 brew install "$formula"
+        fi
+    }
+
+    brew_available=0
+    if have brew; then
+        brew_available=1
+        echo "Using Homebrew (brew) to install missing tools..."
+        install_with_brew uv
+        install_with_brew jq
+        install_with_brew taplo
+        install_with_brew yamllint
+        install_with_brew shfmt
+        install_with_brew shellcheck
+        install_with_brew actionlint
+        echo ""
+    else
+        echo "⚠️  'brew' not found. Skipping Homebrew installs."
+        if [[ "$os" == "Darwin" ]]; then
+            echo "Install Homebrew from https://brew.sh, or ensure required tools are on PATH."
+        else
+            echo "Install required tools via your system package manager, or ensure they are on PATH."
+        fi
+        echo "Required tools: uv, jq, taplo, yamllint, shfmt, shellcheck, actionlint, git-cliff, dprint, typos"
+        echo ""
+    fi
+
+    echo "Ensuring Rust toolchain + components..."
+    if ! have rustup; then
+        echo "❌ 'rustup' not found. Install Rust via https://rustup.rs and re-run: just setup-tools"
+        exit 1
+    fi
+    rustup component add clippy rustfmt rust-docs rust-src
+    echo ""
+
+    echo "Ensuring cargo tools..."
+    if ! have dprint; then
+        echo "  ⏳ Installing dprint (cargo)..."
+        cargo install --locked dprint
+    else
+        echo "  ✓ dprint"
+    fi
+
+    if ! have typos; then
+        echo "  ⏳ Installing typos-cli (cargo)..."
+        cargo install --locked typos-cli
+    else
+        echo "  ✓ typos"
+    fi
+
+    if ! have git-cliff; then
+        echo "  ⏳ Installing git-cliff (cargo)..."
+        cargo install --locked git-cliff
+    else
+        echo "  ✓ git-cliff"
+    fi
+
+    if ! have cargo-tarpaulin; then
+        if [[ "$os" == "Linux" ]]; then
+            echo "  ⏳ Installing cargo-tarpaulin (cargo)..."
+            cargo install --locked cargo-tarpaulin
+        else
+            echo "  ⚠️  Skipping cargo-tarpaulin install on $os (coverage is typically Linux-only)"
+        fi
+    else
+        echo "  ✓ cargo-tarpaulin"
+    fi
+
+    echo ""
+    echo "Verifying required commands are available..."
+    missing=0
+
+    cmds=(uv jq taplo yamllint shfmt shellcheck actionlint git-cliff dprint typos)
+    if [[ "$os" == "Linux" ]]; then
+        cmds+=(cargo-tarpaulin)
+    fi
+
+    for cmd in "${cmds[@]}"; do
+        if have "$cmd"; then
+            echo "  ✓ $cmd"
+        else
+            echo "  ✗ $cmd"
+            missing=1
+        fi
+    done
+    if [ "$missing" -ne 0 ]; then
+        echo ""
+        echo "❌ Some required tools are still missing."
+        if [ "$brew_available" -ne 0 ]; then
+            echo "Fix the installs above (brew) and re-run: just setup-tools"
+        else
+            if [[ "$os" == "Darwin" ]]; then
+                echo "Install Homebrew (https://brew.sh) or install the missing tools manually, then re-run: just setup-tools"
+            else
+                echo "Install the missing tools via your system package manager, then re-run: just setup-tools"
+            fi
+        fi
+        exit 1
+    fi
+
+    echo ""
+    echo "✅ Tooling setup complete."
 
 # Shell scripts: lint/check (non-mutating)
 shell-check: _ensure-shellcheck _ensure-shfmt
@@ -468,7 +541,7 @@ spell-check: _ensure-typos
     done < <(git status --porcelain -z --ignored=no)
     if [ "${#files[@]}" -gt 0 ]; then
         # Exclude typos.toml itself: it intentionally contains allowlisted fragments.
-        printf '%s\0' "${files[@]}" | xargs -0 -n100 typos --force-exclude --exclude typos.toml --
+        printf '%s\0' "${files[@]}" | xargs -0 -n100 typos --config typos.toml --force-exclude --exclude typos.toml --
     else
         echo "No modified files to spell-check."
     fi
@@ -476,11 +549,8 @@ spell-check: _ensure-typos
 # Testing: fast tests (lib + doc)
 test: test-lib test-doc
 
-# Testing: CI suite (lib + integration + examples)
-test-ci: test-lib test-integration test-examples
-
-# Testing: comprehensive suite (CI + doc + Python)
-test-all: test-ci test-doc test-python
+# Testing: comprehensive suite (lib + doc + integration + Python)
+test-all: test test-integration test-python
     @echo "✅ All tests passed!"
 
 test-lib:
@@ -499,7 +569,7 @@ test-cli:
     cargo test --test cli --verbose
 
 test-python: _ensure-uv
-    uv run pytest
+    uv run python -m pytest
 
 test-release:
     cargo test --release
@@ -558,6 +628,33 @@ toml-lint: _ensure-taplo
         taplo lint "${files[@]}"
     else
         echo "No TOML files found to lint."
+    fi
+
+yaml-fix:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    files=()
+    while IFS= read -r -d '' file; do
+        files+=("$file")
+    done < <(git ls-files -z '*.yml' '*.yaml')
+    if [ "${#files[@]}" -gt 0 ]; then
+        cmd=()
+        if command -v prettier >/dev/null; then
+            cmd=(prettier --write --print-width 120)
+        elif command -v npx >/dev/null; then
+            cmd=(npx)
+            if npx --help 2>&1 | grep -q -- '--yes'; then
+                cmd+=(--yes)
+            fi
+            cmd+=(prettier --write --print-width 120)
+        else
+            echo "⚠️  Neither 'prettier' nor 'npx' found. Skipping YAML formatting."
+            exit 0
+        fi
+        echo "📝 prettier --write (YAML, ${#files[@]} files)"
+        printf '%s\0' "${files[@]}" | xargs -0 -n100 "${cmd[@]}"
+    else
+        echo "No YAML files found to format."
     fi
 
 yaml-lint: _ensure-yamllint

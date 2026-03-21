@@ -154,7 +154,6 @@ def run_safe_command(command: str, args: list[str], cwd: Path | None = None, **k
     Raises:
         ExecutableNotFoundError: If command is not found
         subprocess.CalledProcessError: If command fails and check=True
-        subprocess.TimeoutExpired: If command times out
     """
     command_path = get_safe_executable(command)
     run_kwargs = _build_run_kwargs(f"run_safe_command for {command}", **kwargs)

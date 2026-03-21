@@ -4,6 +4,7 @@
 //! with any geometry backend implementing the trait interfaces.
 
 use crate::errors::CdtResult;
+use crate::geometry::backends::delaunay::DelaunayBackend;
 use crate::geometry::operations::TriangulationOps;
 use crate::geometry::traits::TriangulationMut;
 use std::time::Instant;
@@ -344,8 +345,6 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
         time_slices: u32,
         dimension: u8,
     ) -> crate::errors::CdtResult<Self> {
-        use crate::geometry::backends::delaunay::DelaunayBackend;
-
         // Validate dimension first
         if dimension != 2 {
             return Err(crate::errors::CdtError::UnsupportedDimension(
@@ -378,8 +377,6 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
         dimension: u8,
         seed: u64,
     ) -> crate::errors::CdtResult<Self> {
-        use crate::geometry::backends::delaunay::DelaunayBackend;
-
         // Validate dimension first
         if dimension != 2 {
             return Err(crate::errors::CdtError::UnsupportedDimension(

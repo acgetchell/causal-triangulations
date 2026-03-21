@@ -3,7 +3,7 @@
 //! This is the main entry point for the CDT-RS application that creates
 //! and runs causal dynamical triangulations simulations.
 
-use causal_dynamical_triangulations::{CdtConfig, run_simulation};
+use causal_triangulations::{CdtConfig, run_simulation};
 
 fn main() {
     // Initialize logging

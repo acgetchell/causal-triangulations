@@ -35,7 +35,7 @@ use crate::geometry::traits::{
     FlipResult, GeometryBackend, SubdivisionResult, TriangulationMut, TriangulationQuery,
 };
 use delaunay::core::delaunay_triangulation::DelaunayTriangulation;
-use delaunay::geometry::kernel::FastKernel;
+use delaunay::geometry::kernel::RobustKernel;
 use delaunay::prelude::*;
 use std::cell::RefCell;
 use std::marker::PhantomData;
@@ -45,29 +45,11 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct DelaunayBackend<VertexData, CellData, const D: usize>
 where
-    VertexData: delaunay::core::DataType
-        + Copy
-        + Clone
-        + std::fmt::Debug
-        + Eq
-        + Ord
-        + std::hash::Hash
-        + serde::Serialize
-        + for<'de> serde::Deserialize<'de>
-        + 'static,
-    CellData: delaunay::core::DataType
-        + Copy
-        + Clone
-        + std::fmt::Debug
-        + Eq
-        + Ord
-        + std::hash::Hash
-        + serde::Serialize
-        + for<'de> serde::Deserialize<'de>
-        + 'static,
+    VertexData: delaunay::core::DataType + 'static,
+    CellData: delaunay::core::DataType + 'static,
 {
     /// The underlying Delaunay triangulation from the delaunay crate
-    dt: Arc<DelaunayTriangulation<FastKernel<f64>, VertexData, CellData, D>>,
+    dt: Arc<DelaunayTriangulation<RobustKernel<f64>, VertexData, CellData, D>>,
 
     /// Lazily initialized cache for expensive topology queries (edges, edge endpoints, etc.).
     ///
@@ -113,7 +95,7 @@ struct DelaunayEdgeCache {
 
 impl DelaunayEdgeCache {
     fn build<VertexData, CellData, const D: usize>(
-        dt: &DelaunayTriangulation<FastKernel<f64>, VertexData, CellData, D>,
+        dt: &DelaunayTriangulation<RobustKernel<f64>, VertexData, CellData, D>,
     ) -> Self
     where
         VertexData: delaunay::core::DataType,
@@ -170,31 +152,13 @@ pub enum DelaunayError {
 
 impl<VertexData, CellData, const D: usize> DelaunayBackend<VertexData, CellData, D>
 where
-    VertexData: delaunay::core::DataType
-        + Copy
-        + Clone
-        + std::fmt::Debug
-        + Eq
-        + Ord
-        + std::hash::Hash
-        + serde::Serialize
-        + for<'de> serde::Deserialize<'de>
-        + 'static,
-    CellData: delaunay::core::DataType
-        + Copy
-        + Clone
-        + std::fmt::Debug
-        + Eq
-        + Ord
-        + std::hash::Hash
-        + serde::Serialize
-        + for<'de> serde::Deserialize<'de>
-        + 'static,
+    VertexData: delaunay::core::DataType + 'static,
+    CellData: delaunay::core::DataType + 'static,
 {
     /// Create a new Delaunay backend from an existing Delaunay triangulation
     #[must_use]
     pub fn from_triangulation(
-        dt: DelaunayTriangulation<FastKernel<f64>, VertexData, CellData, D>,
+        dt: DelaunayTriangulation<RobustKernel<f64>, VertexData, CellData, D>,
     ) -> Self {
         Self {
             dt: Arc::new(dt),
@@ -207,7 +171,7 @@ where
     #[must_use]
     pub fn triangulation(
         &self,
-    ) -> &DelaunayTriangulation<FastKernel<f64>, VertexData, CellData, D> {
+    ) -> &DelaunayTriangulation<RobustKernel<f64>, VertexData, CellData, D> {
         &self.dt
     }
 
@@ -488,14 +452,14 @@ where
     }
 
     fn is_valid(&self) -> bool {
-        // Basic validation: check that the triangulation has enough vertices for its
-        // dimension and contains at least one cell.
-        //
-        // The upstream `delaunay` crate exposes a deeper `is_valid()` that validates
-        // internal neighbor pointer consistency. Unfortunately, that check can fail for
-        // some randomly generated triangulations (even when counts/iteration work), which
-        // makes tests flaky. For this crate, we treat "valid" as "structurally usable".
-        self.dt.number_of_vertices() > D && self.dt.number_of_cells() > 0
+        // Structural minimum: must have enough vertices and at least one cell.
+        if self.dt.number_of_vertices() <= D || self.dt.number_of_cells() == 0 {
+            return false;
+        }
+
+        // v0.7.2: check coherent orientation (first-class invariant).
+        // This validates that adjacent cells induce opposite orientations on shared facets.
+        self.dt.tds().is_coherently_oriented()
     }
 }
 
@@ -590,46 +554,37 @@ where
     }
 }
 
-// Additional implementation for types that support full Delaunay validation
 impl<VertexData, CellData, const D: usize> DelaunayBackend<VertexData, CellData, D>
 where
-    VertexData: delaunay::core::DataType
-        + Copy
-        + Clone
-        + std::fmt::Debug
-        + Eq
-        + Ord
-        + std::hash::Hash
-        + serde::Serialize
-        + for<'de> serde::Deserialize<'de>
-        + 'static,
-    CellData: delaunay::core::DataType
-        + Copy
-        + Clone
-        + std::fmt::Debug
-        + Eq
-        + Ord
-        + std::hash::Hash
-        + serde::Serialize
-        + for<'de> serde::Deserialize<'de>
-        + 'static,
+    VertexData: delaunay::core::DataType + 'static,
+    CellData: delaunay::core::DataType + 'static,
     [f64; D]: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
-    /// Check if the triangulation satisfies the Delaunay property using `Tds::is_valid()`
-    /// This method is only available for types that satisfy the necessary trait bounds
+    /// Check if the triangulation satisfies the Delaunay property.
+    ///
+    /// Uses the upstream deep validation (`DelaunayTriangulation::is_valid`) which checks
+    /// neighbor pointer consistency, Euler characteristic, coherent orientation, and the
+    /// Delaunay (in-sphere) property.
     #[must_use]
     pub fn is_delaunay(&self) -> bool {
-        // The delaunay crate constructs Delaunay triangulations, but its deep validation
-        // (`DelaunayTriangulation::is_valid`) can fail for some generated point sets due to
-        // internal consistency checks.
-        //
-        // For now, treat "Delaunay" as "basically valid" for use by higher-level CDT code.
-        self.is_valid()
+        self.dt.is_valid().is_ok()
+    }
+
+    /// Returns the high-level topology kind (`Euclidean`, `Toroidal`, etc.) of the
+    /// underlying triangulation.
+    ///
+    /// This exposes the [`GlobalTopology`](delaunay::topology::traits::GlobalTopology)
+    /// metadata attached by [`DelaunayTriangulationBuilder`](delaunay::core::builder::DelaunayTriangulationBuilder) at construction time.
+    #[must_use]
+    pub fn topology_kind(&self) -> delaunay::topology::traits::TopologyKind {
+        self.dt.topology_kind()
     }
 }
 
-/// Type alias for common 2D Delaunay backend
-pub type DelaunayBackend2D = DelaunayBackend<i32, i32, 2>;
+/// Type alias for common 2D Delaunay backend.
+///
+/// Uses `()` vertex data — CDT metadata is tracked at the [`CdtTriangulation`](crate::cdt::triangulation::CdtTriangulation) level.
+pub type DelaunayBackend2D = DelaunayBackend<(), i32, 2>;
 
 /// Counts edges in any Tds structure using a consistent algorithm.
 /// This is the canonical edge counting implementation used throughout the codebase.
@@ -1061,13 +1016,7 @@ mod tests {
     fn test_topology_consistency() {
         // Test that topology is consistent across different query methods
         // Use a fixed seed for reproducibility and to avoid random topology issues
-        let dt = delaunay::geometry::util::generate_random_triangulation::<f64, i32, i32, 2>(
-            6,
-            (0.0, 10.0),
-            None,
-            Some(42),
-        )
-        .expect("Failed to generate triangulation with fixed seed");
+        let dt = crate::util::generate_seeded_delaunay2(6, (0.0, 10.0), 42);
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let vertex_count = backend.vertex_count();
@@ -1122,5 +1071,50 @@ mod tests {
             .face_vertices(&faces[0])
             .expect("Should get face vertices");
         assert_eq!(face_vertices.len(), 3, "Face should have 3 vertices");
+    }
+
+    #[test]
+    fn test_topology_kind_is_euclidean() {
+        // Triangulations built via the builder default to Euclidean topology
+        let dt = crate::util::generate_random_delaunay2(5, (0.0, 10.0));
+        let backend = DelaunayBackend::from_triangulation(dt);
+
+        assert_eq!(
+            backend.topology_kind(),
+            delaunay::topology::traits::TopologyKind::Euclidean,
+            "Default builder construction should produce Euclidean topology"
+        );
+    }
+
+    #[test]
+    fn test_is_valid_checks_coherent_orientation() {
+        // is_valid() now delegates to is_coherently_oriented();
+        // verify it agrees with is_delaunay() for well-formed triangulations
+        let dt = crate::util::generate_seeded_delaunay2(8, (0.0, 10.0), 99);
+        let backend = DelaunayBackend::from_triangulation(dt);
+
+        let valid = backend.is_valid();
+        let delaunay = backend.is_delaunay();
+
+        assert!(valid, "Seeded triangulation should be valid");
+        // A valid Delaunay triangulation is always coherently oriented,
+        // so is_delaunay() implies is_valid()
+        if delaunay {
+            assert!(valid, "is_delaunay() should imply is_valid()");
+        }
+    }
+
+    #[test]
+    fn test_builder_produces_correct_vertex_count() {
+        // Verify the builder path in generate_delaunay2_with_context preserves vertex count
+        for n in [3, 5, 10, 20] {
+            let dt = crate::util::generate_delaunay2_with_context(n, (0.0, 10.0), Some(42))
+                .expect("Builder should succeed");
+            assert_eq!(
+                dt.number_of_vertices(),
+                n as usize,
+                "Builder should produce exactly {n} vertices"
+            );
+        }
     }
 }

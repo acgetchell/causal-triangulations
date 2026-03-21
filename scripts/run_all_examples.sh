@@ -12,7 +12,7 @@ error_exit() {
 # Help function
 show_help() {
 	cat <<EOF
-run_all_examples.sh - Run all examples in the causal-dynamical-triangulations project
+run_all_examples.sh - Run all examples in the causal-triangulations project
 
 USAGE:
     ./scripts/run_all_examples.sh [OPTIONS]
@@ -47,7 +47,7 @@ SEE ALSO:
 EOF
 }
 
-# Script to run all examples in the causal-dynamical-triangulations project
+# Script to run all examples in the causal-triangulations project
 
 # Parse command line arguments
 for arg in "$@"; do
@@ -84,7 +84,7 @@ PROJECT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && cd .. && pwd)
 # Ensure we're executing from the project root
 cd "${PROJECT_ROOT}"
 
-echo "Running all examples for causal-dynamical-triangulations project..."
+echo "Running all examples for causal-triangulations project..."
 echo "=============================================="
 
 # Discover Cargo examples deterministically:

@@ -4,10 +4,10 @@
 
 ### Existing Tests
 
-- **Unit tests** (`src/**`): 155 tests spread across all source modules
+- **Unit tests** (`src/**`): 158 tests spread across all source modules
 - **Integration tests** (`tests/integration_tests.rs`): 8 tests covering simulation workflows, topology, caching, error handling
 - **CLI tests** (`tests/cli.rs`): 10 tests for command-line interface and validation
-- **Python tests** (`scripts/tests/`): 408 tests for benchmark, changelog, and hardware utilities
+- **Python tests** (`scripts/tests/`): 455 tests for benchmark, changelog, hardware, and subprocess utilities
 
 ### Coverage Gaps Identified
 

@@ -1,4 +1,4 @@
-# cliff.toml - git-cliff configuration for causal-dynamical-triangulations
+# cliff.toml - git-cliff configuration for causal-triangulations
 #
 # This file generates a simple, deterministic *base* changelog from git history.
 # The existing Python pipeline (scripts/changelog_utils.py) then applies:
@@ -30,7 +30,7 @@ body = """
 {% endfor %}
 {% if previous %}
 {% if previous.version %}
-## [{{ version }}](https://github.com/acgetchell/causal-dynamical-triangulations/compare/{{ previous.version }}...{{ version }}) - {{ release_date }}
+## [{{ version }}](https://github.com/acgetchell/causal-triangulations/compare/{{ previous.version }}...{{ version }}) - {{ release_date }}
 {% else %}
 ## {{ version }} - {{ release_date }}
 {% endif %}
@@ -40,7 +40,7 @@ body = """
 {% else %}
 {% if previous %}
 {% if previous.version %}
-## [Unreleased](https://github.com/acgetchell/causal-dynamical-triangulations/compare/{{ previous.version }}...HEAD)
+## [Unreleased](https://github.com/acgetchell/causal-triangulations/compare/{{ previous.version }}...HEAD)
 {% else %}
 ## Unreleased
 {% endif %}
@@ -67,7 +67,7 @@ body = """
 {% set pr_ref = subject | find_regex(pat="\\(#\\d+\\)$") | first %}
 {% set pr_num = pr_ref | replace_regex(from="[^0-9]", to="") %}
 {% set pr_title = subject | replace_regex(from="\\s*\\(#\\d+\\)$", to="") %}
-- {{ pr_title }} [`#{{ pr_num }}`](https://github.com/acgetchell/causal-dynamical-triangulations/pull/{{ pr_num }})
+- {{ pr_title }} [`#{{ pr_num }}`](https://github.com/acgetchell/causal-triangulations/pull/{{ pr_num }})
 {% endif %}
 {% endfor %}
 
@@ -83,7 +83,7 @@ body = """
 {% set_global printed_changes_header = true %}
 {% endif %}
 {% set sha = commit.id | truncate(length=7, end="") %}
-- **{{ subject }}** [`{{ sha }}`](https://github.com/acgetchell/causal-dynamical-triangulations/commit/{{ sha }})
+- **{{ subject }}** [`{{ sha }}`](https://github.com/acgetchell/causal-triangulations/commit/{{ sha }})
 {% endif %}
 {% endfor %}
 """

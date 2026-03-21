@@ -1,6 +1,6 @@
 # Contributing to Causal Dynamical Triangulations
 
-Thank you for your interest in contributing to the [**causal-dynamical-triangulations**][cdt-lib] library! This document provides comprehensive guidelines for contributors, from first-time contributors to experienced developers looking to contribute significant features.
+Thank you for your interest in contributing to the [**causal-triangulations**][cdt-lib] library! This document provides comprehensive guidelines for contributors, from first-time contributors to experienced developers looking to contribute significant features.
 
 ## Table of Contents
 
@@ -37,7 +37,7 @@ Our community is built on the principles of:
 
 Before you begin, ensure you have:
 
-1. **Rust 1.93.0** (pinned via `rust-toolchain.toml` - automatically handled by rustup)
+1. **Rust 1.94.0** (pinned via `rust-toolchain.toml` - automatically handled by rustup)
 2. **Git** for version control
 3. **Just** (command runner): `cargo install just`
 4. **Kani verifier** (for formal verification): See setup instructions below
@@ -49,8 +49,8 @@ Before you begin, ensure you have:
    - Clone your fork locally:
 
    ```bash
-   git clone https://github.com/yourusername/causal-dynamical-triangulations.git
-   cd causal-dynamical-triangulations
+   git clone https://github.com/yourusername/causal-triangulations.git
+   cd causal-triangulations
    ```
 
 2. **Setup development environment**:
@@ -126,7 +126,7 @@ Before you begin, ensure you have:
 
 When you enter the project directory, `rustup` will automatically:
 
-- **Install the correct Rust version** (1.93.0) if you don't have it
+- **Install the correct Rust version** (1.94.0) if you don't have it
 - **Switch to the pinned version** for this project
 - **Install required components** (clippy, rustfmt, rust-docs, rust-src, rust-analyzer)
 - **Add cross-compilation targets** for supported platforms
@@ -141,7 +141,7 @@ When you enter the project directory, `rustup` will automatically:
 **First time in the project?** You'll see:
 
 ```text
-info: syncing channel updates for '1.93.0-<your-platform>'
+info: syncing channel updates for '1.94.0-<your-platform>'
 info: downloading component 'cargo'
 info: downloading component 'clippy'
 ...
@@ -164,7 +164,7 @@ cargo kani --version
 ## Project Structure
 
 ```text
-causal-dynamical-triangulations/
+causal-triangulations/
 ├── src/                    # Core library code
 │   ├── cdt/               # CDT-specific implementations
 │   │   ├── action.rs      # Regge action calculations
@@ -257,7 +257,7 @@ just help-workflows  # Detailed workflow guidance
 ### Rust Code Style
 
 - **Edition**: Rust 2024
-- **MSRV**: Rust 1.93.0 (pinned in `rust-toolchain.toml`)
+- **MSRV**: Rust 1.94.0 (pinned in `rust-toolchain.toml`)
 - **Formatting**: Use `rustfmt` (configured in `rustfmt.toml`)
 - **Linting**: Strict clippy with warnings as errors
 
@@ -406,7 +406,7 @@ cargo kani --harness verify_action_calculation
 just kani-fast
 ```
 
-**Toolchain note:** Kani bundles its own nightly and ignores `rust-toolchain.toml`. We install `kani-verifier` 0.66.0 (bundled rustc 1.93.0-nightly) for consistency; normal builds/tests still use the workspace MSRV (1.93.0).
+**Toolchain note:** Kani bundles its own nightly and ignores `rust-toolchain.toml`. We install `kani-verifier` 0.66.0 (bundled rustc 1.94.0-nightly) for consistency; normal builds/tests still use the workspace MSRV (1.94.0).
 
 **Not a Cargo dependency:** The verifier is installed as a binary (`cargo install ... kani-verifier`), not as a crate dependency, so you will not see it in `Cargo.toml`.
 
@@ -575,7 +575,7 @@ For questions about the underlying physics and mathematics:
 
 Thank you for contributing to advancing computational quantum gravity research! 🌌
 
-[cdt-lib]: https://github.com/acgetchell/causal-dynamical-triangulations
+[cdt-lib]: https://github.com/acgetchell/causal-triangulations
 [rustup]: https://rustup.rs/
 [Just]: https://github.com/casey/just
 [Kani]: https://model-checking.github.io/kani/

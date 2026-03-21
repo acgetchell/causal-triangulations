@@ -1,6 +1,6 @@
 ---
 title: "References and Citations"
-description: "Academic references and bibliographic citations used throughout the causal-dynamical-triangulations library"
+description: "Academic references and bibliographic citations used throughout the causal-triangulations library"
 keywords: ["references", "citations", "causal dynamical triangulations", "quantum gravity", "bibliography"]
 author: "Adam Getchell"
 date: "2025-10-07"
@@ -16,8 +16,8 @@ If you use this library in your research or project, please cite it using the in
 **Quick citation:**
 
 ```text
-Adam Getchell. 2025. causal-dynamical-triangulations: A Causal Dynamical Triangulation library for quantum gravity research.
-GitHub. https://github.com/acgetchell/causal-dynamical-triangulations
+Adam Getchell. 2025. causal-triangulations: A Causal Dynamical Triangulation library for quantum gravity research.
+GitHub. https://github.com/acgetchell/causal-triangulations
 ```
 
 For BibTeX, APA, or other citation formats, please refer to the [CITATION.cff](CITATION.cff) file or use GitHub's "Cite this repository" feature.

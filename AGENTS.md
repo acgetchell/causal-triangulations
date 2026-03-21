@@ -47,7 +47,7 @@ When user requests commit message generation:
 
 - Use `uv run` for all Python scripts (never `python3` or `python` directly)
 - Use pytest for tests (not unittest)
-- **Type checking**: `just python-typecheck` runs `ty check` + `mypy` (blocking - all code must pass)
+- **Type checking**: `just python-typecheck` runs `ty check` (blocking - all code must pass)
 - Add type hints to new code
 
 ## Common Commands
@@ -71,7 +71,7 @@ just examples         # Run all example scripts
 
 ## Project Context
 
-- **Rust** {2,3,4}D Causal Dynamical Triangulations library (MSRV 1.93.0, Edition 2024)
+- **Rust** {2,3,4}D Causal Dynamical Triangulations library (MSRV 1.94.0, Edition 2024)
 - **No unsafe code**: `#![forbid(unsafe_code)]`
 - **Architecture**: CDT physics layered over a pluggable geometry backend (`delaunay` crate)
 - **Modules**: `src/cdt/` (CDT logic: moves, action, Metropolis), `src/geometry/` (geometry abstractions and backends), `src/config.rs` (simulation configuration)

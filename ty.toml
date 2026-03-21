@@ -1,5 +1,5 @@
 # ty.toml
-# Astral ty configuration for causal-dynamical-triangulations
+# Astral ty configuration for causal-triangulations
 # Python is auxiliary tooling only (scripts/), Rust is primary
 
 [src]

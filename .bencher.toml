@@ -2,7 +2,7 @@
 # This can be used if you decide to integrate with Bencher.dev service
 
 [project]
-name = "causal-dynamical-triangulations"
+name = "causal-triangulations"
 
 [adapter]
 name = "rust_criterion"
