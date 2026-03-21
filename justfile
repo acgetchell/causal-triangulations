@@ -136,8 +136,8 @@ clean:
 clippy:
     cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic -W clippy::nursery -W clippy::cargo
 
-# Pre-commit workflow: comprehensive validation (checks + tests + release + benches + kani)
-commit-check: check test-all test-release bench-compile kani-fast
+# Pre-commit workflow: comprehensive validation (checks + tests + release + benches)
+commit-check: check test-all test-release bench-compile
     @echo "🚀 Ready to commit! All checks passed."
 
 # Coverage analysis for local development (HTML output)
@@ -201,10 +201,6 @@ help-workflows:
     @echo "  just lint-docs     # Documentation linting (Markdown, Spelling)"
     @echo "  just lint-config   # Configuration validation (JSON, TOML, Actions)"
     @echo ""
-    @echo "Formal Verification:"
-    @echo "  just kani          # Run all Kani formal verification proofs"
-    @echo "  just kani-fast     # Run fast Kani verification (ActionConfig only)"
-    @echo ""
     @echo "Benchmark System:"
     @echo "  just bench              # Run all benchmarks"
     @echo "  just bench-compile      # Compile benchmarks without running"
@@ -224,13 +220,6 @@ help-workflows:
     @echo "  just run-simulation # Run basic_simulation.sh example script"
     @echo ""
     @echo "Note: Some recipes require external tools. Run 'just setup' for full environment setup."
-
-# Kani formal verification
-kani:
-    cargo kani
-
-kani-fast:
-    cargo kani --harness verify_action_config
 
 # All linting: code + documentation + configuration
 lint: lint-code lint-docs lint-config
@@ -339,16 +328,6 @@ setup: setup-tools
     echo "Installing Python tooling..."
     uv sync --group dev
     echo ""
-    kani_version="0.66.0"
-    echo "Ensuring Kani verifier (kani-verifier ${kani_version}) is installed..."
-    installed_kani_version="$(cargo kani --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
-    if [[ "$installed_kani_version" == "$kani_version" ]]; then
-        echo "  ✓ kani-verifier $installed_kani_version"
-    else
-        cargo install --locked --force --version "${kani_version}" kani-verifier
-        cargo kani --version
-    fi
-    echo ""
     echo "Building project..."
     cargo build
     echo "✅ Setup complete! Run 'just help-workflows' to see available commands."
@@ -407,25 +386,28 @@ setup-tools:
     echo ""
 
     echo "Ensuring cargo tools..."
-    if ! have dprint; then
-        echo "  ⏳ Installing dprint (cargo)..."
-        cargo install --locked dprint
+    dprint_version="0.53.0"
+    if ! have dprint || [[ "$(dprint --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$dprint_version" ]]; then
+        echo "  ⏳ Installing dprint ${dprint_version} (cargo)..."
+        cargo install --locked dprint --version "${dprint_version}"
     else
-        echo "  ✓ dprint"
+        echo "  ✓ dprint ${dprint_version}"
     fi
 
-    if ! have typos; then
-        echo "  ⏳ Installing typos-cli (cargo)..."
-        cargo install --locked typos-cli
+    typos_version="1.44.0"
+    if ! have typos || [[ "$(typos --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$typos_version" ]]; then
+        echo "  ⏳ Installing typos-cli ${typos_version} (cargo)..."
+        cargo install --locked typos-cli --version "${typos_version}"
     else
-        echo "  ✓ typos"
+        echo "  ✓ typos ${typos_version}"
     fi
 
-    if ! have git-cliff; then
-        echo "  ⏳ Installing git-cliff (cargo)..."
-        cargo install --locked git-cliff
+    git_cliff_version="2.12.0"
+    if ! have git-cliff || [[ "$(git-cliff --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$git_cliff_version" ]]; then
+        echo "  ⏳ Installing git-cliff ${git_cliff_version} (cargo)..."
+        cargo install --locked git-cliff --version "${git_cliff_version}"
     else
-        echo "  ✓ git-cliff"
+        echo "  ✓ git-cliff ${git_cliff_version}"
     fi
 
     if ! have cargo-tarpaulin; then
@@ -647,9 +629,9 @@ yaml-fix:
                 cmd+=(--yes)
             fi
             cmd+=(prettier --write --print-width 120)
-        else
-            echo "⚠️  Neither 'prettier' nor 'npx' found. Skipping YAML formatting."
-            exit 0
+    else
+            echo "❌ Neither 'prettier' nor 'npx' found. Install prettier (npm install -g prettier) or ensure npx is available."
+            exit 1
         fi
         echo "📝 prettier --write (YAML, ${#files[@]} files)"
         printf '%s\0' "${files[@]}" | xargs -0 -n100 "${cmd[@]}"

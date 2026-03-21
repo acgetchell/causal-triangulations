@@ -1,6 +1,6 @@
 # causal-triangulations
 
-[![CI](https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml) [![rust-clippy analyze](https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml) [![Codecov](https://codecov.io/gh/acgetchell/causal-triangulations/graph/badge.svg?token=CsbOJBypGC)](https://codecov.io/gh/acgetchell/causal-triangulations) [![Kani CI](https://github.com/acgetchell/causal-triangulations/actions/workflows/kani.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/kani.yml) [![Audit dependencies](https://github.com/acgetchell/causal-triangulations/actions/workflows/audit.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/audit.yml)
+[![CI](https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml) [![rust-clippy analyze](https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml) [![Codecov](https://codecov.io/gh/acgetchell/causal-triangulations/graph/badge.svg?token=CsbOJBypGC)](https://codecov.io/gh/acgetchell/causal-triangulations) [![Audit dependencies](https://github.com/acgetchell/causal-triangulations/actions/workflows/audit.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/audit.yml)
 
 Causal Dynamical Triangulations for quantum gravity in [Rust], built on fast Delaunay triangulation primitives.
 
@@ -19,7 +19,6 @@ The library leverages high-performance [Delaunay triangulation] backends and pro
 - [x] Regge action calculation with configurable coupling constants
 - [x] Ergodic moves (Alexander/Pachner moves) with causal constraints
 - [x] Command-line interface for simulation workflows
-- [x] Formal verification using [Kani] model checker
 - [x] Comprehensive benchmarking and performance analysis
 - [x] Cross-platform compatibility (Linux, macOS, Windows)
 
@@ -33,7 +32,6 @@ Early development - API and data structures may change. The library currently su
 
 - **Memory safety** for large-scale simulations
 - **Zero-cost abstractions** for performance-critical geometry operations
-- **Formal verification** support via [Kani] for mathematical correctness
 - **Rich ecosystem** for scientific computing and parallel processing
 
 ## 🤝 How to Contribute
@@ -50,7 +48,7 @@ cargo build && cargo test
 
 # Modern approach (recommended) - install just command runner
 cargo install just
-just setup           # Complete environment setup (includes Kani)
+just setup           # Complete environment setup
 just fix             # Apply formatters/auto-fixes
 just check           # Run all linters/validators
 just --list          # See all available development commands
@@ -69,7 +67,7 @@ just run-example     # Basic simulation
 - `just fix` - Apply formatters/auto-fixes (mutating)
 - `just check` - Run linters/validators (non-mutating)
 - `just ci` - CI parity (mirrors GitHub Actions workflow [`ci.yml`](.github/workflows/ci.yml))
-- `just commit-check` - Comprehensive pre-commit validation (includes Kani)
+- `just commit-check` - Comprehensive pre-commit validation
 
 **Repository tooling (via `just`):**
 
@@ -157,34 +155,10 @@ just perf-trends 7       # Analyze performance trends over 7 days
 
 See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/PERFORMANCE_TESTING.md`](docs/PERFORMANCE_TESTING.md) for comprehensive performance testing workflow documentation.
 
-## 🔒 Formal Verification
-
-The library uses [Kani] model checker for formal verification of critical properties:
-
-```bash
-# Run all proofs (runs per harness matrix in CI on main and scheduled jobs)
-just kani
-
-# Fast verification (single critical harness, default on pull requests)
-just kani-fast
-
-# Individual harnesses
-cargo kani --harness verify_action_config
-cargo kani --harness verify_regge_action_properties
-```
-
-**Toolchain note:** Kani ships its own pinned nightly and does not read `rust-toolchain.toml`. We install `kani-verifier` 0.66.0 (bundled rustc 1.94.0-nightly) for reproducibility; regular builds/tests continue to use the workspace MSRV (1.94.0).
-
-### Workflow behavior
-
-- Pull requests run the fast harness set for quick feedback.
-- Pushes to `main` (and manual dispatch) run every harness in parallel via GitHub Actions matrix jobs.
-
 ## 🛣️ Roadmap
 
 - [x] Integrate an existing Rust **Delaunay** triangulation library (e.g., [`delaunay`](https://crates.io/crates/delaunay))
 - [x] 2D Delaunay triangulation scaffold
-- [x] Model‑checking with **[Kani](https://model-checking.github.io/kani/install-guide.html)** for core invariants
 - [ ] 1+1 foliation (causal time‑slicing)
 - [ ] 2D ergodic moves (Alexander/Pachner moves with causal constraints)
 - [ ] 2D Metropolis–Hastings
@@ -200,7 +174,7 @@ cargo kani --harness verify_regge_action_properties
 
 - **Separation of concerns**: geometry primitives (Delaunay/Voronoi) are decoupled from CDT dynamics.
 - **Foliation‑aware data model**: explicit time labels; space‑like vs time‑like edges encoded in types.
-- **Testing**: unit + property tests; Kani proofs for invariants (e.g., move reversibility, manifoldness).
+- **Testing**: unit + property tests for invariants (e.g., move reversibility, manifoldness).
 
 For comprehensive guidelines on contributing, development environment setup, testing, and project structure, please see [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -231,5 +205,4 @@ This project's license is specified in [LICENSE](LICENSE).
 
 [Rust]: https://rust-lang.org
 [Delaunay triangulation]: https://crates.io/crates/delaunay
-[Kani]: https://model-checking.github.io/kani/
 [Criterion]: https://github.com/bheisler/criterion.rs

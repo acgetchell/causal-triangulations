@@ -96,7 +96,7 @@ def test_cleanup_temp_files_debug_keeps_intermediates_but_removes_backup(tmp_pat
     assert not file_paths["backup"].exists(), "Expected backup to be removed even in debug mode"
 
 
-def test_execute_changelog_generation_writes_final_output_and_cleans_up(tmp_path: Path, monkeypatch) -> None:
+def test_execute_changelog_generation_writes_final_output_and_cleans_up(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Arrange: run from a different directory than the project root.
     workdir = tmp_path / "workdir"
     project_root = tmp_path / "project"
@@ -170,7 +170,7 @@ All tests pass: 123 passed
         assert not (project_root / name).exists(), f"Expected {name} to be removed"
 
 
-def test_execute_changelog_generation_restores_backup_on_failure(tmp_path: Path, monkeypatch) -> None:
+def test_execute_changelog_generation_restores_backup_on_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     workdir = tmp_path / "workdir"
     project_root = tmp_path / "project"
     workdir.mkdir()

@@ -21,14 +21,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from subprocess_utils import run_safe_command
+    from subprocess_utils import ExecutableNotFoundError, run_safe_command
 else:
     try:
         # When executed as a script from scripts/
-        from subprocess_utils import run_safe_command
+        from subprocess_utils import ExecutableNotFoundError, run_safe_command
     except ModuleNotFoundError:
         # When imported as a module (e.g., scripts.hardware_utils)
-        from scripts.subprocess_utils import run_safe_command
+        from scripts.subprocess_utils import ExecutableNotFoundError, run_safe_command
 
 # Configure a module-level logger
 logger = logging.getLogger(__name__)
@@ -352,8 +352,10 @@ class HardwareInfo:
                         break
         except subprocess.CalledProcessError as e:
             logger.debug("rustc command failed: %s", e)
-        except Exception as e:
-            logger.debug("Failed to get Rust info: %s", e)
+        except ExecutableNotFoundError as e:
+            logger.debug("rustc not found in PATH: %s", e)
+        except subprocess.TimeoutExpired as e:
+            logger.debug("rustc command timed out: %s", e)
 
         return rust_version, rust_target
 

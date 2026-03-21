@@ -560,14 +560,14 @@ where
     CellData: delaunay::core::DataType + 'static,
     [f64; D]: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
-    /// Check if the triangulation satisfies the Delaunay property.
+    /// Check if the triangulation is valid and satisfies the Delaunay property.
     ///
-    /// Uses the upstream deep validation (`DelaunayTriangulation::is_valid`) which checks
-    /// neighbor pointer consistency, Euler characteristic, coherent orientation, and the
-    /// Delaunay (in-sphere) property.
+    /// Uses the upstream cumulative validation (`DelaunayTriangulation::validate`) which
+    /// checks neighbor pointer consistency, Euler characteristic, coherent orientation
+    /// (Levels 1–3) and the Delaunay in-sphere property (Level 4).
     #[must_use]
     pub fn is_delaunay(&self) -> bool {
-        self.dt.is_valid().is_ok()
+        self.dt.validate().is_ok()
     }
 
     /// Returns the high-level topology kind (`Euclidean`, `Toroidal`, etc.) of the

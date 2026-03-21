@@ -36,15 +36,15 @@ class TestGetSafeExecutable:
     @pytest.mark.parametrize("command", ["echo", "git", "ls"])
     def test_finds_existing_executables(self, command):
         """Test that it finds common executables."""
+        # Skip commands that are not guaranteed cross-platform
+        if sys.platform.startswith("win") and command in {"ls", "echo"}:
+            pytest.skip(f"{command} may not be an external executable on Windows")
         result = get_safe_executable(command)
         assert isinstance(result, str)
         assert len(result) > 0
         assert Path(result).name.startswith(command)  # Command name should match basename
         # Absolute path on all platforms
         assert Path(result).is_absolute()
-        # Skip commands that are not guaranteed cross-platform
-        if sys.platform.startswith("win") and command in {"ls", "echo"}:
-            pytest.skip(f"{command} may not be an external executable on Windows")
 
     @pytest.mark.parametrize("fake_command", ["definitely-nonexistent-command-xyz", "fake-command-for-testing", "nonexistent123"])
     def test_raises_on_nonexistent_executables(self, fake_command):
@@ -98,7 +98,7 @@ class TestRunCargoCommand:
     @pytest.mark.skipif(shutil.which("cargo") is None, reason="cargo not installed in PATH")
     def test_cargo_command_with_custom_params(self):
         """Test cargo command with custom parameters."""
-        result = run_cargo_command(["check", "--dry-run"], check=False)
+        result = run_cargo_command(["check"], check=False)
         assert isinstance(result.returncode, int)
         assert isinstance(result.stdout, str)
 
@@ -170,18 +170,22 @@ class TestGitRepositoryFunctions:
 
     def test_check_git_repo_in_git_repo(self):
         """Test check_git_repo returns True when in a git repository."""
-        if not check_git_repo():
+        result = check_git_repo()
+        if not result:
             pytest.skip("Not running inside a git repository")
-        assert check_git_repo() is True
+        assert result is True
 
     def test_check_git_history_with_history(self):
         """Test check_git_history returns True when git history exists."""
-        if not check_git_history():
+        result = check_git_history()
+        if not result:
             pytest.skip("Repository has no commit history")
-        assert check_git_history() is True
+        assert result is True
 
     def test_get_git_commit_hash_returns_hash(self):
         """Test that get_git_commit_hash returns a valid commit hash."""
+        if not check_git_history():
+            pytest.skip("Repository has no commit history")
         commit_hash = get_git_commit_hash()
         assert isinstance(commit_hash, str)
         assert len(commit_hash) >= 7  # At least short hash length

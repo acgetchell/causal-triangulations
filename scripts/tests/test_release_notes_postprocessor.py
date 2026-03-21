@@ -31,7 +31,7 @@ def _section_body(lines: list[str], header: str) -> list[str]:
 
 
 class TestReleaseNotesPostProcessor:
-    def test_breaking_changes_moved_out_of_changed_section(self):
+    def test_breaking_changes_moved_out_of_changed_section(self) -> None:
         content = """# Changelog
 
 ## [v1.0.0] - 2025-01-01
@@ -68,7 +68,7 @@ class TestReleaseNotesPostProcessor:
             "Expected verbose breaking-change body details to be trimmed"
         )
 
-    def test_breaking_changes_promoted_from_changes_section_and_empty_section_removed(self):
+    def test_breaking_changes_promoted_from_changes_section_and_empty_section_removed(self) -> None:
         content = """# Changelog
 
 ## v1.0.0
@@ -91,7 +91,7 @@ class TestReleaseNotesPostProcessor:
             "Expected verbose breaking-change body details to be trimmed"
         )
 
-    def test_breaking_changes_detects_escaped_markdown_identifiers(self):
+    def test_breaking_changes_detects_escaped_markdown_identifiers(self) -> None:
         content = """# Changelog
 
 ## v1.0.0
@@ -118,7 +118,7 @@ class TestReleaseNotesPostProcessor:
         changed_body = _section_body(lines, "### Changed")
         assert not any("insert\\_transactional" in line for line in changed_body), "Expected breaking-change entry to be removed from Changed section"
 
-    def test_breaking_changes_detects_removed_public_api(self):
+    def test_breaking_changes_detects_removed_public_api(self) -> None:
         content = """# Changelog
 
 ## v1.0.0
@@ -141,7 +141,7 @@ class TestReleaseNotesPostProcessor:
         changed_body = _section_body(lines, "### Changed")
         assert not any("Removed public API" in line for line in changed_body), "Expected removed-public-API entry to be removed from Changed section"
 
-    def test_breaking_changes_detects_incompatible_language(self):
+    def test_breaking_changes_detects_incompatible_language(self) -> None:
         content = """# Changelog
 
 ## v1.0.0
@@ -166,7 +166,7 @@ class TestReleaseNotesPostProcessor:
             "Expected incompatible-change entry to be removed from Changed section"
         )
 
-    def test_commit_links_attached_to_top_level_only(self):
+    def test_commit_links_attached_to_top_level_only(self) -> None:
         top_sha = "1234567890123456789012345678901234567890"  # 40 chars
         nested_sha = "9876543210987654321098765432109876543210"  # 40 chars
 
@@ -195,7 +195,7 @@ class TestReleaseNotesPostProcessor:
         commit_only_re = re.compile(r"^\s*\[`[a-f0-9]{7,40}`\]\([^)]*\)\s*$")
         assert not any(commit_only_re.match(line) for line in processed.splitlines()), "Expected no standalone commit-link-only lines to remain"
 
-    def test_added_section_consolidates_many_entries_from_same_commit(self):
+    def test_added_section_consolidates_many_entries_from_same_commit(self) -> None:
         sha = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"  # 40 chars
         url = f"https://github.com/acgetchell/delaunay/commit/{sha}"
 
@@ -227,7 +227,7 @@ class TestReleaseNotesPostProcessor:
         assert "  - Tests" in processed, "Expected consolidated output to include a Tests bucket"
         assert "  - Other" in processed, "Expected consolidated output to include an Other bucket"
 
-    def test_wording_normalization_replacements(self):
+    def test_wording_normalization_replacements(self) -> None:
         content = """# Changelog
 
 ## v1.0.0

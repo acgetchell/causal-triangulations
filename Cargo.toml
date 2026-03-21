@@ -54,7 +54,7 @@ predicates = "3.1.4"
 proptest = "1.10.0"
 
 [lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = [ 'cfg(kani)' ] }
+unexpected_cfgs = "warn"
 unsafe_code = "forbid"
 dead_code = "warn"
 missing_docs = "warn"

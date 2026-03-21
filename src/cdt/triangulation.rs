@@ -1351,8 +1351,8 @@ mod prop_tests {
         /// Property: Input parameter bounds validation
         #[test]
         fn parameter_bounds_property(
-            vertices in 3u32..100, // Larger range to test bounds
-            timeslices in 0u32..20
+            vertices in 3u32..30, // Moderate range to test bounds without tarpaulin timeout
+            timeslices in 0u32..6
         ) {
             let result = CdtTriangulation::from_random_points(vertices, timeslices, 2);
 

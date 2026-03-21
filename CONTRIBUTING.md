@@ -13,7 +13,6 @@ Thank you for your interest in contributing to the [**causal-triangulations**][c
 - [Code Style and Standards](#code-style-and-standards)
 - [Testing](#testing)
 - [Documentation](#documentation)
-- [Formal Verification](#formal-verification)
 - [Performance and Benchmarking](#performance-and-benchmarking)
 - [Submitting Changes](#submitting-changes)
 - [Types of Contributions](#types-of-contributions)
@@ -40,7 +39,6 @@ Before you begin, ensure you have:
 1. **Rust 1.94.0** (pinned via `rust-toolchain.toml` - automatically handled by rustup)
 2. **Git** for version control
 3. **Just** (command runner): `cargo install just`
-4. **Kani verifier** (for formal verification): See setup instructions below
 
 ### Quick Start
 
@@ -57,11 +55,9 @@ Before you begin, ensure you have:
 
    ```bash
    # Comprehensive setup (recommended)
-   just setup           # Installs Kani verifier and builds project
+   just setup           # Installs tools and builds project
 
-   # Manual setup (Kani is optional unless you're running verification)
-   cargo install --locked --force --version 0.66.0 kani-verifier
-   cargo kani --version
+   # Manual setup
    cargo build
    ```
 
@@ -149,18 +145,6 @@ info: downloading component 'clippy'
 
 This is normal and only happens once.
 
-### Kani Verifier Setup
-
-This project uses [Kani] for formal verification of critical mathematical properties:
-
-```bash
-# Install Kani verifier (optional unless you're running verification)
-cargo install --locked --force --version 0.66.0 kani-verifier
-
-# Verify installation
-cargo kani --version
-```
-
 ## Project Structure
 
 ```text
@@ -208,8 +192,6 @@ just ci             # CI parity (mirrors .github/workflows/ci.yml)
 just commit-check   # Comprehensive pre-commit validation (recommended before pushing)
 just lint           # Lint code, docs, and config (checks only)
 just test-all       # All test suites
-just kani           # Run all formal verification proofs
-just kani-fast      # Run subset of Kani proofs (faster)
 just bench          # Run performance benchmarks
 just clean          # Clean build artifacts
 ```
@@ -365,58 +347,6 @@ RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
 - Ensure examples in documentation actually compile
 - Link to relevant papers in [REFERENCES.md](REFERENCES.md)
 
-## Formal Verification
-
-This project uses [Kani] model checker to formally verify critical properties of mathematical algorithms.
-
-### Verification Harnesses
-
-Create verification harnesses for critical properties:
-
-```rust
-#[cfg(kani)]
-#[kani::proof]
-fn verify_action_calculation() {
-    let vertices = kani::any();
-    let edges = kani::any();
-    let faces = kani::any();
-    
-    kani::assume(vertices > 0);
-    kani::assume(edges > 0); 
-    kani::assume(faces > 0);
-    
-    let config = ActionConfig::default();
-    let action = config.calculate_action(vertices, edges, faces);
-    
-    // Action should be finite
-    assert!(action.is_finite());
-}
-```
-
-### Running Verification
-
-```bash
-# Run all verification harnesses
-just kani
-
-# Run specific harness
-cargo kani --harness verify_action_calculation
-
-# Quick verification (subset of proofs)
-just kani-fast
-```
-
-**Toolchain note:** Kani bundles its own nightly and ignores `rust-toolchain.toml`. We install `kani-verifier` 0.66.0 (bundled rustc 1.94.0-nightly) for consistency; normal builds/tests still use the workspace MSRV (1.94.0).
-
-**Not a Cargo dependency:** The verifier is installed as a binary (`cargo install ... kani-verifier`), not as a crate dependency, so you will not see it in `Cargo.toml`.
-
-### Verification Guidelines
-
-- Verify mathematical invariants (e.g., Euler characteristic preservation)
-- Check for arithmetic overflow/underflow
-- Ensure no undefined behavior in unsafe code
-- Verify causal structure constraints
-
 ## Performance and Benchmarking
 
 ### Benchmark Organization
@@ -488,7 +418,6 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `ci`
 - [ ] Code is formatted (`cargo fmt`)
 - [ ] No clippy warnings (`cargo clippy`)
 - [ ] Documentation updated
-- [ ] Kani verification passes (`just kani-fast`)
 - [ ] Benchmarks still compile (`cargo bench --no-run`)
 - [ ] Changes are described in PR
 
@@ -527,7 +456,6 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `ci`
 - Implement new CDT algorithms
 - Add support for different geometries
 - Contribute benchmarks from literature
-- Add formal verification of properties
 
 ## Release Process
 
@@ -578,4 +506,3 @@ Thank you for contributing to advancing computational quantum gravity research! 
 [cdt-lib]: https://github.com/acgetchell/causal-triangulations
 [rustup]: https://rustup.rs/
 [Just]: https://github.com/casey/just
-[Kani]: https://model-checking.github.io/kani/

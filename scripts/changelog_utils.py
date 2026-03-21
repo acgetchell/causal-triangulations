@@ -864,6 +864,7 @@ class ChangelogUtils:
         code-like.
         """
         code_prefixes = (
+            # Shell / CLI commands
             "$ ",
             "cargo ",
             "just ",
@@ -879,6 +880,25 @@ class ChangelogUtils:
             "npm ",
             "npx ",
             "make ",
+            # Rust declarations
+            "fn ",
+            "pub ",
+            "mod ",
+            "use ",
+            "impl ",
+            "struct ",
+            "enum ",
+            "trait ",
+            "type ",
+            # Python declarations
+            "def ",
+            "class ",
+            "import ",
+            "from ",
+            # JS/TS declarations
+            "const ",
+            "function ",
+            "export ",
         )
         code_markers = (
             "::",
@@ -1503,27 +1523,21 @@ def _validate_prerequisites() -> None:
     ChangelogUtils.check_git_history()
 
     if not shutil.which("git-cliff"):
-        print(
-            "Error: git-cliff not found. Install via Homebrew (brew install git-cliff) or Cargo (cargo install git-cliff).",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        msg = "git-cliff not found. Install via Homebrew (brew install git-cliff) or Cargo (cargo install git-cliff)."
+        raise ChangelogError(msg)
 
     # Verify git-cliff is runnable.
     try:
         run_safe_command("git-cliff", ["--version"])
-    except Exception:
-        print(
-            "Error: git-cliff failed to run. Verify your installation and try again.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    except Exception as exc:
+        msg = "git-cliff failed to run. Verify your installation and try again."
+        raise ChangelogError(msg) from exc
 
     # Verify configuration file
     config_path = Path("cliff.toml")
     if not config_path.exists():
-        print(f"Error: git-cliff config not found at project root: {config_path}", file=sys.stderr)
-        sys.exit(1)
+        msg = f"git-cliff config not found at project root: {config_path}"
+        raise ChangelogError(msg)
 
 
 def _get_repository_url() -> str:
@@ -1586,14 +1600,15 @@ def _enhance_with_ai(file_paths: dict[str, Path], project_root: Path) -> None:
     enhance_script = script_dir / "enhance_commits.py"
 
     if not enhance_script.exists():
-        sys.exit(1)
+        msg = f"enhance_commits.py not found at {enhance_script}"
+        raise ChangelogError(msg)
 
     try:
         python_exe = sys.executable or "python"
         run_safe_command(python_exe, [str(enhance_script), str(file_paths["expanded"]), str(file_paths["enhanced"])], cwd=project_root)
-    except Exception:
-        print("Error: enhance_commits.py failed. Verify your Python environment and try again.", file=sys.stderr)
-        sys.exit(1)
+    except Exception as exc:
+        msg = "enhance_commits.py failed. Verify your Python environment and try again."
+        raise ChangelogError(msg) from exc
 
 
 def _cleanup_final_output(file_paths: dict[str, Path]) -> None:

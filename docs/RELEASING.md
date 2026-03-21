@@ -179,20 +179,6 @@ cargo publish
 
 ---
 
-## Kani verification before release
-
-Before tagging, verify that formal proofs still pass:
-
-```bash
-# Fast verification (recommended minimum before release)
-just kani-fast
-
-# Full verification (recommended for major/minor releases)
-just kani
-```
-
----
-
 ## Notes and tips
 
 - Never push the temporary tag created for changelog generation; only push the final tag after the PR is merged.
