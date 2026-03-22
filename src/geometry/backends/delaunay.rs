@@ -45,8 +45,8 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub struct DelaunayBackend<VertexData, CellData, const D: usize>
 where
-    VertexData: delaunay::core::DataType + 'static,
-    CellData: delaunay::core::DataType + 'static,
+    VertexData: delaunay::core::DataType,
+    CellData: delaunay::core::DataType,
 {
     /// The underlying Delaunay triangulation from the delaunay crate
     dt: Arc<DelaunayTriangulation<RobustKernel<f64>, VertexData, CellData, D>>,
@@ -152,8 +152,8 @@ pub enum DelaunayError {
 
 impl<VertexData, CellData, const D: usize> DelaunayBackend<VertexData, CellData, D>
 where
-    VertexData: delaunay::core::DataType + 'static,
-    CellData: delaunay::core::DataType + 'static,
+    VertexData: delaunay::core::DataType,
+    CellData: delaunay::core::DataType,
 {
     /// Create a new Delaunay backend from an existing Delaunay triangulation
     #[must_use]
@@ -214,13 +214,33 @@ where
     fn invalidate_edge_cache(&self) {
         *self.edge_cache.borrow_mut() = None;
     }
+
+    /// Check if the triangulation is valid and satisfies the Delaunay property.
+    ///
+    /// Uses the upstream cumulative validation (`DelaunayTriangulation::validate`) which
+    /// checks neighbor pointer consistency, Euler characteristic, coherent orientation
+    /// (Levels 1–3) and the Delaunay in-sphere property (Level 4).
+    #[must_use]
+    pub fn is_delaunay(&self) -> bool {
+        self.dt.validate().is_ok()
+    }
+
+    /// Returns the high-level topology kind (`Euclidean`, `Toroidal`, etc.) of the
+    /// underlying triangulation.
+    ///
+    /// This exposes the [`GlobalTopology`](delaunay::topology::traits::GlobalTopology)
+    /// metadata attached by [`DelaunayTriangulationBuilder`](delaunay::core::builder::DelaunayTriangulationBuilder) at construction time.
+    #[must_use]
+    pub fn topology_kind(&self) -> delaunay::topology::traits::TopologyKind {
+        self.dt.topology_kind()
+    }
 }
 
 impl<VertexData, CellData, const D: usize> GeometryBackend
     for DelaunayBackend<VertexData, CellData, D>
 where
-    VertexData: delaunay::core::DataType + 'static,
-    CellData: delaunay::core::DataType + 'static,
+    VertexData: delaunay::core::DataType,
+    CellData: delaunay::core::DataType,
     [f64; D]: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     type Coordinate = f64;
@@ -237,8 +257,8 @@ where
 impl<VertexData, CellData, const D: usize> TriangulationQuery
     for DelaunayBackend<VertexData, CellData, D>
 where
-    VertexData: delaunay::core::DataType + 'static,
-    CellData: delaunay::core::DataType + 'static,
+    VertexData: delaunay::core::DataType,
+    CellData: delaunay::core::DataType,
     [f64; D]: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     fn vertex_count(&self) -> usize {
@@ -457,17 +477,17 @@ where
             return false;
         }
 
-        // v0.7.2: check coherent orientation (first-class invariant).
-        // This validates that adjacent cells induce opposite orientations on shared facets.
-        self.dt.tds().is_coherently_oriented()
+        // v0.7.2: use full upstream validation (Levels 1–3: neighbor pointers,
+        // Euler characteristic, and coherent orientation).
+        self.dt.validate().is_ok()
     }
 }
 
 impl<VertexData, CellData, const D: usize> TriangulationMut
     for DelaunayBackend<VertexData, CellData, D>
 where
-    VertexData: delaunay::core::DataType + 'static,
-    CellData: delaunay::core::DataType + 'static,
+    VertexData: delaunay::core::DataType,
+    CellData: delaunay::core::DataType,
     [f64; D]: serde::Serialize + for<'de> serde::Deserialize<'de>,
 {
     fn insert_vertex(
@@ -554,34 +574,7 @@ where
     }
 }
 
-impl<VertexData, CellData, const D: usize> DelaunayBackend<VertexData, CellData, D>
-where
-    VertexData: delaunay::core::DataType + 'static,
-    CellData: delaunay::core::DataType + 'static,
-    [f64; D]: serde::Serialize + for<'de> serde::Deserialize<'de>,
-{
-    /// Check if the triangulation is valid and satisfies the Delaunay property.
-    ///
-    /// Uses the upstream cumulative validation (`DelaunayTriangulation::validate`) which
-    /// checks neighbor pointer consistency, Euler characteristic, coherent orientation
-    /// (Levels 1–3) and the Delaunay in-sphere property (Level 4).
-    #[must_use]
-    pub fn is_delaunay(&self) -> bool {
-        self.dt.validate().is_ok()
-    }
-
-    /// Returns the high-level topology kind (`Euclidean`, `Toroidal`, etc.) of the
-    /// underlying triangulation.
-    ///
-    /// This exposes the [`GlobalTopology`](delaunay::topology::traits::GlobalTopology)
-    /// metadata attached by [`DelaunayTriangulationBuilder`](delaunay::core::builder::DelaunayTriangulationBuilder) at construction time.
-    #[must_use]
-    pub fn topology_kind(&self) -> delaunay::topology::traits::TopologyKind {
-        self.dt.topology_kind()
-    }
-}
-
-/// Type alias for common 2D Delaunay backend.
+/// Type alias
 ///
 /// Uses `()` vertex data — CDT metadata is tracked at the [`CdtTriangulation`](crate::cdt::triangulation::CdtTriangulation) level.
 pub type DelaunayBackend2D = DelaunayBackend<(), i32, 2>;
@@ -1097,11 +1090,13 @@ mod tests {
         let delaunay = backend.is_delaunay();
 
         assert!(valid, "Seeded triangulation should be valid");
+        assert!(
+            delaunay,
+            "Seeded triangulation should satisfy Delaunay property"
+        );
         // A valid Delaunay triangulation is always coherently oriented,
         // so is_delaunay() implies is_valid()
-        if delaunay {
-            assert!(valid, "is_delaunay() should imply is_valid()");
-        }
+        assert!(delaunay && valid, "is_delaunay() should imply is_valid()");
     }
 
     #[test]

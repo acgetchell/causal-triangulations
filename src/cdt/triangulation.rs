@@ -195,16 +195,28 @@ impl<B: TriangulationMut> CdtTriangulation<B> {
     pub fn validate(&self) -> CdtResult<()> {
         // Check basic validity
         if !self.geometry.is_valid() {
-            return Err(crate::errors::CdtError::InvalidParameters(
-                "Invalid geometry: triangulation is not valid".to_string(),
-            ));
+            return Err(crate::errors::CdtError::ValidationFailed {
+                check: "geometry".to_string(),
+                detail: format!(
+                    "triangulation is not valid (V={}, E={}, F={})",
+                    self.geometry.vertex_count(),
+                    self.geometry.edge_count(),
+                    self.geometry.face_count(),
+                ),
+            });
         }
 
         // Check Delaunay property (for backends that support it)
         if !self.geometry.is_delaunay() {
-            return Err(crate::errors::CdtError::InvalidParameters(
-                "Invalid geometry: triangulation does not satisfy Delaunay property".to_string(),
-            ));
+            return Err(crate::errors::CdtError::ValidationFailed {
+                check: "Delaunay".to_string(),
+                detail: format!(
+                    "triangulation does not satisfy Delaunay property (V={}, E={}, F={})",
+                    self.geometry.vertex_count(),
+                    self.geometry.edge_count(),
+                    self.geometry.face_count(),
+                ),
+            });
         }
 
         // Additional CDT property validation
@@ -232,9 +244,17 @@ impl<B: TriangulationMut> CdtTriangulation<B> {
             // Planar triangulation with boundary should have χ = 1
             // Closed surfaces would have χ = 2
             if euler_char != 1 && euler_char != 2 {
-                return Err(crate::errors::CdtError::InvalidParameters(format!(
-                    "Invalid topology: Euler characteristic {euler_char} unexpected for 2D triangulation (expected 1 for boundary or 2 for closed surface)"
-                )));
+                return Err(crate::errors::CdtError::ValidationFailed {
+                    check: "topology".to_string(),
+                    detail: format!(
+                        "Euler characteristic χ={euler_char} unexpected for 2D triangulation \
+                         (expected 1 for boundary or 2 for closed surface; \
+                         V={}, E={}, F={})",
+                        self.geometry.vertex_count(),
+                        self.geometry.edge_count(),
+                        self.geometry.face_count(),
+                    ),
+                });
             }
         }
 
@@ -354,9 +374,11 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
 
         // Validate other parameters
         if vertices < 3 {
-            return Err(crate::errors::CdtError::InvalidParameters(
-                "vertices must be >= 3 for 2D triangulation".to_string(),
-            ));
+            return Err(crate::errors::CdtError::InvalidGenerationParameters {
+                issue: "Insufficient vertex count".to_string(),
+                provided_value: vertices.to_string(),
+                expected_range: "≥ 3".to_string(),
+            });
         }
 
         let dt = crate::util::generate_delaunay2_with_context(vertices, (0.0, 10.0), None)?;
@@ -386,9 +408,11 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
 
         // Validate other parameters
         if vertices < 3 {
-            return Err(crate::errors::CdtError::InvalidParameters(
-                "vertices must be >= 3 for 2D triangulation".to_string(),
-            ));
+            return Err(crate::errors::CdtError::InvalidGenerationParameters {
+                issue: "Insufficient vertex count".to_string(),
+                provided_value: vertices.to_string(),
+                expected_range: "≥ 3".to_string(),
+            });
         }
 
         let dt = crate::util::generate_delaunay2_with_context(vertices, (0.0, 10.0), Some(seed))?;
@@ -526,13 +550,16 @@ mod tests {
             let result = CdtTriangulation::from_random_points(count, 2, 2);
             assert!(result.is_err(), "Should fail with {count} vertices");
 
-            if let Err(crate::errors::CdtError::InvalidParameters(msg)) = result {
-                assert!(
-                    msg.contains("vertices must be >= 3"),
-                    "Error message should mention vertex requirement: {msg}"
-                );
-            } else {
-                panic!("Expected InvalidParameters error for {count} vertices");
+            match result {
+                Err(crate::errors::CdtError::InvalidGenerationParameters {
+                    issue,
+                    provided_value,
+                    ..
+                }) => {
+                    assert_eq!(issue, "Insufficient vertex count");
+                    assert_eq!(provided_value, count.to_string());
+                }
+                other => panic!("Expected InvalidGenerationParameters for {count} vertices, got {other:?}"),
             }
         }
     }
@@ -543,10 +570,15 @@ mod tests {
         assert!(result.is_err(), "Should fail with 2 vertices");
 
         match result {
-            Err(crate::errors::CdtError::InvalidParameters(msg)) => {
-                assert!(msg.contains("vertices must be >= 3"));
+            Err(crate::errors::CdtError::InvalidGenerationParameters {
+                issue,
+                provided_value,
+                ..
+            }) => {
+                assert_eq!(issue, "Insufficient vertex count");
+                assert_eq!(provided_value, "2");
             }
-            _ => panic!("Expected InvalidParameters error"),
+            other => panic!("Expected InvalidGenerationParameters, got {other:?}"),
         }
     }
 
@@ -1186,28 +1218,27 @@ mod prop_tests {
             prop_assert!(triangulation.face_count() > 0);
         }
 
-        // NOTE: Seeded determinism test commented out - exposing bug in underlying implementation
-        // The same seed produces different triangulations, indicating non-deterministic behavior
-        // in the random point generation or triangulation process.
-        // Bug details: seed=2852, vertices=8, timeslices=3 produces edge counts 12 vs 11
+        /// Property: Seeded triangulation determinism
+        ///
+        /// Previously disabled due to non-determinism in FastKernel-based generation
+        /// (seed=2852, vertices=8, timeslices=3 produced edge counts 12 vs 11).
+        /// Re-enabled after switching to RobustKernel + DelaunayTriangulationBuilder.
+        #[test]
+        fn seeded_determinism_property(
+            vertices in 4u32..15,
+            timeslices in 1u32..4,
+            seed in 1u64..10000
+        ) {
+            let tri1 = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
+            let tri2 = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
 
-        // /// Property: Seeded triangulation determinism
-        // #[test]
-        // fn seeded_determinism_property(
-        //     vertices in 4u32..15,
-        //     timeslices in 1u32..4,
-        //     seed in 1u64..10000
-        // ) {
-        //     let tri1 = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
-        //     let tri2 = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
-        //
-        //     // Same seed should produce identical triangulations
-        //     prop_assert_eq!(tri1.vertex_count(), tri2.vertex_count(), "Vertex counts should match");
-        //     prop_assert_eq!(tri1.edge_count(), tri2.edge_count(), "Edge counts should match");
-        //     prop_assert_eq!(tri1.face_count(), tri2.face_count(), "Face counts should match");
-        //     prop_assert_eq!(tri1.time_slices(), tri2.time_slices(), "Time slices should match");
-        //     prop_assert_eq!(tri1.dimension(), tri2.dimension(), "Dimensions should match");
-        // }
+            // Same seed should produce identical triangulations
+            prop_assert_eq!(tri1.vertex_count(), tri2.vertex_count(), "Vertex counts should match");
+            prop_assert_eq!(tri1.edge_count(), tri2.edge_count(), "Edge counts should match");
+            prop_assert_eq!(tri1.face_count(), tri2.face_count(), "Face counts should match");
+            prop_assert_eq!(tri1.time_slices(), tri2.time_slices(), "Time slices should match");
+            prop_assert_eq!(tri1.dimension(), tri2.dimension(), "Dimensions should match");
+        }
 
         /// Property: Metadata consistency and tracking
         #[test]
@@ -1351,7 +1382,7 @@ mod prop_tests {
         /// Property: Input parameter bounds validation
         #[test]
         fn parameter_bounds_property(
-            vertices in 3u32..30, // Moderate range to test bounds without tarpaulin timeout
+            vertices in 0u32..30, // Include invalid range (0..3) to exercise error branch
             timeslices in 0u32..6
         ) {
             let result = CdtTriangulation::from_random_points(vertices, timeslices, 2);

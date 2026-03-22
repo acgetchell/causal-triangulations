@@ -385,6 +385,20 @@ setup-tools:
     rustup component add clippy rustfmt rust-docs rust-src
     echo ""
 
+    echo "Ensuring Node/prettier (used by yaml-fix)..."
+    if have prettier; then
+        echo "  ✓ prettier"
+    elif have npx; then
+        echo "  ✓ npx (prettier will run via npx)"
+    elif have brew && [ "$brew_available" -ne 0 ]; then
+        echo "  ⏳ Installing node (brew)..."
+        HOMEBREW_NO_AUTO_UPDATE=1 brew install node
+        npm install -g prettier
+    else
+        echo "  ⚠️  Neither prettier nor npx found. Install Node.js (https://nodejs.org) and run: npm install -g prettier"
+    fi
+    echo ""
+
     echo "Ensuring cargo tools..."
     dprint_version="0.53.0"
     if ! have dprint || [[ "$(dprint --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$dprint_version" ]]; then
@@ -621,9 +635,9 @@ yaml-fix:
     done < <(git ls-files -z '*.yml' '*.yaml')
     if [ "${#files[@]}" -gt 0 ]; then
         cmd=()
-        if command -v prettier >/dev/null; then
+        if command -v prettier >/dev/null 2>&1; then
             cmd=(prettier --write --print-width 120)
-        elif command -v npx >/dev/null; then
+        elif command -v npx >/dev/null 2>&1; then
             cmd=(npx)
             if npx --help 2>&1 | grep -q -- '--yes'; then
                 cmd+=(--yes)

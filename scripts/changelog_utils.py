@@ -856,7 +856,7 @@ class ChangelogUtils:
         return out
 
     @classmethod
-    def _indented_block_looks_like_code(cls, content_lines: list[str]) -> bool:
+    def _indented_block_looks_like_code(cls, content_lines: list[str]) -> bool:  # noqa: PLR0911
         """Heuristically decide whether an indented block is actually code.
 
         Some commit bodies indent wrapped prose by 4 spaces, which Markdown would
@@ -884,31 +884,33 @@ class ChangelogUtils:
             "fn ",
             "pub ",
             "mod ",
-            "use ",
             "impl ",
             "struct ",
             "enum ",
             "trait ",
-            "type ",
             # Python declarations
             "def ",
             "class ",
             "import ",
-            "from ",
             # JS/TS declarations
             "const ",
-            "function ",
-            "export ",
         )
+        # Unambiguous structural markers (no semicolons - too common in prose)
         code_markers = (
             "::",
             "->",
             "=>",
             "#[",
             "//",
-            ";",
             "{",
             "}",
+        )
+        # Patterns for prefixes that overlap with English prose
+        _contextual_patterns = (
+            re.compile(r"^use\s+[\w:]+"),
+            re.compile(r"^from\s+\w+\s+import\b"),
+            re.compile(r"^type\s+\w+\s*[=:]"),
+            re.compile(r"^export\s+(const|function|class|default)\b"),
         )
 
         for line in content_lines:
@@ -920,7 +922,15 @@ class ChangelogUtils:
             if lowered.startswith(code_prefixes):
                 return True
 
+            # Context-sensitive prefixes: require syntax-shaped continuation
+            if any(pat.match(stripped) for pat in _contextual_patterns):
+                return True
+
             if any(marker in stripped for marker in code_markers):
+                return True
+
+            # Semicolons only count as code when they look like statement terminators
+            if re.search(r"\w\s*;\s*$", stripped) or stripped.endswith(");"):
                 return True
 
             # Treat assignment/config lines as code, but avoid classifying any line that
@@ -1489,6 +1499,10 @@ def _execute_changelog_generation(debug_mode: bool) -> None:
         if file_paths is None:
             raise SystemExit(1) from exc
         _restore_backup_and_exit(file_paths)
+    except SystemExit:
+        if file_paths is not None:
+            _restore_backup_and_exit(file_paths)
+        raise
     except Exception as exc:  # restore backup and exit on any unexpected error
         if file_paths is None:
             raise SystemExit(1) from exc

@@ -165,12 +165,12 @@ just test-python
 
 ## Documentation Tests
 
-Public documentation examples must compile.
+Public documentation examples must compile and pass.
 
 Validate with:
 
 ```bash
-just doc-check
+just test-doc
 ```
 
 ---

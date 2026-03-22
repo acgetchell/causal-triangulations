@@ -354,8 +354,8 @@ class HardwareInfo:
             logger.debug("rustc command failed: %s", e)
         except ExecutableNotFoundError as e:
             logger.debug("rustc not found in PATH: %s", e)
-        except subprocess.TimeoutExpired as e:
-            logger.debug("rustc command timed out: %s", e)
+        except OSError as e:
+            logger.debug("rustc command failed (OS error): %s", e)
 
         return rust_version, rust_target
 

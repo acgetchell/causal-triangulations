@@ -255,6 +255,8 @@ impl SimulationResultsBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cdt::triangulation::CdtTriangulation;
+    use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
 
     #[test]
@@ -267,10 +269,7 @@ mod tests {
 
     #[test]
     fn test_backend_vertex_and_edge_counting() {
-        use crate::cdt::triangulation::CdtTriangulation;
-        use crate::geometry::traits::TriangulationQuery;
-
-        // Use fixed seed to ensure deterministic triangulation structure for backend queries.
+        // Use fixed seed
         const TRIANGULATION_SEED: u64 = 53;
 
         let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, TRIANGULATION_SEED)
@@ -297,9 +296,6 @@ mod tests {
 
     #[test]
     fn test_action_calculation() {
-        use crate::cdt::triangulation::CdtTriangulation;
-        use crate::geometry::traits::TriangulationQuery;
-
         let triangulation =
             CdtTriangulation::from_random_points(5, 1, 2).expect("Failed to create triangulation");
 
@@ -320,8 +316,6 @@ mod tests {
 
     #[test]
     fn test_simulation_results() {
-        use crate::cdt::triangulation::CdtTriangulation;
-
         let config = MetropolisConfig::default();
         let measurements = vec![
             Measurement {
