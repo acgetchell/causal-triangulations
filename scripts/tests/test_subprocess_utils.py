@@ -282,7 +282,7 @@ class TestSecurityFeatures:
         """Test that functions reject executable override for security."""
         called = {"run": False}
 
-        def fake_run(*_a, **_k):
+        def fake_run(*_a: Any, **_k: Any) -> subprocess.CompletedProcess[str]:
             called["run"] = True  # should never be set
             msg = "subprocess.run should not be called on override"
             raise AssertionError(msg)

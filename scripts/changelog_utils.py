@@ -61,6 +61,15 @@ class VersionError(ChangelogError):
 class ChangelogUtils:
     """Utility class for changelog operations."""
 
+    # Pre-compiled patterns for context-sensitive code detection in indented blocks.
+    # These overlap with English prose so they require syntax-shaped continuation.
+    _CONTEXTUAL_CODE_PATTERNS = (
+        re.compile(r"^use\s+[\w:]+"),
+        re.compile(r"^from\s+\w+\s+import\b"),
+        re.compile(r"^type\s+\w+\s*[=:]"),
+        re.compile(r"^export\s+(const|function|class|default)\b"),
+    )
+
     @staticmethod
     def find_changelog_path() -> str:
         """
@@ -775,8 +784,8 @@ class ChangelogUtils:
 
         return re.sub(r"https?://[^\s<>()]+", repl, line)
 
-    @classmethod
-    def _strip_heading_like_emphasis(cls, line: str) -> str:
+    @staticmethod
+    def _strip_heading_like_emphasis(line: str) -> str:
         """Strip full-line emphasis used as pseudo-headings.
 
         Markdownlint MD036 flags lines that are *only* emphasis (e.g. '*Title*')
@@ -820,8 +829,8 @@ class ChangelogUtils:
         processed = cls.wrap_bare_urls(processed)
         return cls._strip_heading_like_emphasis(processed)
 
-    @classmethod
-    def _convert_fenced_code_blocks_to_indented(cls, body_lines: list[str]) -> list[str]:
+    @staticmethod
+    def _convert_fenced_code_blocks_to_indented(body_lines: list[str]) -> list[str]:
         """Convert fenced code blocks (```...```) to indented code blocks.
 
         This repository's markdownlint config expects indented code blocks (MD046).
@@ -855,8 +864,8 @@ class ChangelogUtils:
 
         return out
 
-    @classmethod
-    def _indented_block_looks_like_code(cls, content_lines: list[str]) -> bool:  # noqa: PLR0911
+    @staticmethod
+    def _indented_block_looks_like_code(content_lines: list[str]) -> bool:  # noqa: PLR0911
         """Heuristically decide whether an indented block is actually code.
 
         Some commit bodies indent wrapped prose by 4 spaces, which Markdown would
@@ -905,14 +914,6 @@ class ChangelogUtils:
             "{",
             "}",
         )
-        # Patterns for prefixes that overlap with English prose
-        _contextual_patterns = (
-            re.compile(r"^use\s+[\w:]+"),
-            re.compile(r"^from\s+\w+\s+import\b"),
-            re.compile(r"^type\s+\w+\s*[=:]"),
-            re.compile(r"^export\s+(const|function|class|default)\b"),
-        )
-
         for line in content_lines:
             stripped = line.strip()
             if not stripped:
@@ -923,7 +924,7 @@ class ChangelogUtils:
                 return True
 
             # Context-sensitive prefixes: require syntax-shaped continuation
-            if any(pat.match(stripped) for pat in _contextual_patterns):
+            if any(pat.match(stripped) for pat in ChangelogUtils._CONTEXTUAL_CODE_PATTERNS):
                 return True
 
             if any(marker in stripped for marker in code_markers):
@@ -992,8 +993,8 @@ class ChangelogUtils:
             body_content.pop()
         return body_content
 
-    @classmethod
-    def _format_indented_code_block_line(cls, line: str, max_line_length: int) -> list[str]:
+    @staticmethod
+    def _format_indented_code_block_line(line: str, max_line_length: int) -> list[str]:
         """Format an indented code block line, enforcing line-length limits.
 
         We avoid emitting whitespace-only lines (MD009) by collapsing them to a
@@ -1339,11 +1340,10 @@ For detailed release notes, refer to CHANGELOG.md in the repository.
 
 
 def main() -> None:
-    """
-    Main entry point for changelog-utils CLI.
-    This runs the current changelog workflow (git-cliff + post-processing)
-    with robust error handling and cross-platform support.
-    functionality but better error handling and cross-platform support.
+    """Main entry point for changelog-utils CLI.
+
+    Runs the changelog workflow (git-cliff + post-processing) with robust
+    error handling and cross-platform support.
     """
 
     def signal_handler(signum, frame):

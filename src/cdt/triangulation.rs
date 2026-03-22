@@ -559,7 +559,9 @@ mod tests {
                     assert_eq!(issue, "Insufficient vertex count");
                     assert_eq!(provided_value, count.to_string());
                 }
-                other => panic!("Expected InvalidGenerationParameters for {count} vertices, got {other:?}"),
+                other => panic!(
+                    "Expected InvalidGenerationParameters for {count} vertices, got {other:?}"
+                ),
             }
         }
     }

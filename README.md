@@ -10,29 +10,45 @@ This library implements **Causal Dynamical Triangulations (CDT)** in [Rust]. CDT
 
 For an introduction to Causal Dynamical Triangulations, see [this paper](https://arxiv.org/abs/hep-th/0105267).
 
-The library leverages high-performance [Delaunay triangulation] backends and provides a complete toolkit for CDT research and exploration.
+The library leverages high-performance [Delaunay triangulation] backends and provides a foundational toolkit for CDT research and exploration.
 
 ## ✨ Features
 
-- [x] 2D Causal Dynamical Triangulations with time-foliation
-- [x] Metropolis-Hastings Monte Carlo simulation
-- [x] Regge action calculation with configurable coupling constants
-- [x] Ergodic moves (Alexander/Pachner moves) with causal constraints
-- [x] Command-line interface for simulation workflows
-- [x] Comprehensive benchmarking and performance analysis
+- [x] 2D Causal Dynamical Triangulations with time-foliation (early implementation)
+- [x] Initial Metropolis–Hastings Monte Carlo prototype (subject to extraction into a standalone crate)
+- [x] Regge action calculation with configurable coupling constants (experimental)
+- [x] Ergodic moves (Alexander/Pachner moves) with causal constraints (experimental)
+- [x] Command-line interface for simulation workflows (early)
+- [x] Benchmarking and performance analysis infrastructure (in progress)
 - [x] Cross-platform compatibility (Linux, macOS, Windows)
-
-See [CHANGELOG.md](CHANGELOG.md) for details.
 
 ## 🚧 Project Status
 
-Early development - API and data structures may change. The library currently supports 2D CDT with plans for 3D and 4D extensions.
+🚧 **Pre-release (0.0.x)** — This crate is under active development and **not yet ready for production use**. APIs, data structures, and module boundaries may change without notice.
+
+The library currently supports an initial 2D CDT implementation, with planned extensions to 3D and 4D.
 
 **Why Rust for CDT?**
 
 - **Memory safety** for large-scale simulations
 - **Zero-cost abstractions** for performance-critical geometry operations
 - **Rich ecosystem** for scientific computing and parallel processing
+
+## 🧩 Ecosystem (Planned)
+
+This crate is part of a broader Rust ecosystem for computational geometry and simulation:
+
+- [`delaunay`](https://crates.io/crates/delaunay) — geometric primitives and triangulations
+- `la-stack` — linear algebra utilities
+- `markov-chain-monte-carlo` (planned) — a composable MCMC engine to which the current Metropolis–Hastings implementation will migrate
+
+The long-term design separates:
+
+- **Geometry** (triangulations and invariants)
+- **Sampling** (MCMC algorithms)
+- **Physics** (CDT-specific dynamics and observables)
+
+This crate focuses on the CDT (physics + domain) layer.
 
 ## 🤝 How to Contribute
 
@@ -160,8 +176,8 @@ See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/PE
 - [x] Integrate an existing Rust **Delaunay** triangulation library (e.g., [`delaunay`](https://crates.io/crates/delaunay))
 - [x] 2D Delaunay triangulation scaffold
 - [ ] 1+1 foliation (causal time‑slicing)
-- [ ] 2D ergodic moves (Alexander/Pachner moves with causal constraints)
-- [ ] 2D Metropolis–Hastings
+- [ ] 2D ergodic moves (Alexander/Pachner moves with causal constraints, fully validated)
+- [ ] 2D Metropolis–Hastings (stabilized and moved to `markov-chain-monte-carlo`)
 - [ ] Diffusion‑accelerated MCMC (exploration)
 - [ ] Basic visualization hooks (export to common mesh formats)
 - [ ] 3D Delaunay + 2+1 foliation + moves + M–H

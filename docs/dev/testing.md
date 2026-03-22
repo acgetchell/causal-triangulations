@@ -199,13 +199,12 @@ Before proposing patches agents should run:
 just ci
 ```
 
-CI enforces:
+The `ci` recipe runs `check bench-compile test-all examples`, which enforces:
 
-- formatting
-- linting
-- documentation builds
-- unit tests
-- integration tests
+- **check** (via `lint`): formatting, clippy, documentation builds, markdown, spelling, config validation (JSON, TOML, YAML, GitHub Actions)
+- **bench-compile**: benchmarks compile without warnings under `-D warnings`
+- **test-all**: unit tests, doc tests, integration tests, and Python tests (pytest)
+- **examples**: all example scripts run successfully
 
 ---
 

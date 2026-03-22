@@ -477,8 +477,10 @@ where
             return false;
         }
 
-        // v0.7.2: use full upstream validation (Levels 1–3: neighbor pointers,
-        // Euler characteristic, and coherent orientation).
+        // v0.7.2: use full upstream validation (Levels 1–4: neighbor pointers,
+        // Euler characteristic, coherent orientation, and Delaunay property).
+        // The structural-minimum check above is a pre-filter to avoid calling
+        // validate() on trivially degenerate triangulations.
         self.dt.validate().is_ok()
     }
 }

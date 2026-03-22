@@ -440,6 +440,16 @@ setup-tools:
     missing=0
 
     cmds=(uv jq taplo yamllint shfmt shellcheck actionlint git-cliff dprint typos)
+
+    # prettier (or npx as fallback) is required by the yaml-fix recipe
+    if ! have prettier && ! have npx; then
+        echo "  ✗ prettier/npx (required by yaml-fix)"
+        missing=1
+    elif have prettier; then
+        echo "  ✓ prettier"
+    else
+        echo "  ✓ npx (prettier via npx)"
+    fi
     if [[ "$os" == "Linux" ]]; then
         cmds+=(cargo-tarpaulin)
     fi
