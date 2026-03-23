@@ -22,10 +22,12 @@ body = """
 {# Release heading #}
 {% if version %}
 {% set_global release_date = timestamp | date(format="%Y-%m-%d") %}
+{% set_global found_release_date = false %}
 {% for commit in commits %}
 {% set subject = commit.raw_message | split_regex(pat="\r?\n") | first | trim %}
-{% if not (subject is matching("\\(#\\d+\\)$")) %}
+{% if not found_release_date and not (subject is matching("\\(#\\d+\\)$")) %}
 {% set_global release_date = commit.author.timestamp | date(format="%Y-%m-%d") %}
+{% set_global found_release_date = true %}
 {% endif %}
 {% endfor %}
 {% if previous %}

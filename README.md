@@ -22,11 +22,17 @@ The library leverages high-performance [Delaunay triangulation] backends and pro
 - [x] Benchmarking and performance analysis infrastructure (in progress)
 - [x] Cross-platform compatibility (Linux, macOS, Windows)
 
+See [CHANGELOG.md](CHANGELOG.md) for release history.
+
 ## 🚧 Project Status
 
 🚧 **Pre-release (0.0.x)** — This crate is under active development and **not yet ready for production use**. APIs, data structures, and module boundaries may change without notice.
 
 The library currently supports an initial 2D CDT implementation, with planned extensions to 3D and 4D.
+
+## ⚙️ Requirements
+
+- Rust 1.94 or newer (required by dependencies such as `delaunay` and `la-stack`)
 
 **Why Rust for CDT?**
 

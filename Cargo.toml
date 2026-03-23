@@ -1,6 +1,6 @@
 [package]
 name = "causal-triangulations"
-version = "0.1.0"
+version = "0.0.1"
 authors = [ "Adam Getchell <adam@adamgetchell.org>" ]
 categories = [ "science", "mathematics", "algorithms", "simulation" ]
 edition = "2024"

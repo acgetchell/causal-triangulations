@@ -191,7 +191,7 @@ checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "causal-triangulations"
-version = "0.1.0"
+version = "0.0.1"
 dependencies = [
  "approx",
  "assert_cmd",
