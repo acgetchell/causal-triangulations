@@ -244,6 +244,7 @@ class TestErrorHandling:
 class TestSecurityFeatures:
     """Test security-related features of the utilities."""
 
+    @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed in PATH")
     def test_uses_full_executable_paths(self) -> None:
         """Test that commands use full executable paths."""
         # This is implicitly tested by get_safe_executable tests,
@@ -261,6 +262,7 @@ class TestSecurityFeatures:
         # If shell=True was used, this would expand the environment variable
         assert result.stdout.strip() == "$HOME"
 
+    @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed in PATH")
     def test_check_parameter_security_default(self) -> None:
         """Test that check=True is the default for security."""
         # Command that will fail should raise by default

@@ -57,8 +57,9 @@ class TestTagSizeLimitHandling:
         oversized_content = "\n\n".join([base_content] * repeats)
         assert len(oversized_content.encode("utf-8")) > max_tag_size
 
-        # Patch extraction so _get_changelog_content sees our oversized payload.
-        with patch.object(ChangelogUtils, "extract_changelog_section", return_value=oversized_content):
+        # Patch extraction and path lookup so the test is isolated from the filesystem.
+        with patch.object(ChangelogUtils, "find_changelog_path", return_value="CHANGELOG.md"), \
+             patch.object(ChangelogUtils, "extract_changelog_section", return_value=oversized_content):
             tag_message, is_truncated = ChangelogUtils._get_changelog_content("v0.1.0")
 
         assert is_truncated is True, "Large changelog should be truncated"
@@ -70,7 +71,8 @@ class TestTagSizeLimitHandling:
         """Test that small changelog content is returned in full."""
         small_content = _SYNTHETIC_CHANGELOG_SECTION
 
-        with patch.object(ChangelogUtils, "extract_changelog_section", return_value=small_content):
+        with patch.object(ChangelogUtils, "find_changelog_path", return_value="CHANGELOG.md"), \
+             patch.object(ChangelogUtils, "extract_changelog_section", return_value=small_content):
             tag_message, is_truncated = ChangelogUtils._get_changelog_content("v0.1.0")
 
         assert is_truncated is False, "Small changelog should not be truncated"
@@ -101,7 +103,7 @@ class TestTagSizeLimitHandling:
         ChangelogUtils._show_success_message("v0.1.0", is_truncated=True)
 
         # Collect all print calls
-        print_calls = [str(call_args[0][0]) if call_args[0] else "" for call_args in mock_print.call_args_list]
+        print_calls = [str(call.args[0]) if call.args else "" for call in mock_print.call_args_list]
         all_output = "\n".join(print_calls)
 
         # Should mention the tag was created
@@ -119,7 +121,7 @@ class TestTagSizeLimitHandling:
         ChangelogUtils._show_success_message("v1.0.0", is_truncated=False)
 
         # Collect all print calls
-        print_calls = [str(call_args[0][0]) if call_args[0] else "" for call_args in mock_print.call_args_list]
+        print_calls = [str(call.args[0]) if call.args else "" for call in mock_print.call_args_list]
         all_output = "\n".join(print_calls)
 
         # Should mention the tag was created
