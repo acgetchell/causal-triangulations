@@ -61,6 +61,15 @@ class VersionError(ChangelogError):
 class ChangelogUtils:
     """Utility class for changelog operations."""
 
+    # Pre-compiled patterns for context-sensitive code detection in indented blocks.
+    # These overlap with English prose so they require syntax-shaped continuation.
+    _CONTEXTUAL_CODE_PATTERNS = (
+        re.compile(r"^use\s+[\w:]+"),
+        re.compile(r"^from\s+\w+\s+import\b"),
+        re.compile(r"^type\s+\w+\s*[=:]"),
+        re.compile(r"^export\s+(const|function|class|default)\b"),
+    )
+
     @staticmethod
     def find_changelog_path() -> str:
         """
@@ -856,7 +865,7 @@ class ChangelogUtils:
         return out
 
     @staticmethod
-    def _indented_block_looks_like_code(content_lines: list[str]) -> bool:
+    def _indented_block_looks_like_code(content_lines: list[str]) -> bool:  # noqa: PLR0911
         """Heuristically decide whether an indented block is actually code.
 
         Some commit bodies indent wrapped prose by 4 spaces, which Markdown would
@@ -864,6 +873,7 @@ class ChangelogUtils:
         code-like.
         """
         code_prefixes = (
+            # Shell / CLI commands
             "$ ",
             "cargo ",
             "just ",
@@ -879,16 +889,22 @@ class ChangelogUtils:
             "npm ",
             "npx ",
             "make ",
+            # Rust declarations
+            "fn ",
+            "pub ",
+            "mod ",
+            "impl ",
+            "struct ",
+            "enum ",
+            "trait ",
+            # Python declarations
             "def ",
             "class ",
-            "func ",
-            "package ",
-            "module ",
-            "var ",
-            "let ",
+            "import ",
+            # JS/TS declarations
             "const ",
-            "interface ",
         )
+        # Unambiguous structural markers (no semicolons - too common in prose)
         code_markers = (
             "::",
             "->",
@@ -898,7 +914,6 @@ class ChangelogUtils:
             "{",
             "}",
         )
-
         for line in content_lines:
             stripped = line.strip()
             if not stripped:
@@ -908,7 +923,15 @@ class ChangelogUtils:
             if lowered.startswith(code_prefixes):
                 return True
 
+            # Context-sensitive prefixes: require syntax-shaped continuation
+            if any(pat.match(stripped) for pat in ChangelogUtils._CONTEXTUAL_CODE_PATTERNS):
+                return True
+
             if any(marker in stripped for marker in code_markers):
+                return True
+
+            # Semicolons only count as code when they look like statement terminators
+            if re.search(r"\w\s*;\s*$", stripped) or stripped.endswith(");"):
                 return True
 
             # Treat assignment/config lines as code, but avoid classifying any line that
@@ -916,17 +939,9 @@ class ChangelogUtils:
             if re.match(r"^[A-Za-z_][A-Za-z0-9_.-]*\s*=\s*\S", stripped):
                 return True
 
-            # Detect function/method declarations: identifier followed by () (Python, Go, etc.)
-            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*\s*\(", stripped) or stripped.endswith(":"):
-                return True
-
             # Single-token lines inside indented blocks are more likely to be code/output
-            # (hashes, identifiers, paths) than wrapped prose. Require the token to contain
-            # a digit, punctuation commonly found in paths/versions, look like a hex hash, or
-            # be unusually long (>= 40 chars — likely a hash, path, or other code output).
-            if " " not in stripped and (
-                any(c in stripped for c in "0123456789/.-_") or re.match(r"^[0-9a-fA-F]{16,}$", stripped) or len(stripped) >= 40
-            ):
+            # (hashes, identifiers, paths) than wrapped prose.
+            if " " not in stripped and len(stripped) >= 16:
                 return True
 
         return False
@@ -1197,7 +1212,7 @@ class ChangelogUtils:
             except GitRepoError:
                 # Fallback: keep a stable link even when running in a minimal test environment
                 # without a configured `origin` remote. Override via CHANGELOG_FALLBACK_URL.
-                repo_url = os.environ.get("CHANGELOG_FALLBACK_URL", "https://github.com/acgetchell/causal-dynamical-triangulations")
+                repo_url = os.environ.get("CHANGELOG_FALLBACK_URL", "https://github.com/acgetchell/causal-triangulations")
 
             short_message = f"""Version {version}
 
@@ -1325,11 +1340,10 @@ For detailed release notes, refer to CHANGELOG.md in the repository.
 
 
 def main() -> None:
-    """
-    Main entry point for changelog-utils CLI.
+    """Main entry point for changelog-utils CLI.
 
-    This provides a Python replacement for generate_changelog.sh with the same
-    functionality but better error handling and cross-platform support.
+    Runs the changelog workflow (git-cliff + post-processing) with robust
+    error handling and cross-platform support.
     """
 
     def signal_handler(signum, frame):
@@ -1345,7 +1359,7 @@ def main() -> None:
         _handle_tag_command()
         return
 
-    # Handle generate command or legacy mode
+    # Handle generate command (or default mode)
     args = _parse_generate_args()
 
     if args.help:
@@ -1434,14 +1448,14 @@ Intermediate files (when using --debug with generate):
   - CHANGELOG.md.processed.expanded (after PR expansion)
   - CHANGELOG.md.tmp2 (after AI enhancement)
 
-This tool replaces both generate_changelog.sh and tag-from-changelog.sh.
+This tool supersedes the previous shell-based changelog/tag helpers.
 """)
 
 
 def _show_version() -> None:
     """Show version information."""
     print("changelog-utils v0.4.1 (Python implementation)")
-    print("Part of causal-dynamical-triangulations")
+    print("Part of causal-triangulations")
 
 
 def _execute_changelog_generation(debug_mode: bool) -> None:
@@ -1477,7 +1491,19 @@ def _execute_changelog_generation(debug_mode: bool) -> None:
         finally:
             os.chdir(original_cwd)
 
-    except (ChangelogError, GitRepoError, VersionError, KeyboardInterrupt, Exception) as exc:
+    except (ChangelogError, GitRepoError, VersionError) as exc:
+        if file_paths is None:
+            raise SystemExit(1) from exc
+        _restore_backup_and_exit(file_paths)
+    except KeyboardInterrupt as exc:
+        if file_paths is None:
+            raise SystemExit(1) from exc
+        _restore_backup_and_exit(file_paths)
+    except SystemExit:
+        if file_paths is not None:
+            _restore_backup_and_exit(file_paths)
+        raise
+    except Exception as exc:  # restore backup and exit on any unexpected error
         if file_paths is None:
             raise SystemExit(1) from exc
         _restore_backup_and_exit(file_paths)
@@ -1511,27 +1537,21 @@ def _validate_prerequisites() -> None:
     ChangelogUtils.check_git_history()
 
     if not shutil.which("git-cliff"):
-        print(
-            "Error: git-cliff not found. Install via Homebrew (brew install git-cliff) or Cargo (cargo install git-cliff).",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+        msg = "git-cliff not found. Install via Homebrew (brew install git-cliff) or Cargo (cargo install git-cliff)."
+        raise ChangelogError(msg)
 
     # Verify git-cliff is runnable.
     try:
         run_safe_command("git-cliff", ["--version"])
-    except Exception:
-        print(
-            "Error: git-cliff failed to run. Verify your installation and try again.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    except Exception as exc:
+        msg = "git-cliff failed to run. Verify your installation and try again."
+        raise ChangelogError(msg) from exc
 
     # Verify configuration file
     config_path = Path("cliff.toml")
     if not config_path.exists():
-        print(f"Error: git-cliff config not found at project root: {config_path}", file=sys.stderr)
-        sys.exit(1)
+        msg = f"git-cliff config not found at project root: {config_path}"
+        raise ChangelogError(msg)
 
 
 def _get_repository_url() -> str:
@@ -1539,7 +1559,7 @@ def _get_repository_url() -> str:
     try:
         return ChangelogUtils.get_repository_url()
     except GitRepoError:
-        default_fallback = "https://github.com/acgetchell/causal-dynamical-triangulations"
+        default_fallback = "https://github.com/acgetchell/causal-triangulations"
         fallback = os.environ.get("CHANGELOG_FALLBACK_URL", default_fallback)
         print(
             f"Warning: Could not detect repository URL, using fallback: {fallback} (set CHANGELOG_FALLBACK_URL to override)",
@@ -1594,14 +1614,15 @@ def _enhance_with_ai(file_paths: dict[str, Path], project_root: Path) -> None:
     enhance_script = script_dir / "enhance_commits.py"
 
     if not enhance_script.exists():
-        sys.exit(1)
+        msg = f"enhance_commits.py not found at {enhance_script}"
+        raise ChangelogError(msg)
 
     try:
         python_exe = sys.executable or "python"
         run_safe_command(python_exe, [str(enhance_script), str(file_paths["expanded"]), str(file_paths["enhanced"])], cwd=project_root)
-    except Exception:
-        print("Error: enhance_commits.py failed. Verify your Python environment and try again.", file=sys.stderr)
-        sys.exit(1)
+    except Exception as exc:
+        msg = "enhance_commits.py failed. Verify your Python environment and try again."
+        raise ChangelogError(msg) from exc
 
 
 def _cleanup_final_output(file_paths: dict[str, Path]) -> None:
@@ -2465,10 +2486,6 @@ class ChangelogProcessor:
                     self.expanded_commit_shas.add(commit_sha)
                     self.expanded_commit_shas.add(commit_sha[:7])
                     return None
-                # Empty expansion: mark SHA as seen to prevent duplicate processing.
-                self.expanded_commit_shas.add(commit_sha)
-                self.expanded_commit_shas.add(commit_sha[:7])
-                return original_line
 
         except Exception as e:
             logging.debug("Failed to process commit SHA %s: %s", commit_sha, e)

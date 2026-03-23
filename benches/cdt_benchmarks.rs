@@ -9,7 +9,7 @@
 
 #![allow(missing_docs)] // Allow missing docs for criterion-generated functions
 
-use causal_dynamical_triangulations::{
+use causal_triangulations::{
     cdt::{
         action::ActionConfig,
         ergodic_moves::{ErgodicsSystem, MoveType},

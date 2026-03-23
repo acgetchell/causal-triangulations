@@ -1,6 +1,6 @@
-# causal-dynamical-triangulations
+# causal-triangulations
 
-[![CI](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/ci.yml/badge.svg)](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/ci.yml) [![rust-clippy analyze](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/rust-clippy.yml/badge.svg)](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/rust-clippy.yml) [![Codecov](https://codecov.io/gh/acgetchell/causal-dynamical-triangulations/graph/badge.svg?token=CsbOJBypGC)](https://codecov.io/gh/acgetchell/causal-dynamical-triangulations) [![Kani CI](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/kani.yml/badge.svg)](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/kani.yml) [![Audit dependencies](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/audit.yml/badge.svg)](https://github.com/acgetchell/causal-dynamical-triangulations/actions/workflows/audit.yml)
+[![CI](https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml) [![rust-clippy analyze](https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml) [![Codecov](https://codecov.io/gh/acgetchell/causal-triangulations/graph/badge.svg?token=CsbOJBypGC)](https://codecov.io/gh/acgetchell/causal-triangulations) [![Audit dependencies](https://github.com/acgetchell/causal-triangulations/actions/workflows/audit.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/audit.yml)
 
 Causal Dynamical Triangulations for quantum gravity in [Rust], built on fast Delaunay triangulation primitives.
 
@@ -10,31 +10,45 @@ This library implements **Causal Dynamical Triangulations (CDT)** in [Rust]. CDT
 
 For an introduction to Causal Dynamical Triangulations, see [this paper](https://arxiv.org/abs/hep-th/0105267).
 
-The library leverages high-performance [Delaunay triangulation] backends and provides a complete toolkit for CDT research and exploration.
+The library leverages high-performance [Delaunay triangulation] backends and provides a foundational toolkit for CDT research and exploration.
 
 ## ✨ Features
 
-- [x] 2D Causal Dynamical Triangulations with time-foliation
-- [x] Metropolis-Hastings Monte Carlo simulation
-- [x] Regge action calculation with configurable coupling constants
-- [x] Ergodic moves (Alexander/Pachner moves) with causal constraints
-- [x] Command-line interface for simulation workflows
-- [x] Formal verification using [Kani] model checker
-- [x] Comprehensive benchmarking and performance analysis
+- [x] 2D Causal Dynamical Triangulations with time-foliation (early implementation)
+- [x] Initial Metropolis–Hastings Monte Carlo prototype (subject to extraction into a standalone crate)
+- [x] Regge action calculation with configurable coupling constants (experimental)
+- [x] Ergodic moves (Alexander/Pachner moves) with causal constraints (experimental)
+- [x] Command-line interface for simulation workflows (early)
+- [x] Benchmarking and performance analysis infrastructure (in progress)
 - [x] Cross-platform compatibility (Linux, macOS, Windows)
-
-See [CHANGELOG.md](CHANGELOG.md) for details.
 
 ## 🚧 Project Status
 
-Early development - API and data structures may change. The library currently supports 2D CDT with plans for 3D and 4D extensions.
+🚧 **Pre-release (0.0.x)** — This crate is under active development and **not yet ready for production use**. APIs, data structures, and module boundaries may change without notice.
+
+The library currently supports an initial 2D CDT implementation, with planned extensions to 3D and 4D.
 
 **Why Rust for CDT?**
 
 - **Memory safety** for large-scale simulations
 - **Zero-cost abstractions** for performance-critical geometry operations
-- **Formal verification** support via [Kani] for mathematical correctness
 - **Rich ecosystem** for scientific computing and parallel processing
+
+## 🧩 Ecosystem (Planned)
+
+This crate is part of a broader Rust ecosystem for computational geometry and simulation:
+
+- [`delaunay`](https://crates.io/crates/delaunay) — geometric primitives and triangulations
+- `la-stack` — linear algebra utilities
+- `markov-chain-monte-carlo` (planned) — a composable MCMC engine to which the current Metropolis–Hastings implementation will migrate
+
+The long-term design separates:
+
+- **Geometry** (triangulations and invariants)
+- **Sampling** (MCMC algorithms)
+- **Physics** (CDT-specific dynamics and observables)
+
+This crate focuses on the CDT (physics + domain) layer.
 
 ## 🤝 How to Contribute
 
@@ -42,15 +56,15 @@ We welcome contributions! Here's a 30-second quickstart:
 
 ```bash
 # Clone and setup
-git clone https://github.com/acgetchell/causal-dynamical-triangulations.git
-cd causal-dynamical-triangulations
+git clone https://github.com/acgetchell/causal-triangulations.git
+cd causal-triangulations
 
 # Traditional approach
 cargo build && cargo test
 
 # Modern approach (recommended) - install just command runner
 cargo install just
-just setup           # Complete environment setup (includes Kani)
+just setup           # Complete environment setup
 just fix             # Apply formatters/auto-fixes
 just check           # Run all linters/validators
 just --list          # See all available development commands
@@ -69,7 +83,7 @@ just run-example     # Basic simulation
 - `just fix` - Apply formatters/auto-fixes (mutating)
 - `just check` - Run linters/validators (non-mutating)
 - `just ci` - CI parity (mirrors GitHub Actions workflow [`ci.yml`](.github/workflows/ci.yml))
-- `just commit-check` - Comprehensive pre-commit validation (includes Kani)
+- `just commit-check` - Comprehensive pre-commit validation
 
 **Repository tooling (via `just`):**
 
@@ -84,7 +98,7 @@ just run-example     # Basic simulation
 See [`examples/basic_cdt.rs`](examples/basic_cdt.rs) for a complete working example:
 
 ```rust
-use causal_dynamical_triangulations::{
+use causal_triangulations::{
     CdtConfig, MetropolisConfig, ActionConfig, MetropolisAlgorithm,
     geometry::CdtTriangulation2D,
 };
@@ -157,37 +171,13 @@ just perf-trends 7       # Analyze performance trends over 7 days
 
 See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/PERFORMANCE_TESTING.md`](docs/PERFORMANCE_TESTING.md) for comprehensive performance testing workflow documentation.
 
-## 🔒 Formal Verification
-
-The library uses [Kani] model checker for formal verification of critical properties:
-
-```bash
-# Run all proofs (runs per harness matrix in CI on main and scheduled jobs)
-just kani
-
-# Fast verification (single critical harness, default on pull requests)
-just kani-fast
-
-# Individual harnesses
-cargo kani --harness verify_action_config
-cargo kani --harness verify_regge_action_properties
-```
-
-**Toolchain note:** Kani ships its own pinned nightly and does not read `rust-toolchain.toml`. We install `kani-verifier` 0.66.0 (bundled rustc 1.93.0-nightly) for reproducibility; regular builds/tests continue to use the workspace MSRV (1.93.0).
-
-### Workflow behavior
-
-- Pull requests run the fast harness set for quick feedback.
-- Pushes to `main` (and manual dispatch) run every harness in parallel via GitHub Actions matrix jobs.
-
 ## 🛣️ Roadmap
 
 - [x] Integrate an existing Rust **Delaunay** triangulation library (e.g., [`delaunay`](https://crates.io/crates/delaunay))
 - [x] 2D Delaunay triangulation scaffold
-- [x] Model‑checking with **[Kani](https://model-checking.github.io/kani/install-guide.html)** for core invariants
 - [ ] 1+1 foliation (causal time‑slicing)
-- [ ] 2D ergodic moves (Alexander/Pachner moves with causal constraints)
-- [ ] 2D Metropolis–Hastings
+- [ ] 2D ergodic moves (Alexander/Pachner moves with causal constraints, fully validated)
+- [ ] 2D Metropolis–Hastings (stabilized and moved to `markov-chain-monte-carlo`)
 - [ ] Diffusion‑accelerated MCMC (exploration)
 - [ ] Basic visualization hooks (export to common mesh formats)
 - [ ] 3D Delaunay + 2+1 foliation + moves + M–H
@@ -200,7 +190,7 @@ cargo kani --harness verify_regge_action_properties
 
 - **Separation of concerns**: geometry primitives (Delaunay/Voronoi) are decoupled from CDT dynamics.
 - **Foliation‑aware data model**: explicit time labels; space‑like vs time‑like edges encoded in types.
-- **Testing**: unit + property tests; Kani proofs for invariants (e.g., move reversibility, manifoldness).
+- **Testing**: unit + property tests for invariants (e.g., move reversibility, manifoldness).
 
 For comprehensive guidelines on contributing, development environment setup, testing, and project structure, please see [CONTRIBUTING.md](CONTRIBUTING.md).
 
@@ -231,5 +221,4 @@ This project's license is specified in [LICENSE](LICENSE).
 
 [Rust]: https://rust-lang.org
 [Delaunay triangulation]: https://crates.io/crates/delaunay
-[Kani]: https://model-checking.github.io/kani/
 [Criterion]: https://github.com/bheisler/criterion.rs

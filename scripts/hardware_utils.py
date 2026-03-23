@@ -352,8 +352,10 @@ class HardwareInfo:
                         break
         except subprocess.CalledProcessError as e:
             logger.debug("rustc command failed: %s", e)
-        except (OSError, ExecutableNotFoundError) as e:
-            logger.debug("Failed to get Rust info: %s", e)
+        except ExecutableNotFoundError as e:
+            logger.debug("rustc not found in PATH: %s", e)
+        except OSError as e:
+            logger.debug("rustc command failed (OS error): %s", e)
 
         return rust_version, rust_target
 
@@ -643,7 +645,6 @@ def main():
     parser.add_argument("command", choices=["info", "kv", "compare"], help="Command to run")
     parser.add_argument("--baseline-file", help="Path to baseline file (required for 'compare' command)")
     parser.add_argument("--json", action="store_true", help="Output in JSON format")
-    parser.add_argument("--cwd", type=Path, default=None, help="Working directory for rustc/rustup commands (affects toolchain selection)")
 
     args = parser.parse_args()
 
@@ -651,14 +652,14 @@ def main():
 
     if args.command == "info":
         if args.json:
-            info = hardware.get_hardware_info(cwd=args.cwd)
+            info = hardware.get_hardware_info()
             print(json.dumps(info, indent=2))
         else:
-            formatted_info = hardware.format_hardware_info(cwd=args.cwd)
+            formatted_info = hardware.format_hardware_info()
             print(formatted_info, end="")
 
     elif args.command == "kv":
-        info = hardware.get_hardware_info(cwd=args.cwd)
+        info = hardware.get_hardware_info()
         for key, value in info.items():
             print(f"{key}={value}")
 
@@ -674,7 +675,7 @@ def main():
 
         try:
             baseline_content = baseline_path.read_text(encoding="utf-8", errors="replace")
-            current_info = hardware.get_hardware_info(cwd=args.cwd)
+            current_info = hardware.get_hardware_info()
             baseline_info = HardwareComparator.parse_baseline_hardware(baseline_content)
 
             report, has_warnings = HardwareComparator.compare_hardware(current_info, baseline_info)

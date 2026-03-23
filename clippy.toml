@@ -1,8 +1,8 @@
-# Clippy configuration for the causal-dynamical-triangulations crate
+# Clippy configuration for the causal-triangulations crate
 # This ensures consistent configuration across all developers and IDEs
 
 # Minimum Supported Rust Version
-msrv = "1.93.0"
+msrv = "1.94.0"
 
 # Allow multiple crate versions - this is common in Rust dependency trees
 # and not something we can easily control without major refactoring

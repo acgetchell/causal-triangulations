@@ -1,5 +1,16 @@
-use delaunay::geometry::kernel::FastKernel;
+use crate::errors::CdtError;
+use delaunay::core::builder::DelaunayTriangulationBuilder;
+use delaunay::geometry::kernel::RobustKernel;
+use delaunay::geometry::util::{generate_random_points, generate_random_points_seeded};
+use delaunay::prelude::VertexBuilder;
 use rand::random;
+
+/// Type alias for the 2D Delaunay triangulation returned by this crate's generators.
+///
+/// Uses [`RobustKernel`] (the default for [`DelaunayTriangulationBuilder::build`]) and
+/// `()` vertex data (CDT metadata is tracked separately in [`CdtTriangulation`](crate::cdt::triangulation::CdtTriangulation)).
+pub type DelaunayTriangulation2D =
+    delaunay::core::delaunay_triangulation::DelaunayTriangulation<RobustKernel<f64>, (), i32, 2>;
 
 /// Generates a random floating-point number between 0.0 and 1.0.
 ///
@@ -13,6 +24,14 @@ pub fn generate_random_float() -> f64 {
 
 /// Generates a Delaunay triangulation with optional seed for deterministic testing.
 ///
+/// Uses [`DelaunayTriangulationBuilder`] (introduced in delaunay v0.7.2) for
+/// construction, which provides deterministic tie-breaking and coherent orientation
+/// as first-class invariants.
+///
+/// # Panics
+///
+/// Panics if a [`VertexBuilder`] fails to build from a valid point (should not happen in practice).
+///
 /// # Errors
 ///
 /// Returns enhanced error information including vertex count, coordinate range, and underlying error.
@@ -20,11 +39,7 @@ pub fn generate_delaunay2_with_context(
     number_of_vertices: u32,
     coordinate_range: (f64, f64),
     seed: Option<u64>,
-) -> crate::errors::CdtResult<
-    delaunay::core::delaunay_triangulation::DelaunayTriangulation<FastKernel<f64>, i32, i32, 2>,
-> {
-    use crate::errors::CdtError;
-
+) -> crate::errors::CdtResult<DelaunayTriangulation2D> {
     // Validate parameters before attempting generation
     if number_of_vertices < 3 {
         return Err(CdtError::InvalidGenerationParameters {
@@ -42,19 +57,34 @@ pub fn generate_delaunay2_with_context(
         });
     }
 
-    // Generate triangulation with or without seed
-    let dt = delaunay::geometry::util::generate_random_triangulation(
-        number_of_vertices as usize,
-        coordinate_range,
-        None,
-        seed,
-    )
-    .map_err(|e| CdtError::DelaunayGenerationFailed {
-        vertex_count: number_of_vertices,
-        coordinate_range,
-        attempt: 1,
-        underlying_error: e.to_string(),
-    })?;
+    // Generate random points, then build triangulation via the builder API
+    let n = number_of_vertices as usize;
+    let points = seed
+        .map_or_else(
+            || generate_random_points::<f64, 2>(n, coordinate_range),
+            |s| generate_random_points_seeded::<f64, 2>(n, coordinate_range, s),
+        )
+        .map_err(|e| CdtError::DelaunayGenerationFailed {
+            vertex_count: number_of_vertices,
+            coordinate_range,
+            attempt: 1,
+            underlying_error: format!("Point generation failed: {e}"),
+        })?;
+
+    // VertexBuilder::build() only fails if the point is missing, which cannot happen here.
+    let vertices: Vec<_> = points
+        .into_iter()
+        .map(|point| VertexBuilder::default().point(point).build().unwrap())
+        .collect();
+
+    let dt = DelaunayTriangulationBuilder::new(&vertices)
+        .build::<i32>()
+        .map_err(|e| CdtError::DelaunayGenerationFailed {
+            vertex_count: number_of_vertices,
+            coordinate_range,
+            attempt: 1,
+            underlying_error: e.to_string(),
+        })?;
 
     Ok(dt)
 }
@@ -68,7 +98,7 @@ pub fn generate_delaunay2_with_context(
 pub fn generate_random_delaunay2(
     number_of_vertices: u32,
     coordinate_range: (f64, f64),
-) -> delaunay::core::delaunay_triangulation::DelaunayTriangulation<FastKernel<f64>, i32, i32, 2> {
+) -> DelaunayTriangulation2D {
     generate_delaunay2_with_context(number_of_vertices, coordinate_range, None)
         .unwrap_or_else(|_| {
             panic!(
@@ -87,7 +117,7 @@ pub fn generate_seeded_delaunay2(
     number_of_vertices: u32,
     coordinate_range: (f64, f64),
     seed: u64,
-) -> delaunay::core::delaunay_triangulation::DelaunayTriangulation<FastKernel<f64>, i32, i32, 2> {
+) -> DelaunayTriangulation2D {
     generate_delaunay2_with_context(number_of_vertices, coordinate_range, Some(seed))
         .unwrap_or_else(|_| {
             panic!(

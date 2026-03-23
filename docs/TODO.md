@@ -132,7 +132,7 @@ This document tracks all the pending improvements, features, and technical debt 
 - [x] **CI/CD improvements**
   - Performance regression testing via `benchmark_utils.py` + GitHub Actions
   - Automated benchmarking with Criterion.rs baselines
-  - Comprehensive linting: clippy, ruff, mypy, ty, shellcheck, yamllint, actionlint, dprint, typos, taplo
+  - Comprehensive linting: clippy, ruff, ty, shellcheck, yamllint, actionlint, dprint, typos, taplo
 
 ## Future Research Directions
 

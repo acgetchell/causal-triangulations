@@ -2,98 +2,205 @@
 
 Essential guidance for AI assistants working in this repository.
 
+This file is the **entry point for all coding agents**. Detailed rules are split into additional documents under `docs/dev/`. Agents MUST read the referenced files before making changes.
+
+---
+
+## Required Reading
+
+Before modifying code, agents MUST read:
+
+- `AGENTS.md` (this file)
+- **All files in `docs/dev/*.md`** – repository development rules
+- `docs/project.md` – module layout and architecture
+
+The `docs/dev/` directory contains the authoritative development guidance for this repository. Agents must load every file in that directory before making changes.
+
+---
+
 ## Core Rules
 
 ### Git Operations
 
 - **NEVER** run `git commit`, `git push`, `git tag`, or any git commands that modify version control state
-- **ALLOWED**: Run read-only git commands (e.g. `git --no-pager status`, `git --no-pager diff`, `git --no-pager log`, `git --no-pager show`, `git --no-pager blame`) to inspect changes/history
+- **ALLOWED**: read‑only git commands (`git --no-pager status`, `git --no-pager diff`, `git --no-pager log`, `git --no-pager show`, `git --no-pager blame`)
 - **ALWAYS** use `git --no-pager` when reading git output
 - Suggest git commands that modify version control state for the user to run manually
 
-### Commit Messages
+### GitHub CLI (`gh`)
 
-When user requests commit message generation:
+When using the `gh` CLI to view issues, PRs, or other GitHub objects:
+
+- **ALWAYS** use `--json` with `| cat` to avoid pager and scope errors:
+
+  ```bash
+  gh issue view 42 --repo acgetchell/causal-triangulations --json title,body | cat
+  ```
+
+- To extract specific fields cleanly, combine `--json` with `--jq`:
+
+  ```bash
+  gh issue view 42 --repo acgetchell/causal-triangulations --json title,body --jq '.title + "\n" + .body' | cat
+  ```
+
+- **AVOID** plain `gh issue view N` — it may fail with `read:project` scope errors or open a pager.
+
+- To manage **issue dependencies** (Blocks / Is Blocked By), use the GitHub REST API via `gh api`. The endpoint requires the **internal issue ID** (not the issue number).
+
+  To get an issue's internal ID:
+
+  ```bash
+  gh api repos/acgetchell/causal-triangulations/issues/42 --jq '.id'
+  ```
+
+  To add a "blocked by" dependency (e.g. #10 is blocked by #42):
+
+  ```bash
+  gh api repos/acgetchell/causal-triangulations/issues/10/dependencies/blocked_by \
+    -X POST -F issue_id=<BLOCKING_ISSUE_ID>
+  ```
+
+  To list existing blocked‑by dependencies:
+
+  ```bash
+  gh api repos/acgetchell/causal-triangulations/issues/10/dependencies/blocked_by \
+    --jq '[.[].number]' | cat
+  ```
+
+  **Note**: Use `-F` (not `-f`) for `issue_id` so it is sent as an integer. The API returns HTTP 422 if the dependency already exists.
+
+- When updating issues, use explicit `comment`/`edit` commands. For **arbitrary Markdown** (backticks, quotes, special characters), prefer `--body-file -` with a heredoc:
+
+  ```bash
+  gh issue comment 42 --repo acgetchell/causal-triangulations --body-file - <<'EOF'
+  ## Heading
+
+  Body with `backticks`, **bold**, and apostrophes that's safe.
+  EOF
+  ```
+
+  For **simple text only** (no apostrophes or special characters), single‑quoted `--body` is fine:
+
+  ```bash
+  gh issue comment 42 --repo acgetchell/causal-triangulations --body 'Simple update text'
+  ```
+
+### Code Editing
+
+- **NEVER** use `sed`, `awk`, `perl`, or `python` to modify code
+- **ALWAYS** use the patch editing mechanism provided by the agent
+- Shell text tools may be used for **read‑only analysis only**
+
+### Commit Message Generation
+
+When generating commit messages:
 
 1. Run `git --no-pager diff --cached --stat`
-2. Generate conventional commit format: `<type>: <brief summary>`
-3. Types: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `chore`, `style`, `ci`, `build`
-4. Include body with organized bullet points and test results
-5. Present in code block (no language) - user will commit manually
+2. Use conventional commits: `<type>: <summary>`
+3. Valid types: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `chore`, `style`, `ci`, `build`
+4. Include bullet‑point body describing key changes
+5. Present inside a code block so the user can commit manually
 
-### Code Quality
+#### Changelog‑Aware Body Text
 
-- **ALLOWED**: Run formatters/linters: `cargo fmt`, `cargo clippy`, `cargo doc`, `taplo fmt`, `taplo lint`, `uv run ruff check --fix`, `uv run ruff format`, `shfmt -w`, `shellcheck -x`, `dprint fmt`, `typos`, `actionlint`
-- **NEVER**: Use `sed`, `awk`, `perl` for code edits
-- **ALWAYS**: Use `edit_files` for edits (and `create_file` for new files)
-- **EXCEPTION**: Shell text tools OK for read-only analysis only
+Commit bodies appear **verbatim** in `CHANGELOG.md` (indented by git‑cliff's template). Write them as clean, readable prose:
 
-### Validation
+- Keep the **subject line** concise — it becomes the changelog entry.
+- The **type** determines the changelog section (`feat` → Added, `fix` → Fixed, `refactor`/`test`/`style` → Changed, `perf` → Performance, `docs` → Documentation, `build`/`chore`/`ci` → Maintenance).
+- Include **PR references** as `(#N)` in the subject — cliff auto‑links them (e.g. `feat: add foo (#42)`).
+- **Avoid headings** `#`–`###` in the body — they conflict with changelog structure (`##` = release, `###` = section). Use `####` if a heading is truly needed.
+- Body text should be **plain prose or simple lists**. Numbered lists and sub‑items are fine but avoid deep nesting.
 
-- **JSON**: Validate with `jq empty <file>.json` after editing (or `just validate-json`)
-- **TOML**: Lint/format with taplo: `just toml-lint`, `just toml-fmt-check`, `just toml-fmt`
-- **GitHub Actions**: Validate workflows with `just action-lint` (uses `actionlint`)
-- **Spell check**: Run `just spell-check` (or `just lint-docs`) after editing; add legitimate technical terms to `typos.toml` under `[default.extend-words]`
-- **Markdown**: Run `just markdown-check` (uses `dprint`) after editing; fix with `just markdown-fix`
-- **Shell scripts**: Run `just shell-check` after editing `.sh` files; fix with `just shell-fmt`
+#### Breaking Changes
 
-### Rust
+Breaking changes **must** use one of these conventional commit markers so that `git‑cliff` can detect them and generate the `### ⚠️ Breaking Changes` section in `CHANGELOG.md`:
 
-- Prefer borrowed APIs by default: take references (`&T`, `&mut T`, `&[T]`) as arguments and return borrowed views (`&T`, `&[T]`) when possible. Only take ownership or return `Vec`/allocated data when required.
-- Integration tests in `tests/*.rs` are separate crates; add a crate-level doc comment (`//! ...`) at the top to satisfy clippy `missing_docs` (CI uses `-D warnings`).
-- **Module layout**: Never use `mod.rs`. Declare modules in `src/lib.rs` (and `src/main.rs` for binaries), including nested modules via inline `pub mod foo { pub mod bar; }` when needed.
+- **Bang notation**: `feat!: remove deprecated API` (append `!` after the type/scope)
+- **Footer trailer**: add `BREAKING CHANGE: <description>` as a [git trailer](https://git-scm.com/docs/git-interpret-trailers) at the end of the commit body
 
-### Python
+Examples of breaking changes: removing/renaming public API items, changing default behaviour, bumping MSRV, altering serialisation formats.
 
-- Use `uv run` for all Python scripts (never `python3` or `python` directly)
-- Use pytest for tests (not unittest)
-- **Type checking**: `just python-typecheck` runs `ty check` + `mypy` (blocking - all code must pass)
-- Add type hints to new code
+---
 
-## Common Commands
+## Validation Workflow
+
+After modifying files, run appropriate validators.
+
+Common commands:
 
 ```bash
-just fix              # Apply formatters/auto-fixes (mutating)
-just check            # Lint/validators (non-mutating)
-just ci               # Full CI run (checks + all tests + bench compile)
-just commit-check     # Comprehensive pre-commit validation (includes Kani)
-just lint             # All linting
-just test             # Lib and doc tests
-just test-integration # Integration tests (tests/)
-just test-all         # All tests (Rust + Python)
-just examples         # Run all example scripts
+just fix
+just check
+just ci
 ```
 
-### Changelog
+Refer to `docs/dev/commands.md` for full details.
 
-- Never edit `CHANGELOG.md` directly - it's auto-generated from git commits
-- Use `just changelog` to regenerate
+---
+
+## Testing Rules
+
+Testing guidance lives in:
+
+```text
+docs/dev/testing.md
+```
+
+Key principle:
+
+- Rust changes must pass unit tests, integration tests, and documentation builds.
+
+---
 
 ## Project Context
 
-- **Rust** {2,3,4}D Causal Dynamical Triangulations library (MSRV 1.93.0, Edition 2024)
-- **No unsafe code**: `#![forbid(unsafe_code)]`
+- **Language**: Rust
+- **Project**: {2,3,4}D Causal Dynamical Triangulations library
+- **MSRV**: 1.94.0
+- **Edition**: 2024
+- **Unsafe code**: forbidden (`#![forbid(unsafe_code)]`)
 - **Architecture**: CDT physics layered over a pluggable geometry backend (`delaunay` crate)
 - **Modules**: `src/cdt/` (CDT logic: moves, action, Metropolis), `src/geometry/` (geometry abstractions and backends), `src/config.rs` (simulation configuration)
 - **Ergodic moves**: `attempt_22_move`, `attempt_13_move`, `attempt_31_move`, `attempt_edge_flip` are currently placeholder implementations; full `delaunay::Tds` integration is planned
-- **Formal verification**: Kani proofs in `src/cdt/action.rs` under `#[cfg(kani)]`
 - **Python scripts**: `scripts/` contains benchmark, changelog, and hardware utilities; tests in `scripts/tests/` run via pytest
 - **When adding/removing files**: Update `docs/project.md`
 
-## Test Execution
+Architecture details are documented in:
 
-- **tests/ changes**: Run `just test-integration` (or `just ci`)
-- **examples/ changes**: Run `just examples`
-- **benches/ changes**: Run `just bench-compile`
-- **src/ changes**: Run `just test`
-- **scripts/ changes**: Run `just test-python`
-- **Any Rust changes**: Run `just doc-check`
-
-## Formal Verification
-
-```bash
-just kani       # Run all Kani proofs (slow)
-just kani-fast  # Run fast harness (verify_action_config only)
+```text
+docs/project.md
 ```
 
-Kani ships its own pinned nightly and does not read `rust-toolchain.toml`. Regular builds and tests use the workspace MSRV toolchain.
+---
+
+## Python
+
+- Use `uv run` for all Python scripts (never `python3` or `python` directly)
+- Use pytest for tests (not unittest)
+- **Type checking**: `just python-typecheck` runs `ty check` (blocking — all code must pass)
+- Add type hints to new code
+
+---
+
+## Documentation Maintenance
+
+- Never edit `CHANGELOG.md` directly — it's auto-generated from git commits
+- Run `just changelog` to regenerate
+
+---
+
+## Agent Behavior Expectations
+
+Agents should:
+
+- Prefer small, focused patches
+- Follow Rust idioms and borrowing conventions
+- Avoid introducing allocations unless necessary
+- Avoid panics in library code
+- Search documentation under `docs/` when unsure
+
+If multiple solutions exist, prefer the one that:
+
+1. Preserves API stability
+2. Keeps code simple and maintainable
+3. Maintains the CDT ↔ geometry backend separation

@@ -4,12 +4,11 @@
 //! geometry backends.
 
 use super::traits::TriangulationQuery;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 fn stable_hash<T: Hash>(value: &T) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-
     let mut hasher = DefaultHasher::new();
     value.hash(&mut hasher);
     hasher.finish()

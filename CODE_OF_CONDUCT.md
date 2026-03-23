@@ -2,7 +2,7 @@
 
 ## Our Principles of Community
 
-The [causal-dynamical-triangulations][cdt-lib] quantum gravity research library community is founded on the [UC Davis Principles of Community][uc-davis-principles], adapted for our collaborative open-source scientific computing environment. We are committed to fostering an inclusive community that advances quantum gravity research and causal dynamical triangulation methods.
+The [causal-triangulations][cdt-lib] quantum gravity research library community is founded on the [UC Davis Principles of Community][uc-davis-principles], adapted for our collaborative open-source scientific computing environment. We are committed to fostering an inclusive community that advances quantum gravity research and causal dynamical triangulation methods.
 
 ### We affirm the inherent dignity in all of us
 
@@ -138,7 +138,7 @@ These principles are adapted from the [UC Davis Principles of Community][uc-davi
 
 ---
 
-[cdt-lib]: https://github.com/acgetchell/causal-dynamical-triangulations
+[cdt-lib]: https://github.com/acgetchell/causal-triangulations
 [maintainer]: mailto:adam@adamgetchell.org
 [uc-davis-principles]: https://principles.ucdavis.edu/
 

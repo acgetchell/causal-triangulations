@@ -35,6 +35,13 @@ pub enum CdtError {
         /// The expected range or constraint for the parameter
         expected_range: String,
     },
+    /// Validation of a constructed triangulation failed
+    ValidationFailed {
+        /// Name of the validation check that failed (e.g. "geometry", "topology", "Delaunay")
+        check: String,
+        /// Human-readable description of the failure
+        detail: String,
+    },
 }
 
 impl fmt::Display for CdtError {
@@ -68,6 +75,9 @@ impl fmt::Display for CdtError {
                 f,
                 "Invalid triangulation parameters: {issue} (got: {provided_value}, expected: {expected_range})",
             ),
+            Self::ValidationFailed { check, detail } => {
+                write!(f, "Validation failed [{check}]: {detail}")
+            }
         }
     }
 }
@@ -148,6 +158,19 @@ mod tests {
         assert_eq!(
             display,
             "Invalid triangulation parameters: Vertex count too small (got: 2, expected: at least 3)"
+        );
+    }
+
+    #[test]
+    fn test_validation_failed_error() {
+        let error = CdtError::ValidationFailed {
+            check: "topology".to_string(),
+            detail: "Euler characteristic χ=3 unexpected (V=5, E=8, F=6)".to_string(),
+        };
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Validation failed [topology]: Euler characteristic χ=3 unexpected (V=5, E=8, F=6)"
         );
     }
 
