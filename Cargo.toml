@@ -42,10 +42,10 @@ num-traits = "0.2.19"
 rand = "0.10.0"
 serde = { version = "1.0.228", features = [ "derive" ] }
 thiserror = "2.0.17"
-uuid = { version = "1.19", features = [ "v4" ] }
 
 [dev-dependencies]
 approx = "0.5.1"
+slotmap = "1.1.1"
 assert_cmd = "2.2.0"
 criterion = { version = "0.8.2", features = [ "html_reports" ] }
 predicates = "3.1.4"

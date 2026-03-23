@@ -5,16 +5,12 @@
 
 use std::hash::Hash;
 
-/// Core numeric trait for coordinates in geometric calculations
-pub trait CoordinateScalar:
-    Clone + Copy + PartialEq + PartialOrd + std::fmt::Debug + 'static + num_traits::Float
-{
-}
+/// Core numeric trait for coordinates in geometric calculations.
+///
+/// `num_traits::Float` already implies `Copy`, `Clone`, `PartialEq`, and `PartialOrd`.
+pub trait CoordinateScalar: std::fmt::Debug + 'static + num_traits::Float {}
 
-impl<T> CoordinateScalar for T where
-    T: Clone + Copy + PartialEq + PartialOrd + std::fmt::Debug + 'static + num_traits::Float
-{
-}
+impl<T> CoordinateScalar for T where T: std::fmt::Debug + 'static + num_traits::Float {}
 
 /// Handle types for geometry entities - completely opaque to prevent coupling
 pub trait GeometryHandle: Clone + Eq + Hash + std::fmt::Debug {}
@@ -23,8 +19,6 @@ pub trait GeometryHandle: Clone + Eq + Hash + std::fmt::Debug {}
 impl<T> GeometryHandle for T where T: Clone + Eq + Hash + std::fmt::Debug {}
 
 /// Core geometry backend trait - completely abstracted from implementation details.
-///
-/// Note: Send + Sync requirements removed to support non-thread-safe backends like `delaunay::Tds`
 pub trait GeometryBackend {
     /// Coordinate type used by this backend
     type Coordinate: CoordinateScalar;
