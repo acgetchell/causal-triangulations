@@ -477,11 +477,11 @@ where
             return false;
         }
 
-        // v0.7.2: use full upstream validation (Levels 1–4: neighbor pointers,
-        // Euler characteristic, coherent orientation, and Delaunay property).
-        // The structural-minimum check above is a pre-filter to avoid calling
-        // validate() on trivially degenerate triangulations.
-        self.dt.validate().is_ok()
+        // v0.7.2: use Levels 1–3 structural/topological validation via the
+        // Triangulation layer (neighbor pointers, Euler characteristic, coherent
+        // orientation) WITHOUT the Level 4 Delaunay property check.
+        // Use is_delaunay() for the full Levels 1–4 check.
+        self.dt.as_triangulation().validate().is_ok()
     }
 }
 
@@ -1082,22 +1082,22 @@ mod tests {
     }
 
     #[test]
-    fn test_is_valid_checks_coherent_orientation() {
-        // is_valid() now delegates to is_coherently_oriented();
-        // verify it agrees with is_delaunay() for well-formed triangulations
+    fn test_is_valid_runs_structural_validation() {
+        // is_valid() runs Levels 1–3 (structural/topological) via as_triangulation().validate();
+        // is_delaunay() runs Levels 1–4 (including the Delaunay property).
+        // For a well-formed Delaunay triangulation both should pass.
         let dt = crate::util::generate_seeded_delaunay2(8, (0.0, 10.0), 99);
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let valid = backend.is_valid();
         let delaunay = backend.is_delaunay();
 
-        assert!(valid, "Seeded triangulation should be valid");
+        assert!(valid, "Seeded triangulation should be structurally valid");
         assert!(
             delaunay,
             "Seeded triangulation should satisfy Delaunay property"
         );
-        // A valid Delaunay triangulation is always coherently oriented,
-        // so is_delaunay() implies is_valid()
+        // is_delaunay() (Levels 1–4) implies is_valid() (Levels 1–3)
         assert!(delaunay && valid, "is_delaunay() should imply is_valid()");
     }
 

@@ -57,6 +57,7 @@ class TestGetSafeExecutable:
         assert fake_command in str(exc_info.value)
 
 
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed in PATH")
 class TestRunGitCommand:
     """Test run_git_command function."""
 
@@ -196,6 +197,8 @@ class TestGitRepositoryFunctions:
 
     def test_get_git_remote_url_returns_url(self) -> None:
         """Test that get_git_remote_url returns a valid URL."""
+        if not check_git_repo():
+            pytest.skip("Not running inside a git repository")
         remotes = run_git_command(["remote"]).stdout.split()
         if "origin" not in remotes:
             pytest.skip("No 'origin' remote configured")
