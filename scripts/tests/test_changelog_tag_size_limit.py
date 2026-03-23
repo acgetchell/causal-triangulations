@@ -58,8 +58,10 @@ class TestTagSizeLimitHandling:
         assert len(oversized_content.encode("utf-8")) > max_tag_size
 
         # Patch extraction and path lookup so the test is isolated from the filesystem.
-        with patch.object(ChangelogUtils, "find_changelog_path", return_value="CHANGELOG.md"), \
-             patch.object(ChangelogUtils, "extract_changelog_section", return_value=oversized_content):
+        with (
+            patch.object(ChangelogUtils, "find_changelog_path", return_value="CHANGELOG.md"),
+            patch.object(ChangelogUtils, "extract_changelog_section", return_value=oversized_content),
+        ):
             tag_message, is_truncated = ChangelogUtils._get_changelog_content("v0.1.0")
 
         assert is_truncated is True, "Large changelog should be truncated"
@@ -71,8 +73,10 @@ class TestTagSizeLimitHandling:
         """Test that small changelog content is returned in full."""
         small_content = _SYNTHETIC_CHANGELOG_SECTION
 
-        with patch.object(ChangelogUtils, "find_changelog_path", return_value="CHANGELOG.md"), \
-             patch.object(ChangelogUtils, "extract_changelog_section", return_value=small_content):
+        with (
+            patch.object(ChangelogUtils, "find_changelog_path", return_value="CHANGELOG.md"),
+            patch.object(ChangelogUtils, "extract_changelog_section", return_value=small_content),
+        ):
             tag_message, is_truncated = ChangelogUtils._get_changelog_content("v0.1.0")
 
         assert is_truncated is False, "Small changelog should not be truncated"
