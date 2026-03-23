@@ -6,12 +6,10 @@ categories = [ "science", "mathematics", "algorithms", "simulation" ]
 edition = "2024"
 homepage = "https://github.com/acgetchell/causal-triangulations"
 keywords = [
-    "quantum",
-    "gravity",
+    "quantum-gravity",
     "spacetime",
     "simulation",
     "triangulation",
-    "physics",
     "causal",
 ]
 license = "BSD-3-Clause"
