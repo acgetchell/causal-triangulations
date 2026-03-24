@@ -210,28 +210,39 @@ impl MetropolisAlgorithm {
         &self,
         triangulation: crate::geometry::CdtTriangulation2D,
     ) -> crate::errors::CdtResult<SimulationResultsBackend> {
+        // Validate configuration to fail fast before any work
+        if self.config.measurement_frequency == 0 {
+            return Err(crate::errors::CdtError::InvalidParameters(
+                "measurement_frequency must be > 0".to_string(),
+            ));
+        }
+        if !self.config.temperature.is_finite() || self.config.temperature <= 0.0 {
+            return Err(crate::errors::CdtError::InvalidParameters(format!(
+                "temperature must be finite and positive, got {}",
+                self.config.temperature,
+            )));
+        }
+
         let start_time = Instant::now();
         let mut mc_steps = Vec::new();
         let mut measurements = Vec::new();
+
+        // Ensure we have a concrete seed for provenance (generate one if not provided)
+        let seed = self.config.seed.unwrap_or_else(rand::random::<u64>);
 
         log::info!("Starting Metropolis-Hastings simulation...");
         log::info!("Temperature: {}", self.config.temperature);
         log::info!("Total steps: {}", self.config.steps);
         log::info!("Thermalization steps: {}", self.config.thermalization_steps);
-        if let Some(seed) = self.config.seed {
-            log::info!("RNG seed: {seed}");
-        }
+        log::info!("RNG seed: {seed}");
 
         // Set up MCMC chain
         let target = CdtTarget::new(self.action_config.clone(), self.config.temperature);
         let proposal = CdtProposal;
         let mut chain = Chain::new(triangulation, &target)?;
 
-        // Create seeded or OS RNG
-        let mut rng: StdRng = self
-            .config
-            .seed
-            .map_or_else(|| StdRng::from_rng(&mut rand::rng()), StdRng::seed_from_u64);
+        // Create seeded RNG (always deterministic from the resolved seed)
+        let mut rng = StdRng::seed_from_u64(seed);
 
         for step_num in 0..self.config.steps {
             let action_before = -chain.log_prob * self.config.temperature;
@@ -280,8 +291,12 @@ impl MetropolisAlgorithm {
         log::info!("Simulation completed in {elapsed_time:.2?}");
         log::info!("Acceptance rate: {:.2}%", chain.acceptance_rate() * 100.0);
 
+        // Store the resolved seed in the results for provenance
+        let mut result_config = self.config.clone();
+        result_config.seed = Some(seed);
+
         Ok(SimulationResultsBackend {
-            config: self.config.clone(),
+            config: result_config,
             action_config: self.action_config.clone(),
             steps: mc_steps,
             measurements,
@@ -470,6 +485,44 @@ mod tests {
         for (m1, m2) in r1.measurements.iter().zip(r2.measurements.iter()) {
             assert_relative_eq!(m1.action, m2.action);
         }
+    }
+
+    #[test]
+    fn test_run_rejects_zero_measurement_frequency() {
+        let config = MetropolisConfig::new(1.0, 10, 2, 0);
+        let algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
+        let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
+
+        let err = algorithm.run(tri).unwrap_err();
+        let msg = format!("{err}");
+        assert!(msg.contains("measurement_frequency"), "Error: {msg}");
+    }
+
+    #[test]
+    fn test_run_rejects_invalid_temperature() {
+        for bad_temp in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let config = MetropolisConfig::new(bad_temp, 10, 2, 2);
+            let algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
+            let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
+
+            let err = algorithm.run(tri).unwrap_err();
+            let msg = format!("{err}");
+            assert!(msg.contains("temperature"), "T={bad_temp}: {msg}");
+        }
+    }
+
+    #[test]
+    fn test_run_records_seed_for_provenance() {
+        // When no seed is provided, run() should generate and record one
+        let config = MetropolisConfig::new(1.0, 5, 1, 1); // no seed
+        let algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
+        let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
+
+        let results = algorithm.run(tri).expect("Should succeed");
+        assert!(
+            results.config.seed.is_some(),
+            "Results should always contain a resolved seed"
+        );
     }
 
     #[test]

@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! Property-based tests for CDT Metropolis integration.
 
 use causal_triangulations::cdt::action::ActionConfig;
