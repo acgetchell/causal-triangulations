@@ -64,6 +64,10 @@ pub struct CdtConfig {
     /// Run full CDT simulation (default: true; disable to only generate triangulation)
     #[arg(long, default_value_t = true)]
     pub simulate: bool,
+
+    /// Optional RNG seed for reproducible simulations
+    #[arg(long)]
+    pub seed: Option<u64>,
 }
 
 /// Controls how dimension overrides are applied when merging configuration.
@@ -103,6 +107,12 @@ pub struct CdtConfigOverrides {
     pub cosmological_constant: Option<f64>,
     /// Optional override for the simulation flag.
     pub simulate: Option<bool>,
+    /// Optional override for the RNG seed.
+    #[expect(
+        clippy::option_option,
+        reason = "None=no override, Some(None)=clear seed, Some(Some(v))=set seed"
+    )]
+    pub seed: Option<Option<u64>>,
 }
 
 impl CdtConfig {
@@ -164,6 +174,10 @@ impl CdtConfig {
 
         if let Some(simulate) = overrides.simulate {
             merged.simulate = simulate;
+        }
+
+        if let Some(seed) = overrides.seed {
+            merged.seed = seed;
         }
 
         merged
@@ -260,18 +274,24 @@ impl CdtConfig {
             coupling_2: 1.0,
             cosmological_constant: 0.1,
             simulate: true,
+            seed: None,
         }
     }
 
     /// Creates a `MetropolisConfig` from this configuration.
     #[must_use]
     pub const fn to_metropolis_config(&self) -> MetropolisConfig {
-        MetropolisConfig::new(
+        let config = MetropolisConfig::new(
             self.temperature,
             self.steps,
             self.thermalization_steps,
             self.measurement_frequency,
-        )
+        );
+        // Wire seed through if present
+        MetropolisConfig {
+            seed: self.seed,
+            ..config
+        }
     }
 
     /// Creates an `ActionConfig` from this configuration.
@@ -364,6 +384,7 @@ impl TestConfig {
             coupling_2: 1.0,
             cosmological_constant: 0.1,
             simulate: true,
+            seed: None,
         }
     }
 
@@ -382,6 +403,7 @@ impl TestConfig {
             coupling_2: 1.0,
             cosmological_constant: 0.1,
             simulate: true,
+            seed: None,
         }
     }
 
@@ -400,6 +422,7 @@ impl TestConfig {
             coupling_2: 1.0,
             cosmological_constant: 0.1,
             simulate: true,
+            seed: None,
         }
     }
 }
