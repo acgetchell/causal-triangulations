@@ -74,10 +74,6 @@ pub enum DelaunayError {
         /// The cell key that was looked up
         key: CellKey,
     },
-
-    /// Operation failed with an error message
-    #[error("Delaunay operation failed: {0}")]
-    OperationFailed(String),
 }
 
 impl<VertexData, CellData, const D: usize> DelaunayBackend<VertexData, CellData, D>
@@ -231,8 +227,7 @@ where
         &self,
         vertex: &Self::VertexHandle,
     ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
-        // Validate vertex exists
-        if self.dt.vertex_coords(vertex.key).is_none() {
+        if !self.dt.tds().contains_vertex_key(vertex.key) {
             return Err(DelaunayError::InvalidVertex { key: vertex.key });
         }
         Ok(self
@@ -247,8 +242,7 @@ where
         &self,
         vertex: &Self::VertexHandle,
     ) -> Result<Vec<Self::EdgeHandle>, Self::Error> {
-        // Validate vertex exists
-        if self.dt.vertex_coords(vertex.key).is_none() {
+        if !self.dt.tds().contains_vertex_key(vertex.key) {
             return Err(DelaunayError::InvalidVertex { key: vertex.key });
         }
         Ok(self
@@ -262,8 +256,7 @@ where
         &self,
         face: &Self::FaceHandle,
     ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
-        // Validate face exists
-        if self.dt.cell_vertices(face.key).is_none() {
+        if !self.dt.tds().contains_cell_key(face.key) {
             return Err(DelaunayError::InvalidFace { key: face.key });
         }
         Ok(self
@@ -356,10 +349,14 @@ where
 
     fn clear(&mut self) {
         // TODO: Implement clear operation.
+        log::warn!("DelaunayBackend::clear() is not yet implemented; triangulation unchanged");
     }
 
-    fn reserve_capacity(&mut self, _vertices: usize, _faces: usize) {
+    fn reserve_capacity(&mut self, vertices: usize, faces: usize) {
         // TODO: Implement capacity reservation.
+        log::warn!(
+            "DelaunayBackend::reserve_capacity(vertices={vertices}, faces={faces}) is not yet implemented"
+        );
     }
 }
 
