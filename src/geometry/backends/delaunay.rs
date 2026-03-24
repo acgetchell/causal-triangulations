@@ -13,7 +13,13 @@ use delaunay::core::edge::EdgeKey;
 use delaunay::core::triangulation_data_structure::{CellKey, VertexKey};
 use delaunay::geometry::kernel::RobustKernel;
 
-/// Delaunay backend wrapping the delaunay crate's triangulation (f64 coordinates)
+/// Delaunay backend wrapping the delaunay crate's triangulation (f64 coordinates).
+///
+/// # Mutation support
+///
+/// The [`TriangulationMut`] methods (`insert_vertex`, `remove_vertex`, `flip_edge`, etc.)
+/// are not yet implemented and return [`DelaunayError::NotImplemented`]. The `clear()` and
+/// `reserve_capacity()` methods are currently no-ops that emit a `log::warn!` diagnostic.
 #[derive(Debug)]
 pub struct DelaunayBackend<VertexData, CellData, const D: usize>
 where
