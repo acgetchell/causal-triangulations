@@ -17,6 +17,11 @@ src/
 └── cdt/               # CDT physics and Monte Carlo logic
     ├── triangulation.rs # CdtTriangulation core type
     ├── action.rs        # Regge action calculation
-    ├── metropolis.rs    # Metropolis-Hastings algorithm
+    ├── metropolis.rs    # Metropolis-Hastings algorithm (uses markov-chain-monte-carlo crate)
     └── ergodic_moves.rs # Ergodic moves (2,2), (1,3), (3,1)
 ```
+
+## Key Dependencies
+
+- `delaunay` — geometry backend (Delaunay triangulations)
+- `markov-chain-monte-carlo` — MCMC framework (`Chain::step_mut`, `ProposalMut`, `Target`)

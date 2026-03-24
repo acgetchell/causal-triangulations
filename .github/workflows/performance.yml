@@ -278,11 +278,12 @@ jobs:
           echo "This could indicate issues with benchmark compilation or execution."
           exit 1
 
-      # Fail the workflow if regressions detected (for PR blocking)
+      # Warn (but don't fail) on performance regressions
+      # Shared CI runners produce noisy benchmarks; the PR comment provides
+      # visibility without blocking merges on statistical noise.
       - name: Check for performance regressions
         if: github.event_name == 'pull_request' && steps.perf_check.outputs.regression == 'true'
         run: |
-          echo "❌ Performance regressions detected!"
-          echo "This PR introduces performance regressions that exceed the threshold."
-          echo "Please review the performance impact and consider optimizations."
-          exit 1
+          echo "⚠️ Performance regressions detected (informational — not blocking)."
+          echo "Review the PR comment for details. On shared CI runners,"
+          echo "±10% variance is expected; investigate only if regressions persist."
