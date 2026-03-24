@@ -19,10 +19,12 @@ mod integration_tests {
 
         let config = MetropolisConfig::new(1.0, 50, 10, 5);
         let action_config = ActionConfig::default();
-        let mut algorithm = MetropolisAlgorithm::new(config, action_config);
+        let algorithm = MetropolisAlgorithm::new(config, action_config);
 
         // Run simulation
-        let results = algorithm.run(triangulation);
+        let results = algorithm
+            .run(triangulation)
+            .expect("Simulation should succeed");
 
         // Verify results
         assert!(!results.steps.is_empty(), "Simulation should produce steps");
@@ -172,11 +174,15 @@ mod integration_tests {
         let config = MetropolisConfig::new(1.0, 10, 2, 2);
         let action_config = ActionConfig::default();
 
-        let mut algorithm1 = MetropolisAlgorithm::new(config.clone(), action_config.clone());
-        let mut algorithm2 = MetropolisAlgorithm::new(config, action_config);
+        let algorithm1 = MetropolisAlgorithm::new(config.clone(), action_config.clone());
+        let algorithm2 = MetropolisAlgorithm::new(config, action_config);
 
-        let results1 = algorithm1.run(triangulation1);
-        let results2 = algorithm2.run(triangulation2);
+        let results1 = algorithm1
+            .run(triangulation1)
+            .expect("Run 1 should succeed");
+        let results2 = algorithm2
+            .run(triangulation2)
+            .expect("Run 2 should succeed");
 
         // Results should have same structure (though values may differ due to randomness)
         assert_eq!(

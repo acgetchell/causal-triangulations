@@ -2,11 +2,18 @@
 //!
 //! This module implements the Monte Carlo sampling algorithm used to sample
 //! triangulation configurations according to the CDT path integral measure.
+//!
+//! The simulation uses the [`markov_chain_monte_carlo`] crate's
+//! [`Chain::step_mut`](markov_chain_monte_carlo::Chain::step_mut) for
+//! Metropolis–Hastings acceptance/rejection with automatic rollback.
 
 use crate::cdt::action::ActionConfig;
-use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveType};
+use crate::cdt::ergodic_moves::MoveType;
 use crate::geometry::traits::TriangulationQuery;
+use markov_chain_monte_carlo::{Chain, ProposalMut, Target};
 use num_traits::cast::NumCast;
+use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 use std::time::Instant;
 
 // Test utilities are now handled through backend-agnostic CdtTriangulation::new
@@ -22,6 +29,8 @@ pub struct MetropolisConfig {
     pub thermalization_steps: u32,
     /// Frequency of measurements (take measurement every N steps)
     pub measurement_frequency: u32,
+    /// Optional RNG seed for reproducible simulations (default: None = random)
+    pub seed: Option<u64>,
 }
 
 impl Default for MetropolisConfig {
@@ -32,6 +41,7 @@ impl Default for MetropolisConfig {
             steps: 1000,
             thermalization_steps: 100,
             measurement_frequency: 10,
+            seed: None,
         }
     }
 }
@@ -50,7 +60,15 @@ impl MetropolisConfig {
             steps,
             thermalization_steps,
             measurement_frequency,
+            seed: None,
         }
+    }
+
+    /// Sets the RNG seed for reproducible simulations.
+    #[must_use]
+    pub const fn with_seed(mut self, seed: u64) -> Self {
+        self.seed = Some(seed);
+        self
     }
 
     /// Returns the inverse temperature (β = 1/T).
@@ -92,80 +110,159 @@ pub struct Measurement {
     pub triangles: u32,
 }
 
+// ---------------------------------------------------------------------------
+// MCMC trait implementations for CDT
+// ---------------------------------------------------------------------------
+
+/// Target distribution for CDT: log-probability from the Regge action.
+///
+/// Computes `log_prob = -S / T` where `S` is the discrete Regge action
+/// and `T` is the temperature.
+pub struct CdtTarget {
+    action_config: ActionConfig,
+    temperature: f64,
+}
+
+impl CdtTarget {
+    /// Creates a new CDT target distribution.
+    #[must_use]
+    pub const fn new(action_config: ActionConfig, temperature: f64) -> Self {
+        Self {
+            action_config,
+            temperature,
+        }
+    }
+}
+
+impl Target<crate::geometry::CdtTriangulation2D> for CdtTarget {
+    fn log_prob(&self, state: &crate::geometry::CdtTriangulation2D) -> f64 {
+        let g = state.geometry();
+        let action = self.action_config.calculate_action(
+            u32::try_from(g.vertex_count()).unwrap_or_default(),
+            u32::try_from(g.edge_count()).unwrap_or_default(),
+            u32::try_from(g.face_count()).unwrap_or_default(),
+        );
+        -action / self.temperature
+    }
+}
+
+/// Placeholder CDT proposal distribution.
+///
+/// Currently returns `None` (no valid move) for every proposal, which means
+/// all steps are rejected.  This will be replaced with real ergodic moves
+/// (bistellar flips) once [#55](https://github.com/acgetchell/causal-triangulations/issues/55)
+/// is implemented.
+pub struct CdtProposal;
+
+impl ProposalMut<crate::geometry::CdtTriangulation2D> for CdtProposal {
+    type Undo = ();
+
+    fn propose_mut<R: Rng + ?Sized>(
+        &self,
+        _state: &mut crate::geometry::CdtTriangulation2D,
+        _rng: &mut R,
+    ) -> Option<()> {
+        // TODO (#55): Select a random ergodic move, attempt it on the
+        // triangulation, and return an undo token on success.
+        None
+    }
+
+    fn undo(&self, _state: &mut crate::geometry::CdtTriangulation2D, _token: ()) {
+        // No-op: propose_mut currently never succeeds.
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Metropolis algorithm
+// ---------------------------------------------------------------------------
+
 /// Metropolis-Hastings algorithm implementation for CDT.
 ///
-/// This implementation works with both the legacy Tds-based approach
-/// and the new trait-based geometry backends.
+/// Uses the [`markov_chain_monte_carlo`] crate's `Chain::step_mut` for
+/// acceptance/rejection with automatic rollback.
 pub struct MetropolisAlgorithm {
     /// Algorithm configuration
     config: MetropolisConfig,
     /// Action calculation configuration
     action_config: ActionConfig,
-    /// Ergodic moves system
-    ergodics: ErgodicsSystem,
 }
 
 impl MetropolisAlgorithm {
     /// Creates a new Metropolis algorithm instance.
     #[must_use]
-    pub fn new(config: MetropolisConfig, action_config: ActionConfig) -> Self {
+    pub const fn new(config: MetropolisConfig, action_config: ActionConfig) -> Self {
         Self {
             config,
             action_config,
-            ergodics: ErgodicsSystem::new(),
         }
     }
 
     /// Run the Monte Carlo simulation.
     ///
-    /// This runs the Metropolis-Hastings algorithm on the given triangulation.
+    /// This runs the Metropolis-Hastings algorithm on the given triangulation
+    /// using the `markov-chain-monte-carlo` crate for acceptance/rejection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::Mcmc`](crate::errors::CdtError::Mcmc) if the MCMC
+    /// framework encounters a NaN log-probability or proposal ratio.
     pub fn run(
-        &mut self,
+        &self,
         triangulation: crate::geometry::CdtTriangulation2D,
-    ) -> SimulationResultsBackend {
+    ) -> crate::errors::CdtResult<SimulationResultsBackend> {
         let start_time = Instant::now();
-        let mut steps = Vec::new();
+        let mut mc_steps = Vec::new();
         let mut measurements = Vec::new();
 
-        log::info!("Starting Metropolis-Hastings simulation with new backend...");
+        log::info!("Starting Metropolis-Hastings simulation...");
         log::info!("Temperature: {}", self.config.temperature);
         log::info!("Total steps: {}", self.config.steps);
         log::info!("Thermalization steps: {}", self.config.thermalization_steps);
+        if let Some(seed) = self.config.seed {
+            log::info!("RNG seed: {seed}");
+        }
 
-        // Calculate initial action
-        let geometry = triangulation.geometry();
-        let current_action = self.action_config.calculate_action(
-            u32::try_from(geometry.vertex_count()).unwrap_or_default(),
-            u32::try_from(geometry.edge_count()).unwrap_or_default(),
-            u32::try_from(geometry.face_count()).unwrap_or_default(),
-        );
+        // Set up MCMC chain
+        let target = CdtTarget::new(self.action_config.clone(), self.config.temperature);
+        let proposal = CdtProposal;
+        let mut chain = Chain::new(triangulation, &target)?;
+
+        // Create seeded or OS RNG
+        let mut rng: StdRng = self
+            .config
+            .seed
+            .map_or_else(|| StdRng::from_rng(&mut rand::rng()), StdRng::seed_from_u64);
 
         for step_num in 0..self.config.steps {
-            // For now, just simulate the step without actual moves
-            // TODO: Implement ergodic moves for trait-based backends
-            let move_type = self.ergodics.select_random_move();
+            let action_before = -chain.log_prob * self.config.temperature;
+            let accepted = chain.step_mut(&target, &proposal, &mut rng)?;
+            let action_after = -chain.log_prob * self.config.temperature;
 
+            // TODO: Record actual move type once #55 provides real moves
             let mc_step = MonteCarloStep {
                 step: step_num,
-                move_type,
-                accepted: false,
-                action_before: current_action,
-                action_after: None,
-                delta_action: None,
+                move_type: MoveType::Move22, // placeholder
+                accepted,
+                action_before,
+                action_after: if accepted { Some(action_after) } else { None },
+                delta_action: if accepted {
+                    Some(action_after - action_before)
+                } else {
+                    None
+                },
             };
-
-            steps.push(mc_step);
+            mc_steps.push(mc_step);
 
             // Take measurement if needed
             if step_num % self.config.measurement_frequency == 0 {
-                let measurement = Measurement {
+                let g = chain.state.geometry();
+                measurements.push(Measurement {
                     step: step_num,
-                    action: current_action,
-                    vertices: u32::try_from(geometry.vertex_count()).unwrap_or_default(),
-                    edges: u32::try_from(geometry.edge_count()).unwrap_or_default(),
-                    triangles: u32::try_from(geometry.face_count()).unwrap_or_default(),
-                };
-                measurements.push(measurement);
+                    action: action_after,
+                    vertices: u32::try_from(g.vertex_count()).unwrap_or_default(),
+                    edges: u32::try_from(g.edge_count()).unwrap_or_default(),
+                    triangles: u32::try_from(g.face_count()).unwrap_or_default(),
+                });
             }
 
             // Progress reporting
@@ -174,22 +271,23 @@ impl MetropolisAlgorithm {
                     "Step {}/{}, Action: {:.3}",
                     step_num,
                     self.config.steps,
-                    current_action
+                    action_after,
                 );
             }
         }
 
         let elapsed_time = start_time.elapsed();
         log::info!("Simulation completed in {elapsed_time:.2?}");
+        log::info!("Acceptance rate: {:.2}%", chain.acceptance_rate() * 100.0);
 
-        SimulationResultsBackend {
+        Ok(SimulationResultsBackend {
             config: self.config.clone(),
             action_config: self.action_config.clone(),
-            steps,
+            steps: mc_steps,
             measurements,
             elapsed_time,
-            triangulation,
-        }
+            triangulation: chain.state,
+        })
     }
 }
 
@@ -265,6 +363,10 @@ mod tests {
         assert_relative_eq!(config.temperature, 2.0);
         assert_relative_eq!(config.beta(), 0.5);
         assert_eq!(config.steps, 500);
+        assert!(config.seed.is_none());
+
+        let seeded = config.with_seed(123);
+        assert_eq!(seeded.seed, Some(123));
     }
 
     #[test]
@@ -312,6 +414,62 @@ mod tests {
 
         // Since we're using a random triangulation, just verify it returns a finite value
         assert!(action.is_finite());
+    }
+
+    #[test]
+    fn test_cdt_target_log_prob() {
+        let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
+            .expect("Failed to create triangulation");
+
+        let target = CdtTarget::new(ActionConfig::default(), 1.0);
+
+        let log_prob = markov_chain_monte_carlo::Target::log_prob(&target, &triangulation);
+        assert!(log_prob.is_finite(), "log_prob should be finite");
+
+        // log_prob = -action/T, so with T=1 it should be the negative of the action
+        let g = triangulation.geometry();
+        let action = ActionConfig::default().calculate_action(
+            u32::try_from(g.vertex_count()).unwrap_or_default(),
+            u32::try_from(g.edge_count()).unwrap_or_default(),
+            u32::try_from(g.face_count()).unwrap_or_default(),
+        );
+        assert_relative_eq!(log_prob, -action);
+    }
+
+    #[test]
+    fn test_simulation_runs_with_seed() {
+        let config = MetropolisConfig::new(1.0, 10, 2, 2).with_seed(42);
+        let action_config = ActionConfig::default();
+        let algorithm = MetropolisAlgorithm::new(config, action_config);
+
+        let triangulation =
+            CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed to create");
+        let results = algorithm
+            .run(triangulation)
+            .expect("Simulation should succeed");
+
+        // With placeholder proposal, all moves are rejected
+        assert_relative_eq!(results.acceptance_rate(), 0.0);
+        assert!(!results.measurements.is_empty());
+    }
+
+    #[test]
+    fn test_seeded_simulation_determinism() {
+        let run = |seed: u64| {
+            let config = MetropolisConfig::new(1.0, 20, 5, 5).with_seed(seed);
+            let algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
+            let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
+            algorithm.run(tri).expect("Failed")
+        };
+
+        let r1 = run(123);
+        let r2 = run(123);
+
+        assert_eq!(r1.steps.len(), r2.steps.len());
+        assert_eq!(r1.measurements.len(), r2.measurements.len());
+        for (m1, m2) in r1.measurements.iter().zip(r2.measurements.iter()) {
+            assert_relative_eq!(m1.action, m2.action);
+        }
     }
 
     #[test]

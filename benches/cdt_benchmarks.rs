@@ -264,9 +264,11 @@ fn bench_metropolis_simulation(c: &mut Criterion) {
 
                     let config = MetropolisConfig::new(1.0, steps, 5, 5);
                     let action_config = ActionConfig::default();
-                    let mut algorithm = MetropolisAlgorithm::new(config, action_config);
+                    let algorithm = MetropolisAlgorithm::new(config, action_config);
 
-                    let results = algorithm.run(black_box(triangulation));
+                    let results = algorithm
+                        .run(black_box(triangulation))
+                        .expect("Simulation should succeed");
                     black_box(results)
                 });
             },
@@ -286,9 +288,11 @@ fn bench_simulation_analysis(c: &mut Criterion) {
 
     let config = MetropolisConfig::new(1.0, 100, 10, 5);
     let action_config = ActionConfig::default();
-    let mut algorithm = MetropolisAlgorithm::new(config, action_config);
+    let algorithm = MetropolisAlgorithm::new(config, action_config);
 
-    let results = algorithm.run(triangulation);
+    let results = algorithm
+        .run(triangulation)
+        .expect("Simulation should succeed");
 
     group.bench_function("acceptance_rate", |b| {
         b.iter(|| {

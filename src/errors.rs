@@ -42,6 +42,8 @@ pub enum CdtError {
         /// Human-readable description of the failure
         detail: String,
     },
+    /// MCMC framework error (e.g. NaN in log-probability)
+    Mcmc(String),
 }
 
 impl fmt::Display for CdtError {
@@ -78,7 +80,14 @@ impl fmt::Display for CdtError {
             Self::ValidationFailed { check, detail } => {
                 write!(f, "Validation failed [{check}]: {detail}")
             }
+            Self::Mcmc(msg) => write!(f, "MCMC error: {msg}"),
         }
+    }
+}
+
+impl From<markov_chain_monte_carlo::McmcError> for CdtError {
+    fn from(err: markov_chain_monte_carlo::McmcError) -> Self {
+        Self::Mcmc(err.to_string())
     }
 }
 
@@ -171,6 +180,28 @@ mod tests {
         assert_eq!(
             display,
             "Validation failed [topology]: Euler characteristic χ=3 unexpected (V=5, E=8, F=6)"
+        );
+    }
+
+    #[test]
+    fn test_mcmc_error() {
+        let error = CdtError::Mcmc("NaN log-probability".to_string());
+        let display = format!("{error}");
+        assert_eq!(display, "MCMC error: NaN log-probability");
+    }
+
+    #[test]
+    fn test_mcmc_error_from_conversion() {
+        let mcmc_err = markov_chain_monte_carlo::McmcError::NanProposedLogProb;
+        let cdt_err: CdtError = mcmc_err.into();
+        let display = format!("{cdt_err}");
+        assert!(
+            display.contains("MCMC error"),
+            "Should contain MCMC error prefix: {display}"
+        );
+        assert!(
+            display.contains("NaN"),
+            "Should contain NaN context: {display}"
         );
     }
 

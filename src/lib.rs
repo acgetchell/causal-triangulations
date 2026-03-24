@@ -82,6 +82,7 @@ pub mod cdt {
 // Re-exports for convenience
 pub use cdt::action::{ActionConfig, compute_regge_action};
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
+pub use cdt::metropolis::{CdtProposal, CdtTarget};
 pub use cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig, SimulationResultsBackend};
 pub use config::{CdtConfig, TestConfig};
 pub use errors::{CdtError, CdtResult};
@@ -131,8 +132,13 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<cdt::metropolis::Simulati
     log::info!("Number of timeslices: {timeslices}");
     log::info!("Using trait-based backend system");
 
-    // Create initial triangulation
-    let triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
+    // Create initial triangulation (seeded if seed is provided for full reproducibility)
+    let triangulation = if let Some(seed) = config.seed {
+        log::info!("RNG seed: {seed}");
+        CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?
+    } else {
+        CdtTriangulation::from_random_points(vertices, timeslices, 2)?
+    };
 
     log::info!(
         "Triangulation created with {} vertices, {} edges, {} faces",
@@ -142,12 +148,12 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<cdt::metropolis::Simulati
     );
 
     if config.simulate {
-        // Run full CDT simulation with new backend
+        // Run full CDT simulation with MCMC backend
         let metropolis_config = config.to_metropolis_config();
         let action_config = config.to_action_config();
 
-        let mut algorithm = MetropolisAlgorithm::new(metropolis_config, action_config);
-        let results = algorithm.run(triangulation);
+        let algorithm = MetropolisAlgorithm::new(metropolis_config, action_config);
+        let results = algorithm.run(triangulation)?;
 
         log::info!("Simulation Results:");
         log::info!(
@@ -200,6 +206,7 @@ mod lib_tests {
             coupling_2: 1.0,
             cosmological_constant: 0.1,
             simulate: false,
+            seed: Some(42),
         }
     }
 

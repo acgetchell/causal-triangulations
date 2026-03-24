@@ -49,8 +49,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Run the simulation
     info!("Running CDT simulation...");
-    let mut algorithm = MetropolisAlgorithm::new(metropolis_config, action_config);
-    let results = algorithm.run(triangulation);
+    let algorithm = MetropolisAlgorithm::new(metropolis_config, action_config);
+    let results = algorithm.run(triangulation)?;
 
     // Display results
     info!("Simulation completed!");
