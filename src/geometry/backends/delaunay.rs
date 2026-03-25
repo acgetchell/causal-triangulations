@@ -11,7 +11,7 @@ use crate::geometry::traits::{
 use delaunay::core::delaunay_triangulation::DelaunayTriangulation;
 use delaunay::core::edge::EdgeKey;
 use delaunay::core::triangulation_data_structure::{CellKey, VertexKey};
-use delaunay::geometry::kernel::RobustKernel;
+use delaunay::geometry::kernel::AdaptiveKernel;
 
 /// Delaunay backend wrapping the delaunay crate's triangulation (f64 coordinates).
 ///
@@ -27,13 +27,21 @@ where
     CellData: delaunay::core::DataType,
 {
     /// The underlying Delaunay triangulation from the delaunay crate
-    dt: DelaunayTriangulation<RobustKernel<f64>, VertexData, CellData, D>,
+    dt: DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D>,
 }
 
 /// Opaque handle for vertices in Delaunay backend
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DelaunayVertexHandle {
     key: VertexKey,
+}
+
+impl DelaunayVertexHandle {
+    /// Returns the underlying slotmap key for use in secondary maps.
+    #[must_use]
+    pub(crate) const fn vertex_key(&self) -> VertexKey {
+        self.key
+    }
 }
 
 /// Opaque handle for edges in Delaunay backend
@@ -90,7 +98,7 @@ where
     /// Create a new Delaunay backend from an existing Delaunay triangulation
     #[must_use]
     pub const fn from_triangulation(
-        dt: DelaunayTriangulation<RobustKernel<f64>, VertexData, CellData, D>,
+        dt: DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D>,
     ) -> Self {
         Self { dt }
     }
@@ -99,7 +107,7 @@ where
     #[must_use]
     pub const fn triangulation(
         &self,
-    ) -> &DelaunayTriangulation<RobustKernel<f64>, VertexData, CellData, D> {
+    ) -> &DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D> {
         &self.dt
     }
 
@@ -794,8 +802,9 @@ mod tests {
         // For a triangulation without the outer infinite face: V - E + F = 1
         // For a triangulation with the outer infinite face: V - E + F = 2
         // Note: Random triangulations may occasionally have degeneracies that result in χ = 0
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        let euler = vertex_count as i32 - edge_count as i32 + face_count as i32;
+        let euler = crate::util::saturating_usize_to_i32(vertex_count)
+            - crate::util::saturating_usize_to_i32(edge_count)
+            + crate::util::saturating_usize_to_i32(face_count);
         assert!(
             (0..=2).contains(&euler),
             "Euler characteristic should be in range [0, 2] for planar triangulation, got {euler} (V={vertex_count}, E={edge_count}, F={face_count})"

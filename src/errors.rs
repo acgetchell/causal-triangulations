@@ -42,6 +42,13 @@ pub enum CdtError {
         /// Human-readable description of the failure
         detail: String,
     },
+    /// An edge violates the causal structure by spanning more than one time slice
+    CausalityViolation {
+        /// Time label of the first endpoint
+        time_0: u32,
+        /// Time label of the second endpoint
+        time_1: u32,
+    },
     /// MCMC framework error (e.g. NaN in log-probability)
     Mcmc(String),
 }
@@ -79,6 +86,13 @@ impl fmt::Display for CdtError {
             ),
             Self::ValidationFailed { check, detail } => {
                 write!(f, "Validation failed [{check}]: {detail}")
+            }
+            Self::CausalityViolation { time_0, time_1 } => {
+                let dt = time_0.abs_diff(*time_1);
+                write!(
+                    f,
+                    "Causality violation: edge spans {dt} time slices (t={time_0} to t={time_1}), maximum allowed is 1"
+                )
             }
             Self::Mcmc(msg) => write!(f, "MCMC error: {msg}"),
         }
@@ -180,6 +194,19 @@ mod tests {
         assert_eq!(
             display,
             "Validation failed [topology]: Euler characteristic χ=3 unexpected (V=5, E=8, F=6)"
+        );
+    }
+
+    #[test]
+    fn test_causality_violation_error() {
+        let error = CdtError::CausalityViolation {
+            time_0: 0,
+            time_1: 3,
+        };
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Causality violation: edge spans 3 time slices (t=0 to t=3), maximum allowed is 1"
         );
     }
 

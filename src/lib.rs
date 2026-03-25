@@ -73,6 +73,8 @@ pub mod cdt {
     pub mod action;
     /// Ergodic moves for triangulation modifications.
     pub mod ergodic_moves;
+    /// Foliation data structures (time labels, edge classification).
+    pub mod foliation;
     /// Metropolis-Hastings algorithm implementation.
     pub mod metropolis;
     /// CDT triangulation wrapper.
@@ -82,6 +84,7 @@ pub mod cdt {
 // Re-exports for convenience
 pub use cdt::action::{ActionConfig, compute_regge_action};
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
+pub use cdt::foliation::{EdgeType, Foliation};
 pub use cdt::metropolis::{CdtProposal, CdtTarget};
 pub use cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig, SimulationResultsBackend};
 pub use config::{CdtConfig, TestConfig};

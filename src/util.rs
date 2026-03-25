@@ -1,16 +1,48 @@
 use crate::errors::CdtError;
 use delaunay::core::builder::DelaunayTriangulationBuilder;
-use delaunay::geometry::kernel::RobustKernel;
+use delaunay::geometry::kernel::AdaptiveKernel;
 use delaunay::geometry::util::{generate_random_points, generate_random_points_seeded};
 use delaunay::prelude::VertexBuilder;
 use rand::random;
 
+// ---------------------------------------------------------------------------
+// Safe numeric conversions
+// ---------------------------------------------------------------------------
+
+/// Convert a `usize` to `i32`, saturating at `i32::MAX`.
+///
+/// Useful for Euler characteristic calculations where simplex counts
+/// are `usize` but arithmetic needs signed integers.
+#[must_use]
+pub fn saturating_usize_to_i32(n: usize) -> i32 {
+    i32::try_from(n).unwrap_or(i32::MAX)
+}
+
+/// Convert a y-coordinate to a time-slice index via `round()`, clamped to `[0, max_t]`.
+///
+/// Returns `None` if the rounded value is negative or exceeds `u32::MAX`.
+#[must_use]
+pub fn y_to_time_bucket(y: f64, max_t: u32) -> Option<u32> {
+    let rounded = y.round();
+    num_traits::ToPrimitive::to_u32(&rounded).map(|t| t.min(max_t))
+}
+
+/// Convert a non-negative `f64` band index to `u32`, clamped to `[0, max_t]`.
+///
+/// Returns 0 if the value is negative or NaN.
+#[must_use]
+pub fn f64_band_to_u32(band_index: f64, max_t: u32) -> u32 {
+    num_traits::ToPrimitive::to_u32(&band_index)
+        .unwrap_or(0)
+        .min(max_t)
+}
+
 /// Type alias for the 2D Delaunay triangulation returned by this crate's generators.
 ///
-/// Uses [`RobustKernel`] (the default for [`DelaunayTriangulationBuilder::build`]) and
+/// Uses [`AdaptiveKernel`] (the default for [`DelaunayTriangulationBuilder::build`]) and
 /// `()` vertex data (CDT metadata is tracked separately in [`CdtTriangulation`](crate::cdt::triangulation::CdtTriangulation)).
 pub type DelaunayTriangulation2D =
-    delaunay::core::delaunay_triangulation::DelaunayTriangulation<RobustKernel<f64>, (), i32, 2>;
+    delaunay::core::delaunay_triangulation::DelaunayTriangulation<AdaptiveKernel<f64>, (), i32, 2>;
 
 /// Generates a random floating-point number between 0.0 and 1.0.
 ///
@@ -390,6 +422,84 @@ mod tests {
     )]
     fn test_generate_seeded_delaunay2_panic_invalid_range() {
         let _ = generate_seeded_delaunay2(5, (15.0, 10.0), 123);
+    }
+
+    // =========================================================================
+    // Safe numeric conversion tests
+    // =========================================================================
+
+    #[test]
+    fn test_saturating_usize_to_i32_normal() {
+        assert_eq!(saturating_usize_to_i32(0), 0);
+        assert_eq!(saturating_usize_to_i32(1), 1);
+        assert_eq!(saturating_usize_to_i32(42), 42);
+    }
+
+    #[test]
+    fn test_saturating_usize_to_i32_boundary() {
+        assert_eq!(saturating_usize_to_i32(i32::MAX as usize), i32::MAX);
+    }
+
+    #[test]
+    fn test_saturating_usize_to_i32_overflow() {
+        assert_eq!(saturating_usize_to_i32(i32::MAX as usize + 1), i32::MAX);
+        assert_eq!(saturating_usize_to_i32(usize::MAX), i32::MAX);
+    }
+
+    #[test]
+    fn test_y_to_time_bucket_exact_integers() {
+        assert_eq!(y_to_time_bucket(0.0, 5), Some(0));
+        assert_eq!(y_to_time_bucket(1.0, 5), Some(1));
+        assert_eq!(y_to_time_bucket(3.0, 5), Some(3));
+    }
+
+    #[test]
+    fn test_y_to_time_bucket_rounding() {
+        // Values near integers should round correctly
+        assert_eq!(y_to_time_bucket(0.4, 5), Some(0));
+        assert_eq!(y_to_time_bucket(0.6, 5), Some(1));
+        assert_eq!(y_to_time_bucket(2.499, 5), Some(2));
+        assert_eq!(y_to_time_bucket(2.501, 5), Some(3));
+    }
+
+    #[test]
+    fn test_y_to_time_bucket_clamping() {
+        // Values above max_t should clamp
+        assert_eq!(y_to_time_bucket(10.0, 3), Some(3));
+        assert_eq!(y_to_time_bucket(100.0, 0), Some(0));
+    }
+
+    #[test]
+    fn test_y_to_time_bucket_negative() {
+        // Negative values should return None
+        assert_eq!(y_to_time_bucket(-1.0, 5), None);
+        assert_eq!(y_to_time_bucket(-0.6, 5), None);
+    }
+
+    #[test]
+    fn test_y_to_time_bucket_nan_inf() {
+        assert_eq!(y_to_time_bucket(f64::NAN, 5), None);
+        assert_eq!(y_to_time_bucket(f64::INFINITY, 5), None);
+        assert_eq!(y_to_time_bucket(f64::NEG_INFINITY, 5), None);
+    }
+
+    #[test]
+    fn test_f64_band_to_u32_normal() {
+        assert_eq!(f64_band_to_u32(0.0, 5), 0);
+        assert_eq!(f64_band_to_u32(2.0, 5), 2);
+        assert_eq!(f64_band_to_u32(5.0, 5), 5);
+    }
+
+    #[test]
+    fn test_f64_band_to_u32_clamping() {
+        assert_eq!(f64_band_to_u32(10.0, 3), 3);
+    }
+
+    #[test]
+    fn test_f64_band_to_u32_negative_and_nan() {
+        assert_eq!(f64_band_to_u32(-1.0, 5), 0);
+        assert_eq!(f64_band_to_u32(f64::NAN, 5), 0);
+        assert_eq!(f64_band_to_u32(f64::NEG_INFINITY, 5), 0);
     }
 
     #[test]

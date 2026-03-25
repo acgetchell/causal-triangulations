@@ -160,7 +160,8 @@ Key principle:
 - **Edition**: 2024
 - **Unsafe code**: forbidden (`#![forbid(unsafe_code)]`)
 - **Architecture**: CDT physics layered over a pluggable geometry backend (`delaunay` crate)
-- **Modules**: `src/cdt/` (CDT logic: moves, action, Metropolis), `src/geometry/` (geometry abstractions and backends), `src/config.rs` (simulation configuration)
+- **Modules**: `src/cdt/` (CDT logic: moves, action, Metropolis, foliation), `src/geometry/` (geometry abstractions and backends), `src/config.rs` (simulation configuration)
+- **Foliation**: `src/cdt/foliation.rs` assigns per-vertex time labels via `VertexSecondaryMap`; `from_foliated_cylinder` constructs foliated triangulations; `validate_causality` enforces |Δt| ≤ 1 on edges. Design documented in `docs/foliation.md`
 - **Ergodic moves**: `attempt_22_move`, `attempt_13_move`, `attempt_31_move`, `attempt_edge_flip` are currently placeholder implementations; full `delaunay::Tds` integration is planned
 - **Python scripts**: `scripts/` contains benchmark, changelog, and hardware utilities; tests in `scripts/tests/` run via pytest
 - **When adding/removing files**: Update `docs/project.md`

@@ -117,11 +117,10 @@ pub trait TriangulationQuery: GeometryBackend {
     fn is_valid(&self) -> bool;
 
     /// Calculate the Euler characteristic (V - E + F)
-    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     fn euler_characteristic(&self) -> i32 {
-        let v = self.vertex_count() as i32;
-        let e = self.edge_count() as i32;
-        let f = self.face_count() as i32;
+        let v = crate::util::saturating_usize_to_i32(self.vertex_count());
+        let e = crate::util::saturating_usize_to_i32(self.edge_count());
+        let f = crate::util::saturating_usize_to_i32(self.face_count());
         v - e + f
     }
 }

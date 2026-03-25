@@ -66,14 +66,14 @@ This document tracks all the pending improvements, features, and technical debt 
 
 ### Testing Coverage
 
-- [x] **Add integration tests** — 8 integration tests + 10 CLI tests + 155 unit tests + 408 Python tests
+- [x] **Add integration tests** — 8 integration tests + 10 CLI tests + 205 unit tests + 489 Python tests
   - Complete CDT simulation workflow covered
   - Edge cases in triangulation generation covered
+  - Foliation construction, validation, and causality covered (unit + property-based)
 
 - [ ] **Improve unit test coverage**
-  - Add tests for error conditions and edge cases
   - Test ergodic move validation logic
-  - Add property-based testing for geometric invariants
+  - Add property-based testing for additional geometric invariants
 
 ## Low Priority - Features & Documentation
 
@@ -94,8 +94,16 @@ This document tracks all the pending improvements, features, and technical debt 
   - Implement visualization data export
   - Add statistical analysis output options
 
+### Foliation — Next Steps
+
+- [ ] **Toroidal topology** (S¹ × S¹): periodic time requires toroidal Delaunay construction (issue #61)
+- [ ] **Manual foliation assignment**: allow users to set per-vertex time labels directly
+- [ ] **Foliation-aware ergodic moves**: moves that preserve or update the foliation during MCMC steps
+- [ ] **CDT strip construction**: explicit layer-by-layer construction instead of Delaunay triangulation of grid points
+
 ### Documentation
 
+- [x] **Foliation design document** — `docs/foliation.md`
 - [ ] **Algorithm documentation**
   - Add detailed mathematical background for CDT
   - Document the specific ergodic move algorithms used
@@ -164,4 +172,4 @@ This document tracks all the pending improvements, features, and technical debt 
 - Some items may require significant research and development effort
 - Regular review and updating of this list is recommended as the project evolves
 
-Last updated: 2026-02-21
+Last updated: 2026-03-24

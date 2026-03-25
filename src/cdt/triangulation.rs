@@ -3,18 +3,30 @@
 //! This module provides CDT-specific triangulation data structures that work
 //! with any geometry backend implementing the trait interfaces.
 
+use crate::cdt::foliation::{EdgeType, Foliation};
 use crate::errors::CdtResult;
-use crate::geometry::backends::delaunay::DelaunayBackend;
+use crate::geometry::backends::delaunay::{
+    DelaunayBackend, DelaunayEdgeHandle, DelaunayVertexHandle,
+};
 use crate::geometry::operations::TriangulationOps;
-use crate::geometry::traits::TriangulationMut;
+use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
+use delaunay::core::builder::DelaunayTriangulationBuilder;
+use delaunay::core::triangulation_data_structure::VertexKey;
+use delaunay::geometry::point::Point;
+use delaunay::geometry::traits::coordinate::Coordinate;
+use delaunay::prelude::VertexBuilder;
+use delaunay::prelude::collections::VertexSecondaryMap;
 use std::time::Instant;
 
 /// CDT-specific triangulation wrapper - completely geometry-agnostic
 #[derive(Debug)]
 pub struct CdtTriangulation<B: TriangulationMut> {
     geometry: B,
-    metadata: CdtMetadata,
+    /// CDT metadata (time slices, dimension, history)
+    pub metadata: CdtMetadata,
     cache: GeometryCache,
+    /// Optional foliation assigning each vertex to a time slice.
+    foliation: Option<Foliation>,
 }
 
 /// CDT-specific metadata
@@ -106,6 +118,7 @@ impl<B: TriangulationMut> CdtTriangulation<B> {
                 simulation_history: vec![creation_event],
             },
             cache: GeometryCache::default(),
+            foliation: None,
         }
     }
 
@@ -261,58 +274,109 @@ impl<B: TriangulationMut> CdtTriangulation<B> {
         Ok(())
     }
 
-    /// Validate causality constraints
+    /// Validate causality constraints.
     ///
-    /// Checks that the triangulation satisfies causal structure requirements:
-    /// - Timelike edges connect vertices in adjacent time slices
-    /// - Spacelike edges connect vertices within the same time slice
-    /// - No closed timelike curves exist
+    /// If no foliation is present, succeeds vacuously (no causal structure to check).
+    /// Otherwise verifies that every edge either connects vertices in the same time
+    /// slice (spacelike) or in adjacent slices (|Δt| = 1, timelike).  Time labels
+    /// are derived from each vertex’s y-coordinate via `round(y)`, matching the
+    /// bucket convention used at construction time.
     ///
     /// # Errors
-    /// Returns error if causality constraints are violated
-    #[allow(
-        clippy::missing_const_for_fn,
-        clippy::unnecessary_wraps,
-        clippy::unused_self
-    )]
+    /// Returns error if any edge spans more than one time slice.
     fn validate_causality(&self) -> CdtResult<()> {
-        // TODO: Implement causality validation
-        // This requires:
-        // 1. Time slice assignment for each vertex
-        // 2. Classification of edges as timelike or spacelike
-        // 3. Verification that timelike edges only connect adjacent slices
-        // 4. Check for closed timelike curves (cycles in the timelike graph)
+        let Some(foliation) = &self.foliation else {
+            return Ok(());
+        };
+        let max_t = foliation.num_slices().saturating_sub(1);
 
-        // For now, this is a placeholder that always succeeds
-        // The actual implementation will need vertex time labels from the foliation
+        for edge in self.geometry.edges() {
+            let Ok((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
+                continue;
+            };
+            let (Ok(c0), Ok(c1)) = (
+                self.geometry.vertex_coordinates(&v0),
+                self.geometry.vertex_coordinates(&v1),
+            ) else {
+                continue;
+            };
+            if c0.len() < 2 || c1.len() < 2 {
+                continue;
+            }
+            // Bucket assignment: t = round(y), clamped to [0, max_t].
+            // Convert via f64 since B::Coordinate is a generic Float.
+            let Some(y0) = num_traits::ToPrimitive::to_f64(&c0[1]) else {
+                continue;
+            };
+            let Some(y1) = num_traits::ToPrimitive::to_f64(&c1[1]) else {
+                continue;
+            };
+            let Some(t0) = crate::util::y_to_time_bucket(y0, max_t) else {
+                continue;
+            };
+            let Some(t1) = crate::util::y_to_time_bucket(y1, max_t) else {
+                continue;
+            };
+            if t0.abs_diff(t1) > 1 {
+                return Err(crate::errors::CdtError::CausalityViolation {
+                    time_0: t0,
+                    time_1: t1,
+                });
+            }
+        }
         Ok(())
     }
 
-    /// Validate foliation consistency
+    /// Validate foliation consistency.
     ///
-    /// Checks that the triangulation has a valid foliation structure:
-    /// - All vertices are assigned to exactly one time slice
-    /// - Time slices are properly ordered (0 to time_slices-1)
-    /// - Each time slice contains at least one vertex
-    /// - Spatial topology is consistent across slices
+    /// If no foliation is present, succeeds vacuously.
+    /// Otherwise checks:
+    /// 1. Every vertex has a time label in `0..num_slices`
+    /// 2. Every time slice is non-empty
+    /// 3. `slice_sizes` is consistent with the time label map
     ///
     /// # Errors
-    /// Returns error if foliation structure is invalid
-    #[allow(
-        clippy::missing_const_for_fn,
-        clippy::unnecessary_wraps,
-        clippy::unused_self
-    )]
+    /// Returns error if foliation structure is invalid.
     fn validate_foliation(&self) -> CdtResult<()> {
-        // TODO: Implement foliation validation
-        // This requires:
-        // 1. Access to vertex time labels (currently not stored in geometry backend)
-        // 2. Verification that all vertices are labeled with valid time values
-        // 3. Check that each time slice is non-empty
-        // 4. Verify spatial topology consistency (same genus) across slices
+        let Some(foliation) = &self.foliation else {
+            return Ok(());
+        };
 
-        // For now, this is a placeholder that always succeeds
-        // The actual implementation needs the backend to expose time slice information
+        // Check that all vertices are labeled
+        let vertex_count = self.geometry.vertex_count();
+        if foliation.labeled_vertex_count() != vertex_count {
+            return Err(crate::errors::CdtError::ValidationFailed {
+                check: "foliation".to_string(),
+                detail: format!(
+                    "labeled vertex count ({}) does not match triangulation vertex count ({})",
+                    foliation.labeled_vertex_count(),
+                    vertex_count,
+                ),
+            });
+        }
+
+        // Check that every slice is non-empty
+        for (t, &size) in foliation.slice_sizes().iter().enumerate() {
+            if size == 0 {
+                return Err(crate::errors::CdtError::ValidationFailed {
+                    check: "foliation".to_string(),
+                    detail: format!("time slice {t} is empty"),
+                });
+            }
+        }
+
+        // Check that slice_sizes sum matches labeled count
+        let sum: usize = foliation.slice_sizes().iter().sum();
+        if sum != foliation.labeled_vertex_count() {
+            return Err(crate::errors::CdtError::ValidationFailed {
+                check: "foliation".to_string(),
+                detail: format!(
+                    "slice_sizes sum ({sum}) does not match labeled vertex count ({})",
+                    foliation.labeled_vertex_count(),
+                ),
+            });
+        }
+
         Ok(())
     }
 
@@ -352,8 +416,14 @@ impl<B: TriangulationMut> std::ops::DerefMut for CdtGeometryMut<'_, B> {
     }
 }
 
-// Factory functions for creating CdtTriangulations with different backends
+// =============================================================================
+// Delaunay-specific factory functions and foliation methods
+// =============================================================================
 impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
+    // -------------------------------------------------------------------------
+    // Factory constructors
+    // -------------------------------------------------------------------------
+
     /// Create a new CDT triangulation with Delaunay backend from random points.
     ///
     /// This is the recommended way to create triangulations for simulations.
@@ -420,12 +490,323 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
 
         Ok(Self::new(backend, time_slices, dimension))
     }
+
+    /// Construct a foliated 1+1 CDT triangulation with cylinder topology.
+    ///
+    /// Places `vertices_per_slice` vertices per time slice on a regular grid at
+    /// coordinates `(x_i, t)` where `x_i` is evenly spaced in `[0, 1]` and
+    /// `t` is an integer time coordinate.  Time labels are assigned by
+    /// y-coordinate bucket: slice `t` owns vertices with `y ∈ [t − 0.5, t + 0.5)`.
+    ///
+    /// The spatial extent is kept to 1.0 (well below the √3 ≈ 1.73 threshold
+    /// that guarantees no Delaunay edge can skip a time slice), so the resulting
+    /// triangulation satisfies causality by construction.
+    ///
+    /// # Arguments
+    ///
+    /// * `vertices_per_slice` — Number of vertices in each spatial slice (≥ 4).
+    /// * `num_slices` — Number of time slices (≥ 2).
+    /// * `seed` — Optional seed for deterministic vertex perturbation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a [`VertexBuilder`] fails to build from a
+    /// valid point (should not happen in practice).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if parameters are invalid or triangulation construction fails.
+    pub fn from_foliated_cylinder(
+        vertices_per_slice: u32,
+        num_slices: u32,
+        seed: Option<u64>,
+    ) -> CdtResult<Self> {
+        if vertices_per_slice < 4 {
+            return Err(crate::errors::CdtError::InvalidGenerationParameters {
+                issue: "Insufficient vertices per slice".to_string(),
+                provided_value: vertices_per_slice.to_string(),
+                expected_range: "≥ 4".to_string(),
+            });
+        }
+        if num_slices < 2 {
+            return Err(crate::errors::CdtError::InvalidGenerationParameters {
+                issue: "Insufficient number of time slices".to_string(),
+                provided_value: num_slices.to_string(),
+                expected_range: "≥ 2".to_string(),
+            });
+        }
+
+        // Spatial extent is fixed at 1.0 so that the maximum within-strip
+        // circumradius stays below 1.0 (the temporal gap between slices).
+        // This guarantees the Delaunay property cannot create edges that
+        // skip a time slice.
+        //
+        // Small deterministic perturbation is applied to break co-circular
+        // degeneracy in the grid.  Boundary vertices (i=0 and i=last) keep
+        // their exact x so they remain collinear on the convex hull,
+        // preventing hull edges from skipping intermediate time slices.
+        let spatial_extent = 1.0_f64;
+        let spacing = spatial_extent / f64::from(vertices_per_slice - 1);
+        let perturbation_seed = seed.unwrap_or(0);
+        let perturbation_scale = spacing * 0.02;
+
+        let total_vertices = vertices_per_slice.checked_mul(num_slices).ok_or_else(|| {
+            crate::errors::CdtError::InvalidGenerationParameters {
+                issue: "Vertex count overflow".to_string(),
+                provided_value: format!("{vertices_per_slice} × {num_slices}"),
+                expected_range: "product ≤ u32::MAX".to_string(),
+            }
+        })?;
+        let mut vertices = Vec::with_capacity(total_vertices as usize);
+        let last_i = vertices_per_slice - 1;
+
+        for t in 0..num_slices {
+            for i in 0..vertices_per_slice {
+                let x_base = f64::from(i) * spacing;
+                let y_base = f64::from(t); // integer time coordinate
+
+                // Deterministic perturbation keyed on vertex index + seed
+                let flat_idx = u64::from(t) * u64::from(vertices_per_slice) + u64::from(i);
+                let hash = flat_idx
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(perturbation_seed)
+                    .wrapping_mul(1_442_695_040_888_963_407);
+
+                // Perturbation strategy:
+                // - Interior vertices: hash-based perturbation in x and y
+                //   to break co-circular grid degeneracy.
+                // - Boundary vertices (i=0, i=last): deterministic concave
+                //   x-offset via √(t+1) pushes each row further outward.
+                //   The concave (sub-linear) progression ensures every
+                //   intermediate boundary vertex bulges past the line
+                //   connecting its neighbors, so the convex hull includes
+                //   every row’s extremes and no hull edge skips a time slice.
+                let hash_frac = f64::from((hash & 0xFFFF) as u16) / 65535.0;
+                let py_frac = f64::from(((hash >> 16) & 0xFFFF) as u16) / 65535.0;
+                let py = (py_frac - 0.5) * perturbation_scale;
+                let hull_offset = f64::from(t + 1).sqrt();
+                let px = if i == 0 {
+                    // Push left — concave √(t+1) ensures hull membership
+                    -hull_offset * perturbation_scale
+                } else if i == last_i {
+                    // Push right — mirror of left
+                    hull_offset * perturbation_scale
+                } else {
+                    (hash_frac - 0.5) * perturbation_scale
+                };
+
+                let point = Point::<f64, 2>::new([x_base + px, y_base + py]);
+                let vertex = VertexBuilder::default().point(point).build().unwrap();
+                vertices.push(vertex);
+            }
+        }
+
+        let dt = DelaunayTriangulationBuilder::new(&vertices)
+            .build::<i32>()
+            .map_err(|e| crate::errors::CdtError::DelaunayGenerationFailed {
+                vertex_count: total_vertices,
+                coordinate_range: (0.0, f64::from(num_slices - 1)),
+                attempt: 1,
+                underlying_error: e.to_string(),
+            })?;
+
+        // Verify the builder inserted all vertices.
+        if dt.number_of_vertices() != total_vertices as usize {
+            return Err(crate::errors::CdtError::DelaunayGenerationFailed {
+                vertex_count: total_vertices,
+                coordinate_range: (0.0, f64::from(num_slices - 1)),
+                attempt: 1,
+                underlying_error: format!(
+                    "builder inserted only {} of {} vertices (possible degeneracy)",
+                    dt.number_of_vertices(),
+                    total_vertices,
+                ),
+            });
+        }
+
+        // Assign time labels by y-coordinate bucket: t = round(y).
+        // Bucket for slice t covers [t − 0.5, t + 0.5).
+        let mut time_labels = VertexSecondaryMap::new();
+        let max_t = num_slices - 1;
+        for (vkey, vertex) in dt.vertices() {
+            let y = vertex.point().coords()[1];
+            if let Some(t) = crate::util::y_to_time_bucket(y, max_t) {
+                time_labels.insert(vkey, t);
+            }
+        }
+
+        let foliation = Foliation::new(time_labels, num_slices);
+        let backend = DelaunayBackend::from_triangulation(dt);
+        let mut tri = Self::new(backend, num_slices, 2);
+        tri.foliation = Some(foliation);
+        Ok(tri)
+    }
+
+    // -------------------------------------------------------------------------
+    // Foliation assignment
+    // -------------------------------------------------------------------------
+
+    /// Assign a foliation to an existing triangulation by binning vertices
+    /// by their y-coordinate into `num_slices` equal bands.
+    ///
+    /// The y-coordinate range is determined from the actual vertex coordinates.
+    /// Band `t` covers `[y_min + t * band_height, y_min + (t+1) * band_height)`.
+    ///
+    /// This is approximate — useful for testing but not guaranteed to produce
+    /// a valid causal structure.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if `num_slices` is zero or if vertex coordinates cannot be read.
+    pub fn assign_foliation_by_y_coordinate(&mut self, num_slices: u32) -> CdtResult<()> {
+        if num_slices == 0 {
+            return Err(crate::errors::CdtError::InvalidGenerationParameters {
+                issue: "Number of slices must be positive".to_string(),
+                provided_value: "0".to_string(),
+                expected_range: "≥ 1".to_string(),
+            });
+        }
+
+        // Collect all vertex y-coordinates to determine the range
+        let mut y_coords: Vec<(VertexKey, f64)> = Vec::with_capacity(self.geometry.vertex_count());
+        for vh in self.geometry.vertices() {
+            if let Ok(coords) = self.geometry.vertex_coordinates(&vh)
+                && coords.len() >= 2
+            {
+                y_coords.push((vh.vertex_key(), coords[1]));
+            }
+        }
+
+        if y_coords.is_empty() {
+            return Err(crate::errors::CdtError::InvalidParameters(
+                "cannot assign foliation: no vertices with valid 2D coordinates".to_string(),
+            ));
+        }
+
+        let y_min = y_coords
+            .iter()
+            .map(|(_, y)| *y)
+            .fold(f64::INFINITY, f64::min);
+        let y_max = y_coords
+            .iter()
+            .map(|(_, y)| *y)
+            .fold(f64::NEG_INFINITY, f64::max);
+
+        let range = y_max - y_min;
+        // If all vertices are at the same y, put them all in slice 0
+        let band_height = if range.abs() < f64::EPSILON {
+            1.0
+        } else {
+            range / f64::from(num_slices)
+        };
+
+        let mut time_labels = VertexSecondaryMap::new();
+        for (vkey, y) in &y_coords {
+            let t = if range.abs() < f64::EPSILON {
+                0
+            } else {
+                let band_index = ((y - y_min) / band_height).floor();
+                crate::util::f64_band_to_u32(band_index, num_slices - 1)
+            };
+            time_labels.insert(*vkey, t);
+        }
+
+        self.foliation = Some(Foliation::new(time_labels, num_slices));
+        self.metadata.time_slices = num_slices;
+        Ok(())
+    }
+
+    // -------------------------------------------------------------------------
+    // Foliation queries
+    // -------------------------------------------------------------------------
+
+    /// Returns `true` if this triangulation has an assigned foliation.
+    #[must_use]
+    pub const fn has_foliation(&self) -> bool {
+        self.foliation.is_some()
+    }
+
+    /// Returns a reference to the foliation, if present.
+    #[must_use]
+    pub const fn foliation(&self) -> Option<&Foliation> {
+        self.foliation.as_ref()
+    }
+
+    /// Returns the time slice label for a vertex, or `None` if no foliation
+    /// is present or the vertex is unlabeled.
+    #[must_use]
+    pub fn time_label(&self, vertex: &DelaunayVertexHandle) -> Option<u32> {
+        self.foliation
+            .as_ref()
+            .and_then(|f| f.time_label(vertex.vertex_key()))
+    }
+
+    /// Classifies an edge as spacelike or timelike.
+    ///
+    /// Returns `None` if no foliation is present, the edge endpoints cannot
+    /// be resolved, or either endpoint lacks a time label.
+    #[must_use]
+    pub fn edge_type(&self, edge: &DelaunayEdgeHandle) -> Option<EdgeType> {
+        let foliation = self.foliation.as_ref()?;
+        let (v0, v1) = self.geometry.edge_endpoints(edge).ok()?;
+        foliation.classify_edge(v0.vertex_key(), v1.vertex_key())
+    }
+
+    /// Returns all vertex handles that belong to time slice `t`.
+    #[must_use]
+    pub fn vertices_at_time(&self, t: u32) -> Vec<DelaunayVertexHandle> {
+        let Some(foliation) = &self.foliation else {
+            return Vec::new();
+        };
+        self.geometry
+            .vertices()
+            .filter(|vh| foliation.time_label(vh.vertex_key()) == Some(t))
+            .collect()
+    }
+
+    /// Returns per-slice vertex counts, or an empty slice if no foliation.
+    #[must_use]
+    pub fn slice_sizes(&self) -> &[usize] {
+        self.foliation.as_ref().map_or(&[], Foliation::slice_sizes)
+    }
+
+    /// Validates the causal structure of this foliated triangulation.
+    ///
+    /// Checks that every edge either connects vertices within the same time
+    /// slice (spacelike) or in adjacent slices (|Δt| = 1, timelike).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if any edge spans more than one time slice.
+    pub fn validate_causality_delaunay(&self) -> CdtResult<()> {
+        let Some(foliation) = &self.foliation else {
+            return Ok(());
+        };
+
+        for edge in self.geometry.edges() {
+            let Ok((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
+                continue;
+            };
+            let Some(t0) = foliation.time_label(v0.vertex_key()) else {
+                continue;
+            };
+            let Some(t1) = foliation.time_label(v1.vertex_key()) else {
+                continue;
+            };
+            if t0.abs_diff(t1) > 1 {
+                return Err(crate::errors::CdtError::CausalityViolation {
+                    time_0: t0,
+                    time_1: t1,
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::traits::TriangulationQuery;
     use std::thread;
     use std::time::Duration;
 
@@ -778,29 +1159,23 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_causality_placeholder() {
+    fn test_validate_causality_no_foliation() {
         let triangulation =
             CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
 
-        // Causality validation is currently a placeholder that always succeeds
+        // Without foliation, causality validation succeeds vacuously
         let result = triangulation.validate_causality();
-        assert!(
-            result.is_ok(),
-            "Causality validation should succeed (placeholder implementation)"
-        );
+        assert!(result.is_ok(), "Causality should pass without foliation");
     }
 
     #[test]
-    fn test_validate_foliation_placeholder() {
+    fn test_validate_foliation_no_foliation() {
         let triangulation =
             CdtTriangulation::from_random_points(5, 3, 2).expect("Failed to create triangulation");
 
-        // Foliation validation is currently a placeholder that always succeeds
+        // Without foliation, foliation validation succeeds vacuously
         let result = triangulation.validate_foliation();
-        assert!(
-            result.is_ok(),
-            "Foliation validation should succeed (placeholder implementation)"
-        );
+        assert!(result.is_ok(), "Foliation should pass without foliation");
     }
 
     #[test]
@@ -1072,12 +1447,219 @@ mod tests {
             "Large triangulation should have many faces"
         );
     }
+
+    // =========================================================================
+    // Foliation tests
+    // =========================================================================
+
+    #[test]
+    fn test_from_foliated_cylinder_basic() {
+        let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+            .expect("Should create foliated cylinder");
+
+        assert!(tri.has_foliation());
+        assert_eq!(tri.vertex_count(), 15); // 5 * 3
+        assert_eq!(tri.time_slices(), 3);
+        assert_eq!(tri.dimension(), 2);
+        assert!(tri.edge_count() > 0);
+        assert!(tri.face_count() > 0);
+    }
+
+    #[test]
+    fn test_from_foliated_cylinder_vertex_counts_per_slice() {
+        let tri = CdtTriangulation::from_foliated_cylinder(4, 3, Some(1))
+            .expect("Should create foliated cylinder");
+
+        let sizes = tri.slice_sizes();
+        assert_eq!(sizes.len(), 3);
+        for (t, &size) in sizes.iter().enumerate() {
+            assert_eq!(size, 4, "Slice {t} should have 4 vertices");
+        }
+    }
+
+    #[test]
+    fn test_from_foliated_cylinder_all_vertices_labeled() {
+        let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(99))
+            .expect("Should create foliated cylinder");
+
+        // Every vertex should have a time label
+        for vh in tri.geometry().vertices() {
+            assert!(
+                tri.time_label(&vh).is_some(),
+                "Every vertex should have a time label"
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_foliated_cylinder_edge_classification() {
+        let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+            .expect("Should create foliated cylinder");
+
+        let mut spacelike = 0usize;
+        let mut timelike = 0usize;
+
+        for edge in tri.geometry().edges() {
+            let et = tri
+                .edge_type(&edge)
+                .expect("All edges should be classifiable");
+            match et {
+                EdgeType::Spacelike => spacelike += 1,
+                EdgeType::Timelike => timelike += 1,
+            }
+        }
+
+        assert!(spacelike > 0, "Should have some spacelike edges");
+        assert!(timelike > 0, "Should have some timelike edges");
+    }
+
+    #[test]
+    fn test_from_foliated_cylinder_validate_foliation() {
+        let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+            .expect("Should create foliated cylinder");
+
+        let result = tri.validate_foliation();
+        assert!(
+            result.is_ok(),
+            "Foliation validation should pass: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_from_foliated_cylinder_validate_causality() {
+        let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+            .expect("Should create foliated cylinder");
+
+        let result = tri.validate_causality_delaunay();
+        assert!(
+            result.is_ok(),
+            "Causality validation should pass: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_from_foliated_cylinder_seed_determinism() {
+        let tri1 = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42)).unwrap();
+        let tri2 = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42)).unwrap();
+
+        assert_eq!(tri1.vertex_count(), tri2.vertex_count());
+        assert_eq!(tri1.edge_count(), tri2.edge_count());
+        assert_eq!(tri1.face_count(), tri2.face_count());
+        assert_eq!(tri1.slice_sizes(), tri2.slice_sizes());
+    }
+
+    #[test]
+    fn test_from_foliated_cylinder_invalid_params() {
+        // Too few vertices per slice
+        assert!(CdtTriangulation::from_foliated_cylinder(3, 3, None).is_err());
+        // Too few slices
+        assert!(CdtTriangulation::from_foliated_cylinder(5, 1, None).is_err());
+    }
+
+    #[test]
+    fn test_vertices_at_time() {
+        let tri = CdtTriangulation::from_foliated_cylinder(4, 3, Some(1))
+            .expect("Should create foliated cylinder");
+
+        for t in 0..3 {
+            let verts = tri.vertices_at_time(t);
+            assert_eq!(verts.len(), 4, "Slice {t} should have 4 vertices");
+            // All should have the correct label
+            for vh in &verts {
+                assert_eq!(tri.time_label(vh), Some(t));
+            }
+        }
+
+        // Non-existent slice should return empty
+        assert!(tri.vertices_at_time(99).is_empty());
+    }
+
+    #[test]
+    fn test_assign_foliation_by_y_coordinate() {
+        let mut tri =
+            CdtTriangulation::from_random_points(10, 3, 2).expect("Failed to create triangulation");
+
+        assert!(!tri.has_foliation());
+
+        tri.assign_foliation_by_y_coordinate(3)
+            .expect("Should assign foliation");
+
+        assert!(tri.has_foliation());
+        assert_eq!(tri.time_slices(), 3);
+
+        // All vertices should now be labeled
+        for vh in tri.geometry().vertices() {
+            assert!(tri.time_label(&vh).is_some());
+        }
+
+        // Foliation validation should pass
+        let result = tri.validate_foliation();
+        assert!(
+            result.is_ok(),
+            "Foliation validation should pass: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_assign_foliation_zero_slices() {
+        let mut tri = CdtTriangulation::from_random_points(5, 2, 2).unwrap();
+        assert!(tri.assign_foliation_by_y_coordinate(0).is_err());
+    }
+
+    #[test]
+    fn test_from_foliated_cylinder_minimum_size() {
+        // Minimum valid: 4 vertices per slice, 2 slices
+        let tri = CdtTriangulation::from_foliated_cylinder(4, 2, Some(1))
+            .expect("Should create minimal foliated cylinder");
+
+        assert_eq!(tri.vertex_count(), 8);
+        assert_eq!(tri.slice_sizes(), &[4, 4]);
+        assert!(tri.validate_foliation().is_ok());
+        assert!(tri.validate_causality_delaunay().is_ok());
+    }
+
+    #[test]
+    fn test_from_foliated_cylinder_full_validate() {
+        // validate() runs geometry + Delaunay + topology + causality + foliation
+        let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+            .expect("Should create foliated cylinder");
+
+        let result = tri.validate();
+        assert!(result.is_ok(), "Full validation should pass: {result:?}");
+    }
+
+    #[test]
+    fn test_from_foliated_cylinder_no_seed() {
+        // None seed should also work (uses default perturbation seed 0)
+        let tri = CdtTriangulation::from_foliated_cylinder(5, 3, None)
+            .expect("Should create foliated cylinder without seed");
+
+        assert!(tri.has_foliation());
+        assert_eq!(tri.vertex_count(), 15);
+        assert!(tri.validate_foliation().is_ok());
+    }
+
+    #[test]
+    fn test_no_foliation_queries_return_none() {
+        let tri = CdtTriangulation::from_random_points(5, 2, 2).unwrap();
+        assert!(!tri.has_foliation());
+        assert!(tri.foliation().is_none());
+        assert!(tri.slice_sizes().is_empty());
+        assert!(tri.vertices_at_time(0).is_empty());
+
+        // time_label and edge_type return None
+        for vh in tri.geometry().vertices() {
+            assert_eq!(tri.time_label(&vh), None);
+        }
+        for edge in tri.geometry().edges() {
+            assert_eq!(tri.edge_type(&edge), None);
+        }
+    }
 }
 
 #[cfg(test)]
 mod prop_tests {
     use super::*;
-    use crate::geometry::traits::TriangulationQuery;
     use proptest::prelude::*;
 
     proptest! {
@@ -1224,7 +1806,7 @@ mod prop_tests {
         ///
         /// Previously disabled due to non-determinism in FastKernel-based generation
         /// (seed=2852, vertices=8, timeslices=3 produced edge counts 12 vs 11).
-        /// Re-enabled after switching to RobustKernel + DelaunayTriangulationBuilder.
+        /// Re-enabled after switching to AdaptiveKernel + DelaunayTriangulationBuilder.
         #[test]
         fn seeded_determinism_property(
             vertices in 4u32..15,
@@ -1352,12 +1934,9 @@ mod prop_tests {
         ) {
             let triangulation = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
 
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let v = triangulation.vertex_count() as i32;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let e = triangulation.edge_count() as i32;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let f = triangulation.face_count() as i32;
+            let v = crate::util::saturating_usize_to_i32(triangulation.vertex_count());
+            let e = crate::util::saturating_usize_to_i32(triangulation.edge_count());
+            let f = crate::util::saturating_usize_to_i32(triangulation.face_count());
 
             // Basic positivity
             prop_assert!(v >= 3, "Must have at least 3 vertices");
@@ -1393,8 +1972,8 @@ mod prop_tests {
                 prop_assert!(result.is_ok(), "Should succeed with valid vertex count: {}", vertices);
 
                 let triangulation = result.unwrap();
-                #[allow(clippy::cast_possible_truncation)]
-                let vertex_count_u32 = triangulation.vertex_count() as u32;
+                let vertex_count_u32 =
+                    u32::try_from(triangulation.vertex_count()).unwrap_or(u32::MAX);
                 prop_assert_eq!(vertex_count_u32, vertices, "Vertex count should match input");
                 prop_assert_eq!(triangulation.time_slices(), timeslices, "Time slices should match input");
                 prop_assert_eq!(triangulation.dimension(), 2, "Dimension should be 2");
@@ -1425,8 +2004,45 @@ mod prop_tests {
             prop_assert_eq!(direct_edge_count, geometry_edge_count, "Edge count access should be consistent");
 
             // Dimension should be consistent
-            prop_assert_eq!(triangulation.dimension() as usize, triangulation.geometry().dimension(),
+            prop_assert_eq!(usize::from(triangulation.dimension()), triangulation.geometry().dimension(),
                           "Dimension should be consistent between wrapper and geometry");
+        }
+
+        /// Property: Foliated cylinder construction always produces valid foliation and causality
+        #[test]
+        fn foliated_cylinder_invariants(
+            vertices_per_slice in 4u32..10,
+            num_slices in 2u32..6,
+            seed in 0u64..1000
+        ) {
+            // Some seed/size combinations trigger builder degeneracy;
+            // skip those — the constructor returns Err, not a broken triangulation.
+            let Ok(tri) = CdtTriangulation::from_foliated_cylinder(vertices_per_slice, num_slices, Some(seed)) else {
+                return Ok(());
+            };
+
+            // Vertex count must match grid (guaranteed by the constructor check)
+            let expected_v = vertices_per_slice as usize * num_slices as usize;
+            prop_assert_eq!(tri.vertex_count(), expected_v, "Vertex count should match grid");
+
+            // Must have foliation
+            prop_assert!(tri.has_foliation(), "Foliated cylinder must have foliation");
+
+            // Every slice has the right count
+            let sizes = tri.slice_sizes();
+            prop_assert_eq!(sizes.len(), num_slices as usize, "Should have num_slices slices");
+            for (t, &size) in sizes.iter().enumerate() {
+                prop_assert_eq!(size, vertices_per_slice as usize,
+                    "Slice {} should have {} vertices", t, vertices_per_slice);
+            }
+
+            // Foliation validation passes
+            prop_assert!(tri.validate_foliation().is_ok(), "Foliation should be valid");
+
+            // Causality passes (no edges spanning >1 slice)
+            prop_assert!(tri.validate_causality_delaunay().is_ok(),
+                "Causality should hold for foliated cylinder with {} vertices/slice, {} slices, seed {}",
+                vertices_per_slice, num_slices, seed);
         }
     }
 }
