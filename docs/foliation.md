@@ -19,7 +19,7 @@ This implementation uses **cylinder topology** (S¹ × [0,T]) — spatial slices
 
 The foliation is stored in the CDT layer (`src/cdt/foliation.rs`), not the geometry backend, preserving the CDT ↔ geometry separation.
 
-```
+```text
 CdtTriangulation<B>
 ├── geometry: B              (DelaunayBackend — owns the triangulation)
 ├── metadata: CdtMetadata    (time_slices, dimension, history)
@@ -70,7 +70,7 @@ Classification is done by `Foliation::classify_edge(v0, v1)`, which looks up bot
 
 Two validation methods enforce foliation correctness:
 
-#### `validate_foliation()`
+### `validate_foliation()`
 
 Structural checks (backend-agnostic):
 
@@ -78,7 +78,7 @@ Structural checks (backend-agnostic):
 2. Every time slice is non-empty
 3. `slice_sizes` sum is consistent with labeled count
 
-#### `validate_causality()`
+### `validate_causality()`
 
 Edge-level check (backend-agnostic, uses y-coordinate bucketing):
 

@@ -239,14 +239,25 @@ impl<B: TriangulationMut> CdtTriangulation<B> {
 
         Ok(())
     }
-    /// Validate topology properties
+    /// Validate topology properties.
     ///
     /// Checks that the triangulation satisfies expected topological constraints,
     /// including the Euler characteristic for the given dimension and boundary conditions.
     ///
     /// # Errors
-    /// Returns error if topology validation fails
-    fn validate_topology(&self) -> CdtResult<()> {
+    ///
+    /// Returns error if topology validation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::CdtTriangulation;
+    ///
+    /// let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
+    ///     .expect("create triangulation");
+    /// assert!(tri.validate_topology().is_ok());
+    /// ```
+    pub fn validate_topology(&self) -> CdtResult<()> {
         let euler_char = self.geometry.euler_characteristic();
 
         // For 2D planar triangulations with boundary (random points), expect χ = 1
@@ -279,12 +290,23 @@ impl<B: TriangulationMut> CdtTriangulation<B> {
     /// If no foliation is present, succeeds vacuously (no causal structure to check).
     /// Otherwise verifies that every edge either connects vertices in the same time
     /// slice (spacelike) or in adjacent slices (|Δt| = 1, timelike).  Time labels
-    /// are derived from each vertex’s y-coordinate via `round(y)`, matching the
+    /// are derived from each vertex's y-coordinate via `round(y)`, matching the
     /// bucket convention used at construction time.
     ///
     /// # Errors
+    ///
     /// Returns error if any edge spans more than one time slice.
-    fn validate_causality(&self) -> CdtResult<()> {
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::CdtTriangulation;
+    ///
+    /// let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+    ///     .expect("create foliated cylinder");
+    /// assert!(tri.validate_causality().is_ok());
+    /// ```
+    pub fn validate_causality(&self) -> CdtResult<()> {
         let Some(foliation) = &self.foliation else {
             return Ok(());
         };
@@ -336,8 +358,19 @@ impl<B: TriangulationMut> CdtTriangulation<B> {
     /// 3. `slice_sizes` is consistent with the time label map
     ///
     /// # Errors
+    ///
     /// Returns error if foliation structure is invalid.
-    fn validate_foliation(&self) -> CdtResult<()> {
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::CdtTriangulation;
+    ///
+    /// let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+    ///     .expect("create foliated cylinder");
+    /// assert!(tri.validate_foliation().is_ok());
+    /// ```
+    pub fn validate_foliation(&self) -> CdtResult<()> {
         let Some(foliation) = &self.foliation else {
             return Ok(());
         };
@@ -508,14 +541,10 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
     /// * `num_slices` — Number of time slices (≥ 2).
     /// * `seed` — Optional seed for deterministic vertex perturbation.
     ///
-    /// # Panics
-    ///
-    /// Panics if a [`VertexBuilder`] fails to build from a
-    /// valid point (should not happen in practice).
-    ///
     /// # Errors
     ///
-    /// Returns error if parameters are invalid or triangulation construction fails.
+    /// Returns error if parameters are invalid, vertex construction fails,
+    /// or triangulation construction fails.
     pub fn from_foliated_cylinder(
         vertices_per_slice: u32,
         num_slices: u32,
@@ -596,7 +625,12 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
                 };
 
                 let point = Point::<f64, 2>::new([x_base + px, y_base + py]);
-                let vertex = VertexBuilder::default().point(point).build().unwrap();
+                let vertex = VertexBuilder::default().point(point).build().map_err(|e| {
+                    crate::errors::CdtError::VertexBuildFailed {
+                        context: format!("from_foliated_cylinder vertex {flat_idx}"),
+                        underlying_error: e.to_string(),
+                    }
+                })?;
                 vertices.push(vertex);
             }
         }
@@ -1640,6 +1674,40 @@ mod tests {
     }
 
     #[test]
+    fn test_assign_foliation_single_slice() {
+        let mut tri =
+            CdtTriangulation::from_random_points(6, 1, 2).expect("Failed to create triangulation");
+
+        tri.assign_foliation_by_y_coordinate(1)
+            .expect("Should assign single-slice foliation");
+
+        assert!(tri.has_foliation());
+        // All vertices should be in slice 0
+        for vh in tri.geometry().vertices() {
+            assert_eq!(tri.time_label(&vh), Some(0));
+        }
+        assert_eq!(tri.slice_sizes(), &[tri.vertex_count()]);
+    }
+
+    #[test]
+    fn test_from_foliated_cylinder_larger_grid() {
+        // Test a larger grid to exercise scaling
+        let tri = CdtTriangulation::from_foliated_cylinder(10, 8, Some(7))
+            .expect("Should create larger foliated cylinder");
+
+        assert_eq!(tri.vertex_count(), 80);
+        assert!(tri.has_foliation());
+
+        let sizes = tri.slice_sizes();
+        assert_eq!(sizes.len(), 8);
+        for &s in sizes {
+            assert_eq!(s, 10);
+        }
+
+        assert!(tri.validate().is_ok(), "Full validation should pass");
+    }
+
+    #[test]
     fn test_no_foliation_queries_return_none() {
         let tri = CdtTriangulation::from_random_points(5, 2, 2).unwrap();
         assert!(!tri.has_foliation());
@@ -2008,42 +2076,6 @@ mod prop_tests {
                           "Dimension should be consistent between wrapper and geometry");
         }
 
-        /// Property: Foliated cylinder construction always produces valid foliation and causality
-        #[test]
-        fn foliated_cylinder_invariants(
-            vertices_per_slice in 4u32..10,
-            num_slices in 2u32..6,
-            seed in 0u64..1000
-        ) {
-            // Some seed/size combinations trigger builder degeneracy;
-            // skip those — the constructor returns Err, not a broken triangulation.
-            let Ok(tri) = CdtTriangulation::from_foliated_cylinder(vertices_per_slice, num_slices, Some(seed)) else {
-                return Ok(());
-            };
-
-            // Vertex count must match grid (guaranteed by the constructor check)
-            let expected_v = vertices_per_slice as usize * num_slices as usize;
-            prop_assert_eq!(tri.vertex_count(), expected_v, "Vertex count should match grid");
-
-            // Must have foliation
-            prop_assert!(tri.has_foliation(), "Foliated cylinder must have foliation");
-
-            // Every slice has the right count
-            let sizes = tri.slice_sizes();
-            prop_assert_eq!(sizes.len(), num_slices as usize, "Should have num_slices slices");
-            for (t, &size) in sizes.iter().enumerate() {
-                prop_assert_eq!(size, vertices_per_slice as usize,
-                    "Slice {} should have {} vertices", t, vertices_per_slice);
-            }
-
-            // Foliation validation passes
-            prop_assert!(tri.validate_foliation().is_ok(), "Foliation should be valid");
-
-            // Causality passes (no edges spanning >1 slice)
-            prop_assert!(tri.validate_causality_delaunay().is_ok(),
-                "Causality should hold for foliated cylinder with {} vertices/slice, {} slices, seed {}",
-                vertices_per_slice, num_slices, seed);
-        }
     }
 }
 

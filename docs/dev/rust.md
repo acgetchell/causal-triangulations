@@ -162,11 +162,21 @@ Modules are declared from `src/lib.rs` (and `src/main.rs` for binaries), includi
 
 All public items must have documentation.
 
+Public functions and methods should include a `# Examples` section with a runnable doctest demonstrating basic usage. Doctests serve as both documentation and regression tests.
+
 After Rust changes, verify documentation builds:
 
 ```bash
 just doc-check
 ```
+
+---
+
+## Re-exports
+
+All public types intended for external use must be re-exported from the crate root (`src/lib.rs`). The re-export section at the top of `lib.rs` is the crate's prelude.
+
+When adding a new public type, add a corresponding `pub use` line in `lib.rs`.
 
 ---
 

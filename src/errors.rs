@@ -42,6 +42,13 @@ pub enum CdtError {
         /// Human-readable description of the failure
         detail: String,
     },
+    /// Vertex construction failed during triangulation generation
+    VertexBuildFailed {
+        /// Human-readable context (e.g., function name or vertex index)
+        context: String,
+        /// The underlying builder error message
+        underlying_error: String,
+    },
     /// An edge violates the causal structure by spanning more than one time slice
     CausalityViolation {
         /// Time label of the first endpoint
@@ -87,6 +94,13 @@ impl fmt::Display for CdtError {
             Self::ValidationFailed { check, detail } => {
                 write!(f, "Validation failed [{check}]: {detail}")
             }
+            Self::VertexBuildFailed {
+                context,
+                underlying_error,
+            } => write!(
+                f,
+                "Vertex construction failed [{context}]: {underlying_error}"
+            ),
             Self::CausalityViolation { time_0, time_1 } => {
                 let dt = time_0.abs_diff(*time_1);
                 write!(
@@ -194,6 +208,19 @@ mod tests {
         assert_eq!(
             display,
             "Validation failed [topology]: Euler characteristic χ=3 unexpected (V=5, E=8, F=6)"
+        );
+    }
+
+    #[test]
+    fn test_vertex_build_failed_error() {
+        let error = CdtError::VertexBuildFailed {
+            context: "from_foliated_cylinder vertex 7".to_string(),
+            underlying_error: "Missing required field: `point`".to_string(),
+        };
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Vertex construction failed [from_foliated_cylinder vertex 7]: Missing required field: `point`"
         );
     }
 

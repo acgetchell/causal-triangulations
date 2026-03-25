@@ -40,6 +40,10 @@ impl Foliation {
     pub fn new(time_labels: VertexSecondaryMap<u32>, num_slices: u32) -> Self {
         let mut slice_sizes = vec![0usize; num_slices as usize];
         for (_, &t) in &time_labels {
+            debug_assert!(
+                (t as usize) < slice_sizes.len(),
+                "time label {t} out of range for {num_slices} slices"
+            );
             let idx = t as usize;
             if idx < slice_sizes.len() {
                 slice_sizes[idx] += 1;
@@ -203,6 +207,42 @@ mod tests {
         let fol = Foliation::new(labels, 1);
 
         assert_eq!(fol.classify_edge(vkeys[0], vkeys[1]), None);
+    }
+
+    #[test]
+    fn test_classify_edge_acausal_returns_timelike() {
+        // |Δt| > 1: current behavior returns Timelike (validation catches the violation)
+        let dt = crate::util::generate_seeded_delaunay2(4, (0.0, 10.0), 1);
+        let vkeys: Vec<_> = dt.vertices().map(|(k, _)| k).collect();
+
+        let mut labels = VertexSecondaryMap::new();
+        labels.insert(vkeys[0], 0);
+        labels.insert(vkeys[1], 5); // |Δt| = 5
+        let fol = Foliation::new(labels, 6);
+
+        assert_eq!(
+            fol.classify_edge(vkeys[0], vkeys[1]),
+            Some(EdgeType::Timelike),
+            "Acausal edges (|Δt| > 1) should still return Timelike"
+        );
+    }
+
+    #[test]
+    fn test_set_time_label_new_vertex() {
+        let dt = crate::util::generate_seeded_delaunay2(4, (0.0, 10.0), 1);
+        let vkeys: Vec<_> = dt.vertices().map(|(k, _)| k).collect();
+
+        let labels = VertexSecondaryMap::new();
+        let mut fol = Foliation::new(labels, 2);
+
+        assert_eq!(fol.labeled_vertex_count(), 0);
+        assert_eq!(fol.slice_sizes(), &[0, 0]);
+
+        // First-time labeling of a vertex
+        fol.set_time_label(vkeys[0], 1);
+        assert_eq!(fol.labeled_vertex_count(), 1);
+        assert_eq!(fol.slice_sizes(), &[0, 1]);
+        assert_eq!(fol.time_label(vkeys[0]), Some(1));
     }
 
     #[test]

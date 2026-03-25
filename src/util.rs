@@ -60,10 +60,6 @@ pub fn generate_random_float() -> f64 {
 /// construction, which provides deterministic tie-breaking and coherent orientation
 /// as first-class invariants.
 ///
-/// # Panics
-///
-/// Panics if a [`VertexBuilder`] fails to build from a valid point (should not happen in practice).
-///
 /// # Errors
 ///
 /// Returns enhanced error information including vertex count, coordinate range, and underlying error.
@@ -103,11 +99,14 @@ pub fn generate_delaunay2_with_context(
             underlying_error: format!("Point generation failed: {e}"),
         })?;
 
-    // VertexBuilder::build() only fails if the point is missing, which cannot happen here.
     let vertices: Vec<_> = points
         .into_iter()
-        .map(|point| VertexBuilder::default().point(point).build().unwrap())
-        .collect();
+        .map(|point| VertexBuilder::default().point(point).build())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| CdtError::VertexBuildFailed {
+            context: format!("generate_delaunay2_with_context({number_of_vertices} vertices)"),
+            underlying_error: e.to_string(),
+        })?;
 
     let dt = DelaunayTriangulationBuilder::new(&vertices)
         .build::<i32>()

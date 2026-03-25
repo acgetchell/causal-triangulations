@@ -8,6 +8,7 @@ use crate::geometry::traits::{
     FlipResult, GeometryBackend, SubdivisionResult, ThreadSafeBackend, TriangulationMut,
     TriangulationQuery,
 };
+use delaunay::core::DataType;
 use delaunay::core::delaunay_triangulation::DelaunayTriangulation;
 use delaunay::core::edge::EdgeKey;
 use delaunay::core::triangulation_data_structure::{CellKey, VertexKey};
@@ -21,11 +22,7 @@ use delaunay::geometry::kernel::AdaptiveKernel;
 /// are not yet implemented and return [`DelaunayError::NotImplemented`]. The `clear()` and
 /// `reserve_capacity()` methods are currently no-ops that emit a `log::warn!` diagnostic.
 #[derive(Debug)]
-pub struct DelaunayBackend<VertexData, CellData, const D: usize>
-where
-    VertexData: delaunay::core::DataType,
-    CellData: delaunay::core::DataType,
-{
+pub struct DelaunayBackend<VertexData: DataType, CellData: DataType, const D: usize> {
     /// The underlying Delaunay triangulation from the delaunay crate
     dt: DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D>,
 }
@@ -90,10 +87,8 @@ pub enum DelaunayError {
     },
 }
 
-impl<VertexData, CellData, const D: usize> DelaunayBackend<VertexData, CellData, D>
-where
-    VertexData: delaunay::core::DataType,
-    CellData: delaunay::core::DataType,
+impl<VertexData: DataType, CellData: DataType, const D: usize>
+    DelaunayBackend<VertexData, CellData, D>
 {
     /// Create a new Delaunay backend from an existing Delaunay triangulation
     #[must_use]
@@ -132,11 +127,8 @@ where
     }
 }
 
-impl<VertexData, CellData, const D: usize> GeometryBackend
+impl<VertexData: DataType, CellData: DataType, const D: usize> GeometryBackend
     for DelaunayBackend<VertexData, CellData, D>
-where
-    VertexData: delaunay::core::DataType,
-    CellData: delaunay::core::DataType,
 {
     type Coordinate = f64;
     type VertexHandle = DelaunayVertexHandle;
@@ -151,19 +143,13 @@ where
 
 // The upstream `Tds`, `Triangulation`, and `DelaunayTriangulation` types auto-derive
 // `Send + Sync` (all internal storage is `SlotMap`/`DenseSlotMap` + `FxHashMap`, all `Send + Sync`).
-impl<VertexData, CellData, const D: usize> ThreadSafeBackend
-    for DelaunayBackend<VertexData, CellData, D>
-where
-    VertexData: delaunay::core::DataType + Send + Sync,
-    CellData: delaunay::core::DataType + Send + Sync,
+impl<VertexData: DataType + Send + Sync, CellData: DataType + Send + Sync, const D: usize>
+    ThreadSafeBackend for DelaunayBackend<VertexData, CellData, D>
 {
 }
 
-impl<VertexData, CellData, const D: usize> TriangulationQuery
+impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuery
     for DelaunayBackend<VertexData, CellData, D>
-where
-    VertexData: delaunay::core::DataType,
-    CellData: delaunay::core::DataType,
 {
     fn vertex_count(&self) -> usize {
         self.dt.number_of_vertices()
@@ -294,11 +280,8 @@ where
     }
 }
 
-impl<VertexData, CellData, const D: usize> TriangulationMut
+impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
     for DelaunayBackend<VertexData, CellData, D>
-where
-    VertexData: delaunay::core::DataType,
-    CellData: delaunay::core::DataType,
 {
     fn insert_vertex(
         &mut self,
