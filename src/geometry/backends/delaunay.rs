@@ -39,6 +39,12 @@ impl DelaunayVertexHandle {
     pub(crate) const fn vertex_key(&self) -> VertexKey {
         self.key
     }
+
+    /// Creates a handle from a raw vertex key (crate-internal).
+    #[must_use]
+    pub(crate) const fn from_key(key: VertexKey) -> Self {
+        Self { key }
+    }
 }
 
 /// Opaque handle for edges in Delaunay backend
@@ -357,10 +363,50 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
     }
 }
 
-/// Type alias
+// =============================================================================
+// DelaunayBackend2D-specific methods (u32 vertex data = time-slice labels)
+// =============================================================================
+impl DelaunayBackend<u32, i32, 2> {
+    /// Returns the time-slice label stored on a vertex, or `None` if the
+    /// vertex has no data or the handle is invalid.
+    #[must_use]
+    pub fn vertex_time_label(&self, handle: &DelaunayVertexHandle) -> Option<u32> {
+        let (_, vertex) = self.dt.vertices().find(|(k, _)| *k == handle.key)?;
+        vertex.data
+    }
+
+    /// Returns the time-slice label for a vertex identified by its key.
+    #[must_use]
+    pub fn vertex_time_label_by_key(&self, key: VertexKey) -> Option<u32> {
+        let (_, vertex) = self.dt.vertices().find(|(k, _)| *k == key)?;
+        vertex.data
+    }
+
+    /// Mutable access to the underlying triangulation for setting vertex data.
+    ///
+    /// Modifying vertex data (time labels) does not break Delaunay invariants
+    /// since it only changes the `data` field, not geometry or topology.
+    ///
+    // TODO(#284): Once delaunay 0.7.4 exposes `set_vertex_data`, use that
+    // instead and remove `assign_foliation_by_y_coordinate`'s rebuild path.
+    #[allow(dead_code)]
+    pub(crate) const fn triangulation_mut(
+        &mut self,
+    ) -> &mut delaunay::core::delaunay_triangulation::DelaunayTriangulation<
+        AdaptiveKernel<f64>,
+        u32,
+        i32,
+        2,
+    > {
+        &mut self.dt
+    }
+}
+
+/// Type alias for the standard 2D CDT backend.
 ///
-/// Uses `()` vertex data — CDT metadata is tracked at the [`CdtTriangulation`](crate::cdt::triangulation::CdtTriangulation) level.
-pub type DelaunayBackend2D = DelaunayBackend<(), i32, 2>;
+/// Vertex data is `u32` — stores the per-vertex time-slice label (foliation).
+/// This mirrors CGAL's `vertex->info()` used in CDT-plusplus.
+pub type DelaunayBackend2D = DelaunayBackend<u32, i32, 2>;
 
 #[cfg(test)]
 mod tests {

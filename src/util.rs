@@ -40,9 +40,9 @@ pub fn f64_band_to_u32(band_index: f64, max_t: u32) -> u32 {
 /// Type alias for the 2D Delaunay triangulation returned by this crate's generators.
 ///
 /// Uses [`AdaptiveKernel`] (the default for [`DelaunayTriangulationBuilder::build`]) and
-/// `()` vertex data (CDT metadata is tracked separately in [`CdtTriangulation`](crate::cdt::triangulation::CdtTriangulation)).
+/// `u32` vertex data storing the per-vertex time-slice label (foliation).
 pub type DelaunayTriangulation2D =
-    delaunay::core::delaunay_triangulation::DelaunayTriangulation<AdaptiveKernel<f64>, (), i32, 2>;
+    delaunay::core::delaunay_triangulation::DelaunayTriangulation<AdaptiveKernel<f64>, u32, i32, 2>;
 
 /// Generates a random floating-point number between 0.0 and 1.0.
 ///
@@ -99,16 +99,18 @@ pub fn generate_delaunay2_with_context(
             underlying_error: format!("Point generation failed: {e}"),
         })?;
 
+    // Explicitly type the builder as Vertex<f64, u32, 2> so the triangulation
+    // has u32 vertex data available for time-slice labels (even if unset here).
     let vertices: Vec<_> = points
         .into_iter()
-        .map(|point| VertexBuilder::default().point(point).build())
+        .map(|point| VertexBuilder::<f64, u32, 2>::default().point(point).build())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| CdtError::VertexBuildFailed {
             context: format!("generate_delaunay2_with_context({number_of_vertices} vertices)"),
             underlying_error: e.to_string(),
         })?;
 
-    let dt = DelaunayTriangulationBuilder::new(&vertices)
+    let dt = DelaunayTriangulationBuilder::from_vertices(&vertices)
         .build::<i32>()
         .map_err(|e| CdtError::DelaunayGenerationFailed {
             vertex_count: number_of_vertices,

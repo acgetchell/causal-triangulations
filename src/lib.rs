@@ -56,9 +56,8 @@ pub mod geometry {
     // Type aliases for common backend combinations
     /// 2D Delaunay backend (most common configuration).
     ///
-    /// Uses `f64` coordinates with `()` vertex data and `i32` cell data.
-    /// CDT metadata is tracked separately by [`CdtTriangulation`](crate::cdt::triangulation::CdtTriangulation).
-    pub type DelaunayBackend2D = backends::delaunay::DelaunayBackend<(), i32, 2>;
+    /// Uses `f64` coordinates with `u32` vertex data (time-slice labels) and `i32` cell data.
+    pub type DelaunayBackend2D = backends::delaunay::DelaunayBackend<u32, i32, 2>;
 
     /// Default backend type for 2D CDT simulations
     pub type DefaultBackend = DelaunayBackend2D;

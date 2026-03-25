@@ -174,9 +174,9 @@ just doc-check
 
 ## Re-exports
 
-All public types intended for external use must be re-exported from the crate root (`src/lib.rs`). The re-export section at the top of `lib.rs` is the crate's prelude.
+Types that are part of the crate's **stable public API** (documented, intended for external consumption) should be re-exported from the crate root (`src/lib.rs`). Internal-use public types (e.g., backend-specific handles) should not be re-exported to avoid API bloat.
 
-When adding a new public type, add a corresponding `pub use` line in `lib.rs`.
+When adding a new public API type, add a corresponding `pub use` line in the re-export block at the top of `lib.rs`.
 
 ---
 

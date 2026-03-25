@@ -28,9 +28,9 @@ src/
 
 Assigns each vertex to a discrete time slice, enabling classification of edges as spacelike or timelike. See `docs/foliation.md` for design details.
 
-- `Foliation` — per-vertex time labels stored in a `VertexSecondaryMap<u32>` (O(1) slotmap lookup)
+- `Foliation` — aggregate bookkeeping (per-slice vertex counts, total slices)
 - `EdgeType` — `Spacelike` (same slice) or `Timelike` (adjacent slices)
-- Time labels live in the CDT layer, not the geometry backend, preserving the CDT ↔ geometry separation
+- Time labels are stored directly as vertex data (`Vertex.data: Option<u32>`), mirroring CDT-plusplus's `vertex->info()`
 
 #### `cdt/triangulation.rs` — Foliation integration
 
@@ -47,6 +47,6 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 
 ## Key Dependencies
 
-- `delaunay` (v0.7.3) — geometry backend (Delaunay triangulations, `VertexSecondaryMap`)
+- `delaunay` (v0.7.3) — geometry backend (Delaunay triangulations, vertex data for time labels)
 - `markov-chain-monte-carlo` — MCMC framework (`Chain::step_mut`, `ProposalMut`, `Target`)
 - `num-traits` — `ToPrimitive` for safe float→integer conversion

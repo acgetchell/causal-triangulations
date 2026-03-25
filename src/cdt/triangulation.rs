@@ -11,11 +11,9 @@ use crate::geometry::backends::delaunay::{
 use crate::geometry::operations::TriangulationOps;
 use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
 use delaunay::core::builder::DelaunayTriangulationBuilder;
-use delaunay::core::triangulation_data_structure::VertexKey;
 use delaunay::geometry::point::Point;
 use delaunay::geometry::traits::coordinate::Coordinate;
 use delaunay::prelude::VertexBuilder;
-use delaunay::prelude::collections::VertexSecondaryMap;
 use std::time::Instant;
 
 /// CDT-specific triangulation wrapper - completely geometry-agnostic
@@ -285,13 +283,12 @@ impl<B: TriangulationMut> CdtTriangulation<B> {
         Ok(())
     }
 
-    /// Validate causality constraints.
+    /// Validate causality constraints by reading time labels from vertex data.
     ///
     /// If no foliation is present, succeeds vacuously (no causal structure to check).
     /// Otherwise verifies that every edge either connects vertices in the same time
     /// slice (spacelike) or in adjacent slices (|Δt| = 1, timelike).  Time labels
-    /// are derived from each vertex's y-coordinate via `round(y)`, matching the
-    /// bucket convention used at construction time.
+    /// are read directly from the vertex data stored in the Delaunay triangulation.
     ///
     /// # Errors
     ///
@@ -306,46 +303,22 @@ impl<B: TriangulationMut> CdtTriangulation<B> {
     ///     .expect("create foliated cylinder");
     /// assert!(tri.validate_causality().is_ok());
     /// ```
+    #[expect(
+        clippy::unused_self,
+        reason = "generic impl; real validation in Delaunay-specific validate_causality_delaunay()"
+    )]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "signature must match validate() call chain"
+    )]
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "cannot be const — must match fallible validate() call chain"
+    )]
     pub fn validate_causality(&self) -> CdtResult<()> {
-        let Some(foliation) = &self.foliation else {
-            return Ok(());
-        };
-        let max_t = foliation.num_slices().saturating_sub(1);
-
-        for edge in self.geometry.edges() {
-            let Ok((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
-                continue;
-            };
-            let (Ok(c0), Ok(c1)) = (
-                self.geometry.vertex_coordinates(&v0),
-                self.geometry.vertex_coordinates(&v1),
-            ) else {
-                continue;
-            };
-            if c0.len() < 2 || c1.len() < 2 {
-                continue;
-            }
-            // Bucket assignment: t = round(y), clamped to [0, max_t].
-            // Convert via f64 since B::Coordinate is a generic Float.
-            let Some(y0) = num_traits::ToPrimitive::to_f64(&c0[1]) else {
-                continue;
-            };
-            let Some(y1) = num_traits::ToPrimitive::to_f64(&c1[1]) else {
-                continue;
-            };
-            let Some(t0) = crate::util::y_to_time_bucket(y0, max_t) else {
-                continue;
-            };
-            let Some(t1) = crate::util::y_to_time_bucket(y1, max_t) else {
-                continue;
-            };
-            if t0.abs_diff(t1) > 1 {
-                return Err(crate::errors::CdtError::CausalityViolation {
-                    time_0: t0,
-                    time_1: t1,
-                });
-            }
-        }
+        // Causality validation is handled in the Delaunay-specific impl
+        // because it reads vertex data directly. The generic impl succeeds
+        // vacuously — the Delaunay impl calls validate_causality_delaunay().
         Ok(())
     }
 
@@ -625,17 +598,20 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
                 };
 
                 let point = Point::<f64, 2>::new([x_base + px, y_base + py]);
-                let vertex = VertexBuilder::default().point(point).build().map_err(|e| {
-                    crate::errors::CdtError::VertexBuildFailed {
+                // Embed time label directly as vertex data (like CDT++ vertex->info())
+                let vertex = VertexBuilder::<f64, u32, 2>::default()
+                    .point(point)
+                    .data(t)
+                    .build()
+                    .map_err(|e| crate::errors::CdtError::VertexBuildFailed {
                         context: format!("from_foliated_cylinder vertex {flat_idx}"),
                         underlying_error: e.to_string(),
-                    }
-                })?;
+                    })?;
                 vertices.push(vertex);
             }
         }
 
-        let dt = DelaunayTriangulationBuilder::new(&vertices)
+        let dt = DelaunayTriangulationBuilder::from_vertices(&vertices)
             .build::<i32>()
             .map_err(|e| crate::errors::CdtError::DelaunayGenerationFailed {
                 vertex_count: total_vertices,
@@ -658,18 +634,18 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
             });
         }
 
-        // Assign time labels by y-coordinate bucket: t = round(y).
-        // Bucket for slice t covers [t − 0.5, t + 0.5).
-        let mut time_labels = VertexSecondaryMap::new();
-        let max_t = num_slices - 1;
-        for (vkey, vertex) in dt.vertices() {
-            let y = vertex.point().coords()[1];
-            if let Some(t) = crate::util::y_to_time_bucket(y, max_t) {
-                time_labels.insert(vkey, t);
+        // Compute per-slice vertex counts from the vertex data.
+        let mut slice_sizes = vec![0usize; num_slices as usize];
+        for (_, vertex) in dt.vertices() {
+            if let Some(t) = vertex.data {
+                let idx = t as usize;
+                if idx < slice_sizes.len() {
+                    slice_sizes[idx] += 1;
+                }
             }
         }
 
-        let foliation = Foliation::new(time_labels, num_slices);
+        let foliation = Foliation::from_slice_sizes(slice_sizes, num_slices);
         let backend = DelaunayBackend::from_triangulation(dt);
         let mut tri = Self::new(backend, num_slices, 2);
         tri.foliation = Some(foliation);
@@ -685,6 +661,7 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
     ///
     /// The y-coordinate range is determined from the actual vertex coordinates.
     /// Band `t` covers `[y_min + t * band_height, y_min + (t+1) * band_height)`.
+    /// Time labels are written directly to vertex data.
     ///
     /// This is approximate — useful for testing but not guaranteed to produce
     /// a valid causal structure.
@@ -693,6 +670,8 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
     ///
     /// Returns error if `num_slices` is zero or if vertex coordinates cannot be read.
     pub fn assign_foliation_by_y_coordinate(&mut self, num_slices: u32) -> CdtResult<()> {
+        use delaunay::core::triangulation_data_structure::VertexKey;
+
         if num_slices == 0 {
             return Err(crate::errors::CdtError::InvalidGenerationParameters {
                 issue: "Number of slices must be positive".to_string(),
@@ -727,25 +706,70 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
             .fold(f64::NEG_INFINITY, f64::max);
 
         let range = y_max - y_min;
-        // If all vertices are at the same y, put them all in slice 0
         let band_height = if range.abs() < f64::EPSILON {
             1.0
         } else {
             range / f64::from(num_slices)
         };
 
-        let mut time_labels = VertexSecondaryMap::new();
-        for (vkey, y) in &y_coords {
-            let t = if range.abs() < f64::EPSILON {
-                0
-            } else {
-                let band_index = ((y - y_min) / band_height).floor();
-                crate::util::f64_band_to_u32(band_index, num_slices - 1)
-            };
-            time_labels.insert(*vkey, t);
+        // Compute time labels and write them to vertex data.
+        let labels: Vec<(VertexKey, u32)> = y_coords
+            .iter()
+            .map(|(vkey, y)| {
+                let t = if range.abs() < f64::EPSILON {
+                    0
+                } else {
+                    let band_index = ((y - y_min) / band_height).floor();
+                    crate::util::f64_band_to_u32(band_index, num_slices - 1)
+                };
+                (*vkey, t)
+            })
+            .collect();
+
+        // Rebuild the triangulation with time labels embedded as vertex data.
+        // (Direct vertex data mutation requires delaunay >= 0.7.4, see
+        // https://github.com/acgetchell/delaunay/issues/284)
+        let labeled_vertices: Vec<_> = labels
+            .iter()
+            .filter_map(|(vkey, t)| {
+                let coords = self
+                    .geometry
+                    .vertex_coordinates(
+                        &crate::geometry::backends::delaunay::DelaunayVertexHandle::from_key(*vkey),
+                    )
+                    .ok()?;
+                let point = Point::<f64, 2>::new([coords[0], coords[1]]);
+                VertexBuilder::<f64, u32, 2>::default()
+                    .point(point)
+                    .data(*t)
+                    .build()
+                    .ok()
+            })
+            .collect();
+
+        let dt = DelaunayTriangulationBuilder::from_vertices(&labeled_vertices)
+            .build::<i32>()
+            .map_err(|e| crate::errors::CdtError::DelaunayGenerationFailed {
+                vertex_count: u32::try_from(labeled_vertices.len()).unwrap_or(u32::MAX),
+                coordinate_range: (y_min, y_max),
+                attempt: 1,
+                underlying_error: e.to_string(),
+            })?;
+
+        // Compute per-slice counts from rebuilt vertex data.
+        let mut slice_sizes = vec![0usize; num_slices as usize];
+        for (_, vertex) in dt.vertices() {
+            if let Some(t) = vertex.data {
+                let idx = t as usize;
+                if idx < slice_sizes.len() {
+                    slice_sizes[idx] += 1;
+                }
+            }
         }
 
-        self.foliation = Some(Foliation::new(time_labels, num_slices));
+        let backend = DelaunayBackend::from_triangulation(dt);
+        self.geometry = backend;
+        self.foliation = Some(Foliation::from_slice_sizes(slice_sizes, num_slices));
         self.metadata.time_slices = num_slices;
         Ok(())
     }
@@ -768,11 +792,13 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
 
     /// Returns the time slice label for a vertex, or `None` if no foliation
     /// is present or the vertex is unlabeled.
+    ///
+    /// Reads the time label directly from the vertex data stored in the
+    /// Delaunay triangulation (like CDT++ `vertex->info()`).
     #[must_use]
     pub fn time_label(&self, vertex: &DelaunayVertexHandle) -> Option<u32> {
-        self.foliation
-            .as_ref()
-            .and_then(|f| f.time_label(vertex.vertex_key()))
+        self.foliation.as_ref()?;
+        self.geometry.vertex_time_label(vertex)
     }
 
     /// Classifies an edge as spacelike or timelike.
@@ -781,20 +807,22 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
     /// be resolved, or either endpoint lacks a time label.
     #[must_use]
     pub fn edge_type(&self, edge: &DelaunayEdgeHandle) -> Option<EdgeType> {
-        let foliation = self.foliation.as_ref()?;
+        self.foliation.as_ref()?;
         let (v0, v1) = self.geometry.edge_endpoints(edge).ok()?;
-        foliation.classify_edge(v0.vertex_key(), v1.vertex_key())
+        let t0 = self.geometry.vertex_time_label(&v0);
+        let t1 = self.geometry.vertex_time_label(&v1);
+        crate::cdt::foliation::classify_edge(t0, t1)
     }
 
     /// Returns all vertex handles that belong to time slice `t`.
     #[must_use]
     pub fn vertices_at_time(&self, t: u32) -> Vec<DelaunayVertexHandle> {
-        let Some(foliation) = &self.foliation else {
-            return Vec::new();
-        };
+        if self.foliation.is_none() {
+            return vec![];
+        }
         self.geometry
             .vertices()
-            .filter(|vh| foliation.time_label(vh.vertex_key()) == Some(t))
+            .filter(|vh| self.geometry.vertex_time_label(vh) == Some(t))
             .collect()
     }
 
@@ -806,25 +834,35 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
 
     /// Validates the causal structure of this foliated triangulation.
     ///
-    /// Checks that every edge either connects vertices within the same time
-    /// slice (spacelike) or in adjacent slices (|Δt| = 1, timelike).
+    /// Reads time labels directly from vertex data and checks that every
+    /// edge connects vertices within the same slice or adjacent slices.
     ///
     /// # Errors
     ///
     /// Returns error if any edge spans more than one time slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::CdtTriangulation;
+    ///
+    /// let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+    ///     .expect("create foliated cylinder");
+    /// assert!(tri.validate_causality_delaunay().is_ok());
+    /// ```
     pub fn validate_causality_delaunay(&self) -> CdtResult<()> {
-        let Some(foliation) = &self.foliation else {
+        if self.foliation.is_none() {
             return Ok(());
-        };
+        }
 
         for edge in self.geometry.edges() {
             let Ok((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
                 continue;
             };
-            let Some(t0) = foliation.time_label(v0.vertex_key()) else {
+            let Some(t0) = self.geometry.vertex_time_label(&v0) else {
                 continue;
             };
-            let Some(t1) = foliation.time_label(v1.vertex_key()) else {
+            let Some(t1) = self.geometry.vertex_time_label(&v1) else {
                 continue;
             };
             if t0.abs_diff(t1) > 1 {

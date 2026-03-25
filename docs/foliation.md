@@ -17,33 +17,29 @@ This implementation uses **cylinder topology** (S¹ × [0,T]) — spatial slices
 
 ## Architecture
 
-The foliation is stored in the CDT layer (`src/cdt/foliation.rs`), not the geometry backend, preserving the CDT ↔ geometry separation.
+Time labels are stored **directly as vertex data** in the Delaunay triangulation, using the `Vertex<f64, u32, 2>` type parameter. This mirrors CGAL's `vertex->info()` used in CDT-plusplus. The `Foliation` struct tracks only aggregate bookkeeping.
 
 ```text
 CdtTriangulation<B>
 ├── geometry: B              (DelaunayBackend — owns the triangulation)
+│   └── Vertex.data: Option<u32>  (per-vertex time-slice label)
 ├── metadata: CdtMetadata    (time_slices, dimension, history)
 └── foliation: Option<Foliation>
-    ├── time_labels: VertexSecondaryMap<u32>   (vertex key → time slice)
-    ├── slice_sizes: Vec<usize>               (per-slice vertex counts)
+    ├── slice_sizes: Vec<usize>  (per-slice vertex counts)
     └── num_slices: u32
 ```
 
-`VertexSecondaryMap<u32>` is a `SparseSecondaryMap<VertexKey, u32>` from the `delaunay` crate — O(1) lookup sharing the slotmap key space with the primary vertex storage.
+Vertex data is set at construction time via `VertexBuilder::data(t)`. For post-construction labeling (e.g., `assign_foliation_by_y_coordinate`), the triangulation is rebuilt with labeled vertices. Direct vertex data mutation will be supported once `delaunay` exposes `set_vertex_data` (see [delaunay#284](https://github.com/acgetchell/delaunay/issues/284)).
 
 ## Time Label Assignment
 
-Time labels are assigned by **y-coordinate bucketing**: each vertex's y-coordinate is rounded to the nearest integer, giving the time slice index.
+For `from_foliated_cylinder()`, time labels are assigned by **y-coordinate bucketing**: each vertex's y-coordinate is rounded to the nearest integer, giving the time slice index. The label is embedded directly as vertex data at construction.
 
 - Bucket for slice t: y ∈ [t − 0.5, t + 0.5)
 - Conversion uses `y_to_time_bucket()` from `src/util.rs` via `ToPrimitive::to_u32`
 - Values are clamped to [0, num_slices − 1]
 
-This convention is used by both:
-
-1. `from_foliated_cylinder()` — places vertices on a grid at integer y-coordinates, then buckets them
-2. `assign_foliation_by_y_coordinate()` — bins vertices of an existing triangulation into equal y-bands
-3. `validate_causality()` — re-derives time labels from coordinates for the generic (backend-agnostic) check
+`assign_foliation_by_y_coordinate()` uses band-based bucketing and rebuilds the triangulation with labeled vertices.
 
 ## Grid Construction (`from_foliated_cylinder`)
 
@@ -64,7 +60,7 @@ Parameters: `vertices_per_slice ≥ 4`, `num_slices ≥ 2`.
 - `Spacelike` — both endpoints share the same time slice
 - `Timelike` — endpoints are in adjacent time slices (|Δt| = 1)
 
-Classification is done by `Foliation::classify_edge(v0, v1)`, which looks up both vertex keys in the secondary map.
+Classification is done by `classify_edge(t0, t1)`, which reads time labels from vertex data via `vertex_time_label()`.
 
 ## Validation
 
@@ -72,20 +68,18 @@ Two validation methods enforce foliation correctness:
 
 ### `validate_foliation()`
 
-Structural checks (backend-agnostic):
+Structural checks:
 
 1. Every vertex has a time label (labeled count = vertex count)
 2. Every time slice is non-empty
 3. `slice_sizes` sum is consistent with labeled count
 
-### `validate_causality()`
+### `validate_causality_delaunay()`
 
-Edge-level check (backend-agnostic, uses y-coordinate bucketing):
+Edge-level check reading time labels directly from vertex data:
 
 - Every edge must connect vertices within the same slice or adjacent slices
 - Returns `CdtError::CausalityViolation { time_0, time_1 }` if any edge spans >1 slice
-
-There is also `validate_causality_delaunay()` on the Delaunay-specific impl, which uses the stored `VertexKey`-based time labels instead of re-deriving from coordinates.
 
 ## Error Handling
 
@@ -96,6 +90,6 @@ There is also `validate_causality_delaunay()` on the Delaunay-specific impl, whi
 
 ## Future Work
 
+- **Direct vertex data mutation**: `set_vertex_data` API in delaunay crate ([delaunay#284](https://github.com/acgetchell/delaunay/issues/284)) to avoid rebuilding triangulations when assigning labels post-construction
 - **Toroidal topology** (S¹ × S¹): requires periodic Delaunay construction (issue #61)
-- **Manual foliation assignment**: allow users to set per-vertex time labels directly
 - **Foliation-aware ergodic moves**: moves that preserve or update the foliation during MCMC steps
