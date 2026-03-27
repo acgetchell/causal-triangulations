@@ -12,7 +12,6 @@ use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
 };
 use crate::geometry::generators::{build_delaunay2_with_data, delaunay2_with_context};
-use crate::geometry::operations::TriangulationOps;
 use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
 use crate::util::f64_band_to_u32;
 use std::time::Instant;
@@ -189,44 +188,6 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         });
     }
 
-    /// Validate CDT properties
-    ///
-    /// # Errors
-    /// Returns error if the triangulation is invalid
-    pub fn validate(&self) -> CdtResult<()> {
-        // Check basic validity
-        if !self.geometry.is_valid() {
-            return Err(CdtError::ValidationFailed {
-                check: "geometry".to_string(),
-                detail: format!(
-                    "triangulation is not valid (V={}, E={}, F={})",
-                    self.geometry.vertex_count(),
-                    self.geometry.edge_count(),
-                    self.geometry.face_count(),
-                ),
-            });
-        }
-
-        // Check Delaunay property (for backends that support it)
-        if !self.geometry.is_delaunay() {
-            return Err(CdtError::ValidationFailed {
-                check: "Delaunay".to_string(),
-                detail: format!(
-                    "triangulation does not satisfy Delaunay property (V={}, E={}, F={})",
-                    self.geometry.vertex_count(),
-                    self.geometry.edge_count(),
-                    self.geometry.face_count(),
-                ),
-            });
-        }
-
-        // Additional CDT property validation
-        self.validate_topology()?;
-        self.validate_causality()?;
-        self.validate_foliation()?;
-
-        Ok(())
-    }
     /// Validate topology properties.
     ///
     /// Checks that the triangulation satisfies expected topological constraints,
@@ -270,45 +231,6 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             }
         }
 
-        Ok(())
-    }
-
-    /// Validate causality constraints by reading time labels from vertex data.
-    ///
-    /// If no foliation is present, succeeds vacuously (no causal structure to check).
-    /// Otherwise verifies that every edge either connects vertices in the same time
-    /// slice (spacelike) or in adjacent slices (|Δt| = 1, timelike).  Time labels
-    /// are read directly from the vertex data stored in the Delaunay triangulation.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if any edge spans more than one time slice.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::triangulation::*;
-    ///
-    /// let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
-    ///     .expect("create foliated cylinder");
-    /// assert!(tri.validate_causality().is_ok());
-    /// ```
-    #[expect(
-        clippy::unused_self,
-        reason = "generic impl; real validation in Delaunay-specific validate_causality_delaunay()"
-    )]
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "signature must match validate() call chain"
-    )]
-    #[expect(
-        clippy::missing_const_for_fn,
-        reason = "cannot be const — must match fallible validate() call chain"
-    )]
-    pub fn validate_causality(&self) -> CdtResult<()> {
-        // Causality validation is handled in the Delaunay-specific impl
-        // because it reads vertex data directly. The generic impl succeeds
-        // vacuously — the Delaunay impl calls validate_causality_delaunay().
         Ok(())
     }
 
@@ -485,12 +407,16 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(Self::new(backend, time_slices, dimension))
     }
 
-    /// Construct a foliated 1+1 CDT triangulation with cylinder topology.
+    /// Construct a foliated 1+1 CDT triangulation on a finite strip.
     ///
     /// Places `vertices_per_slice` vertices per time slice on a regular grid at
     /// coordinates `(x_i, t)` where `x_i` is evenly spaced in `[0, 1]` and
     /// `t` is an integer time coordinate.  Time labels are assigned by
     /// y-coordinate bucket: slice `t` owns vertices with `y ∈ [t − 0.5, t + 0.5)`.
+    ///
+    /// **Note:** Despite the name, this builds an open strip `[0,1] × [0,T]`
+    /// without spatial periodic identification.  True cylinder topology
+    /// (S¹ × \[0,T\]) is planned for a future release.
     ///
     /// The spatial extent is kept to 1.0 (well below the √3 ≈ 1.73 threshold
     /// that guarantees no Delaunay edge can skip a time slice), so the resulting
@@ -705,9 +631,17 @@ impl CdtTriangulation<DelaunayBackend2D> {
             range / f64::from(num_slices)
         };
 
+        // Clear stale cell classifications from any previous classify_all_cells() call,
+        // since vertex time labels are about to change.
+        let face_keys: Vec<_> = self.geometry.faces().map(|f| f.cell_key()).collect();
+
         // Write time labels directly to vertex data via set_vertex_data (O(1) per vertex).
         let mut slice_sizes = vec![0usize; num_slices as usize];
         let dt = self.geometry.triangulation_mut();
+
+        for &key in &face_keys {
+            dt.set_cell_data(key, None);
+        }
 
         for (vh, y) in &y_coords {
             let t = if range.abs() < f64::EPSILON {
@@ -863,12 +797,78 @@ impl CdtTriangulation<DelaunayBackend2D> {
             })
             .collect();
 
+        // Also collect all face keys to clear stale data from unclassifiable faces.
+        let all_face_keys: Vec<_> = self.geometry.faces().map(|f| f.cell_key()).collect();
+
         let count = classifications.len();
         let dt = self.geometry.triangulation_mut();
+
+        // Clear all cell data first, then write fresh classifications.
+        for &key in &all_face_keys {
+            dt.set_cell_data(key, None);
+        }
         for (face, ct) in classifications {
             dt.set_cell_data(face.cell_key(), Some(ct.to_i32()));
         }
         count
+    }
+
+    /// Validate CDT properties (geometry, Delaunay, topology, causality, foliation).
+    ///
+    /// # Errors
+    /// Returns error if any validation check fails.
+    pub fn validate(&self) -> CdtResult<()> {
+        if !self.geometry.is_valid() {
+            return Err(CdtError::ValidationFailed {
+                check: "geometry".to_string(),
+                detail: format!(
+                    "triangulation is not valid (V={}, E={}, F={})",
+                    self.geometry.vertex_count(),
+                    self.geometry.edge_count(),
+                    self.geometry.face_count(),
+                ),
+            });
+        }
+
+        if !self.geometry.is_delaunay() {
+            return Err(CdtError::ValidationFailed {
+                check: "Delaunay".to_string(),
+                detail: format!(
+                    "triangulation does not satisfy Delaunay property (V={}, E={}, F={})",
+                    self.geometry.vertex_count(),
+                    self.geometry.edge_count(),
+                    self.geometry.face_count(),
+                ),
+            });
+        }
+
+        self.validate_topology()?;
+        self.validate_causality()?;
+        self.validate_foliation()?;
+
+        Ok(())
+    }
+
+    /// Validate causality constraints.
+    ///
+    /// If no foliation is present, succeeds vacuously (no causal structure
+    /// to check).  Otherwise delegates to [`validate_causality_delaunay`](Self::validate_causality_delaunay).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if any edge spans more than one time slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+    ///     .expect("create foliated cylinder");
+    /// assert!(tri.validate_causality().is_ok());
+    /// ```
+    pub fn validate_causality(&self) -> CdtResult<()> {
+        self.validate_causality_delaunay()
     }
 
     /// Validates the causal structure of this foliated triangulation.

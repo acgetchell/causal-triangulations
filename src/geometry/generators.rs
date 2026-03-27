@@ -127,13 +127,14 @@ pub fn build_delaunay2_with_data(
         })
 }
 
-/// Generates a random Delaunay triangulation.
-///
-/// # Panics
-///
-/// Panics if triangulation generation fails due to invalid parameters or coordinate generation errors.
+// =========================================================================
+// Test helpers (panicking convenience wrappers, compiled only during tests)
+// =========================================================================
+
+/// Generates a random Delaunay triangulation. Panics on failure.
+#[cfg(test)]
 #[must_use]
-pub fn random_delaunay2(
+pub(crate) fn random_delaunay2(
     number_of_vertices: u32,
     coordinate_range: (f64, f64),
 ) -> DelaunayTriangulation2D {
@@ -144,23 +145,21 @@ pub fn random_delaunay2(
     })
 }
 
-/// Generates a seeded Delaunay triangulation for deterministic testing.
-///
-/// # Panics
-///
-/// Panics if triangulation generation fails due to invalid parameters or coordinate generation errors.
+/// Generates a seeded Delaunay triangulation. Panics on failure.
+#[cfg(test)]
 #[must_use]
-pub fn seeded_delaunay2(
+pub(crate) fn seeded_delaunay2(
     number_of_vertices: u32,
     coordinate_range: (f64, f64),
     seed: u64,
 ) -> DelaunayTriangulation2D {
-    delaunay2_with_context(number_of_vertices, coordinate_range, Some(seed))
-        .unwrap_or_else(|_| {
+    delaunay2_with_context(number_of_vertices, coordinate_range, Some(seed)).unwrap_or_else(
+        |_| {
             panic!(
                 "Failed to generate seeded Delaunay triangulation with {number_of_vertices} vertices and seed {seed}"
             )
-        })
+        },
+    )
 }
 
 #[cfg(test)]
