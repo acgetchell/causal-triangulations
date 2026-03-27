@@ -1712,8 +1712,12 @@ mod tests {
 
     #[test]
     fn test_assign_foliation_by_y() {
-        let mut tri =
-            CdtTriangulation::from_random_points(10, 3, 2).expect("Failed to create triangulation");
+        let mut tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+            .expect("Failed to create deterministic triangulation");
+
+        // Start from known layered geometry but remove the existing foliation so that
+        // assign_foliation_by_y() has to rebuild it from vertex y-coordinates.
+        tri.foliation = None;
 
         assert!(!tri.has_foliation());
 
@@ -1722,6 +1726,7 @@ mod tests {
 
         assert!(tri.has_foliation());
         assert_eq!(tri.time_slices(), 3);
+        assert_eq!(tri.slice_sizes(), &[5, 5, 5]);
 
         // All vertices should now be labeled
         for vh in tri.geometry().vertices() {
@@ -1956,49 +1961,39 @@ mod tests {
 
     #[test]
     fn test_causality_violation_detected() {
-        let mut tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
-            .expect("Should create foliated cylinder");
+        // Use a hand-built triangle instead of from_foliated_cylinder() so this
+        // test does not depend on Delaunay tie-breaking for a larger strip mesh.
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("Should build deterministic causal triangle");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let mut tri = CdtTriangulation::new(backend, 2, 2);
+        tri.foliation =
+            Some(Foliation::from_slice_sizes(vec![2, 1], 2).expect("Should build foliation"));
 
         assert!(
             tri.validate_causality_delaunay().is_ok(),
-            "Known-good foliated cylinder should start causally valid"
+            "Deterministic causal triangle should start causally valid"
         );
 
-        let timelike_edge = tri
-            .geometry()
-            .edges()
-            .find(|edge| matches!(tri.edge_type(edge), Some(EdgeType::Timelike)))
-            .expect("Foliated cylinder should contain at least one timelike edge");
-        let (v0, v1) = tri
-            .geometry()
-            .edge_endpoints(&timelike_edge)
-            .expect("Timelike edge should have valid endpoints");
-        let t0 = tri
-            .time_label(&v0)
-            .expect("First endpoint should be labeled");
-        let t1 = tri
-            .time_label(&v1)
-            .expect("Second endpoint should be labeled");
-
-        assert_eq!(
-            t0.abs_diff(t1),
-            1,
-            "Selected edge should start timelike before mutation"
+        assert!(
+            tri.geometry()
+                .edges()
+                .any(|edge| matches!(tri.edge_type(&edge), Some(EdgeType::Timelike))),
+            "Deterministic causal triangle should contain a timelike edge"
         );
 
-        let (vertex_to_mutate, new_time) = if t0 < t1 {
-            if t0 > 0 { (v0, t0 - 1) } else { (v1, t1 + 1) }
-        } else if t1 > 0 {
-            (v1, t1 - 1)
-        } else {
-            (v0, t0 + 1)
-        };
+        let vertex_to_mutate = tri
+            .geometry()
+            .vertices()
+            .next()
+            .expect("Deterministic causal triangle should contain a vertex")
+            .vertex_key();
 
         {
             let mut geometry_mut = tri.geometry_mut();
             geometry_mut
                 .triangulation_mut()
-                .set_vertex_data(vertex_to_mutate.vertex_key(), Some(new_time));
+                .set_vertex_data(vertex_to_mutate, Some(3));
         }
 
         let result = tri.validate_causality_delaunay();
