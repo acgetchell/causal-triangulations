@@ -538,9 +538,19 @@ impl CdtTriangulation<DelaunayBackend2D> {
         for vh in backend.vertices() {
             if let Some(t) = backend.vertex_time_label(&vh) {
                 let idx = t as usize;
-                if idx < slice_sizes.len() {
-                    slice_sizes[idx] += 1;
+                if idx >= slice_sizes.len() {
+                    return Err(CdtError::DelaunayGenerationFailed {
+                        vertex_count: total_vertices,
+                        coordinate_range: (0.0, f64::from(num_slices - 1)),
+                        attempt: 1,
+                        underlying_error: format!(
+                            "build_delaunay2_with_data produced vertex {:?} with invalid time label {t}; expected 0..{}",
+                            vh.vertex_key(),
+                            slice_sizes.len(),
+                        ),
+                    });
                 }
+                slice_sizes[idx] += 1;
             }
         }
 
@@ -1922,20 +1932,20 @@ mod tests {
 
     #[test]
     fn test_causality_violation_detected() {
-        // assign_foliation_by_y with many slices on a small coordinate range
-        // can create edges that span multiple slices, violating causality.
-        // We use a wide triangulation with many slices to force this.
-        let mut tri =
-            CdtTriangulation::from_seeded_points(10, 1, 2, 42).expect("create triangulation");
-
-        // 20 slices over ~10 coordinate units → band height ≈ 0.5.
-        // Delaunay edges easily span >1 band.
-        tri.assign_foliation_by_y(20).expect("assign foliation");
+        // Use a deterministic single-triangle triangulation so the causality
+        // violation is guaranteed: the edge between time slices 0 and 2 has
+        // |Δt| = 2.
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 1), ([0.5, 1.0], 2)])
+            .expect("build deterministic triangulation");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let mut tri = CdtTriangulation::new(backend, 3, 2);
+        tri.foliation =
+            Some(Foliation::from_slice_sizes(vec![1, 1, 1], 3).expect("valid foliation"));
 
         let result = tri.validate_causality_delaunay();
         assert!(
             result.is_err(),
-            "Many-slice foliation on random points should produce causality violations"
+            "Explicitly acausal edge should fail causality validation"
         );
 
         // Verify the error is a CausalityViolation with |Δt| > 1
