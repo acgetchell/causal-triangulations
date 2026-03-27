@@ -1949,8 +1949,12 @@ mod tests {
             .geometry()
             .edge_endpoints(&timelike_edge)
             .expect("Timelike edge should have valid endpoints");
-        let t0 = tri.time_label(&v0).expect("First endpoint should be labeled");
-        let t1 = tri.time_label(&v1).expect("Second endpoint should be labeled");
+        let t0 = tri
+            .time_label(&v0)
+            .expect("First endpoint should be labeled");
+        let t1 = tri
+            .time_label(&v1)
+            .expect("Second endpoint should be labeled");
 
         assert_eq!(
             t0.abs_diff(t1),
