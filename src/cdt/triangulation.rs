@@ -277,16 +277,6 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             }
         }
 
-        // Check that slice_sizes sum matches labeled count
-        let sum: usize = foliation.slice_sizes().iter().sum();
-        if sum != foliation.labeled_vertex_count() {
-            return Err(FoliationError::SliceSizeSumMismatch {
-                sum,
-                labeled: foliation.labeled_vertex_count(),
-            }
-            .into());
-        }
-
         Ok(())
     }
 
@@ -657,6 +647,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         self.foliation =
             Some(Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?);
         self.metadata.time_slices = num_slices;
+        self.metadata.last_modified = Instant::now();
+        self.metadata.modification_count += 1;
         Ok(())
     }
 
@@ -1729,6 +1721,33 @@ mod tests {
         assert!(
             result.is_ok(),
             "Foliation validation should pass: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_assign_foliation_by_y_updates_metadata() {
+        let mut tri =
+            CdtTriangulation::from_random_points(10, 2, 2).expect("Failed to create triangulation");
+        let initial_last_modified = tri.metadata.last_modified;
+        let initial_modification_count = tri.metadata.modification_count;
+        let initial_edge_count = tri.edge_count();
+        let initial_euler_characteristic = tri.geometry().euler_characteristic();
+
+        thread::sleep(Duration::from_millis(5));
+
+        tri.assign_foliation_by_y(3)
+            .expect("Should update foliation metadata");
+
+        assert!(tri.metadata.last_modified > initial_last_modified);
+        assert_eq!(
+            tri.metadata.modification_count,
+            initial_modification_count + 1,
+            "Foliation assignment should count as a modification"
+        );
+        assert_eq!(tri.edge_count(), initial_edge_count);
+        assert_eq!(
+            tri.geometry().euler_characteristic(),
+            initial_euler_characteristic
         );
     }
 
