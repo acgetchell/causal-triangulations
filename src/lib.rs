@@ -83,7 +83,7 @@ pub mod cdt {
 // Re-exports for convenience
 pub use cdt::action::{ActionConfig, compute_regge_action};
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
-pub use cdt::foliation::{EdgeType, Foliation};
+pub use cdt::foliation::{CellType, EdgeType, Foliation};
 pub use cdt::metropolis::{CdtProposal, CdtTarget};
 pub use cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig, SimulationResultsBackend};
 pub use config::{CdtConfig, TestConfig};
@@ -94,6 +94,7 @@ use std::time::Duration;
 
 // Trait-based triangulation (recommended)
 pub use cdt::triangulation::CdtTriangulation;
+pub use geometry::traits::TriangulationQuery;
 
 /// Runs a CDT simulation with the specified configuration.
 ///

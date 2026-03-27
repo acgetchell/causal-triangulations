@@ -26,11 +26,12 @@ src/
 
 #### `cdt/foliation.rs` — Foliation
 
-Assigns each vertex to a discrete time slice, enabling classification of edges as spacelike or timelike. See `docs/foliation.md` for design details.
+Assigns each vertex to a discrete time slice, enabling classification of edges as spacelike or timelike and triangles as up or down. See `docs/foliation.md` for design details.
 
 - `Foliation` — aggregate bookkeeping (per-slice vertex counts, total slices)
 - `EdgeType` — `Spacelike` (same slice) or `Timelike` (adjacent slices)
-- Time labels are stored directly as vertex data (`Vertex.data: Option<u32>`), mirroring CDT-plusplus's `vertex->info()`
+- `CellType` — `Up` (2,1) or `Down` (1,2) triangle classification, encoded as `i32` cell data
+- Time labels are stored directly as vertex data (`Vertex.data: Option<u32>`), mirroring CDT-plusplus’s `vertex->info()`
 
 #### `cdt/triangulation.rs` — Foliation integration
 
@@ -47,6 +48,6 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 
 ## Key Dependencies
 
-- `delaunay` (v0.7.3) — geometry backend (Delaunay triangulations, vertex data for time labels)
+- `delaunay` (v0.7.4) — geometry backend (Delaunay triangulations, vertex data for time labels, `set_vertex_data` for O(1) label mutation)
 - `markov-chain-monte-carlo` — MCMC framework (`Chain::step_mut`, `ProposalMut`, `Target`)
 - `num-traits` — `ToPrimitive` for safe float→integer conversion

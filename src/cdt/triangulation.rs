@@ -3,14 +3,15 @@
 //! This module provides CDT-specific triangulation data structures that work
 //! with any geometry backend implementing the trait interfaces.
 
-use crate::cdt::foliation::{EdgeType, Foliation};
+use crate::cdt::foliation::{CellType, EdgeType, Foliation};
 use crate::errors::CdtResult;
 use crate::geometry::backends::delaunay::{
-    DelaunayBackend, DelaunayEdgeHandle, DelaunayVertexHandle,
+    DelaunayBackend, DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
 };
 use crate::geometry::operations::TriangulationOps;
 use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
 use delaunay::core::builder::DelaunayTriangulationBuilder;
+use delaunay::core::triangulation_data_structure::VertexKey;
 use delaunay::geometry::point::Point;
 use delaunay::geometry::traits::coordinate::Coordinate;
 use delaunay::prelude::VertexBuilder;
@@ -18,7 +19,7 @@ use std::time::Instant;
 
 /// CDT-specific triangulation wrapper - completely geometry-agnostic
 #[derive(Debug)]
-pub struct CdtTriangulation<B: TriangulationMut> {
+pub struct CdtTriangulation<B> {
     geometry: B,
     /// CDT metadata (time slices, dimension, history)
     pub metadata: CdtMetadata,
@@ -96,7 +97,7 @@ pub enum SimulationEvent {
     },
 }
 
-impl<B: TriangulationMut> CdtTriangulation<B> {
+impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// Create new CDT triangulation
     pub fn new(geometry: B, time_slices: u32, dimension: u8) -> Self {
         let vertex_count = geometry.vertex_count();
@@ -124,17 +125,6 @@ impl<B: TriangulationMut> CdtTriangulation<B> {
     #[must_use]
     pub const fn geometry(&self) -> &B {
         &self.geometry
-    }
-
-    /// Get mutable reference with automatic cache invalidation
-    pub fn geometry_mut(&mut self) -> CdtGeometryMut<'_, B> {
-        self.invalidate_cache();
-        self.metadata.last_modified = Instant::now();
-        self.metadata.modification_count += 1;
-        CdtGeometryMut {
-            geometry: &mut self.geometry,
-            metadata: &mut self.metadata,
-        }
     }
 
     /// CDT-specific operations
@@ -391,13 +381,27 @@ impl<B: TriangulationMut> CdtTriangulation<B> {
     }
 }
 
+/// Methods that require mutable geometry access.
+impl<B: TriangulationMut> CdtTriangulation<B> {
+    /// Get mutable reference with automatic cache invalidation
+    pub fn geometry_mut(&mut self) -> CdtGeometryMut<'_, B> {
+        self.invalidate_cache();
+        self.metadata.last_modified = Instant::now();
+        self.metadata.modification_count += 1;
+        CdtGeometryMut {
+            geometry: &mut self.geometry,
+            metadata: &mut self.metadata,
+        }
+    }
+}
+
 /// Smart wrapper for mutable geometry access
-pub struct CdtGeometryMut<'a, B: TriangulationMut> {
+pub struct CdtGeometryMut<'a, B> {
     geometry: &'a mut B,
     metadata: &'a mut CdtMetadata,
 }
 
-impl<B: TriangulationMut> CdtGeometryMut<'_, B> {
+impl<B> CdtGeometryMut<'_, B> {
     /// Record a simulation event
     pub fn record_event(&mut self, event: SimulationEvent) {
         self.metadata.simulation_history.push(event);
@@ -409,14 +413,14 @@ impl<B: TriangulationMut> CdtGeometryMut<'_, B> {
     }
 }
 
-impl<B: TriangulationMut> std::ops::Deref for CdtGeometryMut<'_, B> {
+impl<B> std::ops::Deref for CdtGeometryMut<'_, B> {
     type Target = B;
     fn deref(&self) -> &Self::Target {
         self.geometry
     }
 }
 
-impl<B: TriangulationMut> std::ops::DerefMut for CdtGeometryMut<'_, B> {
+impl<B> std::ops::DerefMut for CdtGeometryMut<'_, B> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.geometry
     }
@@ -637,7 +641,7 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
         // Compute per-slice vertex counts from the vertex data.
         let mut slice_sizes = vec![0usize; num_slices as usize];
         for (_, vertex) in dt.vertices() {
-            if let Some(t) = vertex.data {
+            if let Some(&t) = vertex.data() {
                 let idx = t as usize;
                 if idx < slice_sizes.len() {
                     slice_sizes[idx] += 1;
@@ -670,8 +674,6 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
     ///
     /// Returns error if `num_slices` is zero or if vertex coordinates cannot be read.
     pub fn assign_foliation_by_y_coordinate(&mut self, num_slices: u32) -> CdtResult<()> {
-        use delaunay::core::triangulation_data_structure::VertexKey;
-
         if num_slices == 0 {
             return Err(crate::errors::CdtError::InvalidGenerationParameters {
                 issue: "Number of slices must be positive".to_string(),
@@ -691,9 +693,10 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
         }
 
         if y_coords.is_empty() {
-            return Err(crate::errors::CdtError::InvalidParameters(
-                "cannot assign foliation: no vertices with valid 2D coordinates".to_string(),
-            ));
+            return Err(crate::errors::CdtError::ValidationFailed {
+                check: "foliation_assignment".to_string(),
+                detail: "no vertices with valid 2D coordinates".to_string(),
+            });
         }
 
         let y_min = y_coords
@@ -712,63 +715,21 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
             range / f64::from(num_slices)
         };
 
-        // Compute time labels and write them to vertex data.
-        let labels: Vec<(VertexKey, u32)> = y_coords
-            .iter()
-            .map(|(vkey, y)| {
-                let t = if range.abs() < f64::EPSILON {
-                    0
-                } else {
-                    let band_index = ((y - y_min) / band_height).floor();
-                    crate::util::f64_band_to_u32(band_index, num_slices - 1)
-                };
-                (*vkey, t)
-            })
-            .collect();
-
-        // Rebuild the triangulation with time labels embedded as vertex data.
-        // (Direct vertex data mutation requires delaunay >= 0.7.4, see
-        // https://github.com/acgetchell/delaunay/issues/284)
-        let labeled_vertices: Vec<_> = labels
-            .iter()
-            .filter_map(|(vkey, t)| {
-                let coords = self
-                    .geometry
-                    .vertex_coordinates(
-                        &crate::geometry::backends::delaunay::DelaunayVertexHandle::from_key(*vkey),
-                    )
-                    .ok()?;
-                let point = Point::<f64, 2>::new([coords[0], coords[1]]);
-                VertexBuilder::<f64, u32, 2>::default()
-                    .point(point)
-                    .data(*t)
-                    .build()
-                    .ok()
-            })
-            .collect();
-
-        let dt = DelaunayTriangulationBuilder::from_vertices(&labeled_vertices)
-            .build::<i32>()
-            .map_err(|e| crate::errors::CdtError::DelaunayGenerationFailed {
-                vertex_count: u32::try_from(labeled_vertices.len()).unwrap_or(u32::MAX),
-                coordinate_range: (y_min, y_max),
-                attempt: 1,
-                underlying_error: e.to_string(),
-            })?;
-
-        // Compute per-slice counts from rebuilt vertex data.
+        // Write time labels directly to vertex data via set_vertex_data (O(1) per vertex).
         let mut slice_sizes = vec![0usize; num_slices as usize];
-        for (_, vertex) in dt.vertices() {
-            if let Some(t) = vertex.data {
-                let idx = t as usize;
-                if idx < slice_sizes.len() {
-                    slice_sizes[idx] += 1;
-                }
-            }
+        let dt = self.geometry.triangulation_mut();
+
+        for (vkey, y) in &y_coords {
+            let t = if range.abs() < f64::EPSILON {
+                0
+            } else {
+                let band_index = ((y - y_min) / band_height).floor();
+                crate::util::f64_band_to_u32(band_index, num_slices - 1)
+            };
+            dt.set_vertex_data(*vkey, Some(t));
+            slice_sizes[t as usize] += 1;
         }
 
-        let backend = DelaunayBackend::from_triangulation(dt);
-        self.geometry = backend;
         self.foliation = Some(Foliation::from_slice_sizes(slice_sizes, num_slices));
         self.metadata.time_slices = num_slices;
         Ok(())
@@ -830,6 +791,93 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
     #[must_use]
     pub fn slice_sizes(&self) -> &[usize] {
         self.foliation.as_ref().map_or(&[], Foliation::slice_sizes)
+    }
+
+    // -------------------------------------------------------------------------
+    // Cell (triangle) classification
+    // -------------------------------------------------------------------------
+
+    /// Classifies a triangle as Up (2,1) or Down (1,2) from vertex time labels.
+    ///
+    /// Returns `None` if no foliation is present, the face vertices cannot
+    /// be resolved, any vertex lacks a time label, or the triangle does not
+    /// span exactly one time slice (e.g. a boundary same-slice triangle).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{CdtTriangulation, CellType, TriangulationQuery};
+    ///
+    /// let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+    ///     .expect("create foliated cylinder");
+    /// // Most cells should be classifiable; boundary cells may not be.
+    /// let classified: usize = tri.geometry().faces()
+    ///     .filter(|f| tri.cell_type(f).is_some())
+    ///     .count();
+    /// assert!(classified > 0);
+    /// ```
+    #[must_use]
+    pub fn cell_type(&self, face: &DelaunayFaceHandle) -> Option<CellType> {
+        self.foliation.as_ref()?;
+        let verts = self.geometry.face_vertices(face).ok()?;
+        if verts.len() != 3 {
+            return None;
+        }
+        let t0 = self.geometry.vertex_time_label(&verts[0]);
+        let t1 = self.geometry.vertex_time_label(&verts[1]);
+        let t2 = self.geometry.vertex_time_label(&verts[2]);
+        crate::cdt::foliation::classify_cell(t0, t1, t2)
+    }
+
+    /// Reads the stored cell type from cell data, if previously classified.
+    ///
+    /// Returns `None` if the face has no cell data or the data does not
+    /// encode a valid [`CellType`].
+    #[must_use]
+    pub fn cell_type_from_data(&self, face: &DelaunayFaceHandle) -> Option<CellType> {
+        let raw = self.geometry.cell_data_i32(face)?;
+        CellType::from_i32(raw)
+    }
+
+    /// Classifies every triangle and stores the result as cell data.
+    ///
+    /// Each classifiable cell receives `Some(CellType::to_i32())` via
+    /// `set_cell_data`.  Boundary cells that do not span exactly one
+    /// time slice are skipped.
+    ///
+    /// Requires a foliation to be present; returns 0 if there is none.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{CdtTriangulation, TriangulationQuery};
+    ///
+    /// let mut tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+    ///     .expect("create foliated cylinder");
+    /// let classified = tri.classify_all_cells();
+    /// assert!(classified > 0);
+    /// ```
+    pub fn classify_all_cells(&mut self) -> usize {
+        if self.foliation.is_none() {
+            return 0;
+        }
+
+        // Collect (CellKey, CellType) pairs first to avoid borrow conflict.
+        let classifications: Vec<_> = self
+            .geometry
+            .faces()
+            .filter_map(|face| {
+                let ct = self.cell_type(&face)?;
+                Some((face, ct))
+            })
+            .collect();
+
+        let count = classifications.len();
+        let dt = self.geometry.triangulation_mut();
+        for (face, ct) in classifications {
+            dt.set_cell_data(face.cell_key(), Some(ct.to_i32()));
+        }
+        count
     }
 
     /// Validates the causal structure of this foliated triangulation.
@@ -1759,6 +1807,81 @@ mod tests {
         }
         for edge in tri.geometry().edges() {
             assert_eq!(tri.edge_type(&edge), None);
+        }
+    }
+
+    // =========================================================================
+    // Cell classification tests
+    // =========================================================================
+
+    #[test]
+    fn test_cell_type_returns_up_or_down() {
+        let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+            .expect("Should create foliated cylinder");
+
+        let mut up = 0usize;
+        let mut down = 0usize;
+        let mut unclassified = 0usize;
+
+        for face in tri.geometry().faces() {
+            match tri.cell_type(&face) {
+                Some(CellType::Up) => up += 1,
+                Some(CellType::Down) => down += 1,
+                None => unclassified += 1,
+            }
+        }
+
+        assert!(up > 0, "Should have some Up triangles");
+        assert!(down > 0, "Should have some Down triangles");
+        // Total should equal face count
+        assert_eq!(up + down + unclassified, tri.face_count());
+    }
+
+    #[test]
+    fn test_cell_type_no_foliation_returns_none() {
+        let tri = CdtTriangulation::from_random_points(5, 2, 2).unwrap();
+        assert!(!tri.has_foliation());
+
+        for face in tri.geometry().faces() {
+            assert_eq!(tri.cell_type(&face), None);
+        }
+    }
+
+    #[test]
+    fn test_classify_all_cells_stores_data() {
+        let mut tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+            .expect("Should create foliated cylinder");
+
+        let classified = tri.classify_all_cells();
+        assert!(classified > 0, "Should classify some cells");
+
+        // Verify stored data matches live classification
+        for face in tri.geometry().faces() {
+            let live = tri.cell_type(&face);
+            let stored = tri.cell_type_from_data(&face);
+            if live.is_some() {
+                assert_eq!(
+                    live, stored,
+                    "Stored cell type should match live classification"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_classify_all_cells_no_foliation_returns_zero() {
+        let mut tri = CdtTriangulation::from_random_points(5, 2, 2).unwrap();
+        assert_eq!(tri.classify_all_cells(), 0);
+    }
+
+    #[test]
+    fn test_cell_type_from_data_before_classify_returns_none() {
+        let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+            .expect("Should create foliated cylinder");
+
+        // Before classify_all_cells, stored data should be None
+        for face in tri.geometry().faces() {
+            assert_eq!(tri.cell_type_from_data(&face), None);
         }
     }
 }

@@ -29,7 +29,7 @@ CdtTriangulation<B>
     └── num_slices: u32
 ```
 
-Vertex data is set at construction time via `VertexBuilder::data(t)`. For post-construction labeling (e.g., `assign_foliation_by_y_coordinate`), the triangulation is rebuilt with labeled vertices. Direct vertex data mutation will be supported once `delaunay` exposes `set_vertex_data` (see [delaunay#284](https://github.com/acgetchell/delaunay/issues/284)).
+Vertex data is set at construction time via `VertexBuilder::data(t)`. For post-construction labeling (e.g., `assign_foliation_by_y_coordinate`), labels are written in-place via `DelaunayTriangulation::set_vertex_data(key, Some(t))` — an O(1) operation per vertex that does not affect geometry or topology.
 
 ## Time Label Assignment
 
@@ -39,7 +39,7 @@ For `from_foliated_cylinder()`, time labels are assigned by **y-coordinate bucke
 - Conversion uses `y_to_time_bucket()` from `src/util.rs` via `ToPrimitive::to_u32`
 - Values are clamped to [0, num_slices − 1]
 
-`assign_foliation_by_y_coordinate()` uses band-based bucketing and rebuilds the triangulation with labeled vertices.
+`assign_foliation_by_y_coordinate()` uses band-based bucketing and writes labels directly to vertex data via `set_vertex_data`.
 
 ## Grid Construction (`from_foliated_cylinder`)
 
@@ -61,6 +61,17 @@ Parameters: `vertices_per_slice ≥ 4`, `num_slices ≥ 2`.
 - `Timelike` — endpoints are in adjacent time slices (|Δt| = 1)
 
 Classification is done by `classify_edge(t0, t1)`, which reads time labels from vertex data via `vertex_time_label()`.
+
+## Cell (Triangle) Classification
+
+`CellType` classifies triangles by how their vertices are distributed across adjacent time slices:
+
+- `Up` (2,1) — two vertices at time _t_, one at _t + 1_. The spacelike base is in the lower slice.
+- `Down` (1,2) — one vertex at time _t_, two at _t + 1_. The spacelike base is in the upper slice.
+
+Classification is done by `classify_cell(t0, t1, t2)`. Triangles that don’t span exactly one time slice (e.g., all vertices at the same time, or spanning >1 slice) return `None`.
+
+Cell types are encoded as `i32` cell data (`Up = 1`, `Down = -1`) and can be bulk-written via `classify_all_cells()` using `set_cell_data`.
 
 ## Validation
 
@@ -90,6 +101,5 @@ Edge-level check reading time labels directly from vertex data:
 
 ## Future Work
 
-- **Direct vertex data mutation**: `set_vertex_data` API in delaunay crate ([delaunay#284](https://github.com/acgetchell/delaunay/issues/284)) to avoid rebuilding triangulations when assigning labels post-construction
 - **Toroidal topology** (S¹ × S¹): requires periodic Delaunay construction (issue #61)
-- **Foliation-aware ergodic moves**: moves that preserve or update the foliation during MCMC steps
+- **Foliation-aware ergodic moves**: moves that preserve or update the foliation during MCMC steps (#55)

@@ -18,6 +18,44 @@ pub enum EdgeType {
     Timelike,
 }
 
+/// Classification of a triangle (cell) in a foliated 1+1 CDT.
+///
+/// In a valid foliated triangulation every triangle spans exactly two
+/// adjacent time slices.  The type is determined by how many vertices
+/// sit on the lower vs. upper slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CellType {
+    /// **(2,1)** — two vertices at time *t*, one at *t + 1*.
+    /// The spacelike base is in the lower slice.
+    Up,
+    /// **(1,2)** — one vertex at time *t*, two at *t + 1*.
+    /// The spacelike base is in the upper slice.
+    Down,
+}
+
+impl CellType {
+    /// Encode as the `i32` value stored in cell data.
+    #[must_use]
+    pub const fn to_i32(self) -> i32 {
+        match self {
+            Self::Up => 1,
+            Self::Down => -1,
+        }
+    }
+
+    /// Decode from the `i32` value stored in cell data.
+    ///
+    /// Returns `None` for values that do not represent a valid cell type.
+    #[must_use]
+    pub const fn from_i32(value: i32) -> Option<Self> {
+        match value {
+            1 => Some(Self::Up),
+            -1 => Some(Self::Down),
+            _ => None,
+        }
+    }
+}
+
 /// Classifies an edge given the time labels of its two endpoints.
 ///
 /// Returns `None` if either label is `None` (unlabeled vertex).
@@ -33,6 +71,32 @@ pub fn classify_edge(t0: Option<u32>, t1: Option<u32>) -> Option<EdgeType> {
         // Edges spanning more than one time slice violate causality;
         // still classifiable but validation will catch this.
         Some(EdgeType::Timelike)
+    }
+}
+
+/// Classifies a triangle given the time labels of its three vertices.
+///
+/// Returns `None` if any label is missing, if the triangle is degenerate
+/// (all vertices at the same time), or if it spans more than one time slice.
+#[must_use]
+pub fn classify_cell(t0: Option<u32>, t1: Option<u32>, t2: Option<u32>) -> Option<CellType> {
+    let t0 = t0?;
+    let t1 = t1?;
+    let t2 = t2?;
+
+    let min_t = t0.min(t1).min(t2);
+    let max_t = t0.max(t1).max(t2);
+
+    // Must span exactly one time slice (adjacent slices)
+    if max_t - min_t != 1 {
+        return None;
+    }
+
+    let lower_count = [t0, t1, t2].iter().filter(|&&t| t == min_t).count();
+    match lower_count {
+        2 => Some(CellType::Up),   // (2,1): two at t, one at t+1
+        1 => Some(CellType::Down), // (1,2): one at t, two at t+1
+        _ => None,                 // unreachable for 3 vertices spanning 2 values
     }
 }
 
@@ -138,5 +202,71 @@ mod tests {
             Some(EdgeType::Timelike),
             "Acausal edges (|Δt| > 1) should still return Timelike"
         );
+    }
+
+    // =========================================================================
+    // CellType tests
+    // =========================================================================
+
+    #[test]
+    fn test_cell_type_encoding_roundtrip() {
+        assert_eq!(
+            CellType::from_i32(CellType::Up.to_i32()),
+            Some(CellType::Up)
+        );
+        assert_eq!(
+            CellType::from_i32(CellType::Down.to_i32()),
+            Some(CellType::Down)
+        );
+    }
+
+    #[test]
+    fn test_cell_type_from_invalid_i32() {
+        assert_eq!(CellType::from_i32(0), None);
+        assert_eq!(CellType::from_i32(2), None);
+        assert_eq!(CellType::from_i32(-2), None);
+    }
+
+    #[test]
+    fn test_classify_cell_up() {
+        // Two at t=0, one at t=1 → Up (2,1)
+        assert_eq!(classify_cell(Some(0), Some(0), Some(1)), Some(CellType::Up));
+        assert_eq!(classify_cell(Some(0), Some(1), Some(0)), Some(CellType::Up));
+        assert_eq!(classify_cell(Some(1), Some(0), Some(0)), Some(CellType::Up));
+    }
+
+    #[test]
+    fn test_classify_cell_down() {
+        // One at t=0, two at t=1 → Down (1,2)
+        assert_eq!(
+            classify_cell(Some(1), Some(1), Some(0)),
+            Some(CellType::Down)
+        );
+        assert_eq!(
+            classify_cell(Some(1), Some(0), Some(1)),
+            Some(CellType::Down)
+        );
+        assert_eq!(
+            classify_cell(Some(0), Some(1), Some(1)),
+            Some(CellType::Down)
+        );
+    }
+
+    #[test]
+    fn test_classify_cell_same_slice_returns_none() {
+        // All vertices at same time → None (degenerate)
+        assert_eq!(classify_cell(Some(2), Some(2), Some(2)), None);
+    }
+
+    #[test]
+    fn test_classify_cell_spans_two_slices_returns_none() {
+        // Spans more than one slice → None (acausal)
+        assert_eq!(classify_cell(Some(0), Some(1), Some(2)), None);
+    }
+
+    #[test]
+    fn test_classify_cell_unlabeled_returns_none() {
+        assert_eq!(classify_cell(Some(0), Some(0), None), None);
+        assert_eq!(classify_cell(None, Some(0), Some(1)), None);
     }
 }

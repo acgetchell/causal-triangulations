@@ -42,6 +42,7 @@ impl DelaunayVertexHandle {
 
     /// Creates a handle from a raw vertex key (crate-internal).
     #[must_use]
+    #[expect(dead_code, reason = "needed by ergodic moves (#55)")]
     pub(crate) const fn from_key(key: VertexKey) -> Self {
         Self { key }
     }
@@ -57,6 +58,14 @@ pub struct DelaunayEdgeHandle {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DelaunayFaceHandle {
     key: CellKey,
+}
+
+impl DelaunayFaceHandle {
+    /// Returns the underlying cell key for use with `set_cell_data`.
+    #[must_use]
+    pub(crate) const fn cell_key(&self) -> CellKey {
+        self.key
+    }
 }
 
 /// Error type for Delaunay backend operations
@@ -372,24 +381,28 @@ impl DelaunayBackend<u32, i32, 2> {
     #[must_use]
     pub fn vertex_time_label(&self, handle: &DelaunayVertexHandle) -> Option<u32> {
         let (_, vertex) = self.dt.vertices().find(|(k, _)| *k == handle.key)?;
-        vertex.data
+        vertex.data().copied()
     }
 
     /// Returns the time-slice label for a vertex identified by its key.
     #[must_use]
     pub fn vertex_time_label_by_key(&self, key: VertexKey) -> Option<u32> {
         let (_, vertex) = self.dt.vertices().find(|(k, _)| *k == key)?;
-        vertex.data
+        vertex.data().copied()
     }
 
-    /// Mutable access to the underlying triangulation for setting vertex data.
+    /// Returns the stored `i32` cell data for a face, or `None` if the
+    /// face handle is invalid or the cell has no data.
+    #[must_use]
+    pub fn cell_data_i32(&self, handle: &DelaunayFaceHandle) -> Option<i32> {
+        let (_, cell) = self.dt.cells().find(|(k, _)| *k == handle.key)?;
+        cell.data().copied()
+    }
+
+    /// Mutable access to the underlying triangulation for setting vertex/cell data.
     ///
-    /// Modifying vertex data (time labels) does not break Delaunay invariants
+    /// Modifying vertex/cell data does not break Delaunay invariants
     /// since it only changes the `data` field, not geometry or topology.
-    ///
-    // TODO(#284): Once delaunay 0.7.4 exposes `set_vertex_data`, use that
-    // instead and remove `assign_foliation_by_y_coordinate`'s rebuild path.
-    #[allow(dead_code)]
     pub(crate) const fn triangulation_mut(
         &mut self,
     ) -> &mut delaunay::core::delaunay_triangulation::DelaunayTriangulation<
