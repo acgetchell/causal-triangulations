@@ -1,8 +1,9 @@
 //! Foliation data structures for Causal Dynamical Triangulations.
 //!
 //! A **foliation** assigns each vertex to a discrete time slice, enabling
-//! classification of edges as spacelike (within a slice) or timelike (between
-//! adjacent slices). This is the core causal structure of CDT.
+//! classification of edges as spacelike (within a slice), timelike (between
+//! adjacent slices), or acausal (spanning multiple slices).
+//! This is the core causal structure of CDT.
 //!
 //! Time labels are stored directly as vertex data in the Delaunay triangulation
 //! (`Vertex<f64, u32, 2>` — the `u32` is the time-slice index). This mirrors
@@ -16,6 +17,8 @@ pub enum EdgeType {
     Spacelike,
     /// Endpoints are in adjacent time slices (|Δt| = 1).
     Timelike,
+    /// Endpoints span more than one time slice (|Δt| > 1), violating causality.
+    Acausal,
 }
 
 /// Classification of a triangle (cell) in a foliated 1+1 CDT.
@@ -68,9 +71,7 @@ pub fn classify_edge(t0: Option<u32>, t1: Option<u32>) -> Option<EdgeType> {
     } else if t0.abs_diff(t1) == 1 {
         Some(EdgeType::Timelike)
     } else {
-        // Edges spanning more than one time slice violate causality;
-        // still classifiable but validation will catch this.
-        Some(EdgeType::Timelike)
+        Some(EdgeType::Acausal)
     }
 }
 
@@ -100,6 +101,34 @@ pub fn classify_cell(t0: Option<u32>, t1: Option<u32>, t2: Option<u32>) -> Optio
     }
 }
 
+/// Error type for `Foliation` construction.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FoliationError {
+    /// `slice_sizes` length does not match `num_slices`.
+    SliceSizeMismatch {
+        /// Actual length of the `slice_sizes` vector.
+        slice_sizes_len: usize,
+        /// Expected number of slices.
+        num_slices: u32,
+    },
+}
+
+impl std::fmt::Display for FoliationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SliceSizeMismatch {
+                slice_sizes_len,
+                num_slices,
+            } => write!(
+                f,
+                "slice_sizes length ({slice_sizes_len}) != num_slices ({num_slices})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for FoliationError {}
+
 /// Per-slice bookkeeping for a CDT triangulation.
 ///
 /// Time labels are stored on vertices directly (as vertex data in the
@@ -115,19 +144,24 @@ pub struct Foliation {
 
 impl Foliation {
     /// Creates a new foliation from pre-computed per-slice vertex counts.
-    #[must_use]
-    pub fn from_slice_sizes(slice_sizes: Vec<usize>, num_slices: u32) -> Self {
-        debug_assert_eq!(
-            slice_sizes.len(),
-            num_slices as usize,
-            "slice_sizes length {} != num_slices {}",
-            slice_sizes.len(),
-            num_slices
-        );
-        Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns error if `slice_sizes.len() != num_slices`.
+    pub fn from_slice_sizes(
+        slice_sizes: Vec<usize>,
+        num_slices: u32,
+    ) -> Result<Self, FoliationError> {
+        if slice_sizes.len() != num_slices as usize {
+            return Err(FoliationError::SliceSizeMismatch {
+                slice_sizes_len: slice_sizes.len(),
+                num_slices,
+            });
+        }
+        Ok(Self {
             slice_sizes,
             num_slices,
-        }
+        })
     }
 
     /// Returns the number of vertices in each time slice.
@@ -162,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_foliation_empty() {
-        let fol = Foliation::from_slice_sizes(vec![0, 0, 0], 3);
+        let fol = Foliation::from_slice_sizes(vec![0, 0, 0], 3).expect("valid foliation");
         assert_eq!(fol.num_slices(), 3);
         assert_eq!(fol.labeled_vertex_count(), 0);
         assert_eq!(fol.slice_sizes(), &[0, 0, 0]);
@@ -170,11 +204,25 @@ mod tests {
 
     #[test]
     fn test_foliation_populated() {
-        let fol = Foliation::from_slice_sizes(vec![3, 3], 2);
+        let fol = Foliation::from_slice_sizes(vec![3, 3], 2).expect("valid foliation");
         assert_eq!(fol.num_slices(), 2);
         assert_eq!(fol.labeled_vertex_count(), 6);
         assert_eq!(fol.slice_sizes()[0], 3);
         assert_eq!(fol.slice_sizes()[1], 3);
+    }
+
+    #[test]
+    fn test_foliation_slice_size_mismatch() {
+        let result = Foliation::from_slice_sizes(vec![3, 3], 3);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(
+            err,
+            FoliationError::SliceSizeMismatch {
+                slice_sizes_len: 2,
+                num_slices: 3,
+            }
+        );
     }
 
     #[test]
@@ -195,12 +243,17 @@ mod tests {
     }
 
     #[test]
-    fn test_classify_edge_acausal_returns_timelike() {
-        // |Δt| > 1: returns Timelike (validation catches the violation)
+    fn test_classify_edge_acausal() {
+        // |Δt| > 1: returns Acausal
         assert_eq!(
             classify_edge(Some(0), Some(5)),
-            Some(EdgeType::Timelike),
-            "Acausal edges (|Δt| > 1) should still return Timelike"
+            Some(EdgeType::Acausal),
+            "Edges with |Δt| > 1 should be Acausal"
+        );
+        assert_eq!(
+            classify_edge(Some(0), Some(2)),
+            Some(EdgeType::Acausal),
+            "Edges with |Δt| = 2 should be Acausal"
         );
     }
 

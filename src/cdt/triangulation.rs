@@ -3,13 +3,15 @@
 //! This module provides CDT-specific triangulation data structures that work
 //! with any geometry backend implementing the trait interfaces.
 
-use crate::cdt::foliation::{CellType, EdgeType, Foliation};
-use crate::errors::CdtResult;
+use crate::cdt::foliation::{CellType, EdgeType, Foliation, classify_cell, classify_edge};
+use crate::errors::{CdtError, CdtResult};
+use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
     DelaunayBackend, DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
 };
 use crate::geometry::operations::TriangulationOps;
 use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
+use crate::util::{f64_band_to_u32, generate_delaunay2_with_context};
 use delaunay::core::builder::DelaunayTriangulationBuilder;
 use delaunay::core::triangulation_data_structure::VertexKey;
 use delaunay::geometry::point::Point;
@@ -196,7 +198,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     pub fn validate(&self) -> CdtResult<()> {
         // Check basic validity
         if !self.geometry.is_valid() {
-            return Err(crate::errors::CdtError::ValidationFailed {
+            return Err(CdtError::ValidationFailed {
                 check: "geometry".to_string(),
                 detail: format!(
                     "triangulation is not valid (V={}, E={}, F={})",
@@ -209,7 +211,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
 
         // Check Delaunay property (for backends that support it)
         if !self.geometry.is_delaunay() {
-            return Err(crate::errors::CdtError::ValidationFailed {
+            return Err(CdtError::ValidationFailed {
                 check: "Delaunay".to_string(),
                 detail: format!(
                     "triangulation does not satisfy Delaunay property (V={}, E={}, F={})",
@@ -256,7 +258,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             // Planar triangulation with boundary should have χ = 1
             // Closed surfaces would have χ = 2
             if euler_char != 1 && euler_char != 2 {
-                return Err(crate::errors::CdtError::ValidationFailed {
+                return Err(CdtError::ValidationFailed {
                     check: "topology".to_string(),
                     detail: format!(
                         "Euler characteristic χ={euler_char} unexpected for 2D triangulation \
@@ -341,7 +343,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         // Check that all vertices are labeled
         let vertex_count = self.geometry.vertex_count();
         if foliation.labeled_vertex_count() != vertex_count {
-            return Err(crate::errors::CdtError::ValidationFailed {
+            return Err(CdtError::ValidationFailed {
                 check: "foliation".to_string(),
                 detail: format!(
                     "labeled vertex count ({}) does not match triangulation vertex count ({})",
@@ -354,7 +356,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         // Check that every slice is non-empty
         for (t, &size) in foliation.slice_sizes().iter().enumerate() {
             if size == 0 {
-                return Err(crate::errors::CdtError::ValidationFailed {
+                return Err(CdtError::ValidationFailed {
                     check: "foliation".to_string(),
                     detail: format!("time slice {t} is empty"),
                 });
@@ -364,7 +366,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         // Check that slice_sizes sum matches labeled count
         let sum: usize = foliation.slice_sizes().iter().sum();
         if sum != foliation.labeled_vertex_count() {
-            return Err(crate::errors::CdtError::ValidationFailed {
+            return Err(CdtError::ValidationFailed {
                 check: "foliation".to_string(),
                 detail: format!(
                     "slice_sizes sum ({sum}) does not match labeled vertex count ({})",
@@ -429,7 +431,7 @@ impl<B> std::ops::DerefMut for CdtGeometryMut<'_, B> {
 // =============================================================================
 // Delaunay-specific factory functions and foliation methods
 // =============================================================================
-impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
+impl CdtTriangulation<DelaunayBackend2D> {
     // -------------------------------------------------------------------------
     // Factory constructors
     // -------------------------------------------------------------------------
@@ -440,28 +442,22 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
     ///
     /// # Errors
     /// Returns error if triangulation generation fails
-    pub fn from_random_points(
-        vertices: u32,
-        time_slices: u32,
-        dimension: u8,
-    ) -> crate::errors::CdtResult<Self> {
+    pub fn from_random_points(vertices: u32, time_slices: u32, dimension: u8) -> CdtResult<Self> {
         // Validate dimension first
         if dimension != 2 {
-            return Err(crate::errors::CdtError::UnsupportedDimension(
-                dimension.into(),
-            ));
+            return Err(CdtError::UnsupportedDimension(dimension.into()));
         }
 
         // Validate other parameters
         if vertices < 3 {
-            return Err(crate::errors::CdtError::InvalidGenerationParameters {
+            return Err(CdtError::InvalidGenerationParameters {
                 issue: "Insufficient vertex count".to_string(),
                 provided_value: vertices.to_string(),
                 expected_range: "≥ 3".to_string(),
             });
         }
 
-        let dt = crate::util::generate_delaunay2_with_context(vertices, (0.0, 10.0), None)?;
+        let dt = generate_delaunay2_with_context(vertices, (0.0, 10.0), None)?;
         let backend = DelaunayBackend::from_triangulation(dt);
 
         Ok(Self::new(backend, time_slices, dimension))
@@ -478,24 +474,22 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
         time_slices: u32,
         dimension: u8,
         seed: u64,
-    ) -> crate::errors::CdtResult<Self> {
+    ) -> CdtResult<Self> {
         // Validate dimension first
         if dimension != 2 {
-            return Err(crate::errors::CdtError::UnsupportedDimension(
-                dimension.into(),
-            ));
+            return Err(CdtError::UnsupportedDimension(dimension.into()));
         }
 
         // Validate other parameters
         if vertices < 3 {
-            return Err(crate::errors::CdtError::InvalidGenerationParameters {
+            return Err(CdtError::InvalidGenerationParameters {
                 issue: "Insufficient vertex count".to_string(),
                 provided_value: vertices.to_string(),
                 expected_range: "≥ 3".to_string(),
             });
         }
 
-        let dt = crate::util::generate_delaunay2_with_context(vertices, (0.0, 10.0), Some(seed))?;
+        let dt = generate_delaunay2_with_context(vertices, (0.0, 10.0), Some(seed))?;
         let backend = DelaunayBackend::from_triangulation(dt);
 
         Ok(Self::new(backend, time_slices, dimension))
@@ -528,14 +522,14 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
         seed: Option<u64>,
     ) -> CdtResult<Self> {
         if vertices_per_slice < 4 {
-            return Err(crate::errors::CdtError::InvalidGenerationParameters {
+            return Err(CdtError::InvalidGenerationParameters {
                 issue: "Insufficient vertices per slice".to_string(),
                 provided_value: vertices_per_slice.to_string(),
                 expected_range: "≥ 4".to_string(),
             });
         }
         if num_slices < 2 {
-            return Err(crate::errors::CdtError::InvalidGenerationParameters {
+            return Err(CdtError::InvalidGenerationParameters {
                 issue: "Insufficient number of time slices".to_string(),
                 provided_value: num_slices.to_string(),
                 expected_range: "≥ 2".to_string(),
@@ -557,7 +551,7 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
         let perturbation_scale = spacing * 0.02;
 
         let total_vertices = vertices_per_slice.checked_mul(num_slices).ok_or_else(|| {
-            crate::errors::CdtError::InvalidGenerationParameters {
+            CdtError::InvalidGenerationParameters {
                 issue: "Vertex count overflow".to_string(),
                 provided_value: format!("{vertices_per_slice} × {num_slices}"),
                 expected_range: "product ≤ u32::MAX".to_string(),
@@ -607,7 +601,7 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
                     .point(point)
                     .data(t)
                     .build()
-                    .map_err(|e| crate::errors::CdtError::VertexBuildFailed {
+                    .map_err(|e| CdtError::VertexBuildFailed {
                         context: format!("from_foliated_cylinder vertex {flat_idx}"),
                         underlying_error: e.to_string(),
                     })?;
@@ -617,7 +611,7 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
 
         let dt = DelaunayTriangulationBuilder::from_vertices(&vertices)
             .build::<i32>()
-            .map_err(|e| crate::errors::CdtError::DelaunayGenerationFailed {
+            .map_err(|e| CdtError::DelaunayGenerationFailed {
                 vertex_count: total_vertices,
                 coordinate_range: (0.0, f64::from(num_slices - 1)),
                 attempt: 1,
@@ -626,7 +620,7 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
 
         // Verify the builder inserted all vertices.
         if dt.number_of_vertices() != total_vertices as usize {
-            return Err(crate::errors::CdtError::DelaunayGenerationFailed {
+            return Err(CdtError::DelaunayGenerationFailed {
                 vertex_count: total_vertices,
                 coordinate_range: (0.0, f64::from(num_slices - 1)),
                 attempt: 1,
@@ -649,7 +643,12 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
             }
         }
 
-        let foliation = Foliation::from_slice_sizes(slice_sizes, num_slices);
+        let foliation = Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(|e| {
+            CdtError::ValidationFailed {
+                check: "foliation_construction".to_string(),
+                detail: e.to_string(),
+            }
+        })?;
         let backend = DelaunayBackend::from_triangulation(dt);
         let mut tri = Self::new(backend, num_slices, 2);
         tri.foliation = Some(foliation);
@@ -675,29 +674,40 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
     /// Returns error if `num_slices` is zero or if vertex coordinates cannot be read.
     pub fn assign_foliation_by_y_coordinate(&mut self, num_slices: u32) -> CdtResult<()> {
         if num_slices == 0 {
-            return Err(crate::errors::CdtError::InvalidGenerationParameters {
+            return Err(CdtError::InvalidGenerationParameters {
                 issue: "Number of slices must be positive".to_string(),
                 provided_value: "0".to_string(),
                 expected_range: "≥ 1".to_string(),
             });
         }
 
-        // Collect all vertex y-coordinates to determine the range
-        let mut y_coords: Vec<(VertexKey, f64)> = Vec::with_capacity(self.geometry.vertex_count());
-        for vh in self.geometry.vertices() {
-            if let Ok(coords) = self.geometry.vertex_coordinates(&vh)
-                && coords.len() >= 2
-            {
-                y_coords.push((vh.vertex_key(), coords[1]));
-            }
-        }
-
-        if y_coords.is_empty() {
-            return Err(crate::errors::CdtError::ValidationFailed {
-                check: "foliation_assignment".to_string(),
-                detail: "no vertices with valid 2D coordinates".to_string(),
-            });
-        }
+        // Collect all vertex y-coordinates, failing fast if any vertex is unreadable.
+        let y_coords: Vec<(VertexKey, f64)> = self
+            .geometry
+            .vertices()
+            .map(|vh| {
+                let coords = self.geometry.vertex_coordinates(&vh).map_err(|_| {
+                    CdtError::ValidationFailed {
+                        check: "foliation_assignment".to_string(),
+                        detail: format!(
+                            "failed to read coordinates for vertex {:?}",
+                            vh.vertex_key()
+                        ),
+                    }
+                })?;
+                if coords.len() < 2 {
+                    return Err(CdtError::ValidationFailed {
+                        check: "foliation_assignment".to_string(),
+                        detail: format!(
+                            "vertex {:?} has {} coordinates, expected ≥ 2",
+                            vh.vertex_key(),
+                            coords.len()
+                        ),
+                    });
+                }
+                Ok((vh.vertex_key(), coords[1]))
+            })
+            .collect::<CdtResult<Vec<_>>>()?;
 
         let y_min = y_coords
             .iter()
@@ -724,13 +734,20 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
                 0
             } else {
                 let band_index = ((y - y_min) / band_height).floor();
-                crate::util::f64_band_to_u32(band_index, num_slices - 1)
+                f64_band_to_u32(band_index, num_slices - 1)
             };
             dt.set_vertex_data(*vkey, Some(t));
             slice_sizes[t as usize] += 1;
         }
 
-        self.foliation = Some(Foliation::from_slice_sizes(slice_sizes, num_slices));
+        self.foliation = Some(
+            Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(|e| {
+                CdtError::ValidationFailed {
+                    check: "foliation_assignment".to_string(),
+                    detail: e.to_string(),
+                }
+            })?,
+        );
         self.metadata.time_slices = num_slices;
         Ok(())
     }
@@ -762,7 +779,7 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
         self.geometry.vertex_time_label(vertex)
     }
 
-    /// Classifies an edge as spacelike or timelike.
+    /// Classifies an edge as spacelike, timelike, or acausal.
     ///
     /// Returns `None` if no foliation is present, the edge endpoints cannot
     /// be resolved, or either endpoint lacks a time label.
@@ -772,7 +789,7 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
         let (v0, v1) = self.geometry.edge_endpoints(edge).ok()?;
         let t0 = self.geometry.vertex_time_label(&v0);
         let t1 = self.geometry.vertex_time_label(&v1);
-        crate::cdt::foliation::classify_edge(t0, t1)
+        classify_edge(t0, t1)
     }
 
     /// Returns all vertex handles that belong to time slice `t`.
@@ -826,7 +843,7 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
         let t0 = self.geometry.vertex_time_label(&verts[0]);
         let t1 = self.geometry.vertex_time_label(&verts[1]);
         let t2 = self.geometry.vertex_time_label(&verts[2]);
-        crate::cdt::foliation::classify_cell(t0, t1, t2)
+        classify_cell(t0, t1, t2)
     }
 
     /// Reads the stored cell type from cell data, if previously classified.
@@ -904,17 +921,35 @@ impl CdtTriangulation<crate::geometry::backends::delaunay::DelaunayBackend2D> {
         }
 
         for edge in self.geometry.edges() {
-            let Ok((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
-                continue;
-            };
-            let Some(t0) = self.geometry.vertex_time_label(&v0) else {
-                continue;
-            };
-            let Some(t1) = self.geometry.vertex_time_label(&v1) else {
-                continue;
-            };
+            let (v0, v1) =
+                self.geometry
+                    .edge_endpoints(&edge)
+                    .map_err(|_| CdtError::ValidationFailed {
+                        check: "causality".to_string(),
+                        detail: "failed to resolve edge endpoints".to_string(),
+                    })?;
+            let t0 =
+                self.geometry
+                    .vertex_time_label(&v0)
+                    .ok_or_else(|| CdtError::ValidationFailed {
+                        check: "causality".to_string(),
+                        detail: format!(
+                            "vertex {:?} has no time label in a foliated triangulation",
+                            v0.vertex_key()
+                        ),
+                    })?;
+            let t1 =
+                self.geometry
+                    .vertex_time_label(&v1)
+                    .ok_or_else(|| CdtError::ValidationFailed {
+                        check: "causality".to_string(),
+                        detail: format!(
+                            "vertex {:?} has no time label in a foliated triangulation",
+                            v1.vertex_key()
+                        ),
+                    })?;
             if t0.abs_diff(t1) > 1 {
-                return Err(crate::errors::CdtError::CausalityViolation {
+                return Err(CdtError::CausalityViolation {
                     time_0: t0,
                     time_1: t1,
                 });
@@ -1036,7 +1071,7 @@ mod tests {
             let result = CdtTriangulation::from_random_points(10, 3, dim);
             assert!(result.is_err(), "Should fail with dimension {dim}");
 
-            if let Err(crate::errors::CdtError::UnsupportedDimension(d)) = result {
+            if let Err(CdtError::UnsupportedDimension(d)) = result {
                 assert_eq!(d, u32::from(dim), "Error should report correct dimension");
             } else {
                 panic!("Expected UnsupportedDimension error for dimension {dim}");
@@ -1052,7 +1087,7 @@ mod tests {
             assert!(result.is_err(), "Should fail with {count} vertices");
 
             match result {
-                Err(crate::errors::CdtError::InvalidGenerationParameters {
+                Err(CdtError::InvalidGenerationParameters {
                     issue,
                     provided_value,
                     ..
@@ -1073,7 +1108,7 @@ mod tests {
         assert!(result.is_err(), "Should fail with 2 vertices");
 
         match result {
-            Err(crate::errors::CdtError::InvalidGenerationParameters {
+            Err(CdtError::InvalidGenerationParameters {
                 issue,
                 provided_value,
                 ..
@@ -1626,6 +1661,9 @@ mod tests {
             match et {
                 EdgeType::Spacelike => spacelike += 1,
                 EdgeType::Timelike => timelike += 1,
+                EdgeType::Acausal => {
+                    panic!("Foliated cylinder should not have acausal edges")
+                }
             }
         }
 
@@ -1889,6 +1927,7 @@ mod tests {
 #[cfg(test)]
 mod prop_tests {
     use super::*;
+    use crate::util::saturating_usize_to_i32;
     use proptest::prelude::*;
 
     proptest! {
@@ -2163,9 +2202,9 @@ mod prop_tests {
         ) {
             let triangulation = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
 
-            let v = crate::util::saturating_usize_to_i32(triangulation.vertex_count());
-            let e = crate::util::saturating_usize_to_i32(triangulation.edge_count());
-            let f = crate::util::saturating_usize_to_i32(triangulation.face_count());
+            let v = saturating_usize_to_i32(triangulation.vertex_count());
+            let e = saturating_usize_to_i32(triangulation.edge_count());
+            let f = saturating_usize_to_i32(triangulation.face_count());
 
             // Basic positivity
             prop_assert!(v >= 3, "Must have at least 3 vertices");

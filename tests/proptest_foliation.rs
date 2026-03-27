@@ -70,6 +70,9 @@ proptest! {
             match et.unwrap() {
                 EdgeType::Spacelike => spacelike += 1,
                 EdgeType::Timelike => timelike += 1,
+                EdgeType::Acausal => {
+                    prop_assert!(false, "Foliated cylinder should not have acausal edges");
+                }
             }
         }
 
