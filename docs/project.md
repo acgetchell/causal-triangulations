@@ -5,14 +5,15 @@ src/
 ├── lib.rs             # Public API and module exports
 ├── main.rs            # CLI entry point
 ├── errors.rs          # Error types (CdtError, CausalityViolation)
-├── util.rs            # Delaunay generators, safe numeric conversions
+├── util.rs            # Safe numeric conversions, random float
 ├── config.rs          # Simulation configuration
 ├── geometry/          # Geometry abstraction layer
 │   ├── traits.rs      # Core geometry traits (GeometryBackend, etc.)
 │   ├── mesh.rs        # CDT-agnostic mesh data structures
 │   ├── operations.rs  # High-level triangulation operations
+│   ├── generators.rs  # Delaunay triangulation generators (delaunay crate boundary)
 │   └── backends/      # Pluggable geometry backends
-│       ├── delaunay.rs # Delaunay crate wrapper
+│       ├── delaunay.rs # Delaunay crate wrapper (delaunay crate boundary)
 │       └── mock.rs    # Mock backend for testing
 └── cdt/               # CDT physics and Monte Carlo logic
     ├── triangulation.rs # CdtTriangulation core type, factory constructors, foliation queries
@@ -36,9 +37,18 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 #### `cdt/triangulation.rs` — Foliation integration
 
 - `from_foliated_cylinder(vertices_per_slice, num_slices, seed)` — grid-based CDT construction with y-coordinate bucket labeling
-- `assign_foliation_by_y_coordinate(num_slices)` — bin existing vertices into time slices
+- `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`
 - Validation: `validate_foliation()` (structural), `validate_causality()` (no edge spans >1 slice)
+
+#### `geometry/generators.rs` — Delaunay triangulation generators
+
+- `delaunay2_with_context` — builds a 2D Delaunay triangulation with optional seed
+- `build_delaunay2_with_data` — builds from coordinate + vertex-data pairs
+- `random_delaunay2`, `seeded_delaunay2` — convenience wrappers
+- `DelaunayTriangulation2D` — type alias for the concrete 2D triangulation type
+
+Together with `backends/delaunay.rs`, this module is the only place that directly imports from the `delaunay` crate.
 
 #### `util.rs` — Numeric helpers
 

@@ -119,6 +119,15 @@ impl From<markov_chain_monte_carlo::McmcError> for CdtError {
     }
 }
 
+impl From<crate::cdt::foliation::FoliationError> for CdtError {
+    fn from(err: crate::cdt::foliation::FoliationError) -> Self {
+        Self::ValidationFailed {
+            check: "foliation".to_string(),
+            detail: err.to_string(),
+        }
+    }
+}
+
 impl std::error::Error for CdtError {}
 
 /// Result type for CDT operations.

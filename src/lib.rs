@@ -44,6 +44,9 @@ pub mod geometry {
     /// Core geometry traits for CDT abstraction.
     pub mod traits;
 
+    /// Delaunay triangulation generators.
+    pub mod generators;
+
     /// Geometry backend implementations.
     pub mod backends {
         /// Delaunay backend - wraps the delaunay crate.
@@ -95,6 +98,75 @@ use std::time::Duration;
 // Trait-based triangulation (recommended)
 pub use cdt::triangulation::CdtTriangulation;
 pub use geometry::traits::TriangulationQuery;
+
+/// Prelude module for convenient imports.
+///
+/// Provides commonly used types for CDT construction, simulation, and analysis.
+///
+/// # Quick start
+///
+/// ```
+/// use causal_triangulations::prelude::*;
+///
+/// let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+///     .expect("create foliated cylinder");
+/// assert!(tri.validate().is_ok());
+/// ```
+pub mod prelude {
+    // Core CDT types
+    pub use crate::CdtTriangulation;
+    pub use crate::geometry::CdtTriangulation2D;
+    pub use crate::geometry::traits::TriangulationQuery;
+
+    // Foliation / classification
+    pub use crate::cdt::foliation::{CellType, EdgeType, Foliation};
+
+    // Action
+    pub use crate::cdt::action::{ActionConfig, compute_regge_action};
+
+    // Ergodic moves
+    pub use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
+
+    // Metropolis simulation
+    pub use crate::cdt::metropolis::{
+        CdtProposal, CdtTarget, MetropolisAlgorithm, MetropolisConfig,
+    };
+
+    // Configuration and errors
+    pub use crate::config::CdtConfig;
+    pub use crate::errors::{CdtError, CdtResult};
+
+    /// Focused exports for CDT triangulation construction and queries.
+    ///
+    /// Lighter than `prelude::*` — just the types needed for building and
+    /// inspecting triangulations (the most common doctest pattern).
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
+    ///     .expect("create triangulation");
+    /// assert!(tri.vertex_count() >= 3);
+    /// ```
+    pub mod triangulation {
+        pub use crate::CdtTriangulation;
+        pub use crate::cdt::foliation::{CellType, EdgeType, Foliation};
+        pub use crate::errors::{CdtError, CdtResult};
+        pub use crate::geometry::traits::TriangulationQuery;
+    }
+
+    /// Focused exports for running CDT simulations.
+    pub mod simulation {
+        pub use crate::CdtTriangulation;
+        pub use crate::cdt::action::{ActionConfig, compute_regge_action};
+        pub use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
+        pub use crate::cdt::metropolis::{
+            CdtProposal, CdtTarget, MetropolisAlgorithm, MetropolisConfig,
+        };
+        pub use crate::config::CdtConfig;
+        pub use crate::errors::{CdtError, CdtResult};
+    }
+}
 
 /// Runs a CDT simulation with the specified configuration.
 ///

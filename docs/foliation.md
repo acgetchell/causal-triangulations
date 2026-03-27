@@ -29,7 +29,7 @@ CdtTriangulation<B>
     └── num_slices: u32
 ```
 
-Vertex data is set at construction time via `VertexBuilder::data(t)`. For post-construction labeling (e.g., `assign_foliation_by_y_coordinate`), labels are written in-place via `DelaunayTriangulation::set_vertex_data(key, Some(t))` — an O(1) operation per vertex that does not affect geometry or topology.
+Vertex data is set at construction time via `VertexBuilder::data(t)`. For post-construction labeling (e.g., `assign_foliation_by_y`), labels are written in-place via `DelaunayTriangulation::set_vertex_data(key, Some(t))` — an O(1) operation per vertex that does not affect geometry or topology.
 
 ## Time Label Assignment
 
@@ -39,7 +39,7 @@ For `from_foliated_cylinder()`, time labels are assigned by **y-coordinate bucke
 - Conversion uses `y_to_time_bucket()` from `src/util.rs` via `ToPrimitive::to_u32`
 - Values are clamped to [0, num_slices − 1]
 
-`assign_foliation_by_y_coordinate()` uses band-based bucketing and writes labels directly to vertex data via `set_vertex_data`.
+`assign_foliation_by_y()` uses band-based bucketing and writes labels directly to vertex data via `set_vertex_data`.
 
 ## Grid Construction (`from_foliated_cylinder`)
 

@@ -159,7 +159,7 @@ Key principle:
 - **MSRV**: 1.94.0
 - **Edition**: 2024
 - **Unsafe code**: forbidden (`#![forbid(unsafe_code)]`)
-- **Architecture**: CDT physics layered over a pluggable geometry backend (`delaunay` crate)
+- **Architecture**: CDT physics layered over a pluggable geometry backend (`delaunay` crate). Direct `use delaunay::` imports are restricted to `src/geometry/` (`backends/delaunay.rs` and `generators.rs`); all other modules use the trait-based abstractions and `DelaunayBackend2D` type alias (see `docs/dev/rust.md § Geometry Backend Isolation`)
 - **Modules**: `src/cdt/` (CDT logic: moves, action, Metropolis, foliation), `src/geometry/` (geometry abstractions and backends), `src/config.rs` (simulation configuration)
 - **Foliation**: `src/cdt/foliation.rs` assigns per-vertex time labels via `VertexSecondaryMap`; `from_foliated_cylinder` constructs foliated triangulations; `validate_causality` enforces |Δt| ≤ 1 on edges. Design documented in `docs/foliation.md`
 - **Ergodic moves**: `attempt_22_move`, `attempt_13_move`, `attempt_31_move`, `attempt_edge_flip` are currently placeholder implementations; full `delaunay::Tds` integration is planned

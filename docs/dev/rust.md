@@ -247,6 +247,24 @@ Before adding a dependency, consider:
 
 ---
 
+## Geometry Backend Isolation
+
+Direct `use delaunay::` imports are **restricted** to the `src/geometry/` subtree:
+
+- `src/geometry/backends/delaunay.rs` — wraps `delaunay` crate types behind trait-based handles
+- `src/geometry/generators.rs` — Delaunay triangulation generators (`delaunay2_with_context`, `build_delaunay2_with_data`)
+
+No module outside `src/geometry/` may import from the `delaunay` crate directly. Instead use:
+
+- The `DelaunayBackend2D` type alias (defined in `src/lib.rs` geometry module)
+- Handle types from `crate::geometry::backends::delaunay` (`DelaunayVertexHandle`, `DelaunayEdgeHandle`, `DelaunayFaceHandle`)
+- Trait methods from `TriangulationQuery` / `TriangulationMut`
+- Generator utilities from `crate::geometry::generators`
+
+This ensures the `delaunay` crate can be upgraded or replaced without touching CDT logic.
+
+---
+
 ## Formatting and Lints
 
 Code must pass:

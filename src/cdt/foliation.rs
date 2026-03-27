@@ -101,7 +101,7 @@ pub fn classify_cell(t0: Option<u32>, t1: Option<u32>, t2: Option<u32>) -> Optio
     }
 }
 
-/// Error type for `Foliation` construction.
+/// Error type for foliation construction and validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FoliationError {
     /// `slice_sizes` length does not match `num_slices`.
@@ -110,6 +110,25 @@ pub enum FoliationError {
         slice_sizes_len: usize,
         /// Expected number of slices.
         num_slices: u32,
+    },
+    /// The number of labeled vertices does not match the triangulation vertex count.
+    LabelCountMismatch {
+        /// Number of vertices with time labels.
+        labeled: usize,
+        /// Expected vertex count from the triangulation.
+        expected: usize,
+    },
+    /// A time slice contains no vertices.
+    EmptySlice {
+        /// The index of the empty slice.
+        slice: usize,
+    },
+    /// The sum of per-slice sizes does not match the labeled vertex count.
+    SliceSizeSumMismatch {
+        /// Sum of `slice_sizes`.
+        sum: usize,
+        /// Total labeled vertex count.
+        labeled: usize,
     },
 }
 
@@ -122,6 +141,15 @@ impl std::fmt::Display for FoliationError {
             } => write!(
                 f,
                 "slice_sizes length ({slice_sizes_len}) != num_slices ({num_slices})"
+            ),
+            Self::LabelCountMismatch { labeled, expected } => write!(
+                f,
+                "labeled vertex count ({labeled}) does not match triangulation vertex count ({expected})"
+            ),
+            Self::EmptySlice { slice } => write!(f, "time slice {slice} is empty"),
+            Self::SliceSizeSumMismatch { sum, labeled } => write!(
+                f,
+                "slice_sizes sum ({sum}) does not match labeled vertex count ({labeled})"
             ),
         }
     }
@@ -321,5 +349,57 @@ mod tests {
     fn test_classify_cell_unlabeled_returns_none() {
         assert_eq!(classify_cell(Some(0), Some(0), None), None);
         assert_eq!(classify_cell(None, Some(0), Some(1)), None);
+    }
+
+    // =========================================================================
+    // FoliationError variant tests
+    // =========================================================================
+
+    #[test]
+    fn test_foliation_error_label_count_mismatch_display() {
+        let err = FoliationError::LabelCountMismatch {
+            labeled: 5,
+            expected: 10,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains('5') && msg.contains("10"),
+            "Display should include both counts: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_foliation_error_empty_slice_display() {
+        let err = FoliationError::EmptySlice { slice: 2 };
+        let msg = err.to_string();
+        assert!(
+            msg.contains('2') && msg.contains("empty"),
+            "Display should mention slice index: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_foliation_error_slice_size_sum_mismatch_display() {
+        let err = FoliationError::SliceSizeSumMismatch {
+            sum: 7,
+            labeled: 10,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains('7') && msg.contains("10"),
+            "Display should include both values: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_foliation_error_equality() {
+        assert_eq!(
+            FoliationError::EmptySlice { slice: 0 },
+            FoliationError::EmptySlice { slice: 0 },
+        );
+        assert_ne!(
+            FoliationError::EmptySlice { slice: 0 },
+            FoliationError::EmptySlice { slice: 1 },
+        );
     }
 }

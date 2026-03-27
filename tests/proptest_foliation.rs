@@ -1,9 +1,7 @@
 #![forbid(unsafe_code)]
 //! Property-based tests for CDT foliation construction and validation.
 
-use causal_triangulations::cdt::foliation::EdgeType;
-use causal_triangulations::cdt::triangulation::CdtTriangulation;
-use causal_triangulations::geometry::traits::TriangulationQuery;
+use causal_triangulations::prelude::triangulation::*;
 use proptest::prelude::*;
 
 proptest! {

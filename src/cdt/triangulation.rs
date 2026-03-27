@@ -3,20 +3,18 @@
 //! This module provides CDT-specific triangulation data structures that work
 //! with any geometry backend implementing the trait interfaces.
 
-use crate::cdt::foliation::{CellType, EdgeType, Foliation, classify_cell, classify_edge};
+use crate::cdt::foliation::{
+    CellType, EdgeType, Foliation, FoliationError, classify_cell, classify_edge,
+};
 use crate::errors::{CdtError, CdtResult};
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
-    DelaunayBackend, DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
+    DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
 };
+use crate::geometry::generators::{build_delaunay2_with_data, delaunay2_with_context};
 use crate::geometry::operations::TriangulationOps;
 use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
-use crate::util::{f64_band_to_u32, generate_delaunay2_with_context};
-use delaunay::core::builder::DelaunayTriangulationBuilder;
-use delaunay::core::triangulation_data_structure::VertexKey;
-use delaunay::geometry::point::Point;
-use delaunay::geometry::traits::coordinate::Coordinate;
-use delaunay::prelude::VertexBuilder;
+use crate::util::f64_band_to_u32;
 use std::time::Instant;
 
 /// CDT-specific triangulation wrapper - completely geometry-agnostic
@@ -241,7 +239,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::CdtTriangulation;
+    /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
     ///     .expect("create triangulation");
@@ -289,7 +287,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::CdtTriangulation;
+    /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
     ///     .expect("create foliated cylinder");
@@ -329,7 +327,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::CdtTriangulation;
+    /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
     ///     .expect("create foliated cylinder");
@@ -343,36 +341,28 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         // Check that all vertices are labeled
         let vertex_count = self.geometry.vertex_count();
         if foliation.labeled_vertex_count() != vertex_count {
-            return Err(CdtError::ValidationFailed {
-                check: "foliation".to_string(),
-                detail: format!(
-                    "labeled vertex count ({}) does not match triangulation vertex count ({})",
-                    foliation.labeled_vertex_count(),
-                    vertex_count,
-                ),
-            });
+            return Err(FoliationError::LabelCountMismatch {
+                labeled: foliation.labeled_vertex_count(),
+                expected: vertex_count,
+            }
+            .into());
         }
 
         // Check that every slice is non-empty
         for (t, &size) in foliation.slice_sizes().iter().enumerate() {
             if size == 0 {
-                return Err(CdtError::ValidationFailed {
-                    check: "foliation".to_string(),
-                    detail: format!("time slice {t} is empty"),
-                });
+                return Err(FoliationError::EmptySlice { slice: t }.into());
             }
         }
 
         // Check that slice_sizes sum matches labeled count
         let sum: usize = foliation.slice_sizes().iter().sum();
         if sum != foliation.labeled_vertex_count() {
-            return Err(CdtError::ValidationFailed {
-                check: "foliation".to_string(),
-                detail: format!(
-                    "slice_sizes sum ({sum}) does not match labeled vertex count ({})",
-                    foliation.labeled_vertex_count(),
-                ),
-            });
+            return Err(FoliationError::SliceSizeSumMismatch {
+                sum,
+                labeled: foliation.labeled_vertex_count(),
+            }
+            .into());
         }
 
         Ok(())
@@ -457,8 +447,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
             });
         }
 
-        let dt = generate_delaunay2_with_context(vertices, (0.0, 10.0), None)?;
-        let backend = DelaunayBackend::from_triangulation(dt);
+        let dt = delaunay2_with_context(vertices, (0.0, 10.0), None)?;
+        let backend = DelaunayBackend2D::from_triangulation(dt);
 
         Ok(Self::new(backend, time_slices, dimension))
     }
@@ -489,8 +479,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
             });
         }
 
-        let dt = generate_delaunay2_with_context(vertices, (0.0, 10.0), Some(seed))?;
-        let backend = DelaunayBackend::from_triangulation(dt);
+        let dt = delaunay2_with_context(vertices, (0.0, 10.0), Some(seed))?;
+        let backend = DelaunayBackend2D::from_triangulation(dt);
 
         Ok(Self::new(backend, time_slices, dimension))
     }
@@ -557,7 +547,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 expected_range: "product ≤ u32::MAX".to_string(),
             }
         })?;
-        let mut vertices = Vec::with_capacity(total_vertices as usize);
+        let mut vertex_specs = Vec::with_capacity(total_vertices as usize);
         let last_i = vertices_per_slice - 1;
 
         for t in 0..num_slices {
@@ -566,8 +556,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 let y_base = f64::from(t); // integer time coordinate
 
                 // Deterministic perturbation keyed on vertex index + seed
-                let flat_idx = u64::from(t) * u64::from(vertices_per_slice) + u64::from(i);
-                let hash = flat_idx
+                let hash = (u64::from(t) * u64::from(vertices_per_slice) + u64::from(i))
                     .wrapping_mul(6_364_136_223_846_793_005)
                     .wrapping_add(perturbation_seed)
                     .wrapping_mul(1_442_695_040_888_963_407);
@@ -580,7 +569,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 //   The concave (sub-linear) progression ensures every
                 //   intermediate boundary vertex bulges past the line
                 //   connecting its neighbors, so the convex hull includes
-                //   every row’s extremes and no hull edge skips a time slice.
+                //   every row's extremes and no hull edge skips a time slice.
                 let hash_frac = f64::from((hash & 0xFFFF) as u16) / 65535.0;
                 let py_frac = f64::from(((hash >> 16) & 0xFFFF) as u16) / 65535.0;
                 let py = (py_frac - 0.5) * perturbation_scale;
@@ -595,47 +584,43 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     (hash_frac - 0.5) * perturbation_scale
                 };
 
-                let point = Point::<f64, 2>::new([x_base + px, y_base + py]);
-                // Embed time label directly as vertex data (like CDT++ vertex->info())
-                let vertex = VertexBuilder::<f64, u32, 2>::default()
-                    .point(point)
-                    .data(t)
-                    .build()
-                    .map_err(|e| CdtError::VertexBuildFailed {
-                        context: format!("from_foliated_cylinder vertex {flat_idx}"),
-                        underlying_error: e.to_string(),
-                    })?;
-                vertices.push(vertex);
+                vertex_specs.push(([x_base + px, y_base + py], t));
             }
         }
 
-        let dt = DelaunayTriangulationBuilder::from_vertices(&vertices)
-            .build::<i32>()
-            .map_err(|e| CdtError::DelaunayGenerationFailed {
+        // Delegate low-level Delaunay construction to the utility layer.
+        let dt = build_delaunay2_with_data(&vertex_specs).map_err(|e| match e {
+            CdtError::DelaunayGenerationFailed {
+                underlying_error, ..
+            } => CdtError::DelaunayGenerationFailed {
                 vertex_count: total_vertices,
                 coordinate_range: (0.0, f64::from(num_slices - 1)),
                 attempt: 1,
-                underlying_error: e.to_string(),
-            })?;
+                underlying_error,
+            },
+            other => other,
+        })?;
+
+        let backend = DelaunayBackend2D::from_triangulation(dt);
 
         // Verify the builder inserted all vertices.
-        if dt.number_of_vertices() != total_vertices as usize {
+        if backend.vertex_count() != total_vertices as usize {
             return Err(CdtError::DelaunayGenerationFailed {
                 vertex_count: total_vertices,
                 coordinate_range: (0.0, f64::from(num_slices - 1)),
                 attempt: 1,
                 underlying_error: format!(
                     "builder inserted only {} of {} vertices (possible degeneracy)",
-                    dt.number_of_vertices(),
+                    backend.vertex_count(),
                     total_vertices,
                 ),
             });
         }
 
-        // Compute per-slice vertex counts from the vertex data.
+        // Compute per-slice vertex counts from vertex data stored in the backend.
         let mut slice_sizes = vec![0usize; num_slices as usize];
-        for (_, vertex) in dt.vertices() {
-            if let Some(&t) = vertex.data() {
+        for vh in backend.vertices() {
+            if let Some(t) = backend.vertex_time_label(&vh) {
                 let idx = t as usize;
                 if idx < slice_sizes.len() {
                     slice_sizes[idx] += 1;
@@ -643,13 +628,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
             }
         }
 
-        let foliation = Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(|e| {
-            CdtError::ValidationFailed {
-                check: "foliation_construction".to_string(),
-                detail: e.to_string(),
-            }
-        })?;
-        let backend = DelaunayBackend::from_triangulation(dt);
+        let foliation =
+            Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
         let mut tri = Self::new(backend, num_slices, 2);
         tri.foliation = Some(foliation);
         Ok(tri)
@@ -672,7 +652,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// # Errors
     ///
     /// Returns error if `num_slices` is zero or if vertex coordinates cannot be read.
-    pub fn assign_foliation_by_y_coordinate(&mut self, num_slices: u32) -> CdtResult<()> {
+    pub fn assign_foliation_by_y(&mut self, num_slices: u32) -> CdtResult<()> {
         if num_slices == 0 {
             return Err(CdtError::InvalidGenerationParameters {
                 issue: "Number of slices must be positive".to_string(),
@@ -682,15 +662,15 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
 
         // Collect all vertex y-coordinates, failing fast if any vertex is unreadable.
-        let y_coords: Vec<(VertexKey, f64)> = self
+        let y_coords: Vec<(DelaunayVertexHandle, f64)> = self
             .geometry
             .vertices()
             .map(|vh| {
-                let coords = self.geometry.vertex_coordinates(&vh).map_err(|_| {
+                let coords = self.geometry.vertex_coordinates(&vh).map_err(|e| {
                     CdtError::ValidationFailed {
                         check: "foliation_assignment".to_string(),
                         detail: format!(
-                            "failed to read coordinates for vertex {:?}",
+                            "failed to read coordinates for vertex {:?}: {e}",
                             vh.vertex_key()
                         ),
                     }
@@ -705,7 +685,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                         ),
                     });
                 }
-                Ok((vh.vertex_key(), coords[1]))
+                Ok((vh, coords[1]))
             })
             .collect::<CdtResult<Vec<_>>>()?;
 
@@ -729,25 +709,19 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let mut slice_sizes = vec![0usize; num_slices as usize];
         let dt = self.geometry.triangulation_mut();
 
-        for (vkey, y) in &y_coords {
+        for (vh, y) in &y_coords {
             let t = if range.abs() < f64::EPSILON {
                 0
             } else {
                 let band_index = ((y - y_min) / band_height).floor();
                 f64_band_to_u32(band_index, num_slices - 1)
             };
-            dt.set_vertex_data(*vkey, Some(t));
+            dt.set_vertex_data(vh.vertex_key(), Some(t));
             slice_sizes[t as usize] += 1;
         }
 
-        self.foliation = Some(
-            Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(|e| {
-                CdtError::ValidationFailed {
-                    check: "foliation_assignment".to_string(),
-                    detail: e.to_string(),
-                }
-            })?,
-        );
+        self.foliation =
+            Some(Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?);
         self.metadata.time_slices = num_slices;
         Ok(())
     }
@@ -823,7 +797,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{CdtTriangulation, CellType, TriangulationQuery};
+    /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
     ///     .expect("create foliated cylinder");
@@ -867,7 +841,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{CdtTriangulation, TriangulationQuery};
+    /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// let mut tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
     ///     .expect("create foliated cylinder");
@@ -909,7 +883,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::CdtTriangulation;
+    /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
     ///     .expect("create foliated cylinder");
@@ -1733,13 +1707,13 @@ mod tests {
     }
 
     #[test]
-    fn test_assign_foliation_by_y_coordinate() {
+    fn test_assign_foliation_by_y() {
         let mut tri =
             CdtTriangulation::from_random_points(10, 3, 2).expect("Failed to create triangulation");
 
         assert!(!tri.has_foliation());
 
-        tri.assign_foliation_by_y_coordinate(3)
+        tri.assign_foliation_by_y(3)
             .expect("Should assign foliation");
 
         assert!(tri.has_foliation());
@@ -1761,7 +1735,7 @@ mod tests {
     #[test]
     fn test_assign_foliation_zero_slices() {
         let mut tri = CdtTriangulation::from_random_points(5, 2, 2).unwrap();
-        assert!(tri.assign_foliation_by_y_coordinate(0).is_err());
+        assert!(tri.assign_foliation_by_y(0).is_err());
     }
 
     #[test]
@@ -1802,7 +1776,7 @@ mod tests {
         let mut tri =
             CdtTriangulation::from_random_points(6, 1, 2).expect("Failed to create triangulation");
 
-        tri.assign_foliation_by_y_coordinate(1)
+        tri.assign_foliation_by_y(1)
             .expect("Should assign single-slice foliation");
 
         assert!(tri.has_foliation());
@@ -1920,6 +1894,57 @@ mod tests {
         // Before classify_all_cells, stored data should be None
         for face in tri.geometry().faces() {
             assert_eq!(tri.cell_type_from_data(&face), None);
+        }
+    }
+
+    // =========================================================================
+    // Causality violation detection
+    // =========================================================================
+
+    #[test]
+    fn test_causality_violation_detected() {
+        // assign_foliation_by_y with many slices on a small coordinate range
+        // can create edges that span multiple slices, violating causality.
+        // We use a wide triangulation with many slices to force this.
+        let mut tri =
+            CdtTriangulation::from_seeded_points(10, 1, 2, 42).expect("create triangulation");
+
+        // 20 slices over ~10 coordinate units → band height ≈ 0.5.
+        // Delaunay edges easily span >1 band.
+        tri.assign_foliation_by_y(20).expect("assign foliation");
+
+        let result = tri.validate_causality_delaunay();
+        assert!(
+            result.is_err(),
+            "Many-slice foliation on random points should produce causality violations"
+        );
+
+        // Verify the error is a CausalityViolation with |Δt| > 1
+        if let Err(CdtError::CausalityViolation { time_0, time_1 }) = result {
+            assert!(
+                time_0.abs_diff(time_1) > 1,
+                "CausalityViolation should report |Δt| > 1, got t0={time_0}, t1={time_1}"
+            );
+        } else {
+            panic!("Expected CausalityViolation error, got {result:?}");
+        }
+    }
+
+    #[test]
+    fn test_foliation_error_converts_to_cdt_error() {
+        // Verify From<FoliationError> for CdtError produces ValidationFailed
+        let fol_err = FoliationError::EmptySlice { slice: 3 };
+        let cdt_err: CdtError = fol_err.into();
+
+        match cdt_err {
+            CdtError::ValidationFailed { check, detail } => {
+                assert_eq!(check, "foliation");
+                assert!(
+                    detail.contains('3') && detail.contains("empty"),
+                    "Detail should describe the empty slice: {detail}"
+                );
+            }
+            other => panic!("Expected ValidationFailed, got {other:?}"),
         }
     }
 }
