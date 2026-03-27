@@ -635,6 +635,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         // since vertex time labels are about to change.
         let face_keys: Vec<_> = self.geometry.faces().map(|f| f.cell_key()).collect();
 
+        self.invalidate_cache();
+
         // Write time labels directly to vertex data via set_vertex_data (O(1) per vertex).
         let mut slice_sizes = vec![0usize; num_slices as usize];
         let dt = self.geometry.triangulation_mut();
@@ -1758,6 +1760,28 @@ mod tests {
         assert_eq!(
             tri.geometry().euler_characteristic(),
             initial_euler_characteristic
+        );
+    }
+
+    #[test]
+    fn test_assign_foliation_by_y_invalidates_cache() {
+        let mut tri =
+            CdtTriangulation::from_random_points(10, 2, 2).expect("Failed to create triangulation");
+
+        tri.refresh_cache();
+        assert!(tri.cache.edge_count.is_some());
+        assert!(tri.cache.euler_char.is_some());
+
+        tri.assign_foliation_by_y(3)
+            .expect("Should invalidate cache when assigning foliation");
+
+        assert!(
+            tri.cache.edge_count.is_none(),
+            "assign_foliation_by_y should clear cached edge count via invalidate_cache()"
+        );
+        assert!(
+            tri.cache.euler_char.is_none(),
+            "assign_foliation_by_y should clear cached Euler characteristic via invalidate_cache()"
         );
     }
 
