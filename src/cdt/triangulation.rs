@@ -1932,15 +1932,46 @@ mod tests {
 
     #[test]
     fn test_causality_violation_detected() {
-        // Use a deterministic single-triangle triangulation so the causality
-        // violation is guaranteed: the edge between time slices 0 and 2 has
-        // |Δt| = 2.
-        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 1), ([0.5, 1.0], 2)])
-            .expect("build deterministic triangulation");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
-        let mut tri = CdtTriangulation::new(backend, 3, 2);
-        tri.foliation =
-            Some(Foliation::from_slice_sizes(vec![1, 1, 1], 3).expect("valid foliation"));
+        let mut tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
+            .expect("Should create foliated cylinder");
+
+        assert!(
+            tri.validate_causality_delaunay().is_ok(),
+            "Known-good foliated cylinder should start causally valid"
+        );
+
+        let timelike_edge = tri
+            .geometry()
+            .edges()
+            .find(|edge| matches!(tri.edge_type(edge), Some(EdgeType::Timelike)))
+            .expect("Foliated cylinder should contain at least one timelike edge");
+        let (v0, v1) = tri
+            .geometry()
+            .edge_endpoints(&timelike_edge)
+            .expect("Timelike edge should have valid endpoints");
+        let t0 = tri.time_label(&v0).expect("First endpoint should be labeled");
+        let t1 = tri.time_label(&v1).expect("Second endpoint should be labeled");
+
+        assert_eq!(
+            t0.abs_diff(t1),
+            1,
+            "Selected edge should start timelike before mutation"
+        );
+
+        let (vertex_to_mutate, new_time) = if t0 < t1 {
+            if t0 > 0 { (v0, t0 - 1) } else { (v1, t1 + 1) }
+        } else if t1 > 0 {
+            (v1, t1 - 1)
+        } else {
+            (v0, t0 + 1)
+        };
+
+        {
+            let mut geometry_mut = tri.geometry_mut();
+            geometry_mut
+                .triangulation_mut()
+                .set_vertex_data(vertex_to_mutate.vertex_key(), Some(new_time));
+        }
 
         let result = tri.validate_causality_delaunay();
         assert!(
