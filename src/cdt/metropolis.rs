@@ -9,6 +9,8 @@
 
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::MoveType;
+use crate::config::validate_simulation_settings;
+use crate::errors::{CdtError, CdtResult};
 use crate::geometry::traits::TriangulationQuery;
 use markov_chain_monte_carlo::{Chain, ProposalMut, Target};
 use num_traits::cast::NumCast;
@@ -75,6 +77,35 @@ impl MetropolisConfig {
     #[must_use]
     pub fn beta(&self) -> f64 {
         1.0 / self.temperature
+    }
+
+    /// Validates simulation-specific configuration values.
+    ///
+    /// # Errors
+    ///
+    /// Returns a structured error describing the invalid simulation setting.
+    pub fn validate(&self) -> CdtResult<()> {
+        validate_simulation_settings(
+            self.temperature,
+            self.steps,
+            self.thermalization_steps,
+            self.measurement_frequency,
+            |setting, provided_value, expected| {
+                invalid_simulation_configuration_from_parts(setting, provided_value, expected)
+            },
+        )
+    }
+}
+
+fn invalid_simulation_configuration_from_parts(
+    setting: &str,
+    provided_value: String,
+    expected: String,
+) -> CdtError {
+    CdtError::InvalidSimulationConfiguration {
+        setting: setting.to_string(),
+        provided_value,
+        expected,
     }
 }
 
@@ -204,24 +235,21 @@ impl MetropolisAlgorithm {
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::Mcmc`](crate::errors::CdtError::Mcmc) if the MCMC
-    /// framework encounters a NaN log-probability or proposal ratio.
+    /// Returns [`CdtError::Mcmc`] if the MCMC framework encounters a NaN
+    /// log-probability or proposal ratio.
+    /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
+    /// configuration is invalid.
+    ///
+    /// Measurements are recorded at step numbers divisible by
+    /// [`MetropolisConfig::measurement_frequency`], including step 0.
+    /// Downstream equilibrium filtering treats measurements with
+    /// `step >= thermalization_steps` as post-thermalization.
     pub fn run(
         &self,
         triangulation: crate::geometry::CdtTriangulation2D,
-    ) -> crate::errors::CdtResult<SimulationResultsBackend> {
+    ) -> CdtResult<SimulationResultsBackend> {
         // Validate configuration to fail fast before any work
-        if self.config.measurement_frequency == 0 {
-            return Err(crate::errors::CdtError::InvalidParameters(
-                "measurement_frequency must be > 0".to_string(),
-            ));
-        }
-        if !self.config.temperature.is_finite() || self.config.temperature <= 0.0 {
-            return Err(crate::errors::CdtError::InvalidParameters(format!(
-                "temperature must be finite and positive, got {}",
-                self.config.temperature,
-            )));
-        }
+        self.config.validate()?;
 
         let start_time = Instant::now();
         let mut mc_steps = Vec::new();
@@ -264,7 +292,9 @@ impl MetropolisAlgorithm {
             };
             mc_steps.push(mc_step);
 
-            // Take measurement if needed
+            // Take measurements on exact frequency boundaries, including step 0.
+            // equilibrium_measurements() later treats step >= thermalization_steps
+            // as post-thermalization, so a boundary-aligned measurement counts.
             if step_num % self.config.measurement_frequency == 0 {
                 let g = chain.state.geometry();
                 measurements.push(Measurement {
@@ -356,6 +386,12 @@ impl SimulationResultsBackend {
     }
 
     /// Returns measurements after thermalization.
+    ///
+    /// Measurements are recorded during [`MetropolisAlgorithm::run`] whenever a
+    /// step number is divisible by [`MetropolisConfig::measurement_frequency`],
+    /// including step 0. This accessor defines equilibrium as
+    /// `measurement.step >= thermalization_steps`, so a measurement taken exactly
+    /// on the thermalization boundary is included.
     #[must_use]
     pub fn equilibrium_measurements(&self) -> Vec<&Measurement> {
         self.measurements
@@ -494,8 +530,18 @@ mod tests {
         let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
 
         let err = algorithm.run(tri).unwrap_err();
-        let msg = format!("{err}");
-        assert!(msg.contains("measurement_frequency"), "Error: {msg}");
+        match err {
+            CdtError::InvalidSimulationConfiguration {
+                setting,
+                provided_value,
+                expected,
+            } => {
+                assert_eq!(setting, "measurement_frequency");
+                assert_eq!(provided_value, "0");
+                assert_eq!(expected, "≥ 1");
+            }
+            other => panic!("Expected InvalidSimulationConfiguration, got {other:?}"),
+        }
     }
 
     #[test]
@@ -506,9 +552,63 @@ mod tests {
             let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
 
             let err = algorithm.run(tri).unwrap_err();
-            let msg = format!("{err}");
-            assert!(msg.contains("temperature"), "T={bad_temp}: {msg}");
+            match err {
+                CdtError::InvalidSimulationConfiguration {
+                    setting, expected, ..
+                } => {
+                    assert_eq!(setting, "temperature", "T={bad_temp}");
+                    assert_eq!(expected, "finite and positive", "T={bad_temp}");
+                }
+                other => panic!(
+                    "Expected InvalidSimulationConfiguration for T={bad_temp}, got {other:?}"
+                ),
+            }
         }
+    }
+
+    #[test]
+    fn test_validate_rejects_missing_post_thermalization_measurement() {
+        let err = MetropolisConfig::new(1.0, 20, 15, 10)
+            .validate()
+            .expect_err(
+                "Configuration should require at least one post-thermalization measurement",
+            );
+
+        match err {
+            CdtError::InvalidSimulationConfiguration {
+                setting,
+                provided_value,
+                expected,
+            } => {
+                assert_eq!(setting, "measurement schedule");
+                assert!(
+                    provided_value.contains("steps=20")
+                        && provided_value.contains("thermalization_steps=15")
+                        && provided_value.contains("measurement_frequency=10"),
+                    "Unexpected provided value: {provided_value}"
+                );
+                assert_eq!(expected, "at least one post-thermalization measurement");
+            }
+            other => panic!("Expected InvalidSimulationConfiguration, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_run_accepts_boundary_aligned_equilibrium_measurement_schedule() {
+        let config = MetropolisConfig::new(1.0, 11, 10, 10).with_seed(42);
+        let algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
+        let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
+
+        let results = algorithm
+            .run(tri)
+            .expect("Boundary-aligned measurement schedule should be valid");
+        let equilibrium_steps: Vec<_> = results
+            .equilibrium_measurements()
+            .into_iter()
+            .map(|measurement| measurement.step)
+            .collect();
+
+        assert_eq!(equilibrium_steps, vec![10]);
     }
 
     #[test]

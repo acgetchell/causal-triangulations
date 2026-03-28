@@ -338,6 +338,72 @@ impl CdtTriangulation<DelaunayBackend2D> {
     // Factory constructors
     // -------------------------------------------------------------------------
 
+    fn foliated_cylinder_generation_error(
+        total_vertices: u32,
+        num_slices: u32,
+        underlying_error: impl Into<String>,
+    ) -> CdtError {
+        CdtError::DelaunayGenerationFailed {
+            vertex_count: total_vertices,
+            coordinate_range: (0.0, f64::from(num_slices - 1)),
+            attempt: 1,
+            underlying_error: underlying_error.into(),
+        }
+    }
+
+    fn slice_sizes_from_vertex_labels(
+        backend: &DelaunayBackend2D,
+        total_vertices: u32,
+        num_slices: u32,
+    ) -> CdtResult<Vec<usize>> {
+        const UNLABELED_VERTEX_EXAMPLE_LIMIT: usize = 4;
+
+        let mut slice_sizes = vec![0usize; num_slices as usize];
+        let mut unlabeled_vertex_count = 0usize;
+        let mut unlabeled_vertex_examples = Vec::with_capacity(UNLABELED_VERTEX_EXAMPLE_LIMIT);
+
+        for vh in backend.vertices() {
+            if let Some(t) = backend.vertex_time_label(&vh) {
+                let idx = t as usize;
+                if idx >= slice_sizes.len() {
+                    return Err(Self::foliated_cylinder_generation_error(
+                        total_vertices,
+                        num_slices,
+                        format!(
+                            "build_delaunay2_with_data produced vertex {:?} with invalid time label {t}; expected 0..{}",
+                            vh.vertex_key(),
+                            slice_sizes.len(),
+                        ),
+                    ));
+                }
+                slice_sizes[idx] += 1;
+            } else {
+                unlabeled_vertex_count += 1;
+                if unlabeled_vertex_examples.len() < UNLABELED_VERTEX_EXAMPLE_LIMIT {
+                    unlabeled_vertex_examples.push(format!("{:?}", vh.vertex_key()));
+                }
+            }
+        }
+
+        if unlabeled_vertex_count > 0 {
+            let vertex_noun = if unlabeled_vertex_count == 1 {
+                "vertex"
+            } else {
+                "vertices"
+            };
+            return Err(Self::foliated_cylinder_generation_error(
+                total_vertices,
+                num_slices,
+                format!(
+                    "build_delaunay2_with_data produced {unlabeled_vertex_count} unlabeled {vertex_noun}; example vertex keys (up to {UNLABELED_VERTEX_EXAMPLE_LIMIT}): [{}]; likely source: build_delaunay2_with_data failed to preserve per-vertex time labels",
+                    unlabeled_vertex_examples.join(", "),
+                ),
+            ));
+        }
+
+        Ok(slice_sizes)
+    }
+
     /// Create a new CDT triangulation with Delaunay backend from random points.
     ///
     /// This is the recommended way to create triangulations for simulations.
@@ -421,7 +487,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// # Errors
     ///
     /// Returns error if parameters are invalid, vertex construction fails,
-    /// or triangulation construction fails.
+    /// triangulation construction fails, or the builder output does not retain
+    /// valid per-vertex time labels. Builder-label failures are surfaced as
+    /// [`CdtError::DelaunayGenerationFailed`] with detailed context.
     pub fn from_foliated_cylinder(
         vertices_per_slice: u32,
         num_slices: u32,
@@ -508,12 +576,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let dt = build_delaunay2_with_data(&vertex_specs).map_err(|e| match e {
             CdtError::DelaunayGenerationFailed {
                 underlying_error, ..
-            } => CdtError::DelaunayGenerationFailed {
-                vertex_count: total_vertices,
-                coordinate_range: (0.0, f64::from(num_slices - 1)),
-                attempt: 1,
+            } => Self::foliated_cylinder_generation_error(
+                total_vertices,
+                num_slices,
                 underlying_error,
-            },
+            ),
             other => other,
         })?;
 
@@ -521,38 +588,20 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         // Verify the builder inserted all vertices.
         if backend.vertex_count() != total_vertices as usize {
-            return Err(CdtError::DelaunayGenerationFailed {
-                vertex_count: total_vertices,
-                coordinate_range: (0.0, f64::from(num_slices - 1)),
-                attempt: 1,
-                underlying_error: format!(
+            return Err(Self::foliated_cylinder_generation_error(
+                total_vertices,
+                num_slices,
+                format!(
                     "builder inserted only {} of {} vertices (possible degeneracy)",
                     backend.vertex_count(),
                     total_vertices,
                 ),
-            });
+            ));
         }
 
         // Compute per-slice vertex counts from vertex data stored in the backend.
-        let mut slice_sizes = vec![0usize; num_slices as usize];
-        for vh in backend.vertices() {
-            if let Some(t) = backend.vertex_time_label(&vh) {
-                let idx = t as usize;
-                if idx >= slice_sizes.len() {
-                    return Err(CdtError::DelaunayGenerationFailed {
-                        vertex_count: total_vertices,
-                        coordinate_range: (0.0, f64::from(num_slices - 1)),
-                        attempt: 1,
-                        underlying_error: format!(
-                            "build_delaunay2_with_data produced vertex {:?} with invalid time label {t}; expected 0..{}",
-                            vh.vertex_key(),
-                            slice_sizes.len(),
-                        ),
-                    });
-                }
-                slice_sizes[idx] += 1;
-            }
-        }
+        let slice_sizes =
+            Self::slice_sizes_from_vertex_labels(&backend, total_vertices, num_slices)?;
 
         let foliation =
             Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
@@ -1625,6 +1674,94 @@ mod tests {
     }
 
     #[test]
+    fn test_slice_sizes_from_vertex_labels_rejects_unlabeled_vertices() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("Should build labeled triangle");
+        let mut backend = DelaunayBackend2D::from_triangulation(dt);
+        let unlabeled_vertex = backend
+            .vertices()
+            .next()
+            .expect("Triangle should contain a vertex")
+            .vertex_key();
+
+        backend
+            .triangulation_mut()
+            .set_vertex_data(unlabeled_vertex, None);
+
+        let result =
+            CdtTriangulation::<DelaunayBackend2D>::slice_sizes_from_vertex_labels(&backend, 3, 2);
+
+        match result {
+            Err(CdtError::DelaunayGenerationFailed {
+                vertex_count,
+                coordinate_range,
+                attempt,
+                underlying_error,
+            }) => {
+                assert_eq!(vertex_count, 3);
+                assert_eq!(coordinate_range, (0.0, 1.0));
+                assert_eq!(attempt, 1);
+                assert!(
+                    underlying_error.contains("1 unlabeled vertex"),
+                    "Error should report unlabeled vertices: {underlying_error}"
+                );
+                assert!(
+                    underlying_error.contains("example vertex keys"),
+                    "Error should include example keys: {underlying_error}"
+                );
+                assert!(
+                    underlying_error.contains(
+                        "build_delaunay2_with_data failed to preserve per-vertex time labels"
+                    ),
+                    "Error should identify the likely source: {underlying_error}"
+                );
+            }
+            other => panic!("Expected DelaunayGenerationFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_slice_sizes_from_vertex_labels_rejects_out_of_range_labels() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("Should build labeled triangle");
+        let mut backend = DelaunayBackend2D::from_triangulation(dt);
+        let invalid_vertex = backend
+            .vertices()
+            .next()
+            .expect("Triangle should contain a vertex")
+            .vertex_key();
+
+        backend
+            .triangulation_mut()
+            .set_vertex_data(invalid_vertex, Some(5));
+
+        let result =
+            CdtTriangulation::<DelaunayBackend2D>::slice_sizes_from_vertex_labels(&backend, 3, 2);
+
+        match result {
+            Err(CdtError::DelaunayGenerationFailed {
+                vertex_count,
+                coordinate_range,
+                attempt,
+                underlying_error,
+            }) => {
+                assert_eq!(vertex_count, 3);
+                assert_eq!(coordinate_range, (0.0, 1.0));
+                assert_eq!(attempt, 1);
+                assert!(
+                    underlying_error.contains("invalid time label 5"),
+                    "Error should preserve invalid-label reporting: {underlying_error}"
+                );
+                assert!(
+                    underlying_error.contains("expected 0..2"),
+                    "Error should report the expected label range: {underlying_error}"
+                );
+            }
+            other => panic!("Expected DelaunayGenerationFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_from_foliated_cylinder_edge_classification() {
         let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
             .expect("Should create foliated cylinder");
@@ -1955,6 +2092,51 @@ mod tests {
         }
     }
 
+    fn deterministic_triangle_debug_summary(backend: &DelaunayBackend2D) -> String {
+        let mut vertices: Vec<_> = backend
+            .vertices()
+            .map(|vh| {
+                let coords = backend.vertex_coordinates(&vh).map_or_else(
+                    |err| format!("coord_error:{err}"),
+                    |coords| format!("{coords:?}"),
+                );
+                format!(
+                    "{:?}@{}:{:?}",
+                    vh.vertex_key(),
+                    coords,
+                    backend.vertex_time_label(&vh)
+                )
+            })
+            .collect();
+        vertices.sort_unstable();
+
+        let mut edges: Vec<_> = backend
+            .edges()
+            .map(|edge| match backend.edge_endpoints(&edge) {
+                Ok((v0, v1)) => format!(
+                    "{:?}<->{:?}:{:?}->{:?}",
+                    v0.vertex_key(),
+                    v1.vertex_key(),
+                    backend.vertex_time_label(&v0),
+                    backend.vertex_time_label(&v1)
+                ),
+                Err(err) => format!("endpoint_error:{err}"),
+            })
+            .collect();
+        edges.sort_unstable();
+
+        format!(
+            "vertex_count={}, edge_count={}, face_count={}, is_valid={}, is_delaunay={}, vertices=[{}], edges=[{}]",
+            backend.vertex_count(),
+            backend.edge_count(),
+            backend.face_count(),
+            backend.is_valid(),
+            backend.is_delaunay(),
+            vertices.join(", "),
+            edges.join(", "),
+        )
+    }
+
     // =========================================================================
     // Causality violation detection
     // =========================================================================
@@ -1967,19 +2149,34 @@ mod tests {
             .expect("Should build deterministic causal triangle");
         let backend = DelaunayBackend2D::from_triangulation(dt);
         let mut tri = CdtTriangulation::new(backend, 2, 2);
-        tri.foliation =
-            Some(Foliation::from_slice_sizes(vec![2, 1], 2).expect("Should build foliation"));
 
+        // Derive the foliation from coordinates instead of relying on
+        // build_delaunay2_with_data() to preserve vertex data across platforms.
+        // This test targets causality validation, not builder label retention.
+        tri.assign_foliation_by_y(2)
+            .expect("Should derive foliation from triangle coordinates");
+
+        assert_eq!(
+            tri.slice_sizes(),
+            &[2, 1],
+            "Deterministic triangle should assign slice sizes [2, 1], got {:?}; {}",
+            tri.slice_sizes(),
+            deterministic_triangle_debug_summary(tri.geometry())
+        );
+
+        let initial_validation = tri.validate_causality_delaunay();
         assert!(
-            tri.validate_causality_delaunay().is_ok(),
-            "Deterministic causal triangle should start causally valid"
+            initial_validation.is_ok(),
+            "Deterministic causal triangle should start causally valid: {initial_validation:?}; {}",
+            deterministic_triangle_debug_summary(tri.geometry())
         );
 
         assert!(
             tri.geometry()
                 .edges()
                 .any(|edge| matches!(tri.edge_type(&edge), Some(EdgeType::Timelike))),
-            "Deterministic causal triangle should contain a timelike edge"
+            "Deterministic causal triangle should contain a timelike edge; {}",
+            deterministic_triangle_debug_summary(tri.geometry())
         );
 
         let vertex_to_mutate = tri
@@ -2009,7 +2206,10 @@ mod tests {
                 "CausalityViolation should report |Δt| > 1, got t0={time_0}, t1={time_1}"
             );
         } else {
-            panic!("Expected CausalityViolation error, got {result:?}");
+            panic!(
+                "Expected CausalityViolation error, got {result:?}; {}",
+                deterministic_triangle_debug_summary(tri.geometry())
+            );
         }
     }
 

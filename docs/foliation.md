@@ -95,9 +95,9 @@ Edge-level check reading time labels directly from vertex data:
 ## Error Handling
 
 - `CdtError::CausalityViolation { time_0, time_1 }` — structured error for edges violating causality
-- `CdtError::ValidationFailed { check: "foliation", detail }` — for structural foliation issues
+- `CdtError::DelaunayGenerationFailed` — from `from_foliated_cylinder()` when builder output is inconsistent (for example missing or out-of-range per-vertex time labels), with detailed construction context
+- `CdtError::ValidationFailed { check, detail }` — for structural foliation issues and foliation-assignment failures (for example unreadable vertex coordinates)
 - `CdtError::InvalidGenerationParameters` — for invalid constructor parameters
-- `CdtError::InvalidParameters` — for precondition failures (e.g. no 2D coordinates available)
 
 ## Future Work
 

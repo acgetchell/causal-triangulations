@@ -9,6 +9,7 @@
 
 use crate::cdt::action::ActionConfig;
 use crate::cdt::metropolis::MetropolisConfig;
+use crate::errors::{CdtError, CdtResult};
 use clap::Parser;
 use dirs::home_dir;
 use std::path::{Component, Path, PathBuf};
@@ -252,6 +253,92 @@ fn normalize_components(path: &Path) -> PathBuf {
     }
 }
 
+fn invalid_configuration(
+    setting: &str,
+    provided_value: &impl std::fmt::Display,
+    expected: &impl std::fmt::Display,
+) -> CdtError {
+    invalid_configuration_from_parts(setting, provided_value.to_string(), expected.to_string())
+}
+
+fn invalid_configuration_from_parts(
+    setting: &str,
+    provided_value: String,
+    expected: String,
+) -> CdtError {
+    CdtError::InvalidConfiguration {
+        setting: setting.to_string(),
+        provided_value,
+        expected,
+    }
+}
+
+pub(crate) fn validate_simulation_settings(
+    temperature: f64,
+    steps: u32,
+    thermalization_steps: u32,
+    measurement_frequency: u32,
+    mut error_for: impl FnMut(&str, String, String) -> CdtError,
+) -> CdtResult<()> {
+    let mut invalid = |setting: &str, provided_value: String, expected: String| {
+        Err(error_for(setting, provided_value, expected))
+    };
+
+    if !temperature.is_finite() || temperature <= 0.0 {
+        return invalid(
+            "temperature",
+            temperature.to_string(),
+            "finite and positive".to_string(),
+        );
+    }
+
+    if steps == 0 {
+        return invalid("steps", steps.to_string(), "≥ 1".to_string());
+    }
+
+    if measurement_frequency == 0 {
+        return invalid(
+            "measurement_frequency",
+            measurement_frequency.to_string(),
+            "≥ 1".to_string(),
+        );
+    }
+
+    if measurement_frequency > steps {
+        return invalid(
+            "measurement_frequency",
+            measurement_frequency.to_string(),
+            format!("≤ steps ({steps})"),
+        );
+    }
+
+    if thermalization_steps > steps {
+        return invalid(
+            "thermalization_steps",
+            thermalization_steps.to_string(),
+            format!("≤ steps ({steps})"),
+        );
+    }
+
+    if thermalization_steps < steps {
+        let first_post_thermalization_measurement = thermalization_steps
+            .div_ceil(measurement_frequency)
+            .saturating_mul(measurement_frequency);
+
+        if first_post_thermalization_measurement >= steps {
+            return invalid(
+                "measurement schedule",
+                format!(
+                    "steps={steps}, thermalization_steps={thermalization_steps}, measurement_frequency={measurement_frequency}"
+                ),
+                "at least one post-thermalization measurement".to_string(),
+            );
+        }
+    }
+
+    Ok(())
+}
+
 impl CdtConfig {
     /// Builds a new instance of `CdtConfig` from command line arguments.
     #[must_use]
@@ -313,54 +400,35 @@ impl CdtConfig {
     ///
     /// # Errors
     ///
-    /// Returns an error message if any parameters are invalid.
-    pub fn validate(&self) -> Result<(), String> {
+    /// Returns a structured error describing the invalid configuration entry.
+    pub fn validate(&self) -> CdtResult<()> {
         if self.vertices < 3 {
-            return Err("Number of vertices must be at least 3".to_string());
+            return Err(invalid_configuration("vertices", &self.vertices, &"≥ 3"));
         }
 
         if self.timeslices == 0 {
-            return Err("Number of timeslices must be at least 1".to_string());
+            return Err(invalid_configuration(
+                "timeslices",
+                &self.timeslices,
+                &"≥ 1",
+            ));
         }
 
         if let Some(dim) = self.dimension
             && !(2..=3).contains(&dim)
         {
-            return Err(format!(
-                "Unsupported dimension: {dim}. Only 2D and 3D are supported."
-            ));
+            return Err(invalid_configuration("dimension", &dim, &"2 or 3"));
         }
 
-        if self.temperature <= 0.0 {
-            return Err("Temperature must be positive".to_string());
-        }
-
-        if self.steps == 0 {
-            return Err("Number of steps must be positive".to_string());
-        }
-
-        if self.measurement_frequency == 0 {
-            return Err("Measurement frequency must be positive".to_string());
-        }
-
-        if self.measurement_frequency > self.steps {
-            return Err("Measurement frequency cannot be greater than total steps".to_string());
-        }
-
-        if self.thermalization_steps > self.steps {
-            return Err("Thermalization steps cannot exceed total steps".to_string());
-        }
-
-        let measurement_steps = self.steps.saturating_sub(self.thermalization_steps);
-        if measurement_steps > 0 && measurement_steps < self.measurement_frequency {
-            return Err(format!(
-                "Only {measurement_steps} steps remain after thermalization, but measurement_frequency is {}. \
-                 No measurements will be taken. Increase steps or decrease measurement_frequency.",
-                self.measurement_frequency
-            ));
-        }
-
-        Ok(())
+        validate_simulation_settings(
+            self.temperature,
+            self.steps,
+            self.thermalization_steps,
+            self.measurement_frequency,
+            |setting, provided_value, expected| {
+                invalid_configuration_from_parts(setting, provided_value, expected)
+            },
+        )
     }
 }
 
@@ -458,6 +526,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "validation test exercises the full structured configuration error matrix"
+    )]
     fn test_config_validation() {
         let valid_config = CdtConfig::new(32, 3);
         assert!(valid_config.validate().is_ok());
@@ -466,47 +538,109 @@ mod tests {
             vertices: 2,
             ..CdtConfig::new(32, 3)
         };
-        assert!(invalid_vertices.validate().is_err());
+        assert!(matches!(
+            invalid_vertices.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "vertices" && provided_value == "2" && expected == "≥ 3"
+        ));
 
         let invalid_timeslices = CdtConfig {
             timeslices: 0,
             ..CdtConfig::new(32, 3)
         };
-        assert!(invalid_timeslices.validate().is_err());
+        assert!(matches!(
+            invalid_timeslices.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "timeslices" && provided_value == "0" && expected == "≥ 1"
+        ));
 
         let invalid_temperature = CdtConfig {
             temperature: -1.0,
             ..CdtConfig::new(32, 3)
         };
-        assert!(invalid_temperature.validate().is_err());
+        assert!(matches!(
+            invalid_temperature.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "temperature"
+                && provided_value == "-1"
+                && expected == "finite and positive"
+        ));
 
         let invalid_measurement_frequency = CdtConfig {
             measurement_frequency: 0,
             ..CdtConfig::new(32, 3)
         };
-        assert!(invalid_measurement_frequency.validate().is_err());
+        assert!(matches!(
+            invalid_measurement_frequency.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "measurement_frequency"
+                && provided_value == "0"
+                && expected == "≥ 1"
+        ));
 
         let invalid_steps = CdtConfig {
             steps: 0,
             ..CdtConfig::new(32, 3)
         };
-        assert!(invalid_steps.validate().is_err());
+        assert!(matches!(
+            invalid_steps.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "steps" && provided_value == "0" && expected == "≥ 1"
+        ));
 
         let invalid_dimension = CdtConfig {
             dimension: Some(4),
             ..CdtConfig::new(32, 3)
         };
-        let error = invalid_dimension.validate().unwrap_err();
-        assert!(
-            error.contains("Unsupported dimension"),
-            "unexpected validation error: {error}"
-        );
+        assert!(matches!(
+            invalid_dimension.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "dimension" && provided_value == "4" && expected == "2 or 3"
+        ));
 
         let measurement_frequency_exceeds_steps = CdtConfig {
             measurement_frequency: 2_000,
             ..CdtConfig::new(32, 3)
         };
-        assert!(measurement_frequency_exceeds_steps.validate().is_err());
+        assert!(matches!(
+            measurement_frequency_exceeds_steps.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "measurement_frequency"
+                && provided_value == "2000"
+                && expected == "≤ steps (1000)"
+        ));
+
+        let boundary_aligned_measurement = CdtConfig {
+            steps: 11,
+            thermalization_steps: 10,
+            measurement_frequency: 10,
+            ..CdtConfig::new(32, 3)
+        };
+        assert!(
+            boundary_aligned_measurement.validate().is_ok(),
+            "Configurations where thermalization ends on a measurement boundary should pass validation"
+        );
 
         let zero_measurement_steps = CdtConfig {
             steps: 10,
@@ -525,11 +659,23 @@ mod tests {
             measurement_frequency: 10,
             ..CdtConfig::new(32, 3)
         };
-        let error = insufficient_measurements.validate().unwrap_err();
-        assert!(
-            error.contains("No measurements will be taken"),
-            "Unexpected validation error: {error}"
-        );
+        match insufficient_measurements.validate() {
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) => {
+                assert_eq!(setting, "measurement schedule");
+                assert!(
+                    provided_value.contains("steps=20")
+                        && provided_value.contains("thermalization_steps=15")
+                        && provided_value.contains("measurement_frequency=10"),
+                    "Unexpected provided value: {provided_value}"
+                );
+                assert_eq!(expected, "at least one post-thermalization measurement");
+            }
+            other => panic!("Unexpected validation result: {other:?}"),
+        }
     }
 
     #[test]

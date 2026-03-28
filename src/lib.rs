@@ -183,15 +183,14 @@ pub mod prelude {
 ///
 /// # Errors
 ///
-/// Returns [`CdtError::InvalidParameters`] if the configuration fails validation
-/// (e.g., invalid measurement frequency, inconsistent parameters).
-/// Returns [`CdtError::UnsupportedDimension`] if an unsupported dimension (not 2D) is specified.
+/// Returns [`CdtError::InvalidConfiguration`] if the configuration fails validation
+/// (e.g., invalid measurement frequency or inconsistent parameters).
+/// Returns [`CdtError::UnsupportedDimension`] if a validated configuration requests
+/// a simulation dimension other than 2.
 /// Returns triangulation generation errors from the underlying triangulation creation.
 pub fn run_simulation(config: &CdtConfig) -> CdtResult<cdt::metropolis::SimulationResultsBackend> {
     // Validate configuration early to fail fast with clear error messages
-    if let Err(err) = config.validate() {
-        return Err(CdtError::InvalidParameters(err));
-    }
+    config.validate()?;
 
     let vertices = config.vertices;
     let timeslices = config.timeslices;
@@ -310,13 +309,17 @@ mod lib_tests {
         let result = run_simulation(&config);
         assert!(result.is_err(), "Should reject zero measurement frequency");
 
-        if let Err(CdtError::InvalidParameters(msg)) = result {
-            assert!(
-                msg.contains("Measurement frequency must be positive"),
-                "Error message should mention measurement frequency: {msg}"
-            );
+        if let Err(CdtError::InvalidConfiguration {
+            setting,
+            provided_value,
+            expected,
+        }) = result
+        {
+            assert_eq!(setting, "measurement_frequency");
+            assert_eq!(provided_value, "0");
+            assert_eq!(expected, "≥ 1");
         } else {
-            panic!("Expected InvalidParameters error");
+            panic!("Expected InvalidConfiguration error");
         }
     }
 
@@ -332,13 +335,17 @@ mod lib_tests {
             "Should reject measurement frequency greater than steps"
         );
 
-        if let Err(CdtError::InvalidParameters(msg)) = result {
-            assert!(
-                msg.contains("cannot be greater than total steps"),
-                "Error message should mention steps constraint: {msg}"
-            );
+        if let Err(CdtError::InvalidConfiguration {
+            setting,
+            provided_value,
+            expected,
+        }) = result
+        {
+            assert_eq!(setting, "measurement_frequency");
+            assert_eq!(provided_value, "200");
+            assert_eq!(expected, "≤ steps (100)");
         } else {
-            panic!("Expected InvalidParameters error");
+            panic!("Expected InvalidConfiguration error");
         }
     }
 
@@ -350,13 +357,17 @@ mod lib_tests {
         let result = run_simulation(&config);
         assert!(result.is_err(), "Should reject too few vertices");
 
-        if let Err(CdtError::InvalidParameters(msg)) = result {
-            assert!(
-                msg.contains("vertices must be at least 3"),
-                "Error message should mention vertex constraint: {msg}"
-            );
+        if let Err(CdtError::InvalidConfiguration {
+            setting,
+            provided_value,
+            expected,
+        }) = result
+        {
+            assert_eq!(setting, "vertices");
+            assert_eq!(provided_value, "2");
+            assert_eq!(expected, "≥ 3");
         } else {
-            panic!("Expected InvalidParameters error");
+            panic!("Expected InvalidConfiguration error");
         }
     }
 
@@ -368,13 +379,17 @@ mod lib_tests {
         let result = run_simulation(&config);
         assert!(result.is_err(), "Should reject negative temperature");
 
-        if let Err(CdtError::InvalidParameters(msg)) = result {
-            assert!(
-                msg.contains("Temperature must be positive"),
-                "Error message should mention temperature constraint: {msg}"
-            );
+        if let Err(CdtError::InvalidConfiguration {
+            setting,
+            provided_value,
+            expected,
+        }) = result
+        {
+            assert_eq!(setting, "temperature");
+            assert_eq!(provided_value, "-1");
+            assert_eq!(expected, "finite and positive");
         } else {
-            panic!("Expected InvalidParameters error");
+            panic!("Expected InvalidConfiguration error");
         }
     }
 

@@ -5,16 +5,8 @@ use std::fmt;
 /// Main error type for CDT operations.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CdtError {
-    /// Invalid triangulation parameters
-    InvalidParameters(String),
-    /// Triangulation generation failed
-    TriangulationGeneration(String),
-    /// Ergodic move failed
-    ErgodicsFailure(String),
     /// Invalid dimension specified
     UnsupportedDimension(u32),
-    /// Action calculation error
-    ActionCalculation(String),
     /// Delaunay triangulation generation failed with detailed context
     DelaunayGenerationFailed {
         /// Number of vertices requested for the triangulation
@@ -34,6 +26,24 @@ pub enum CdtError {
         provided_value: String,
         /// The expected range or constraint for the parameter
         expected_range: String,
+    },
+    /// Top-level CDT configuration failed validation.
+    InvalidConfiguration {
+        /// Name of the invalid configuration setting.
+        setting: String,
+        /// Value supplied for the setting.
+        provided_value: String,
+        /// Expected constraint for the setting.
+        expected: String,
+    },
+    /// Metropolis / simulation configuration failed validation.
+    InvalidSimulationConfiguration {
+        /// Name of the invalid simulation setting.
+        setting: String,
+        /// Value supplied for the setting.
+        provided_value: String,
+        /// Expected constraint for the setting.
+        expected: String,
     },
     /// Validation of a constructed triangulation failed
     ValidationFailed {
@@ -63,16 +73,10 @@ pub enum CdtError {
 impl fmt::Display for CdtError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidParameters(msg) => write!(f, "Invalid parameters: {msg}"),
-            Self::TriangulationGeneration(msg) => {
-                write!(f, "Triangulation generation failed: {msg}")
-            }
-            Self::ErgodicsFailure(msg) => write!(f, "Ergodic move failed: {msg}"),
             Self::UnsupportedDimension(dim) => write!(
                 f,
                 "Unsupported dimension: {dim}. Only 2D is currently supported"
             ),
-            Self::ActionCalculation(msg) => write!(f, "Action calculation error: {msg}"),
             Self::DelaunayGenerationFailed {
                 vertex_count,
                 coordinate_range,
@@ -90,6 +94,22 @@ impl fmt::Display for CdtError {
             } => write!(
                 f,
                 "Invalid triangulation parameters: {issue} (got: {provided_value}, expected: {expected_range})",
+            ),
+            Self::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            } => write!(
+                f,
+                "Invalid configuration: {setting} (got: {provided_value}, expected: {expected})"
+            ),
+            Self::InvalidSimulationConfiguration {
+                setting,
+                provided_value,
+                expected,
+            } => write!(
+                f,
+                "Invalid simulation configuration: {setting} (got: {provided_value}, expected: {expected})"
             ),
             Self::ValidationFailed { check, detail } => {
                 write!(f, "Validation failed [{check}]: {detail}")
@@ -138,44 +158,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_invalid_parameters_error() {
-        let error = CdtError::InvalidParameters("Test message".to_string());
-        let display = format!("{error}");
-        assert_eq!(display, "Invalid parameters: Test message");
-    }
-
-    #[test]
-    fn test_triangulation_generation_error() {
-        let error = CdtError::TriangulationGeneration("Generation failed".to_string());
+    fn test_invalid_configuration_error() {
+        let error = CdtError::InvalidConfiguration {
+            setting: "vertices".to_string(),
+            provided_value: "2".to_string(),
+            expected: "≥ 3".to_string(),
+        };
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Triangulation generation failed: Generation failed"
+            "Invalid configuration: vertices (got: 2, expected: ≥ 3)"
         );
     }
 
     #[test]
-    fn test_ergodics_failure_error() {
-        let error = CdtError::ErgodicsFailure("Move rejected".to_string());
-        let display = format!("{error}");
-        assert_eq!(display, "Ergodic move failed: Move rejected");
-    }
-
-    #[test]
-    fn test_unsupported_dimension_error() {
-        let error = CdtError::UnsupportedDimension(3);
+    fn test_invalid_simulation_configuration_error() {
+        let error = CdtError::InvalidSimulationConfiguration {
+            setting: "temperature".to_string(),
+            provided_value: "NaN".to_string(),
+            expected: "finite and positive".to_string(),
+        };
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Unsupported dimension: 3. Only 2D is currently supported"
+            "Invalid simulation configuration: temperature (got: NaN, expected: finite and positive)"
         );
-    }
-
-    #[test]
-    fn test_action_calculation_error() {
-        let error = CdtError::ActionCalculation("NaN result".to_string());
-        let display = format!("{error}");
-        assert_eq!(display, "Action calculation error: NaN result");
     }
 
     #[test]
@@ -190,6 +197,16 @@ mod tests {
         assert_eq!(
             display,
             "Delaunay triangulation generation failed: 10 vertices, range [-1, 1], attempt 5: Too many duplicate points"
+        );
+    }
+
+    #[test]
+    fn test_unsupported_dimension_error() {
+        let error = CdtError::UnsupportedDimension(3);
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Unsupported dimension: 3. Only 2D is currently supported"
         );
     }
 
@@ -270,9 +287,21 @@ mod tests {
 
     #[test]
     fn test_error_equality() {
-        let error1 = CdtError::InvalidParameters("Test".to_string());
-        let error2 = CdtError::InvalidParameters("Test".to_string());
-        let error3 = CdtError::InvalidParameters("Different".to_string());
+        let error1 = CdtError::InvalidConfiguration {
+            setting: "steps".to_string(),
+            provided_value: "0".to_string(),
+            expected: "≥ 1".to_string(),
+        };
+        let error2 = CdtError::InvalidConfiguration {
+            setting: "steps".to_string(),
+            provided_value: "0".to_string(),
+            expected: "≥ 1".to_string(),
+        };
+        let error3 = CdtError::InvalidConfiguration {
+            setting: "steps".to_string(),
+            provided_value: "10".to_string(),
+            expected: "≥ 1".to_string(),
+        };
 
         assert_eq!(error1, error2);
         assert_ne!(error1, error3);
@@ -287,16 +316,24 @@ mod tests {
 
     #[test]
     fn test_error_debug() {
-        let error = CdtError::InvalidParameters("Debug test".to_string());
+        let error = CdtError::InvalidConfiguration {
+            setting: "vertices".to_string(),
+            provided_value: "2".to_string(),
+            expected: "≥ 3".to_string(),
+        };
         let debug_str = format!("{error:?}");
-        assert!(debug_str.contains("InvalidParameters"));
-        assert!(debug_str.contains("Debug test"));
+        assert!(debug_str.contains("InvalidConfiguration"));
+        assert!(debug_str.contains("vertices"));
     }
 
     #[test]
     fn test_cdt_result_type() {
         let success: CdtResult<i32> = Ok(42);
-        let failure: CdtResult<i32> = Err(CdtError::InvalidParameters("Test".to_string()));
+        let failure: CdtResult<i32> = Err(CdtError::InvalidConfiguration {
+            setting: "steps".to_string(),
+            provided_value: "0".to_string(),
+            expected: "≥ 1".to_string(),
+        });
 
         assert!(success.is_ok());
         assert!(failure.is_err());
@@ -311,7 +348,11 @@ mod tests {
 
     #[test]
     fn test_std_error_trait() {
-        let error = CdtError::InvalidParameters("Test error".to_string());
+        let error = CdtError::InvalidConfiguration {
+            setting: "temperature".to_string(),
+            provided_value: "NaN".to_string(),
+            expected: "finite and positive".to_string(),
+        };
         let _: &dyn std::error::Error = &error;
         // If this compiles, the trait is implemented correctly
     }
