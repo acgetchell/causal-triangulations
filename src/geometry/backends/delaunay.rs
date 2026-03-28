@@ -231,8 +231,23 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuer
         edge: &Self::EdgeHandle,
     ) -> Result<(Self::VertexHandle, Self::VertexHandle), Self::Error> {
         let (v0, v1) = edge.key.endpoints();
-        // Validate that both endpoint vertices exist in this triangulation
-        if self.dt.vertex_coords(v0).is_none() || self.dt.vertex_coords(v1).is_none() {
+        let contains_v0 = self.dt.tds().contains_vertex_key(v0);
+        let contains_v1 = self.dt.tds().contains_vertex_key(v1);
+
+        // Validate endpoint membership directly through the triangulation data
+        // structure. For endpoint resolution we only need stable vertex keys;
+        // coordinate lookup is a stricter requirement and has proven flaky for
+        // a minimal hand-built triangle under Linux tarpaulin.
+        if !contains_v0 || !contains_v1 {
+            log::debug!(
+                "Failed to resolve edge {:?}: contains_v0={}, contains_v1={}, vertex_count={}, edge_count={}, face_count={}",
+                edge.key,
+                contains_v0,
+                contains_v1,
+                self.dt.number_of_vertices(),
+                self.dt.as_triangulation().number_of_edges(),
+                self.dt.number_of_cells(),
+            );
             return Err(DelaunayError::InvalidEdge { v0, v1 });
         }
         Ok((
@@ -638,6 +653,36 @@ mod tests {
             assert!(
                 vertices.contains(&v2),
                 "Second endpoint should be a valid vertex"
+            );
+        }
+    }
+
+    #[test]
+    fn test_edge_endpoints_for_hand_built_triangle() {
+        let dt = crate::geometry::generators::build_delaunay2_with_data(&[
+            ([0.0, 0.0], 0),
+            ([1.0, 0.0], 0),
+            ([0.5, 1.0], 1),
+        ])
+        .expect("Should build hand-built triangle");
+        let backend = DelaunayBackend::from_triangulation(dt);
+
+        let vertices: HashSet<_> = backend.vertices().collect();
+        let edges: Vec<_> = backend.edges().collect();
+
+        assert_eq!(edges.len(), 3, "Hand-built triangle should expose 3 edges");
+
+        for edge in &edges {
+            let (v0, v1) = backend
+                .edge_endpoints(edge)
+                .expect("Should retrieve endpoints for hand-built triangle edge");
+            assert!(
+                vertices.contains(&v0),
+                "First endpoint should be a valid vertex in the hand-built triangle"
+            );
+            assert!(
+                vertices.contains(&v1),
+                "Second endpoint should be a valid vertex in the hand-built triangle"
             );
         }
     }

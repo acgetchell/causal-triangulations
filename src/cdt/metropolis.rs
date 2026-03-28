@@ -240,10 +240,11 @@ impl MetropolisAlgorithm {
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
     /// configuration is invalid.
     ///
-    /// Measurements are recorded at step numbers divisible by
-    /// [`MetropolisConfig::measurement_frequency`], including step 0.
-    /// Downstream equilibrium filtering treats measurements with
-    /// `step >= thermalization_steps` as post-thermalization.
+    /// Measurements include the initial state at step 0, then the state after
+    /// each completed-move count divisible by
+    /// [`MetropolisConfig::measurement_frequency`]. Downstream equilibrium
+    /// filtering treats measurements with `step >= thermalization_steps` as
+    /// post-thermalization.
     pub fn run(
         &self,
         triangulation: crate::geometry::CdtTriangulation2D,
@@ -269,6 +270,17 @@ impl MetropolisAlgorithm {
         let proposal = CdtProposal;
         let mut chain = Chain::new(triangulation, &target)?;
 
+        {
+            let g = chain.state.geometry();
+            measurements.push(Measurement {
+                step: 0,
+                action: -chain.log_prob * self.config.temperature,
+                vertices: u32::try_from(g.vertex_count()).unwrap_or_default(),
+                edges: u32::try_from(g.edge_count()).unwrap_or_default(),
+                triangles: u32::try_from(g.face_count()).unwrap_or_default(),
+            });
+        }
+
         // Create seeded RNG (always deterministic from the resolved seed)
         let mut rng = StdRng::seed_from_u64(seed);
 
@@ -292,13 +304,15 @@ impl MetropolisAlgorithm {
             };
             mc_steps.push(mc_step);
 
-            // Take measurements on exact frequency boundaries, including step 0.
-            // equilibrium_measurements() later treats step >= thermalization_steps
-            // as post-thermalization, so a boundary-aligned measurement counts.
-            if step_num % self.config.measurement_frequency == 0 {
+            let completed_steps = step_num + 1;
+
+            // Record the post-step state whenever the completed-move count lands
+            // on a measurement boundary. The initial state at step 0 was already
+            // captured before entering the loop.
+            if completed_steps % self.config.measurement_frequency == 0 {
                 let g = chain.state.geometry();
                 measurements.push(Measurement {
-                    step: step_num,
+                    step: completed_steps,
                     action: action_after,
                     vertices: u32::try_from(g.vertex_count()).unwrap_or_default(),
                     edges: u32::try_from(g.edge_count()).unwrap_or_default(),
@@ -387,11 +401,11 @@ impl SimulationResultsBackend {
 
     /// Returns measurements after thermalization.
     ///
-    /// Measurements are recorded during [`MetropolisAlgorithm::run`] whenever a
-    /// step number is divisible by [`MetropolisConfig::measurement_frequency`],
-    /// including step 0. This accessor defines equilibrium as
-    /// `measurement.step >= thermalization_steps`, so a measurement taken exactly
-    /// on the thermalization boundary is included.
+    /// Measurements are recorded for the initial state at step 0, then after
+    /// completed-move counts divisible by
+    /// [`MetropolisConfig::measurement_frequency`]. This accessor defines
+    /// equilibrium as `measurement.step >= thermalization_steps`, so a
+    /// measurement taken exactly on the thermalization boundary is included.
     #[must_use]
     pub fn equilibrium_measurements(&self) -> Vec<&Measurement> {
         self.measurements
@@ -502,6 +516,7 @@ mod tests {
         // With placeholder proposal, all moves are rejected
         assert_relative_eq!(results.acceptance_rate(), 0.0);
         assert!(!results.measurements.is_empty());
+        assert_eq!(results.measurements[0].step, 0);
     }
 
     #[test]
@@ -568,7 +583,7 @@ mod tests {
 
     #[test]
     fn test_validate_rejects_missing_post_thermalization_measurement() {
-        let err = MetropolisConfig::new(1.0, 20, 15, 10)
+        let err = MetropolisConfig::new(1.0, 19, 15, 10)
             .validate()
             .expect_err(
                 "Configuration should require at least one post-thermalization measurement",
@@ -582,7 +597,7 @@ mod tests {
             } => {
                 assert_eq!(setting, "measurement schedule");
                 assert!(
-                    provided_value.contains("steps=20")
+                    provided_value.contains("steps=19")
                         && provided_value.contains("thermalization_steps=15")
                         && provided_value.contains("measurement_frequency=10"),
                     "Unexpected provided value: {provided_value}"
@@ -594,21 +609,54 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_rejects_overflowed_post_thermalization_boundary() {
+        let err = MetropolisConfig::new(1.0, u32::MAX, u32::MAX, 2)
+            .validate()
+            .expect_err(
+                "Configuration should reject schedules without a reachable post-thermalization measurement",
+            );
+
+        match err {
+            CdtError::InvalidSimulationConfiguration {
+                setting,
+                provided_value,
+                expected,
+            } => {
+                assert_eq!(setting, "measurement schedule");
+                assert!(
+                    provided_value.contains("steps=4294967295")
+                        && provided_value.contains("thermalization_steps=4294967295")
+                        && provided_value.contains("measurement_frequency=2"),
+                    "Unexpected provided value: {provided_value}"
+                );
+                assert_eq!(expected, "at least one post-thermalization measurement");
+            }
+            other => panic!("Expected InvalidSimulationConfiguration, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_run_accepts_boundary_aligned_equilibrium_measurement_schedule() {
-        let config = MetropolisConfig::new(1.0, 11, 10, 10).with_seed(42);
+        let config = MetropolisConfig::new(1.0, 20, 15, 10).with_seed(42);
         let algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
         let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
 
         let results = algorithm
             .run(tri)
             .expect("Boundary-aligned measurement schedule should be valid");
+        let measurement_steps: Vec<_> = results
+            .measurements
+            .iter()
+            .map(|measurement| measurement.step)
+            .collect();
         let equilibrium_steps: Vec<_> = results
             .equilibrium_measurements()
             .into_iter()
             .map(|measurement| measurement.step)
             .collect();
 
-        assert_eq!(equilibrium_steps, vec![10]);
+        assert_eq!(measurement_steps, vec![0, 10, 20]);
+        assert_eq!(equilibrium_steps, vec![20]);
     }
 
     #[test]

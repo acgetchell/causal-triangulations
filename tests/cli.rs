@@ -109,9 +109,10 @@ fn cdt_cli_accepts_boundary_aligned_measurement_schedule() {
 
     cmd.arg("--vertices").arg("10");
     cmd.arg("--timeslices").arg("3");
-    cmd.arg("--steps").arg("11");
-    cmd.arg("--thermalization-steps").arg("10");
+    cmd.arg("--steps").arg("20");
+    cmd.arg("--thermalization-steps").arg("15");
     cmd.arg("--measurement-frequency").arg("10");
+    cmd.arg("--seed").arg("42");
     cmd.arg("--simulate");
     cmd.env("RUST_LOG", "error");
 
@@ -124,7 +125,7 @@ fn cdt_cli_rejects_missing_post_thermalization_measurement() {
 
     cmd.arg("--vertices").arg("10");
     cmd.arg("--timeslices").arg("3");
-    cmd.arg("--steps").arg("20");
+    cmd.arg("--steps").arg("19");
     cmd.arg("--thermalization-steps").arg("15");
     cmd.arg("--measurement-frequency").arg("10");
     cmd.arg("--simulate");

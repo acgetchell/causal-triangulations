@@ -238,9 +238,8 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///
     /// If no foliation is present, succeeds vacuously.
     /// Otherwise checks:
-    /// 1. Every vertex has a time label in `0..num_slices`
-    /// 2. Every time slice is non-empty
-    /// 3. `slice_sizes` is consistent with the time label map
+    /// 1. The stored labeled-vertex count matches the geometry vertex count
+    /// 2. Every stored time slice is non-empty
     ///
     /// # Errors
     ///
@@ -404,6 +403,58 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(slice_sizes)
     }
 
+    fn live_slice_sizes_from_vertex_labels(
+        backend: &DelaunayBackend2D,
+        num_slices: u32,
+    ) -> CdtResult<Vec<usize>> {
+        const UNLABELED_VERTEX_EXAMPLE_LIMIT: usize = 4;
+
+        if num_slices == 0 {
+            return Err(CdtError::ValidationFailed {
+                check: "foliation".to_string(),
+                detail: "cannot validate foliation with 0 time slices".to_string(),
+            });
+        }
+
+        let mut slice_sizes = vec![0usize; num_slices as usize];
+        let mut unlabeled_vertex_count = 0usize;
+        let mut unlabeled_vertex_examples = Vec::with_capacity(UNLABELED_VERTEX_EXAMPLE_LIMIT);
+
+        for vh in backend.vertices() {
+            if let Some(t) = backend.vertex_time_label(&vh) {
+                let idx = t as usize;
+                if idx >= slice_sizes.len() {
+                    return Err(CdtError::ValidationFailed {
+                        check: "foliation".to_string(),
+                        detail: format!(
+                            "vertex {:?} has out-of-range time label {t}; expected 0..{}",
+                            vh.vertex_key(),
+                            slice_sizes.len(),
+                        ),
+                    });
+                }
+                slice_sizes[idx] += 1;
+            } else {
+                unlabeled_vertex_count += 1;
+                if unlabeled_vertex_examples.len() < UNLABELED_VERTEX_EXAMPLE_LIMIT {
+                    unlabeled_vertex_examples.push(format!("{:?}", vh.vertex_key()));
+                }
+            }
+        }
+
+        if unlabeled_vertex_count > 0 {
+            return Err(CdtError::ValidationFailed {
+                check: "foliation".to_string(),
+                detail: format!(
+                    "{unlabeled_vertex_count} vertices are missing time labels; example vertex keys (up to {UNLABELED_VERTEX_EXAMPLE_LIMIT}): [{}]",
+                    unlabeled_vertex_examples.join(", "),
+                ),
+            });
+        }
+
+        Ok(slice_sizes)
+    }
+
     /// Create a new CDT triangulation with Delaunay backend from random points.
     ///
     /// This is the recommended way to create triangulations for simulations.
@@ -461,6 +512,59 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let backend = DelaunayBackend2D::from_triangulation(dt);
 
         Ok(Self::new(backend, time_slices, dimension))
+    }
+
+    /// Wrap a labeled 2D Delaunay backend and derive foliation from vertex data.
+    ///
+    /// Preserves per-vertex time labels already embedded in the backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::UnsupportedDimension`] if `dimension != 2`.
+    /// Returns [`CdtError::ValidationFailed`] if any vertex is unlabeled or
+    /// has a time label outside `0..time_slices`, or if any time slice is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::DelaunayBackend2D;
+    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ])
+    /// .expect("build labeled triangle");
+    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// let tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
+    ///     .expect("wrap labeled backend");
+    ///
+    /// assert!(tri.has_foliation());
+    /// assert_eq!(tri.slice_sizes(), &[2, 1]);
+    /// ```
+    pub fn from_labeled_delaunay(
+        backend: DelaunayBackend2D,
+        time_slices: u32,
+        dimension: u8,
+    ) -> CdtResult<Self> {
+        if dimension != 2 {
+            return Err(CdtError::UnsupportedDimension(dimension.into()));
+        }
+
+        let slice_sizes = Self::live_slice_sizes_from_vertex_labels(&backend, time_slices)?;
+        for (slice, &size) in slice_sizes.iter().enumerate() {
+            if size == 0 {
+                return Err(FoliationError::EmptySlice { slice }.into());
+            }
+        }
+        let foliation =
+            Foliation::from_slice_sizes(slice_sizes, time_slices).map_err(CdtError::from)?;
+
+        let mut tri = Self::new(backend, time_slices, dimension);
+        tri.foliation = Some(foliation);
+        Ok(tri)
     }
 
     /// Construct a foliated 1+1 CDT triangulation on a finite strip.
@@ -948,34 +1052,59 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
 
         for edge in self.geometry.edges() {
-            let (v0, v1) =
-                self.geometry
-                    .edge_endpoints(&edge)
-                    .map_err(|_| CdtError::ValidationFailed {
+            let (v0, v1) = match self.geometry.edge_endpoints(&edge) {
+                Ok(endpoints) => endpoints,
+                Err(err) => {
+                    log::debug!(
+                        "Causality validation failed to resolve endpoints for edge {:?}: {err}; vertex_count={}, edge_count={}, face_count={}",
+                        edge,
+                        self.geometry.vertex_count(),
+                        self.geometry.edge_count(),
+                        self.geometry.face_count(),
+                    );
+                    return Err(CdtError::ValidationFailed {
                         check: "causality".to_string(),
                         detail: "failed to resolve edge endpoints".to_string(),
-                    })?;
-            let t0 =
-                self.geometry
-                    .vertex_time_label(&v0)
-                    .ok_or_else(|| CdtError::ValidationFailed {
-                        check: "causality".to_string(),
-                        detail: format!(
-                            "vertex {:?} has no time label in a foliated triangulation",
-                            v0.vertex_key()
-                        ),
-                    })?;
-            let t1 =
-                self.geometry
-                    .vertex_time_label(&v1)
-                    .ok_or_else(|| CdtError::ValidationFailed {
-                        check: "causality".to_string(),
-                        detail: format!(
-                            "vertex {:?} has no time label in a foliated triangulation",
-                            v1.vertex_key()
-                        ),
-                    })?;
+                    });
+                }
+            };
+            let t0 = self.geometry.vertex_time_label(&v0).ok_or_else(|| {
+                log::debug!(
+                    "Causality validation found unlabeled vertex {:?} while checking edge {:?}",
+                    v0.vertex_key(),
+                    edge,
+                );
+                CdtError::ValidationFailed {
+                    check: "causality".to_string(),
+                    detail: format!(
+                        "vertex {:?} has no time label in a foliated triangulation",
+                        v0.vertex_key()
+                    ),
+                }
+            })?;
+            let t1 = self.geometry.vertex_time_label(&v1).ok_or_else(|| {
+                log::debug!(
+                    "Causality validation found unlabeled vertex {:?} while checking edge {:?}",
+                    v1.vertex_key(),
+                    edge,
+                );
+                CdtError::ValidationFailed {
+                    check: "causality".to_string(),
+                    detail: format!(
+                        "vertex {:?} has no time label in a foliated triangulation",
+                        v1.vertex_key()
+                    ),
+                }
+            })?;
             if t0.abs_diff(t1) > 1 {
+                log::debug!(
+                    "Causality violation on edge {:?}: {:?}@t{} <-> {:?}@t{}",
+                    edge,
+                    v0.vertex_key(),
+                    t0,
+                    v1.vertex_key(),
+                    t1,
+                );
                 return Err(CdtError::CausalityViolation {
                     time_0: t0,
                     time_1: t1,
@@ -1759,6 +1888,52 @@ mod tests {
             }
             other => panic!("Expected DelaunayGenerationFailed, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_from_labeled_delaunay_preserves_foliation() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("Should build labeled triangle");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+
+        let tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
+            .expect("Should preserve labels as foliation");
+
+        assert!(tri.has_foliation());
+        assert_eq!(tri.slice_sizes(), &[2, 1]);
+        assert!(tri.validate_foliation().is_ok());
+
+        for vh in tri.geometry().vertices() {
+            assert!(tri.time_label(&vh).is_some());
+        }
+    }
+
+    #[test]
+    fn test_from_labeled_delaunay_rejects_out_of_range_labels() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 5)])
+            .expect("Should build labeled triangle");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+
+        let result = CdtTriangulation::from_labeled_delaunay(backend, 2, 2);
+        assert!(matches!(
+            result,
+            Err(CdtError::ValidationFailed { ref check, ref detail })
+                if check == "foliation" && detail.contains("out-of-range time label 5")
+        ));
+    }
+
+    #[test]
+    fn test_from_labeled_delaunay_rejects_empty_intermediate_slice() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 2), ([0.5, 1.0], 2)])
+            .expect("Should build labeled triangle");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+
+        let result = CdtTriangulation::from_labeled_delaunay(backend, 3, 2);
+        assert!(matches!(
+            result,
+            Err(CdtError::ValidationFailed { ref check, ref detail })
+                if check == "foliation" && detail.contains("time slice 1 is empty")
+        ));
     }
 
     #[test]

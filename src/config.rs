@@ -320,20 +320,18 @@ pub(crate) fn validate_simulation_settings(
         );
     }
 
-    if thermalization_steps < steps {
-        let first_post_thermalization_measurement = thermalization_steps
-            .div_ceil(measurement_frequency)
-            .saturating_mul(measurement_frequency);
+    let first_post_thermalization_measurement = u64::from(thermalization_steps)
+        .div_ceil(u64::from(measurement_frequency))
+        * u64::from(measurement_frequency);
 
-        if first_post_thermalization_measurement >= steps {
-            return invalid(
-                "measurement schedule",
-                format!(
-                    "steps={steps}, thermalization_steps={thermalization_steps}, measurement_frequency={measurement_frequency}"
-                ),
-                "at least one post-thermalization measurement".to_string(),
-            );
-        }
+    if first_post_thermalization_measurement > u64::from(steps) {
+        return invalid(
+            "measurement schedule",
+            format!(
+                "steps={steps}, thermalization_steps={thermalization_steps}, measurement_frequency={measurement_frequency}"
+            ),
+            "at least one post-thermalization measurement".to_string(),
+        );
     }
 
     Ok(())
@@ -642,19 +640,30 @@ mod tests {
             "Configurations where thermalization ends on a measurement boundary should pass validation"
         );
 
-        let zero_measurement_steps = CdtConfig {
+        let boundary_aligned_final_measurement = CdtConfig {
             steps: 10,
             thermalization_steps: 10,
             measurement_frequency: 5,
             ..CdtConfig::new(32, 3)
         };
         assert!(
-            zero_measurement_steps.validate().is_ok(),
-            "Configurations with zero post-thermalization steps but valid frequencies should pass validation"
+            boundary_aligned_final_measurement.validate().is_ok(),
+            "Configurations with a final-step post-thermalization measurement should pass validation"
+        );
+
+        let final_step_measurement = CdtConfig {
+            steps: 20,
+            thermalization_steps: 15,
+            measurement_frequency: 10,
+            ..CdtConfig::new(32, 3)
+        };
+        assert!(
+            final_step_measurement.validate().is_ok(),
+            "A measurement taken exactly at the final completed step should satisfy the schedule"
         );
 
         let insufficient_measurements = CdtConfig {
-            steps: 20,
+            steps: 19,
             thermalization_steps: 15,
             measurement_frequency: 10,
             ..CdtConfig::new(32, 3)
@@ -667,9 +676,33 @@ mod tests {
             }) => {
                 assert_eq!(setting, "measurement schedule");
                 assert!(
-                    provided_value.contains("steps=20")
+                    provided_value.contains("steps=19")
                         && provided_value.contains("thermalization_steps=15")
                         && provided_value.contains("measurement_frequency=10"),
+                    "Unexpected provided value: {provided_value}"
+                );
+                assert_eq!(expected, "at least one post-thermalization measurement");
+            }
+            other => panic!("Unexpected validation result: {other:?}"),
+        }
+
+        let overflowed_post_thermalization_boundary = CdtConfig {
+            steps: u32::MAX,
+            thermalization_steps: u32::MAX,
+            measurement_frequency: 2,
+            ..CdtConfig::new(32, 3)
+        };
+        match overflowed_post_thermalization_boundary.validate() {
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) => {
+                assert_eq!(setting, "measurement schedule");
+                assert!(
+                    provided_value.contains("steps=4294967295")
+                        && provided_value.contains("thermalization_steps=4294967295")
+                        && provided_value.contains("measurement_frequency=2"),
                     "Unexpected provided value: {provided_value}"
                 );
                 assert_eq!(expected, "at least one post-thermalization measurement");
