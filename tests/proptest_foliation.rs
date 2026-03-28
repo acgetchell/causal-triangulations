@@ -1,8 +1,37 @@
 #![forbid(unsafe_code)]
 //! Property-based tests for CDT foliation construction and validation.
 
+use causal_triangulations::prelude::geometry::DelaunayBackend2D;
 use causal_triangulations::prelude::triangulation::*;
+use causal_triangulations::{CdtError, CdtResult};
 use proptest::prelude::*;
+
+fn assert_foliated_cylinder_known_failure(result: CdtResult<CdtTriangulation<DelaunayBackend2D>>) {
+    match result {
+        Err(CdtError::DelaunayGenerationFailed {
+            underlying_error, ..
+        }) => {
+            let rejected_as_non_cdt = underlying_error.contains("non-CDT triangulation")
+                || underlying_error.contains("invalid CDT triangle");
+            let rejected_for_vertex_drop = underlying_error.contains("builder inserted only");
+            assert!(
+                rejected_as_non_cdt || rejected_for_vertex_drop,
+                "Expected non-CDT or vertex-drop rejection, got: {underlying_error}"
+            );
+        }
+        Ok(_) => panic!("Expected point-set strip construction rejection"),
+        Err(other) => panic!("Expected DelaunayGenerationFailed, got {other:?}"),
+    }
+}
+
+#[test]
+fn foliated_cylinder_known_limitation_regression_guard() {
+    assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        5,
+        3,
+        Some(42),
+    ));
+}
 
 proptest! {
     /// Property: Foliated cylinder construction always produces valid foliation and causality.
@@ -11,17 +40,18 @@ proptest! {
     /// - vertex count == vertices_per_slice × num_slices
     /// - every slice has exactly vertices_per_slice vertices
     /// - foliation and causality validation both pass
+    ///
+    /// TODO(#57): Re-enable this as an active invariant when explicit CDT strip
+    /// construction is available (blocked on delaunay/293).
     #[test]
+    #[ignore = "TODO(#57): blocked on delaunay/293 explicit strip construction"]
     fn foliated_cylinder_invariants(
         vertices_per_slice in 4u32..10,
         num_slices in 2u32..6,
         seed in 0u64..1000
     ) {
-        // Some seed/size combinations trigger builder degeneracy;
-        // skip those — the constructor returns Err, not a broken triangulation.
-        let Ok(tri) = CdtTriangulation::from_foliated_cylinder(vertices_per_slice, num_slices, Some(seed)) else {
-            return Ok(());
-        };
+        let tri = CdtTriangulation::from_foliated_cylinder(vertices_per_slice, num_slices, Some(seed))
+            .expect("TODO(#57): expected to pass once explicit strip construction lands");
 
         // Vertex count must match grid
         let expected_v = vertices_per_slice as usize * num_slices as usize;
@@ -49,15 +79,18 @@ proptest! {
 
     /// Property: Every edge in a foliated cylinder is classifiable and
     /// spacelike + timelike == total edges.
+    ///
+    /// TODO(#57): Re-enable this as an active invariant when explicit CDT strip
+    /// construction is available (blocked on delaunay/293).
     #[test]
+    #[ignore = "TODO(#57): blocked on delaunay/293 explicit strip construction"]
     fn foliated_cylinder_edge_classification_complete(
         vertices_per_slice in 4u32..8,
         num_slices in 2u32..5,
         seed in 0u64..500
     ) {
-        let Ok(tri) = CdtTriangulation::from_foliated_cylinder(vertices_per_slice, num_slices, Some(seed)) else {
-            return Ok(());
-        };
+        let tri = CdtTriangulation::from_foliated_cylinder(vertices_per_slice, num_slices, Some(seed))
+            .expect("TODO(#57): expected to pass once explicit strip construction lands");
 
         let mut spacelike = 0usize;
         let mut timelike = 0usize;
@@ -81,24 +114,24 @@ proptest! {
     }
 
     /// Property: Foliated cylinder construction is deterministic for a given seed.
+    ///
+    /// TODO(#57): Re-enable this as an active invariant when explicit CDT strip
+    /// construction is available (blocked on delaunay/293).
     #[test]
+    #[ignore = "TODO(#57): blocked on delaunay/293 explicit strip construction"]
     fn foliated_cylinder_seed_determinism(
         vertices_per_slice in 4u32..8,
         num_slices in 2u32..5,
         seed in 0u64..500
     ) {
-        let r1 = CdtTriangulation::from_foliated_cylinder(vertices_per_slice, num_slices, Some(seed));
-        let r2 = CdtTriangulation::from_foliated_cylinder(vertices_per_slice, num_slices, Some(seed));
+        let t1 = CdtTriangulation::from_foliated_cylinder(vertices_per_slice, num_slices, Some(seed))
+            .expect("TODO(#57): expected to pass once explicit strip construction lands");
+        let t2 = CdtTriangulation::from_foliated_cylinder(vertices_per_slice, num_slices, Some(seed))
+            .expect("TODO(#57): expected to pass once explicit strip construction lands");
 
-        match (r1, r2) {
-            (Ok(t1), Ok(t2)) => {
-                prop_assert_eq!(t1.vertex_count(), t2.vertex_count());
-                prop_assert_eq!(t1.edge_count(), t2.edge_count());
-                prop_assert_eq!(t1.face_count(), t2.face_count());
-                prop_assert_eq!(t1.slice_sizes(), t2.slice_sizes());
-            }
-            (Err(_), Err(_)) => { /* both fail — consistent */ }
-            _ => prop_assert!(false, "Determinism violated: one succeeded, one failed"),
-        }
+        prop_assert_eq!(t1.vertex_count(), t2.vertex_count());
+        prop_assert_eq!(t1.edge_count(), t2.edge_count());
+        prop_assert_eq!(t1.face_count(), t2.face_count());
+        prop_assert_eq!(t1.slice_sizes(), t2.slice_sizes());
     }
 }

@@ -108,8 +108,8 @@ pub use geometry::traits::TriangulationQuery;
 /// ```
 /// use causal_triangulations::prelude::*;
 ///
-/// let tri = CdtTriangulation::from_foliated_cylinder(5, 3, Some(42))
-///     .expect("create foliated cylinder");
+/// let tri = CdtTriangulation::from_seeded_points(12, 3, 2, 42)
+///     .expect("create seeded triangulation");
 /// assert!(tri.validate().is_ok());
 /// ```
 pub mod prelude {
@@ -165,6 +165,36 @@ pub mod prelude {
         };
         pub use crate::config::CdtConfig;
         pub use crate::errors::{CdtError, CdtResult};
+    }
+
+    /// Focused exports for geometry backend construction and querying.
+    ///
+    /// This prelude is intended for backend-level workflows (e.g. building
+    /// triangulations with explicit vertex data and running trait-based geometry
+    /// queries), without pulling in simulation-specific symbols.
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::*;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ])
+    /// .expect("build labeled triangle");
+    ///
+    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// assert!(backend.is_valid());
+    /// ```
+    pub mod geometry {
+        pub use crate::geometry::DelaunayBackend2D;
+        pub use crate::geometry::backends::delaunay::{
+            DelaunayBackend, DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
+        };
+        pub use crate::geometry::backends::mock::MockBackend;
+        pub use crate::geometry::generators::{build_delaunay2_with_data, delaunay2_with_context};
+        pub use crate::geometry::operations::TriangulationOps;
+        pub use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
     }
 }
 

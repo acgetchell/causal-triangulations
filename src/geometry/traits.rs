@@ -79,14 +79,25 @@ pub trait TriangulationQuery: GeometryBackend {
         face: &Self::FaceHandle,
     ) -> Result<Vec<Self::VertexHandle>, Self::Error>;
 
-    /// Get the two vertices that form an edge
+    /// Get the two vertices that form an edge.
     ///
-    /// # Errors
-    /// Returns error if the edge handle is invalid
+    /// Returns `Some((v0, v1))` when endpoint resolution succeeds, or `None`
+    /// if the edge handle is invalid or endpoints are unavailable.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::*;
+    ///
+    /// let backend = MockBackend::create_triangle();
+    /// let edge = backend.edges().next().expect("triangle should have an edge");
+    /// let endpoints = backend.edge_endpoints(&edge);
+    /// assert!(endpoints.is_some());
+    /// ```
     fn edge_endpoints(
         &self,
         edge: &Self::EdgeHandle,
-    ) -> Result<(Self::VertexHandle, Self::VertexHandle), Self::Error>;
+    ) -> Option<(Self::VertexHandle, Self::VertexHandle)>;
 
     /// Get all faces adjacent to a vertex
     ///

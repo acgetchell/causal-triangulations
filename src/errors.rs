@@ -59,6 +59,15 @@ pub enum CdtError {
         /// The underlying builder error message
         underlying_error: String,
     },
+    /// Backend payload mutation failed due to an invalid or unavailable handle.
+    BackendMutationFailed {
+        /// Mutation operation being attempted.
+        operation: String,
+        /// Human-readable target handle (e.g., "vertex `VertexKey`(..)").
+        target: String,
+        /// Additional failure detail.
+        detail: String,
+    },
     /// An edge violates the causal structure by spanning more than one time slice
     CausalityViolation {
         /// Time label of the first endpoint
@@ -120,6 +129,14 @@ impl fmt::Display for CdtError {
             } => write!(
                 f,
                 "Vertex construction failed [{context}]: {underlying_error}"
+            ),
+            Self::BackendMutationFailed {
+                operation,
+                target,
+                detail,
+            } => write!(
+                f,
+                "Backend mutation failed [{operation}] on {target}: {detail}"
             ),
             Self::CausalityViolation { time_0, time_1 } => {
                 let dt = time_0.abs_diff(*time_1);
@@ -247,6 +264,20 @@ mod tests {
         assert_eq!(
             display,
             "Vertex construction failed [from_foliated_cylinder vertex 7]: Missing required field: `point`"
+        );
+    }
+
+    #[test]
+    fn test_backend_mutation_failed_error() {
+        let error = CdtError::BackendMutationFailed {
+            operation: "set_vertex_data".to_string(),
+            target: "vertex VertexKey(123v1)".to_string(),
+            detail: "backend reported invalid vertex key".to_string(),
+        };
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Backend mutation failed [set_vertex_data] on vertex VertexKey(123v1): backend reported invalid vertex key"
         );
     }
 

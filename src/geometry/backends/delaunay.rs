@@ -64,7 +64,7 @@ pub struct DelaunayFaceHandle {
 }
 
 impl DelaunayFaceHandle {
-    /// Returns the underlying cell key for use with `set_cell_data`.
+    /// Returns the underlying cell key for use with `set_cell_data_i32`.
     #[must_use]
     pub(crate) const fn cell_key(&self) -> CellKey {
         self.key
@@ -229,31 +229,49 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuer
     fn edge_endpoints(
         &self,
         edge: &Self::EdgeHandle,
-    ) -> Result<(Self::VertexHandle, Self::VertexHandle), Self::Error> {
+    ) -> Option<(Self::VertexHandle, Self::VertexHandle)> {
         let (v0, v1) = edge.key.endpoints();
-        let contains_v0 = self.dt.tds().contains_vertex_key(v0);
-        let contains_v1 = self.dt.tds().contains_vertex_key(v1);
+        let tds = self.dt.tds();
 
-        // Validate endpoint membership directly through the triangulation data
-        // structure. For endpoint resolution we only need stable vertex keys;
-        // coordinate lookup is a stricter requirement and has proven flaky for
-        // a minimal hand-built triangle under Linux tarpaulin.
-        if !contains_v0 || !contains_v1 {
-            log::debug!(
-                "Failed to resolve edge {:?}: contains_v0={}, contains_v1={}, vertex_count={}, edge_count={}, face_count={}",
+        let contains_v0 = tds.contains_vertex_key(v0);
+        let contains_v1 = tds.contains_vertex_key(v1);
+        // Fast reject for invalid endpoint handles.
+        if !(contains_v0 && contains_v1) {
+            log::trace!(
+                "edge_endpoints: missing endpoint(s) for edge {:?} (contains_v0={}, contains_v1={})",
                 edge.key,
                 contains_v0,
                 contains_v1,
-                self.dt.number_of_vertices(),
-                self.dt.as_triangulation().number_of_edges(),
-                self.dt.number_of_cells(),
             );
-            return Err(DelaunayError::InvalidEdge { v0, v1 });
+            return None;
         }
-        Ok((
-            DelaunayVertexHandle { key: v0 },
-            DelaunayVertexHandle { key: v1 },
-        ))
+
+        // Validate membership using local adjacency around v0.
+        // This is O(deg(v0)) rather than scanning all edges.
+        let edge_exists = self.dt.incident_edges(v0).any(|candidate| {
+            let (c0, c1) = candidate.endpoints();
+            (c0 == v0 && c1 == v1) || (c0 == v1 && c1 == v0)
+        });
+
+        if edge_exists {
+            return Some((
+                DelaunayVertexHandle { key: v0 },
+                DelaunayVertexHandle { key: v1 },
+            ));
+        }
+
+        log::trace!(
+            "edge_endpoints: unable to resolve edge {:?} (contains_v0={}, contains_v1={}, edge_exists={}, V={}, E={}, F={})",
+            edge.key,
+            contains_v0,
+            contains_v1,
+            edge_exists,
+            self.dt.number_of_vertices(),
+            self.dt.as_triangulation().number_of_edges(),
+            self.dt.number_of_cells(),
+        );
+
+        None
     }
 
     fn adjacent_faces(
@@ -417,19 +435,98 @@ impl DelaunayBackend<u32, i32, 2> {
         cell.data().copied()
     }
 
-    /// Mutable access to the underlying triangulation for setting vertex/cell data.
+    /// Sets the optional time-slice label for a vertex.
     ///
-    /// Modifying vertex/cell data does not break Delaunay invariants
-    /// since it only changes the `data` field, not geometry or topology.
-    pub(crate) const fn triangulation_mut(
+    /// Returns the previous payload for a valid key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DelaunayError::InvalidVertex`] if `key` is not present.
+    ///
+    /// This mutates only vertex payload data and does not alter geometry or topology.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::*;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ])
+    /// .expect("build labeled triangle");
+    /// let mut backend = DelaunayBackend2D::from_triangulation(dt);
+    ///
+    /// let key = backend
+    ///     .triangulation()
+    ///     .vertices()
+    ///     .next()
+    ///     .map(|(k, _)| k)
+    ///     .expect("triangle should have a vertex");
+    ///
+    /// let previous = backend
+    ///     .set_vertex_data(key, Some(2))
+    ///     .expect("vertex key should be valid");
+    /// assert!(previous.is_some());
+    /// assert_eq!(backend.vertex_time_label_by_key(key), Some(2));
+    /// ```
+    pub fn set_vertex_data(
         &mut self,
-    ) -> &mut delaunay::core::delaunay_triangulation::DelaunayTriangulation<
-        AdaptiveKernel<f64>,
-        u32,
-        i32,
-        2,
-    > {
-        &mut self.dt
+        key: VertexKey,
+        data: Option<u32>,
+    ) -> Result<Option<u32>, DelaunayError> {
+        self.dt
+            .set_vertex_data(key, data)
+            .ok_or(DelaunayError::InvalidVertex { key })
+    }
+
+    /// Sets the optional `i32` payload for a cell.
+    ///
+    /// Returns the previous payload for a valid key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DelaunayError::InvalidFace`] if `key` is not present.
+    ///
+    /// This mutates only cell payload data and does not alter geometry or topology.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::*;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ])
+    /// .expect("build labeled triangle");
+    /// let mut backend = DelaunayBackend2D::from_triangulation(dt);
+    ///
+    /// let key = backend
+    ///     .triangulation()
+    ///     .cells()
+    ///     .next()
+    ///     .map(|(k, _)| k)
+    ///     .expect("triangle should have a cell");
+    ///
+    /// let previous = backend
+    ///     .set_cell_data_i32(key, Some(7))
+    ///     .expect("cell key should be valid");
+    /// assert_eq!(previous, None);
+    ///
+    /// let face = backend.faces().next().expect("triangle should have a face");
+    /// assert_eq!(backend.cell_data_i32(&face), Some(7));
+    /// ```
+    pub fn set_cell_data_i32(
+        &mut self,
+        key: CellKey,
+        data: Option<i32>,
+    ) -> Result<Option<i32>, DelaunayError> {
+        self.dt
+            .set_cell_data(key, data)
+            .ok_or(DelaunayError::InvalidFace { key })
     }
 }
 
@@ -442,6 +539,8 @@ pub type DelaunayBackend2D = DelaunayBackend<u32, i32, 2>;
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+
+    use crate::geometry::generators::build_delaunay2_with_data;
 
     use super::*;
 
@@ -659,12 +758,8 @@ mod tests {
 
     #[test]
     fn test_edge_endpoints_for_hand_built_triangle() {
-        let dt = crate::geometry::generators::build_delaunay2_with_data(&[
-            ([0.0, 0.0], 0),
-            ([1.0, 0.0], 0),
-            ([0.5, 1.0], 1),
-        ])
-        .expect("Should build hand-built triangle");
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("Should build hand-built triangle");
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let vertices: HashSet<_> = backend.vertices().collect();
@@ -697,10 +792,55 @@ mod tests {
         let invalid_handle = DelaunayEdgeHandle {
             key: EdgeKey::new(k1, k2),
         };
-        let err = backend.edge_endpoints(&invalid_handle).unwrap_err();
         assert!(
-            matches!(err, DelaunayError::InvalidEdge { .. }),
-            "Expected InvalidEdge, got: {err}"
+            backend.edge_endpoints(&invalid_handle).is_none(),
+            "Invalid edge handle should return None"
+        );
+    }
+
+    #[test]
+    fn test_edge_endpoints_non_edge_with_existing_vertices_returns_none() {
+        let dt = build_delaunay2_with_data(&[
+            ([0.0, 0.0], 0),
+            ([2.0, 0.0], 0),
+            ([2.2, 1.2], 0),
+            ([1.0, 2.0], 0),
+            ([-0.2, 1.0], 0),
+        ])
+        .expect("Should build deterministic 5-point triangulation");
+        let backend = DelaunayBackend::from_triangulation(dt);
+
+        let edge_pairs: HashSet<_> = backend
+            .edges()
+            .map(|edge| {
+                let (a, b) = edge.key.endpoints();
+                (a, b)
+            })
+            .collect();
+
+        let vertex_keys: Vec<_> = backend.vertices().map(|vh| vh.key).collect();
+
+        let mut non_edge_pair = None;
+        'find_non_edge: for i in 0..vertex_keys.len() {
+            for j in (i + 1)..vertex_keys.len() {
+                let a = vertex_keys[i];
+                let b = vertex_keys[j];
+                if !edge_pairs.contains(&(a, b)) && !edge_pairs.contains(&(b, a)) {
+                    non_edge_pair = Some((a, b));
+                    break 'find_non_edge;
+                }
+            }
+        }
+
+        let (a, b) =
+            non_edge_pair.expect("A planar 5-vertex triangulation must have a non-edge pair");
+        let non_edge_handle = DelaunayEdgeHandle {
+            key: EdgeKey::new(a, b),
+        };
+
+        assert!(
+            backend.edge_endpoints(&non_edge_handle).is_none(),
+            "Non-edge handle with existing vertices should return None"
         );
     }
 
