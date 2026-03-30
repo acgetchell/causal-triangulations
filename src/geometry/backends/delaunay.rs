@@ -64,7 +64,7 @@ pub struct DelaunayFaceHandle {
 }
 
 impl DelaunayFaceHandle {
-    /// Returns the underlying cell key for use with `set_cell_data_i32`.
+    /// Returns the underlying cell key for payload lookups and updates by key.
     #[must_use]
     pub(crate) const fn cell_key(&self) -> CellKey {
         self.key
@@ -142,6 +142,52 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     #[must_use]
     pub const fn topology_kind(&self) -> delaunay::topology::traits::TopologyKind {
         self.dt.topology_kind()
+    }
+
+    /// Returns the vertex payload for `key`, if present.
+    #[must_use]
+    pub fn vertex_data_by_key(&self, key: VertexKey) -> Option<VertexData> {
+        self.dt.tds().get_vertex_by_key(key)?.data().copied()
+    }
+
+    /// Returns the cell payload for `key`, if present.
+    #[must_use]
+    pub fn cell_data_by_key(&self, key: CellKey) -> Option<CellData> {
+        self.dt.tds().get_cell(key)?.data().copied()
+    }
+
+    /// Sets the optional payload for a vertex identified by `key`.
+    ///
+    /// Returns the previous payload for a valid key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DelaunayError::InvalidVertex`] if `key` is not present.
+    pub fn set_vertex_data_by_key(
+        &mut self,
+        key: VertexKey,
+        data: Option<VertexData>,
+    ) -> Result<Option<VertexData>, DelaunayError> {
+        self.dt
+            .set_vertex_data(key, data)
+            .ok_or(DelaunayError::InvalidVertex { key })
+    }
+
+    /// Sets the optional payload for a cell identified by `key`.
+    ///
+    /// Returns the previous payload for a valid key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DelaunayError::InvalidFace`] if `key` is not present.
+    pub fn set_cell_data_by_key(
+        &mut self,
+        key: CellKey,
+        data: Option<CellData>,
+    ) -> Result<Option<CellData>, DelaunayError> {
+        self.dt
+            .set_cell_data(key, data)
+            .ok_or(DelaunayError::InvalidFace { key })
     }
 }
 
@@ -407,134 +453,6 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
         );
     }
 }
-
-// =============================================================================
-// DelaunayBackend2D-specific methods (u32 vertex data = time-slice labels)
-// =============================================================================
-impl DelaunayBackend<u32, i32, 2> {
-    /// Returns the time-slice label stored on a vertex, or `None` if the
-    /// vertex has no data or the handle is invalid.
-    #[must_use]
-    pub fn vertex_time_label(&self, handle: &DelaunayVertexHandle) -> Option<u32> {
-        let (_, vertex) = self.dt.vertices().find(|(k, _)| *k == handle.key)?;
-        vertex.data().copied()
-    }
-
-    /// Returns the time-slice label for a vertex identified by its key.
-    #[must_use]
-    pub fn vertex_time_label_by_key(&self, key: VertexKey) -> Option<u32> {
-        let (_, vertex) = self.dt.vertices().find(|(k, _)| *k == key)?;
-        vertex.data().copied()
-    }
-
-    /// Returns the stored `i32` cell data for a face, or `None` if the
-    /// face handle is invalid or the cell has no data.
-    #[must_use]
-    pub fn cell_data_i32(&self, handle: &DelaunayFaceHandle) -> Option<i32> {
-        let (_, cell) = self.dt.cells().find(|(k, _)| *k == handle.key)?;
-        cell.data().copied()
-    }
-
-    /// Sets the optional time-slice label for a vertex.
-    ///
-    /// Returns the previous payload for a valid key.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DelaunayError::InvalidVertex`] if `key` is not present.
-    ///
-    /// This mutates only vertex payload data and does not alter geometry or topology.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::geometry::*;
-    ///
-    /// let dt = build_delaunay2_with_data(&[
-    ///     ([0.0, 0.0], 0),
-    ///     ([1.0, 0.0], 0),
-    ///     ([0.5, 1.0], 1),
-    /// ])
-    /// .expect("build labeled triangle");
-    /// let mut backend = DelaunayBackend2D::from_triangulation(dt);
-    ///
-    /// let key = backend
-    ///     .triangulation()
-    ///     .vertices()
-    ///     .next()
-    ///     .map(|(k, _)| k)
-    ///     .expect("triangle should have a vertex");
-    ///
-    /// let previous = backend
-    ///     .set_vertex_data(key, Some(2))
-    ///     .expect("vertex key should be valid");
-    /// assert!(previous.is_some());
-    /// assert_eq!(backend.vertex_time_label_by_key(key), Some(2));
-    /// ```
-    pub fn set_vertex_data(
-        &mut self,
-        key: VertexKey,
-        data: Option<u32>,
-    ) -> Result<Option<u32>, DelaunayError> {
-        self.dt
-            .set_vertex_data(key, data)
-            .ok_or(DelaunayError::InvalidVertex { key })
-    }
-
-    /// Sets the optional `i32` payload for a cell.
-    ///
-    /// Returns the previous payload for a valid key.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DelaunayError::InvalidFace`] if `key` is not present.
-    ///
-    /// This mutates only cell payload data and does not alter geometry or topology.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::geometry::*;
-    ///
-    /// let dt = build_delaunay2_with_data(&[
-    ///     ([0.0, 0.0], 0),
-    ///     ([1.0, 0.0], 0),
-    ///     ([0.5, 1.0], 1),
-    /// ])
-    /// .expect("build labeled triangle");
-    /// let mut backend = DelaunayBackend2D::from_triangulation(dt);
-    ///
-    /// let key = backend
-    ///     .triangulation()
-    ///     .cells()
-    ///     .next()
-    ///     .map(|(k, _)| k)
-    ///     .expect("triangle should have a cell");
-    ///
-    /// let previous = backend
-    ///     .set_cell_data_i32(key, Some(7))
-    ///     .expect("cell key should be valid");
-    /// assert_eq!(previous, None);
-    ///
-    /// let face = backend.faces().next().expect("triangle should have a face");
-    /// assert_eq!(backend.cell_data_i32(&face), Some(7));
-    /// ```
-    pub fn set_cell_data_i32(
-        &mut self,
-        key: CellKey,
-        data: Option<i32>,
-    ) -> Result<Option<i32>, DelaunayError> {
-        self.dt
-            .set_cell_data(key, data)
-            .ok_or(DelaunayError::InvalidFace { key })
-    }
-}
-
-/// Type alias for the standard 2D CDT backend.
-///
-/// Vertex data is `u32` — stores the per-vertex time-slice label (foliation).
-/// This mirrors CGAL's `vertex->info()` used in CDT-plusplus.
-pub type DelaunayBackend2D = DelaunayBackend<u32, i32, 2>;
 
 #[cfg(test)]
 mod tests {

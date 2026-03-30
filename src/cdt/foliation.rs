@@ -118,6 +118,29 @@ pub enum FoliationError {
         /// Expected vertex count from the triangulation.
         expected: usize,
     },
+    /// A specific vertex is missing a live time label.
+    MissingVertexLabel {
+        /// Zero-based index of the vertex in backend iteration order.
+        vertex: usize,
+    },
+    /// A specific vertex has a time label outside the allowed slice range.
+    OutOfRangeVertexLabel {
+        /// Zero-based index of the vertex in backend iteration order.
+        vertex: usize,
+        /// Observed label value on that vertex.
+        label: u32,
+        /// Exclusive upper bound for valid labels (`0..expected_range_end`).
+        expected_range_end: usize,
+    },
+    /// Live per-slice labeling does not match stored foliation bookkeeping.
+    LabelMismatch {
+        /// Slice index where mismatch was detected.
+        slice: usize,
+        /// Stored count for this slice.
+        expected: usize,
+        /// Live count observed from backend vertex labels.
+        actual: usize,
+    },
     /// A time slice contains no vertices.
     EmptySlice {
         /// The index of the empty slice.
@@ -145,6 +168,25 @@ impl std::fmt::Display for FoliationError {
             Self::LabelCountMismatch { labeled, expected } => write!(
                 f,
                 "labeled vertex count ({labeled}) does not match triangulation vertex count ({expected})"
+            ),
+            Self::MissingVertexLabel { vertex } => {
+                write!(f, "vertex index {vertex} is missing a time label")
+            }
+            Self::OutOfRangeVertexLabel {
+                vertex,
+                label,
+                expected_range_end,
+            } => write!(
+                f,
+                "vertex index {vertex} has out-of-range time label {label}; expected 0..{expected_range_end}"
+            ),
+            Self::LabelMismatch {
+                slice,
+                expected,
+                actual,
+            } => write!(
+                f,
+                "time slice {slice} has stored count {expected}, but live labels report {actual}"
             ),
             Self::EmptySlice { slice } => write!(f, "time slice {slice} is empty"),
             Self::SliceSizeSumMismatch { sum, labeled } => write!(
@@ -375,6 +417,47 @@ mod tests {
         assert!(
             msg.contains('2') && msg.contains("empty"),
             "Display should mention slice index: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_foliation_error_missing_vertex_label_display() {
+        let err = FoliationError::MissingVertexLabel { vertex: 4 };
+        let msg = err.to_string();
+        assert!(
+            msg.contains('4') && msg.contains("missing"),
+            "Display should include vertex index and missing-label context: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_foliation_error_label_mismatch_display() {
+        let err = FoliationError::LabelMismatch {
+            slice: 1,
+            expected: 3,
+            actual: 2,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains('1') && msg.contains('3') && msg.contains('2'),
+            "Display should include slice and both counts: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_out_of_range_label_display() {
+        let err = FoliationError::OutOfRangeVertexLabel {
+            vertex: 2,
+            label: 9,
+            expected_range_end: 3,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains('2')
+                && msg.contains('9')
+                && msg.contains("out-of-range")
+                && msg.contains("0..3"),
+            "Display should include vertex index, label, and expected range: {msg}"
         );
     }
 

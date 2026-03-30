@@ -14,6 +14,7 @@ use crate::geometry::backends::delaunay::{
 use crate::geometry::generators::{build_delaunay2_with_data, delaunay2_with_context};
 use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
 use crate::util::f64_band_to_u32;
+use std::any::Any;
 use std::time::Instant;
 
 /// CDT-specific triangulation wrapper - completely geometry-agnostic
@@ -21,7 +22,7 @@ use std::time::Instant;
 pub struct CdtTriangulation<B> {
     geometry: B,
     /// CDT metadata (time slices, dimension, history)
-    pub metadata: CdtMetadata,
+    metadata: CdtMetadata,
     cache: GeometryCache,
     /// Optional foliation assigning each vertex to a time slice.
     foliation: Option<Foliation>,
@@ -148,6 +149,12 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         self.metadata.dimension
     }
 
+    /// Returns immutable CDT metadata.
+    #[must_use]
+    pub const fn metadata(&self) -> &CdtMetadata {
+        &self.metadata
+    }
+
     /// Cached edge count with automatic invalidation.
     ///
     /// Returns the cached edge count if the cache is valid (i.e., no mutations since last refresh).
@@ -234,12 +241,52 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         Ok(())
     }
 
+    fn apply_time_slices(&mut self, time_slices: u32) {
+        self.metadata.time_slices = time_slices;
+        if self
+            .foliation
+            .as_ref()
+            .is_some_and(|foliation| foliation.num_slices() != time_slices)
+        {
+            self.foliation = None;
+        }
+    }
+
+    /// Updates the configured number of time slices.
+    ///
+    /// If an existing foliation uses a different slice count, the foliation is
+    /// cleared to avoid stale bookkeeping.
+    pub fn set_time_slices(&mut self, time_slices: u32) {
+        if self.metadata.time_slices == time_slices {
+            return;
+        }
+
+        self.apply_time_slices(time_slices);
+        self.bump_modification_count();
+    }
+
+    /// Marks the triangulation metadata as modified.
+    ///
+    /// This invalidates cached derived geometry quantities.
+    pub fn bump_modification_count(&mut self) {
+        self.invalidate_cache();
+        self.metadata.last_modified = Instant::now();
+        self.metadata.modification_count += 1;
+    }
+
+    fn invalidate_cache(&mut self) {
+        self.cache = GeometryCache::default();
+    }
+}
+
+impl<B: TriangulationQuery + 'static> CdtTriangulation<B> {
     /// Validate foliation consistency.
     ///
     /// If no foliation is present, succeeds vacuously.
     /// Otherwise checks:
     /// 1. The stored labeled-vertex count matches the geometry vertex count
     /// 2. Every stored time slice is non-empty
+    /// 3. Live backend labels match stored per-slice bookkeeping
     ///
     /// # Errors
     ///
@@ -278,11 +325,47 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             }
         }
 
-        Ok(())
-    }
+        // Validate against live labels from the canonical backend payload when
+        // running on the Delaunay backend.
+        if let Some(geometry) = (&self.geometry as &dyn Any).downcast_ref::<DelaunayBackend2D>() {
+            let mut live_slice_sizes = vec![0usize; foliation.slice_sizes().len()];
 
-    fn invalidate_cache(&mut self) {
-        self.cache = GeometryCache::default();
+            for (vertex, vh) in geometry.vertices().enumerate() {
+                let Some(label) = geometry.vertex_data_by_key(vh.vertex_key()) else {
+                    return Err(FoliationError::MissingVertexLabel { vertex }.into());
+                };
+
+                let slice = label as usize;
+                if slice >= live_slice_sizes.len() {
+                    return Err(FoliationError::OutOfRangeVertexLabel {
+                        vertex,
+                        label,
+                        expected_range_end: live_slice_sizes.len(),
+                    }
+                    .into());
+                }
+
+                live_slice_sizes[slice] += 1;
+            }
+
+            for (slice, (&expected, &actual)) in foliation
+                .slice_sizes()
+                .iter()
+                .zip(live_slice_sizes.iter())
+                .enumerate()
+            {
+                if expected != actual {
+                    return Err(FoliationError::LabelMismatch {
+                        slice,
+                        expected,
+                        actual,
+                    }
+                    .into());
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -290,9 +373,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
 impl<B: TriangulationMut> CdtTriangulation<B> {
     /// Get mutable reference with automatic cache invalidation
     pub fn geometry_mut(&mut self) -> CdtGeometryMut<'_, B> {
-        self.invalidate_cache();
-        self.metadata.last_modified = Instant::now();
-        self.metadata.modification_count += 1;
+        self.bump_modification_count();
         CdtGeometryMut {
             geometry: &mut self.geometry,
             metadata: &mut self.metadata,
@@ -364,7 +445,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let mut unlabeled_vertex_examples = Vec::with_capacity(UNLABELED_VERTEX_EXAMPLE_LIMIT);
 
         for vh in backend.vertices() {
-            if let Some(t) = backend.vertex_time_label(&vh) {
+            if let Some(t) = backend.vertex_data_by_key(vh.vertex_key()) {
                 let idx = t as usize;
                 if idx >= slice_sizes.len() {
                     return Err(Self::foliated_cylinder_generation_error(
@@ -423,7 +504,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let mut unlabeled_vertex_examples = Vec::with_capacity(UNLABELED_VERTEX_EXAMPLE_LIMIT);
 
         for vh in backend.vertices() {
-            if let Some(t) = backend.vertex_time_label(&vh) {
+            if let Some(t) = backend.vertex_data_by_key(vh.vertex_key()) {
                 let idx = t as usize;
                 if idx >= slice_sizes.len() {
                     return Err(CdtError::ValidationFailed {
@@ -585,6 +666,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// constructor therefore validates the result and returns an error unless
     /// the output is a genuine 1+1 CDT strip.
     ///
+    /// This constructor is provisional and crate-internal until the explicit
+    /// strip builder path is implemented in [`from_cdt_strip`](Self::from_cdt_strip).
+    ///
     /// # Arguments
     ///
     /// * `vertices_per_slice` — Number of vertices in each spatial slice (≥ 4).
@@ -598,20 +682,23 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// valid per-vertex time labels. Builder-label failures are surfaced as
     /// [`CdtError::DelaunayGenerationFailed`] with detailed context.
     ///
-    /// # Examples
+    /// # Internal
     ///
-    /// ```
-    /// use causal_triangulations::prelude::triangulation::*;
-    ///
-    /// // Parameter validation happens before geometric construction.
-    /// let result = CdtTriangulation::from_foliated_cylinder(3, 3, Some(42));
-    /// assert!(result.is_err());
-    /// ```
-    pub fn from_foliated_cylinder(
+    /// This API is crate-internal and experimental.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "provisional internal strip constructor remains intentionally crate-internal until explicit strip construction lands"
+        )
+    )]
+    pub(crate) fn from_foliated_cylinder(
         vertices_per_slice: u32,
         num_slices: u32,
         seed: Option<u64>,
     ) -> CdtResult<Self> {
+        // TODO(#57): Remove this provisional point-set constructor once the
+        // explicit combinatorial strip builder is available.
         if vertices_per_slice < 4 {
             return Err(CdtError::InvalidGenerationParameters {
                 issue: "Insufficient vertices per slice".to_string(),
@@ -891,15 +978,13 @@ impl CdtTriangulation<DelaunayBackend2D> {
         // since vertex time labels are about to change.
         let face_keys: Vec<_> = self.geometry.faces().map(|f| f.cell_key()).collect();
 
-        self.invalidate_cache();
-
-        // Write time labels directly to vertex data via set_vertex_data (O(1) per vertex).
+        // Write time labels directly to vertex data via set_vertex_data_by_key (O(1) per vertex).
         let mut slice_sizes = vec![0usize; num_slices as usize];
 
         for &key in &face_keys {
-            if let Err(err) = self.geometry.set_cell_data_i32(key, None) {
+            if let Err(err) = self.geometry.set_cell_data_by_key(key, None) {
                 return Err(CdtError::BackendMutationFailed {
-                    operation: "set_cell_data_i32".to_string(),
+                    operation: "set_cell_data_by_key".to_string(),
                     target: format!("face {key:?}"),
                     detail: err.to_string(),
                 });
@@ -913,9 +998,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 let band_index = ((y - y_min) / band_height).floor();
                 f64_band_to_u32(band_index, num_slices - 1)
             };
-            if let Err(err) = self.geometry.set_vertex_data(vh.vertex_key(), Some(t)) {
+            if let Err(err) = self
+                .geometry
+                .set_vertex_data_by_key(vh.vertex_key(), Some(t))
+            {
                 return Err(CdtError::BackendMutationFailed {
-                    operation: "set_vertex_data".to_string(),
+                    operation: "set_vertex_data_by_key".to_string(),
                     target: format!("vertex {:?}", vh.vertex_key()),
                     detail: format!("failed while assigning time label {t}: {err}"),
                 });
@@ -925,9 +1013,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         self.foliation =
             Some(Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?);
-        self.metadata.time_slices = num_slices;
-        self.metadata.last_modified = Instant::now();
-        self.metadata.modification_count += 1;
+        self.apply_time_slices(num_slices);
+        self.bump_modification_count();
         Ok(())
     }
 
@@ -955,7 +1042,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     #[must_use]
     pub fn time_label(&self, vertex: &DelaunayVertexHandle) -> Option<u32> {
         self.foliation.as_ref()?;
-        self.geometry.vertex_time_label(vertex)
+        self.geometry.vertex_data_by_key(vertex.vertex_key())
     }
 
     /// Returns all vertex handles that belong to time slice `t`.
@@ -966,7 +1053,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
         self.geometry
             .vertices()
-            .filter(|vh| self.geometry.vertex_time_label(vh) == Some(t))
+            .filter(|vh| self.geometry.vertex_data_by_key(vh.vertex_key()) == Some(t))
             .collect()
     }
 
@@ -1010,8 +1097,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         self.foliation.as_ref()?;
 
         let (v0, v1) = self.geometry.edge_endpoints(edge)?;
-        let t0 = self.geometry.vertex_time_label(&v0)?;
-        let t1 = self.geometry.vertex_time_label(&v1)?;
+        let t0 = self.geometry.vertex_data_by_key(v0.vertex_key())?;
+        let t1 = self.geometry.vertex_data_by_key(v1.vertex_key())?;
 
         Some(match t0.abs_diff(t1) {
             0 => EdgeType::Spacelike,
@@ -1048,9 +1135,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
         if verts.len() != 3 {
             return None;
         }
-        let t0 = self.geometry.vertex_time_label(&verts[0]);
-        let t1 = self.geometry.vertex_time_label(&verts[1]);
-        let t2 = self.geometry.vertex_time_label(&verts[2]);
+        let t0 = self.geometry.vertex_data_by_key(verts[0].vertex_key());
+        let t1 = self.geometry.vertex_data_by_key(verts[1].vertex_key());
+        let t2 = self.geometry.vertex_data_by_key(verts[2].vertex_key());
         classify_cell(t0, t1, t2)
     }
 
@@ -1060,7 +1147,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// encode a valid [`CellType`].
     #[must_use]
     pub fn cell_type_from_data(&self, face: &DelaunayFaceHandle) -> Option<CellType> {
-        let raw = self.geometry.cell_data_i32(face)?;
+        let raw = self.geometry.cell_data_by_key(face.cell_key())?;
         CellType::from_i32(raw)
     }
 
@@ -1112,9 +1199,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
 
         let t = [
-            self.geometry.vertex_time_label(&verts[0])?,
-            self.geometry.vertex_time_label(&verts[1])?,
-            self.geometry.vertex_time_label(&verts[2])?,
+            self.geometry.vertex_data_by_key(verts[0].vertex_key())?,
+            self.geometry.vertex_data_by_key(verts[1].vertex_key())?,
+            self.geometry.vertex_data_by_key(verts[2].vertex_key())?,
         ];
 
         Some([
@@ -1174,22 +1261,22 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         // Clear all cell data first, then write fresh classifications.
         for &key in &all_face_keys {
-            self.geometry.set_cell_data_i32(key, None).map_err(|err| {
-                CdtError::BackendMutationFailed {
-                    operation: "set_cell_data_i32".to_string(),
+            self.geometry
+                .set_cell_data_by_key(key, None)
+                .map_err(|err| CdtError::BackendMutationFailed {
+                    operation: "set_cell_data_by_key".to_string(),
                     target: format!("face {key:?}"),
                     detail: format!(
                         "failed to clear existing cell payload before classification: {err}"
                     ),
-                }
-            })?;
+                })?;
         }
         for (face, ct) in classifications {
             let key = face.cell_key();
             self.geometry
-                .set_cell_data_i32(key, Some(ct.to_i32()))
+                .set_cell_data_by_key(key, Some(ct.to_i32()))
                 .map_err(|err| CdtError::BackendMutationFailed {
-                    operation: "set_cell_data_i32".to_string(),
+                    operation: "set_cell_data_by_key".to_string(),
                     target: format!("face {key:?}"),
                     detail: format!(
                         "failed to store classified cell payload {}: {err}",
@@ -1296,6 +1383,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///     .expect("create foliated triangulation");
     /// assert!(tri.validate_causality_delaunay().is_ok());
     /// ```
+    #[expect(
+        clippy::too_many_lines,
+        reason = "causality validation includes detailed diagnostics for multiple face-resolution and label error paths"
+    )]
     pub fn validate_causality_delaunay(&self) -> CdtResult<()> {
         if self.foliation.is_none() {
             return Ok(());
@@ -1327,48 +1418,57 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 });
             }
 
-            let t0 = self.geometry.vertex_time_label(&verts[0]).ok_or_else(|| {
-                log::debug!(
-                    "Causality validation found unlabeled vertex {:?} while checking face {:?}",
-                    verts[0].vertex_key(),
-                    face,
-                );
-                CdtError::ValidationFailed {
-                    check: "causality".to_string(),
-                    detail: format!(
-                        "vertex {:?} has no time label in a foliated triangulation",
+            let t0 = self
+                .geometry
+                .vertex_data_by_key(verts[0].vertex_key())
+                .ok_or_else(|| {
+                    log::debug!(
+                        "Causality validation found unlabeled vertex {:?} while checking face {:?}",
                         verts[0].vertex_key(),
-                    ),
-                }
-            })?;
-            let t1 = self.geometry.vertex_time_label(&verts[1]).ok_or_else(|| {
-                log::debug!(
-                    "Causality validation found unlabeled vertex {:?} while checking face {:?}",
-                    verts[1].vertex_key(),
-                    face,
-                );
-                CdtError::ValidationFailed {
-                    check: "causality".to_string(),
-                    detail: format!(
-                        "vertex {:?} has no time label in a foliated triangulation",
+                        face,
+                    );
+                    CdtError::ValidationFailed {
+                        check: "causality".to_string(),
+                        detail: format!(
+                            "vertex {:?} has no time label in a foliated triangulation",
+                            verts[0].vertex_key(),
+                        ),
+                    }
+                })?;
+            let t1 = self
+                .geometry
+                .vertex_data_by_key(verts[1].vertex_key())
+                .ok_or_else(|| {
+                    log::debug!(
+                        "Causality validation found unlabeled vertex {:?} while checking face {:?}",
                         verts[1].vertex_key(),
-                    ),
-                }
-            })?;
-            let t2 = self.geometry.vertex_time_label(&verts[2]).ok_or_else(|| {
-                log::debug!(
-                    "Causality validation found unlabeled vertex {:?} while checking face {:?}",
-                    verts[2].vertex_key(),
-                    face,
-                );
-                CdtError::ValidationFailed {
-                    check: "causality".to_string(),
-                    detail: format!(
-                        "vertex {:?} has no time label in a foliated triangulation",
+                        face,
+                    );
+                    CdtError::ValidationFailed {
+                        check: "causality".to_string(),
+                        detail: format!(
+                            "vertex {:?} has no time label in a foliated triangulation",
+                            verts[1].vertex_key(),
+                        ),
+                    }
+                })?;
+            let t2 = self
+                .geometry
+                .vertex_data_by_key(verts[2].vertex_key())
+                .ok_or_else(|| {
+                    log::debug!(
+                        "Causality validation found unlabeled vertex {:?} while checking face {:?}",
                         verts[2].vertex_key(),
-                    ),
-                }
-            })?;
+                        face,
+                    );
+                    CdtError::ValidationFailed {
+                        check: "causality".to_string(),
+                        detail: format!(
+                            "vertex {:?} has no time label in a foliated triangulation",
+                            verts[2].vertex_key(),
+                        ),
+                    }
+                })?;
 
             // CDT triangle invariant: exactly 1 spacelike edge, 2 timelike edges.
             let mut spacelike = 0;
@@ -1622,9 +1722,9 @@ mod tests {
             CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
 
         // Should have at least one creation event
-        assert!(!triangulation.metadata.simulation_history.is_empty());
+        assert!(!triangulation.metadata().simulation_history.is_empty());
 
-        match &triangulation.metadata.simulation_history[0] {
+        match &triangulation.metadata().simulation_history[0] {
             SimulationEvent::Created {
                 vertex_count,
                 time_slices,
@@ -1645,7 +1745,7 @@ mod tests {
         let initial_edge_count = triangulation.edge_count();
         assert!(initial_edge_count > 0);
 
-        let initial_mod_count = triangulation.metadata.modification_count;
+        let initial_mod_count = triangulation.metadata().modification_count;
 
         // Get mutable access - this should invalidate cache and increment modification count
         {
@@ -1656,7 +1756,7 @@ mod tests {
 
         // Modification count should have increased
         assert_eq!(
-            triangulation.metadata.modification_count,
+            triangulation.metadata().modification_count,
             initial_mod_count + 1
         );
 
@@ -1801,7 +1901,7 @@ mod tests {
         let mut triangulation =
             CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
 
-        let initial_history_len = triangulation.metadata.simulation_history.len();
+        let initial_history_len = triangulation.metadata().simulation_history.len();
 
         {
             let mut wrapper = triangulation.geometry_mut();
@@ -1826,12 +1926,12 @@ mod tests {
 
         // Should have 3 more events
         assert_eq!(
-            triangulation.metadata.simulation_history.len(),
+            triangulation.metadata().simulation_history.len(),
             initial_history_len + 3
         );
 
         // Check the recorded events
-        let history = &triangulation.metadata.simulation_history;
+        let history = &triangulation.metadata().simulation_history;
         match &history[initial_history_len] {
             SimulationEvent::MoveAttempted { move_type, step } => {
                 assert_eq!(move_type, "test_move");
@@ -1869,8 +1969,8 @@ mod tests {
         let mut triangulation =
             CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
 
-        let creation_time = triangulation.metadata.creation_time;
-        let initial_last_modified = triangulation.metadata.last_modified;
+        let creation_time = triangulation.metadata().creation_time;
+        let initial_last_modified = triangulation.metadata().last_modified;
 
         // Creation time should be after our start time
         assert!(creation_time >= start_time);
@@ -1886,13 +1986,13 @@ mod tests {
             let _wrapper = triangulation.geometry_mut();
         }
 
-        let new_last_modified = triangulation.metadata.last_modified;
+        let new_last_modified = triangulation.metadata().last_modified;
 
         // last_modified should have been updated
         assert!(new_last_modified > initial_last_modified);
 
         // creation_time should remain unchanged
-        assert_eq!(triangulation.metadata.creation_time, creation_time);
+        assert_eq!(triangulation.metadata().creation_time, creation_time);
     }
 
     #[test]
@@ -1901,23 +2001,23 @@ mod tests {
             CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
 
         // Initial modification count should be 0
-        assert_eq!(triangulation.metadata.modification_count, 0);
+        assert_eq!(triangulation.metadata().modification_count, 0);
 
         // Each mutable access should increment
         {
             let _wrapper = triangulation.geometry_mut();
         }
-        assert_eq!(triangulation.metadata.modification_count, 1);
+        assert_eq!(triangulation.metadata().modification_count, 1);
 
         {
             let _wrapper = triangulation.geometry_mut();
         }
-        assert_eq!(triangulation.metadata.modification_count, 2);
+        assert_eq!(triangulation.metadata().modification_count, 2);
 
         // Immutable access shouldn't change count
         let _geometry = triangulation.geometry();
         let _edge_count = triangulation.edge_count();
-        assert_eq!(triangulation.metadata.modification_count, 2);
+        assert_eq!(triangulation.metadata().modification_count, 2);
     }
 
     #[test]
@@ -2015,7 +2115,7 @@ mod tests {
         let triangulation =
             CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
 
-        let metadata1 = triangulation.metadata;
+        let metadata1 = triangulation.metadata().clone();
         let metadata2 = metadata1.clone();
 
         assert_eq!(metadata1.time_slices, metadata2.time_slices);
@@ -2111,7 +2211,7 @@ mod tests {
             .vertex_key();
 
         let _previous_label = backend
-            .set_vertex_data(unlabeled_vertex, None)
+            .set_vertex_data_by_key(unlabeled_vertex, None)
             .expect("Expected valid vertex key while clearing label");
 
         let result =
@@ -2158,7 +2258,7 @@ mod tests {
             .vertex_key();
 
         let _previous_label = backend
-            .set_vertex_data(invalid_vertex, Some(5))
+            .set_vertex_data_by_key(invalid_vertex, Some(5))
             .expect("Expected valid vertex key while setting out-of-range label");
 
         let result =
@@ -2203,6 +2303,103 @@ mod tests {
         for vh in tri.geometry().vertices() {
             assert!(tri.time_label(&vh).is_some());
         }
+    }
+
+    #[test]
+    fn test_validate_foliation_missing_label() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("Should build labeled triangle");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+
+        let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
+            .expect("Should preserve labels as foliation");
+
+        let vertex_to_clear = tri
+            .geometry()
+            .vertices()
+            .next()
+            .expect("Triangle should contain a vertex")
+            .vertex_key();
+
+        {
+            let mut geometry_mut = tri.geometry_mut();
+            let _previous = geometry_mut
+                .set_vertex_data_by_key(vertex_to_clear, None)
+                .expect("Expected valid vertex key while clearing label");
+        }
+
+        let result = tri.validate_foliation();
+        assert!(matches!(
+            result,
+            Err(CdtError::ValidationFailed { ref check, ref detail })
+                if check == "foliation" && detail.contains("missing a time label")
+        ));
+    }
+
+    #[test]
+    fn test_validate_foliation_out_of_range_label() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("Should build labeled triangle");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+
+        let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
+            .expect("Should preserve labels as foliation");
+
+        let vertex_to_mutate = tri
+            .geometry()
+            .vertices()
+            .next()
+            .expect("Triangle should contain a vertex")
+            .vertex_key();
+
+        {
+            let mut geometry_mut = tri.geometry_mut();
+            let _previous = geometry_mut
+                .set_vertex_data_by_key(vertex_to_mutate, Some(7))
+                .expect("Expected valid vertex key while mutating label");
+        }
+
+        let result = tri.validate_foliation();
+        assert!(matches!(
+            result,
+            Err(CdtError::ValidationFailed { ref check, ref detail })
+                if check == "foliation"
+                    && detail.contains("out-of-range time label 7")
+                    && detail.contains("expected 0..2")
+        ));
+    }
+
+    #[test]
+    fn test_validate_foliation_slice_mismatch() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("Should build labeled triangle");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+
+        let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
+            .expect("Should preserve labels as foliation");
+
+        let vertex_to_move = tri
+            .geometry()
+            .vertices()
+            .find(|vh| tri.geometry().vertex_data_by_key(vh.vertex_key()) == Some(0))
+            .expect("Triangle should contain a vertex in slice 0")
+            .vertex_key();
+
+        {
+            let mut geometry_mut = tri.geometry_mut();
+            let _previous = geometry_mut
+                .set_vertex_data_by_key(vertex_to_move, Some(1))
+                .expect("Expected valid vertex key while mutating label");
+        }
+
+        let result = tri.validate_foliation();
+        assert!(matches!(
+            result,
+            Err(CdtError::ValidationFailed { ref check, ref detail })
+                if check == "foliation"
+                    && detail.contains("stored count")
+                    && detail.contains("live labels report")
+        ));
     }
 
     #[test]
@@ -2322,8 +2519,8 @@ mod tests {
     fn test_assign_foliation_by_y_updates_metadata() {
         let mut tri =
             CdtTriangulation::from_random_points(10, 2, 2).expect("Failed to create triangulation");
-        let initial_last_modified = tri.metadata.last_modified;
-        let initial_modification_count = tri.metadata.modification_count;
+        let initial_last_modified = tri.metadata().last_modified;
+        let initial_modification_count = tri.metadata().modification_count;
         let initial_edge_count = tri.edge_count();
         let initial_euler_characteristic = tri.geometry().euler_characteristic();
 
@@ -2332,9 +2529,9 @@ mod tests {
         tri.assign_foliation_by_y(3)
             .expect("Should update foliation metadata");
 
-        assert!(tri.metadata.last_modified > initial_last_modified);
+        assert!(tri.metadata().last_modified > initial_last_modified);
         assert_eq!(
-            tri.metadata.modification_count,
+            tri.metadata().modification_count,
             initial_modification_count + 1,
             "Foliation assignment should count as a modification"
         );
@@ -2520,7 +2717,7 @@ mod tests {
                     "{:?}@{}:{:?}",
                     vh.vertex_key(),
                     coords,
-                    backend.vertex_time_label(&vh)
+                    backend.vertex_data_by_key(vh.vertex_key())
                 )
             })
             .collect();
@@ -2533,8 +2730,8 @@ mod tests {
                     "{:?}<->{:?}:{:?}->{:?}",
                     v0.vertex_key(),
                     v1.vertex_key(),
-                    backend.vertex_time_label(&v0),
-                    backend.vertex_time_label(&v1)
+                    backend.vertex_data_by_key(v0.vertex_key()),
+                    backend.vertex_data_by_key(v1.vertex_key())
                 ),
                 None => "endpoint_error:unavailable".to_string(),
             })
@@ -2606,7 +2803,7 @@ mod tests {
         {
             let mut geometry_mut = tri.geometry_mut();
             let _previous_label = geometry_mut
-                .set_vertex_data(vertex_to_mutate, Some(3))
+                .set_vertex_data_by_key(vertex_to_mutate, Some(3))
                 .expect("Expected valid vertex key while mutating deterministic triangle");
         }
 
@@ -2642,6 +2839,29 @@ mod tests {
                 assert!(
                     detail.contains('3') && detail.contains("empty"),
                     "Detail should describe the empty slice: {detail}"
+                );
+            }
+            other => panic!("Expected ValidationFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_out_of_range_error_conversion() {
+        let fol_err = FoliationError::OutOfRangeVertexLabel {
+            vertex: 2,
+            label: 7,
+            expected_range_end: 2,
+        };
+        let cdt_err: CdtError = fol_err.into();
+
+        match cdt_err {
+            CdtError::ValidationFailed { check, detail } => {
+                assert_eq!(check, "foliation");
+                assert!(
+                    detail.contains("vertex index 2")
+                        && detail.contains("out-of-range time label 7")
+                        && detail.contains("expected 0..2"),
+                    "Detail should preserve out-of-range label context: {detail}"
                 );
             }
             other => panic!("Expected ValidationFailed, got {other:?}"),
@@ -2828,19 +3048,19 @@ mod prop_tests {
             // Initial metadata should be consistent
             prop_assert_eq!(triangulation.time_slices(), timeslices, "Time slices should match input");
             prop_assert_eq!(triangulation.dimension(), 2, "Dimension should be 2");
-            prop_assert_eq!(triangulation.metadata.modification_count, 0, "Initial modification count should be 0");
+            prop_assert_eq!(triangulation.metadata().modification_count, 0, "Initial modification count should be 0");
 
             // Should have creation event
-            prop_assert!(!triangulation.metadata.simulation_history.is_empty(), "Should have creation event");
+            prop_assert!(!triangulation.metadata().simulation_history.is_empty(), "Should have creation event");
 
-            let initial_mod_count = triangulation.metadata.modification_count;
+            let initial_mod_count = triangulation.metadata().modification_count;
 
             // Mutation should increment modification count
             {
                 let _mut_wrapper = triangulation.geometry_mut();
             }
 
-            prop_assert_eq!(triangulation.metadata.modification_count, initial_mod_count + 1,
+            prop_assert_eq!(triangulation.metadata().modification_count, initial_mod_count + 1,
                           "Modification count should increment after mutation");
         }
 
@@ -2898,7 +3118,7 @@ mod prop_tests {
         ) {
             let mut triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
 
-            let initial_history_len = triangulation.metadata.simulation_history.len();
+            let initial_history_len = triangulation.metadata().simulation_history.len();
             prop_assert!(initial_history_len >= 1, "Should have at least creation event");
 
             // Record some events
@@ -2914,7 +3134,7 @@ mod prop_tests {
                 });
             }
 
-            prop_assert_eq!(triangulation.metadata.simulation_history.len(), initial_history_len + 2,
+            prop_assert_eq!(triangulation.metadata().simulation_history.len(), initial_history_len + 2,
                           "Should have 2 additional events after recording");
         }
 

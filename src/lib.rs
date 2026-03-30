@@ -108,7 +108,7 @@ pub use geometry::traits::TriangulationQuery;
 /// ```
 /// use causal_triangulations::prelude::*;
 ///
-/// let tri = CdtTriangulation::from_seeded_points(12, 3, 2, 42)
+/// let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)
 ///     .expect("create seeded triangulation");
 /// assert!(tri.validate().is_ok());
 /// ```

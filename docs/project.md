@@ -36,7 +36,7 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 
 #### `cdt/triangulation.rs` — Foliation integration
 
-- `from_foliated_cylinder(vertices_per_slice, num_slices, seed)` — grid-based CDT construction with y-coordinate bucket labeling
+- `from_foliated_cylinder(vertices_per_slice, num_slices, seed)` _(crate-internal, provisional)_ — point-set strip constructor used for internal diagnostics while explicit strip construction lands
 - `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`
 - Validation: `validate_foliation()` (structural), `validate_causality()` (no edge spans >1 slice)
@@ -58,6 +58,6 @@ Together with `backends/delaunay.rs`, this module is the only place that directl
 
 ## Key Dependencies
 
-- `delaunay` (v0.7.4) — geometry backend (Delaunay triangulations, vertex data for time labels, `set_vertex_data` for O(1) label mutation)
+- `delaunay` (v0.7.4) — geometry backend (Delaunay triangulations, vertex data for time labels, `set_vertex_data_by_key` for O(1) label mutation)
 - `markov-chain-monte-carlo` — MCMC framework (`Chain::step_mut`, `ProposalMut`, `Target`)
 - `num-traits` — `ToPrimitive` for safe float→integer conversion
