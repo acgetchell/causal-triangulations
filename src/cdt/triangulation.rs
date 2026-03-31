@@ -26,6 +26,8 @@ pub struct CdtTriangulation<B> {
     cache: GeometryCache,
     /// Optional foliation assigning each vertex to a time slice.
     foliation: Option<Foliation>,
+    /// Modification counter value when foliation bookkeeping was last synchronized.
+    foliation_synced_at_modification: Option<u64>,
 }
 
 /// CDT-specific metadata
@@ -118,6 +120,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             },
             cache: GeometryCache::default(),
             foliation: None,
+            foliation_synced_at_modification: None,
         }
     }
 
@@ -249,6 +252,26 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             .is_some_and(|foliation| foliation.num_slices() != time_slices)
         {
             self.foliation = None;
+            self.foliation_synced_at_modification = None;
+        }
+    }
+
+    #[must_use]
+    fn has_current_foliation(&self) -> bool {
+        self.foliation.is_some()
+            && self.foliation_synced_at_modification == Some(self.metadata.modification_count)
+    }
+
+    fn mark_foliation_synchronized(&mut self) {
+        self.foliation_synced_at_modification = self
+            .foliation
+            .as_ref()
+            .map(|_| self.metadata.modification_count);
+    }
+
+    const fn invalidate_foliation_bookkeeping(&mut self) {
+        if self.foliation.is_some() {
+            self.foliation_synced_at_modification = None;
         }
     }
 
@@ -270,6 +293,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// This invalidates cached derived geometry quantities.
     pub fn bump_modification_count(&mut self) {
         self.invalidate_cache();
+        self.invalidate_foliation_bookkeeping();
         self.metadata.last_modified = Instant::now();
         self.metadata.modification_count += 1;
     }
@@ -646,6 +670,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         let mut tri = Self::new(backend, time_slices, dimension);
         tri.foliation = Some(foliation);
+        tri.mark_foliation_synchronized();
         Ok(tri)
     }
 
@@ -813,6 +838,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
         let mut tri = Self::new(backend, num_slices, 2);
         tri.foliation = Some(foliation);
+        tri.mark_foliation_synchronized();
 
         tri.validate_foliation().map_err(|err| {
             Self::foliated_cylinder_generation_error(
@@ -906,7 +932,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// # Errors
     ///
-    /// Returns error if `num_slices` is zero or if vertex coordinates cannot be read.
+    /// Returns error if `num_slices` is zero, if vertex coordinates cannot be
+    /// read, or if y-bucket assignment would leave any time slice empty.
     ///
     /// # Examples
     ///
@@ -974,12 +1001,27 @@ impl CdtTriangulation<DelaunayBackend2D> {
             range / f64::from(num_slices)
         };
 
+        // Plan per-vertex labels in memory first so foliation validation errors
+        // do not partially mutate backend state.
+        let mut assignments = Vec::with_capacity(y_coords.len());
+        let mut slice_sizes = vec![0usize; num_slices as usize];
+        for (vh, y) in &y_coords {
+            let t = if range.abs() < f64::EPSILON {
+                0
+            } else {
+                let band_index = ((y - y_min) / band_height).floor();
+                f64_band_to_u32(band_index, num_slices - 1)
+            };
+            assignments.push((vh.vertex_key(), t));
+            slice_sizes[t as usize] += 1;
+        }
+
+        let foliation =
+            Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
+
         // Clear stale cell classifications from any previous classify_all_cells() call,
         // since vertex time labels are about to change.
         let face_keys: Vec<_> = self.geometry.faces().map(|f| f.cell_key()).collect();
-
-        // Write time labels directly to vertex data via set_vertex_data_by_key (O(1) per vertex).
-        let mut slice_sizes = vec![0usize; num_slices as usize];
 
         for &key in &face_keys {
             if let Err(err) = self.geometry.set_cell_data_by_key(key, None) {
@@ -991,30 +1033,21 @@ impl CdtTriangulation<DelaunayBackend2D> {
             }
         }
 
-        for (vh, y) in &y_coords {
-            let t = if range.abs() < f64::EPSILON {
-                0
-            } else {
-                let band_index = ((y - y_min) / band_height).floor();
-                f64_band_to_u32(band_index, num_slices - 1)
-            };
-            if let Err(err) = self
-                .geometry
-                .set_vertex_data_by_key(vh.vertex_key(), Some(t))
-            {
+        // Write time labels directly to vertex data via set_vertex_data_by_key (O(1) per vertex).
+        for (vertex_key, t) in assignments {
+            if let Err(err) = self.geometry.set_vertex_data_by_key(vertex_key, Some(t)) {
                 return Err(CdtError::BackendMutationFailed {
                     operation: "set_vertex_data_by_key".to_string(),
-                    target: format!("vertex {:?}", vh.vertex_key()),
+                    target: format!("vertex {vertex_key:?}"),
                     detail: format!("failed while assigning time label {t}: {err}"),
                 });
             }
-            slice_sizes[t as usize] += 1;
         }
 
-        self.foliation =
-            Some(Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?);
         self.apply_time_slices(num_slices);
         self.bump_modification_count();
+        self.foliation = Some(foliation);
+        self.mark_foliation_synchronized();
         Ok(())
     }
 
@@ -1024,14 +1057,18 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
     /// Returns `true` if this triangulation has an assigned foliation.
     #[must_use]
-    pub const fn has_foliation(&self) -> bool {
-        self.foliation.is_some()
+    pub fn has_foliation(&self) -> bool {
+        self.has_current_foliation()
     }
 
     /// Returns a reference to the foliation, if present.
     #[must_use]
-    pub const fn foliation(&self) -> Option<&Foliation> {
-        self.foliation.as_ref()
+    pub fn foliation(&self) -> Option<&Foliation> {
+        if self.has_current_foliation() {
+            self.foliation.as_ref()
+        } else {
+            None
+        }
     }
 
     /// Returns the time slice label for a vertex, or `None` if no foliation
@@ -1041,14 +1078,14 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Delaunay triangulation (like CDT++ `vertex->info()`).
     #[must_use]
     pub fn time_label(&self, vertex: &DelaunayVertexHandle) -> Option<u32> {
-        self.foliation.as_ref()?;
+        self.foliation()?;
         self.geometry.vertex_data_by_key(vertex.vertex_key())
     }
 
     /// Returns all vertex handles that belong to time slice `t`.
     #[must_use]
     pub fn vertices_at_time(&self, t: u32) -> Vec<DelaunayVertexHandle> {
-        if self.foliation.is_none() {
+        if !self.has_foliation() {
             return vec![];
         }
         self.geometry
@@ -1060,7 +1097,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Returns per-slice vertex counts, or an empty slice if no foliation.
     #[must_use]
     pub fn slice_sizes(&self) -> &[usize] {
-        self.foliation.as_ref().map_or(&[], Foliation::slice_sizes)
+        self.foliation().map_or(&[], Foliation::slice_sizes)
     }
 
     // -------------------------------------------------------------------------
@@ -1094,7 +1131,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn edge_type(&self, edge: &DelaunayEdgeHandle) -> Option<EdgeType> {
-        self.foliation.as_ref()?;
+        self.foliation()?;
 
         let (v0, v1) = self.geometry.edge_endpoints(edge)?;
         let t0 = self.geometry.vertex_data_by_key(v0.vertex_key())?;
@@ -1130,7 +1167,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn cell_type(&self, face: &DelaunayFaceHandle) -> Option<CellType> {
-        self.foliation.as_ref()?;
+        self.foliation()?;
         let verts = self.geometry.face_vertices(face).ok()?;
         if verts.len() != 3 {
             return None;
@@ -1191,7 +1228,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn face_edge_types(&self, face: &DelaunayFaceHandle) -> Option<[EdgeType; 3]> {
-        self.foliation.as_ref()?;
+        self.foliation()?;
 
         let verts = self.geometry.face_vertices(face).ok()?;
         if verts.len() != 3 {
@@ -1240,7 +1277,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// assert!(classified > 0);
     /// ```
     pub fn classify_all_cells(&mut self) -> CdtResult<Option<usize>> {
-        if self.foliation.is_none() {
+        if !self.has_foliation() {
             return Ok(None);
         }
 
@@ -2328,6 +2365,15 @@ mod tests {
                 .expect("Expected valid vertex key while clearing label");
         }
 
+        assert!(
+            !tri.has_foliation(),
+            "mutable backend access should invalidate cached foliation bookkeeping"
+        );
+        assert!(
+            tri.slice_sizes().is_empty(),
+            "stale foliation bookkeeping should not be exposed via slice_sizes()"
+        );
+
         let result = tri.validate_foliation();
         assert!(matches!(
             result,
@@ -2568,6 +2614,44 @@ mod tests {
     fn test_assign_foliation_zero_slices() {
         let mut tri = CdtTriangulation::from_random_points(5, 2, 2).unwrap();
         assert!(tri.assign_foliation_by_y(0).is_err());
+    }
+
+    #[test]
+    fn test_assign_foliation_empty_slice_error_preserves_metadata() {
+        let mut tri =
+            CdtTriangulation::from_random_points(6, 2, 2).expect("Failed to create triangulation");
+        let initial_time_slices = tri.time_slices();
+        let initial_modification_count = tri.metadata().modification_count;
+        let vertex_keys: Vec<_> = tri
+            .geometry()
+            .vertices()
+            .map(|vh| vh.vertex_key())
+            .collect();
+
+        let requested_slices = u32::try_from(tri.vertex_count())
+            .expect("vertex count should fit into u32 for this test")
+            .saturating_add(1);
+        let result = tri.assign_foliation_by_y(requested_slices);
+
+        assert!(matches!(
+            result,
+            Err(CdtError::ValidationFailed { ref check, ref detail })
+                if check == "foliation" && detail.contains("time slice") && detail.contains("empty")
+        ));
+        assert_eq!(tri.time_slices(), initial_time_slices);
+        assert_eq!(
+            tri.metadata().modification_count,
+            initial_modification_count
+        );
+        assert!(!tri.has_foliation());
+
+        for key in vertex_keys {
+            assert_eq!(
+                tri.geometry().vertex_data_by_key(key),
+                None,
+                "failed assignment should not write vertex labels"
+            );
+        }
     }
 
     #[test]

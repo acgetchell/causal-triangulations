@@ -25,7 +25,7 @@ src/
 
 ## Key Modules
 
-#### `cdt/foliation.rs` — Foliation
+### `cdt/foliation.rs` — Foliation
 
 Assigns each vertex to a discrete time slice, enabling classification of edges as spacelike or timelike and triangles as up or down. See `docs/foliation.md` for design details.
 
@@ -34,14 +34,14 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 - `CellType` — `Up` (2,1) or `Down` (1,2) triangle classification, encoded as `i32` cell data
 - Time labels are stored directly as vertex data (`Vertex.data: Option<u32>`), mirroring CDT-plusplus’s `vertex->info()`
 
-#### `cdt/triangulation.rs` — Foliation integration
+### `cdt/triangulation.rs` — Foliation integration
 
 - `from_foliated_cylinder(vertices_per_slice, num_slices, seed)` _(crate-internal, provisional)_ — point-set strip constructor used for internal diagnostics while explicit strip construction lands
 - `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`
 - Validation: `validate_foliation()` (structural), `validate_causality()` (no edge spans >1 slice)
 
-#### `geometry/generators.rs` — Delaunay triangulation generators
+### `geometry/generators.rs` — Delaunay triangulation generators
 
 - `delaunay2_with_context` — builds a 2D Delaunay triangulation with optional seed
 - `build_delaunay2_with_data` — builds from coordinate + vertex-data pairs
@@ -50,7 +50,7 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 
 Together with `backends/delaunay.rs`, this module is the only place that directly imports from the `delaunay` crate.
 
-#### `util.rs` — Numeric helpers
+### `util.rs` — Numeric helpers
 
 - `saturating_usize_to_i32` — safe usize→i32 for Euler characteristic arithmetic
 - `y_to_time_bucket` — f64→Option<u32> via round(), for time-slice assignment

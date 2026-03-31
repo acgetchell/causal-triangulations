@@ -217,7 +217,8 @@ impl Foliation {
     ///
     /// # Errors
     ///
-    /// Returns error if `slice_sizes.len() != num_slices`.
+    /// Returns error if `slice_sizes.len() != num_slices` or if any slice is
+    /// empty.
     pub fn from_slice_sizes(
         slice_sizes: Vec<usize>,
         num_slices: u32,
@@ -227,6 +228,9 @@ impl Foliation {
                 slice_sizes_len: slice_sizes.len(),
                 num_slices,
             });
+        }
+        if let Some(slice) = slice_sizes.iter().position(|&slice_size| slice_size == 0) {
+            return Err(FoliationError::EmptySlice { slice });
         }
         Ok(Self {
             slice_sizes,
@@ -265,11 +269,10 @@ mod tests {
     }
 
     #[test]
-    fn test_foliation_empty() {
-        let fol = Foliation::from_slice_sizes(vec![0, 0, 0], 3).expect("valid foliation");
-        assert_eq!(fol.num_slices(), 3);
-        assert_eq!(fol.labeled_vertex_count(), 0);
-        assert_eq!(fol.slice_sizes(), &[0, 0, 0]);
+    fn test_foliation_empty_slice_rejected() {
+        let result = Foliation::from_slice_sizes(vec![0, 0, 0], 3);
+        let err = result.expect_err("empty slices should be rejected");
+        assert_eq!(err, FoliationError::EmptySlice { slice: 0 });
     }
 
     #[test]
