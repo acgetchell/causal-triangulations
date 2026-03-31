@@ -38,8 +38,6 @@ pub mod util;
 /// This module provides trait-based geometry operations that isolate CDT algorithms
 /// from specific geometry implementations.
 pub mod geometry {
-    /// CDT-agnostic mesh data structures.
-    pub mod mesh;
     /// High-level triangulation operations.
     pub mod operations;
     /// Core geometry traits for CDT abstraction.

@@ -2629,8 +2629,8 @@ mod tests {
 
     #[test]
     fn test_assign_foliation_by_y_updates_metadata() {
-        let mut tri =
-            CdtTriangulation::from_random_points(10, 2, 2).expect("Failed to create triangulation");
+        let mut tri = CdtTriangulation::from_seeded_points(15, 3, 2, 42)
+            .expect("Failed to create deterministic triangulation");
         let initial_last_modified = tri.metadata().last_modified;
         let initial_modification_count = tri.metadata().modification_count;
         let initial_edge_count = tri.edge_count();
@@ -2656,8 +2656,8 @@ mod tests {
 
     #[test]
     fn test_assign_foliation_by_y_invalidates_cache() {
-        let mut tri =
-            CdtTriangulation::from_random_points(10, 2, 2).expect("Failed to create triangulation");
+        let mut tri = CdtTriangulation::from_seeded_points(15, 3, 2, 42)
+            .expect("Failed to create deterministic triangulation");
 
         tri.refresh_cache();
         assert!(tri.cache.edge_count.is_some());
@@ -2897,6 +2897,132 @@ mod tests {
         }
 
         assert_eq!(tri.cell_type_from_data(&face), None);
+    }
+
+    #[test]
+    fn test_classify_all_cells_on_labeled_triangle() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("Should build labeled triangle");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
+            .expect("Should preserve labels as foliation");
+
+        // cell_type should classify before bulk classification
+        let face = tri
+            .geometry()
+            .faces()
+            .next()
+            .expect("Triangle should contain a face");
+        let live_ct = tri
+            .cell_type(&face)
+            .expect("Single face should be classifiable");
+        assert!(
+            live_ct == CellType::Up || live_ct == CellType::Down,
+            "Single face spanning two slices must be Up or Down"
+        );
+
+        // Bulk classify and verify stored data matches live classification
+        let count = tri
+            .classify_all_cells()
+            .expect("classify_all_cells should succeed")
+            .expect("foliation is present");
+        assert_eq!(count, 1, "Single-face triangulation should classify 1 cell");
+
+        let stored_ct = tri
+            .cell_type_from_data(&face)
+            .expect("Stored cell type should be present after classification");
+        assert_eq!(
+            live_ct, stored_ct,
+            "Stored classification should match live classification"
+        );
+    }
+
+    #[test]
+    fn test_vertices_at_time_with_foliation() {
+        let mut tri = CdtTriangulation::from_seeded_points(15, 3, 2, 42)
+            .expect("Failed to create deterministic triangulation");
+
+        tri.assign_foliation_by_y(3)
+            .expect("Should assign foliation");
+
+        // Every slice should have at least one vertex
+        for t in 0..3 {
+            let verts = tri.vertices_at_time(t);
+            assert!(
+                !verts.is_empty(),
+                "Slice {t} should have at least one vertex"
+            );
+            // Each returned vertex should actually carry that time label
+            for vh in &verts {
+                assert_eq!(
+                    tri.time_label(vh),
+                    Some(t),
+                    "Vertex returned by vertices_at_time({t}) should have label {t}"
+                );
+            }
+        }
+
+        // Sum across all slices should equal total vertex count
+        let total: usize = (0..3).map(|t| tri.vertices_at_time(t).len()).sum();
+        assert_eq!(
+            total,
+            tri.vertex_count(),
+            "Sum of vertices_at_time across all slices should equal vertex_count"
+        );
+
+        // Non-existent slice should return empty
+        assert!(tri.vertices_at_time(999).is_empty());
+    }
+
+    #[test]
+    fn test_assign_foliation_by_y_reassignment() {
+        let mut tri = CdtTriangulation::from_seeded_points(15, 3, 2, 42)
+            .expect("Failed to create deterministic triangulation");
+
+        // First assignment: 3 slices
+        tri.assign_foliation_by_y(3)
+            .expect("First foliation assignment should succeed");
+        assert!(tri.has_foliation());
+        assert_eq!(tri.time_slices(), 3);
+        let sizes_3 = tri.slice_sizes().to_vec();
+        assert_eq!(sizes_3.len(), 3);
+
+        // Classify cells so we can verify stale data is cleared
+        let classified_before = tri
+            .classify_all_cells()
+            .expect("classify_all_cells should succeed")
+            .expect("foliation is present");
+        assert!(classified_before > 0);
+
+        // Re-assign with 2 slices
+        tri.assign_foliation_by_y(2)
+            .expect("Re-assignment with different slice count should succeed");
+        assert!(tri.has_foliation());
+        assert_eq!(tri.time_slices(), 2);
+        let sizes_2 = tri.slice_sizes().to_vec();
+        assert_eq!(sizes_2.len(), 2);
+        assert_eq!(
+            sizes_2.iter().sum::<usize>(),
+            tri.vertex_count(),
+            "Slice sizes should sum to vertex count after re-assignment"
+        );
+
+        // Stale cell data from the 3-slice classification should be cleared;
+        // cell_type_from_data should return None until classify_all_cells is
+        // called again with the new foliation.
+        for face in tri.geometry().faces() {
+            assert_eq!(
+                tri.cell_type_from_data(&face),
+                None,
+                "Stale cell data should be cleared after foliation re-assignment"
+            );
+        }
+
+        // Foliation and causality validation should still pass
+        assert!(
+            tri.validate_foliation().is_ok(),
+            "Foliation should be valid after re-assignment"
+        );
     }
 
     fn deterministic_triangle_debug_summary(backend: &DelaunayBackend2D) -> String {

@@ -10,7 +10,9 @@
 //! CGAL's `vertex->info()` used in CDT-plusplus.  The `Foliation` struct
 //! tracks only aggregate bookkeeping (per-slice counts and total slices).
 
-/// Classification of an edge in a foliated triangulation.
+use std::fmt;
+
+/// Classification of an edge
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum EdgeType {
     /// Both endpoints share the same time slice.
@@ -155,8 +157,8 @@ pub enum FoliationError {
     },
 }
 
-impl std::fmt::Display for FoliationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for FoliationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SliceSizeMismatch {
                 slice_sizes_len,

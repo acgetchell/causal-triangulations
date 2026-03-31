@@ -9,7 +9,6 @@ src/
 ├── config.rs          # Simulation configuration
 ├── geometry/          # Geometry abstraction layer
 │   ├── traits.rs      # Core geometry traits (GeometryBackend, etc.)
-│   ├── mesh.rs        # CDT-agnostic mesh data structures
 │   ├── operations.rs  # High-level triangulation operations
 │   ├── generators.rs  # Delaunay triangulation generators (delaunay crate boundary)
 │   └── backends/      # Pluggable geometry backends

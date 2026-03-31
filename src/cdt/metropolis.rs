@@ -11,12 +11,13 @@ use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::MoveType;
 use crate::config::validate_simulation_settings;
 use crate::errors::{CdtError, CdtResult};
+use crate::geometry::CdtTriangulation2D;
 use crate::geometry::traits::TriangulationQuery;
 use markov_chain_monte_carlo::{Chain, ProposalMut, Target};
 use num_traits::cast::NumCast;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 // Test utilities are now handled through backend-agnostic CdtTriangulation::new
 
@@ -165,8 +166,8 @@ impl CdtTarget {
     }
 }
 
-impl Target<crate::geometry::CdtTriangulation2D> for CdtTarget {
-    fn log_prob(&self, state: &crate::geometry::CdtTriangulation2D) -> f64 {
+impl Target<CdtTriangulation2D> for CdtTarget {
+    fn log_prob(&self, state: &CdtTriangulation2D) -> f64 {
         let g = state.geometry();
         let action = self.action_config.calculate_action(
             u32::try_from(g.vertex_count()).unwrap_or_default(),
@@ -185,12 +186,12 @@ impl Target<crate::geometry::CdtTriangulation2D> for CdtTarget {
 /// is implemented.
 pub struct CdtProposal;
 
-impl ProposalMut<crate::geometry::CdtTriangulation2D> for CdtProposal {
+impl ProposalMut<CdtTriangulation2D> for CdtProposal {
     type Undo = ();
 
     fn propose_mut<R: Rng + ?Sized>(
         &self,
-        _state: &mut crate::geometry::CdtTriangulation2D,
+        _state: &mut CdtTriangulation2D,
         _rng: &mut R,
     ) -> Option<()> {
         // TODO (#55): Select a random ergodic move, attempt it on the
@@ -198,7 +199,7 @@ impl ProposalMut<crate::geometry::CdtTriangulation2D> for CdtProposal {
         None
     }
 
-    fn undo(&self, _state: &mut crate::geometry::CdtTriangulation2D, _token: ()) {
+    fn undo(&self, _state: &mut CdtTriangulation2D, _token: ()) {
         // No-op: propose_mut currently never succeeds.
     }
 }
@@ -245,10 +246,7 @@ impl MetropolisAlgorithm {
     /// [`MetropolisConfig::measurement_frequency`]. Downstream equilibrium
     /// filtering treats measurements with `step >= thermalization_steps` as
     /// post-thermalization.
-    pub fn run(
-        &self,
-        triangulation: crate::geometry::CdtTriangulation2D,
-    ) -> CdtResult<SimulationResultsBackend> {
+    pub fn run(&self, triangulation: CdtTriangulation2D) -> CdtResult<SimulationResultsBackend> {
         // Validate configuration to fail fast before any work
         self.config.validate()?;
 
@@ -362,9 +360,9 @@ pub struct SimulationResultsBackend {
     /// Measurements taken during simulation
     pub measurements: Vec<Measurement>,
     /// Total simulation time
-    pub elapsed_time: std::time::Duration,
+    pub elapsed_time: Duration,
     /// Final triangulation state
-    pub triangulation: crate::geometry::CdtTriangulation2D,
+    pub triangulation: CdtTriangulation2D,
 }
 
 impl SimulationResultsBackend {

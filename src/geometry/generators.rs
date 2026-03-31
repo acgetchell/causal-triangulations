@@ -5,7 +5,7 @@
 //! that directly imports from the `delaunay` crate (see
 //! `docs/dev/rust.md § Geometry Backend Isolation`).
 
-use crate::errors::CdtError;
+use crate::errors::{CdtError, CdtResult};
 use delaunay::core::builder::DelaunayTriangulationBuilder;
 use delaunay::geometry::kernel::AdaptiveKernel;
 use delaunay::geometry::point::Point;
@@ -33,7 +33,7 @@ pub fn delaunay2_with_context(
     number_of_vertices: u32,
     coordinate_range: (f64, f64),
     seed: Option<u64>,
-) -> crate::errors::CdtResult<DelaunayTriangulation2D> {
+) -> CdtResult<DelaunayTriangulation2D> {
     // Validate parameters before attempting generation
     if number_of_vertices < 3 {
         return Err(CdtError::InvalidGenerationParameters {
@@ -99,7 +99,7 @@ pub fn delaunay2_with_context(
 /// Returns error if vertex construction or Delaunay triangulation building fails.
 pub fn build_delaunay2_with_data(
     coords_with_data: &[([f64; 2], u32)],
-) -> crate::errors::CdtResult<DelaunayTriangulation2D> {
+) -> CdtResult<DelaunayTriangulation2D> {
     let vertices: Vec<_> = coords_with_data
         .iter()
         .enumerate()
@@ -114,7 +114,7 @@ pub fn build_delaunay2_with_data(
                     underlying_error: e.to_string(),
                 })
         })
-        .collect::<crate::errors::CdtResult<Vec<_>>>()?;
+        .collect::<CdtResult<Vec<_>>>()?;
 
     let vertex_count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
     DelaunayTriangulationBuilder::from_vertices(&vertices)

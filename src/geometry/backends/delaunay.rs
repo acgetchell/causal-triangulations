@@ -8,8 +8,7 @@
 // cspell:ignore vkey
 
 use crate::geometry::traits::{
-    FlipResult, GeometryBackend, SubdivisionResult, ThreadSafeBackend, TriangulationMut,
-    TriangulationQuery,
+    FlipResult, GeometryBackend, SubdivisionResult, TriangulationMut, TriangulationQuery,
 };
 use delaunay::core::DataType;
 use delaunay::core::delaunay_triangulation::DelaunayTriangulation;
@@ -203,13 +202,6 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> GeometryBackend
     fn backend_name(&self) -> &'static str {
         "delaunay"
     }
-}
-
-// The upstream `Tds`, `Triangulation`, and `DelaunayTriangulation` types auto-derive
-// `Send + Sync` (all internal storage is `SlotMap`/`DenseSlotMap` + `FxHashMap`, all `Send + Sync`).
-impl<VertexData: DataType + Send + Sync, CellData: DataType + Send + Sync, const D: usize>
-    ThreadSafeBackend for DelaunayBackend<VertexData, CellData, D>
-{
 }
 
 impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuery
@@ -1048,7 +1040,7 @@ mod tests {
     fn test_thread_safety() {
         fn assert_send_sync<T: Send + Sync>(_: &T) {}
 
-        // Verify the backend can be sent across threads (ThreadSafeBackend)
+        // Verify the backend implements Send + Sync for safe concurrent use
         let dt = crate::geometry::generators::random_delaunay2(5, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
         assert_send_sync(&backend);

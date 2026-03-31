@@ -1,5 +1,6 @@
 //! Error types for the CDT library.
 
+use crate::cdt::foliation::FoliationError;
 use std::fmt;
 
 /// Main error type for CDT operations.
@@ -156,8 +157,8 @@ impl From<markov_chain_monte_carlo::McmcError> for CdtError {
     }
 }
 
-impl From<crate::cdt::foliation::FoliationError> for CdtError {
-    fn from(err: crate::cdt::foliation::FoliationError) -> Self {
+impl From<FoliationError> for CdtError {
+    fn from(err: FoliationError) -> Self {
         Self::ValidationFailed {
             check: "foliation".to_string(),
             detail: err.to_string(),
