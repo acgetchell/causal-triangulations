@@ -117,11 +117,17 @@ pub fn build_delaunay2_with_data(
         .collect::<CdtResult<Vec<_>>>()?;
 
     let vertex_count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
+    let coordinate_range = coords_with_data
+        .iter()
+        .flat_map(|(c, _)| c.iter().copied())
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+            (lo.min(v), hi.max(v))
+        });
     DelaunayTriangulationBuilder::from_vertices(&vertices)
         .build::<i32>()
         .map_err(|e| CdtError::DelaunayGenerationFailed {
             vertex_count,
-            coordinate_range: (0.0, 0.0),
+            coordinate_range,
             attempt: 1,
             underlying_error: e.to_string(),
         })
