@@ -166,14 +166,29 @@ pub trait TriangulationOps: TriangulationQuery {
     ///
     /// # Notes
     /// - The returned edge order is **unspecified**.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::*;
+    ///
+    /// let backend = MockBackend::create_triangle();
+    /// let boundary = backend.boundary_edges();
+    /// assert_eq!(boundary.len(), 3);
+    /// ```
     fn boundary_edges(&self) -> Vec<Self::EdgeHandle> {
         // Build a lookup from an (unordered) vertex pair to the corresponding edge handle.
         let mut edge_by_vertices: HashMap<UnorderedPair<Self::VertexHandle>, Self::EdgeHandle> =
             HashMap::new();
 
         for edge in self.edges() {
-            if let Ok((v1, v2)) = self.edge_endpoints(&edge) {
-                edge_by_vertices.insert(UnorderedPair(v1, v2), edge);
+            match self.edge_endpoints(&edge) {
+                Some((v1, v2)) => {
+                    edge_by_vertices.insert(UnorderedPair(v1, v2), edge);
+                }
+                None => {
+                    log::trace!("boundary_edges: skipping unresolved edge {edge:?}");
+                }
             }
         }
 

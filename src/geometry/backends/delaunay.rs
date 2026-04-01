@@ -1,17 +1,20 @@
 //! Delaunay backend - wraps the delaunay crate.
 //!
-//! This is the ONLY module that directly uses types from the delaunay crate,
-//! providing complete isolation of the geometry implementation from CDT logic.
+//! Together with `src/geometry/generators.rs`, this module is one of only
+//! two places that directly import from the `delaunay` crate.  All modules
+//! outside `src/geometry/` access Delaunay functionality through the trait
+//! abstractions and handle types defined here
+//! (see `docs/dev/rust.md § Geometry Backend Isolation`).
 // cspell:ignore vkey
 
 use crate::geometry::traits::{
-    FlipResult, GeometryBackend, SubdivisionResult, ThreadSafeBackend, TriangulationMut,
-    TriangulationQuery,
+    FlipResult, GeometryBackend, SubdivisionResult, TriangulationMut, TriangulationQuery,
 };
+use delaunay::core::DataType;
 use delaunay::core::delaunay_triangulation::DelaunayTriangulation;
 use delaunay::core::edge::EdgeKey;
 use delaunay::core::triangulation_data_structure::{CellKey, VertexKey};
-use delaunay::geometry::kernel::RobustKernel;
+use delaunay::geometry::kernel::AdaptiveKernel;
 
 /// Delaunay backend wrapping the delaunay crate's triangulation (f64 coordinates).
 ///
@@ -21,19 +24,30 @@ use delaunay::geometry::kernel::RobustKernel;
 /// are not yet implemented and return [`DelaunayError::NotImplemented`]. The `clear()` and
 /// `reserve_capacity()` methods are currently no-ops that emit a `log::warn!` diagnostic.
 #[derive(Debug)]
-pub struct DelaunayBackend<VertexData, CellData, const D: usize>
-where
-    VertexData: delaunay::core::DataType,
-    CellData: delaunay::core::DataType,
-{
+pub struct DelaunayBackend<VertexData: DataType, CellData: DataType, const D: usize> {
     /// The underlying Delaunay triangulation from the delaunay crate
-    dt: DelaunayTriangulation<RobustKernel<f64>, VertexData, CellData, D>,
+    dt: DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D>,
 }
 
 /// Opaque handle for vertices in Delaunay backend
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DelaunayVertexHandle {
     key: VertexKey,
+}
+
+impl DelaunayVertexHandle {
+    /// Returns the underlying slotmap key for use in secondary maps.
+    #[must_use]
+    pub(crate) const fn vertex_key(&self) -> VertexKey {
+        self.key
+    }
+
+    /// Creates a handle from a raw vertex key (crate-internal).
+    #[must_use]
+    #[expect(dead_code, reason = "needed by ergodic moves (#55)")]
+    pub(crate) const fn from_key(key: VertexKey) -> Self {
+        Self { key }
+    }
 }
 
 /// Opaque handle for edges in Delaunay backend
@@ -46,6 +60,14 @@ pub struct DelaunayEdgeHandle {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DelaunayFaceHandle {
     key: CellKey,
+}
+
+impl DelaunayFaceHandle {
+    /// Returns the underlying cell key for payload lookups and updates by key.
+    #[must_use]
+    pub(crate) const fn cell_key(&self) -> CellKey {
+        self.key
+    }
 }
 
 /// Error type for Delaunay backend operations
@@ -82,15 +104,13 @@ pub enum DelaunayError {
     },
 }
 
-impl<VertexData, CellData, const D: usize> DelaunayBackend<VertexData, CellData, D>
-where
-    VertexData: delaunay::core::DataType,
-    CellData: delaunay::core::DataType,
+impl<VertexData: DataType, CellData: DataType, const D: usize>
+    DelaunayBackend<VertexData, CellData, D>
 {
     /// Create a new Delaunay backend from an existing Delaunay triangulation
     #[must_use]
     pub const fn from_triangulation(
-        dt: DelaunayTriangulation<RobustKernel<f64>, VertexData, CellData, D>,
+        dt: DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D>,
     ) -> Self {
         Self { dt }
     }
@@ -99,7 +119,7 @@ where
     #[must_use]
     pub const fn triangulation(
         &self,
-    ) -> &DelaunayTriangulation<RobustKernel<f64>, VertexData, CellData, D> {
+    ) -> &DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D> {
         &self.dt
     }
 
@@ -122,13 +142,56 @@ where
     pub const fn topology_kind(&self) -> delaunay::topology::traits::TopologyKind {
         self.dt.topology_kind()
     }
+
+    /// Returns the vertex payload for `key`, if present.
+    #[must_use]
+    pub fn vertex_data_by_key(&self, key: VertexKey) -> Option<VertexData> {
+        self.dt.tds().get_vertex_by_key(key)?.data().copied()
+    }
+
+    /// Returns the cell payload for `key`, if present.
+    #[must_use]
+    pub fn cell_data_by_key(&self, key: CellKey) -> Option<CellData> {
+        self.dt.tds().get_cell(key)?.data().copied()
+    }
+
+    /// Sets the optional payload for a vertex identified by `key`.
+    ///
+    /// Returns the previous payload for a valid key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DelaunayError::InvalidVertex`] if `key` is not present.
+    pub fn set_vertex_data_by_key(
+        &mut self,
+        key: VertexKey,
+        data: Option<VertexData>,
+    ) -> Result<Option<VertexData>, DelaunayError> {
+        self.dt
+            .set_vertex_data(key, data)
+            .ok_or(DelaunayError::InvalidVertex { key })
+    }
+
+    /// Sets the optional payload for a cell identified by `key`.
+    ///
+    /// Returns the previous payload for a valid key.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DelaunayError::InvalidFace`] if `key` is not present.
+    pub fn set_cell_data_by_key(
+        &mut self,
+        key: CellKey,
+        data: Option<CellData>,
+    ) -> Result<Option<CellData>, DelaunayError> {
+        self.dt
+            .set_cell_data(key, data)
+            .ok_or(DelaunayError::InvalidFace { key })
+    }
 }
 
-impl<VertexData, CellData, const D: usize> GeometryBackend
+impl<VertexData: DataType, CellData: DataType, const D: usize> GeometryBackend
     for DelaunayBackend<VertexData, CellData, D>
-where
-    VertexData: delaunay::core::DataType,
-    CellData: delaunay::core::DataType,
 {
     type Coordinate = f64;
     type VertexHandle = DelaunayVertexHandle;
@@ -141,21 +204,8 @@ where
     }
 }
 
-// The upstream `Tds`, `Triangulation`, and `DelaunayTriangulation` types auto-derive
-// `Send + Sync` (all internal storage is `SlotMap`/`DenseSlotMap` + `FxHashMap`, all `Send + Sync`).
-impl<VertexData, CellData, const D: usize> ThreadSafeBackend
+impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuery
     for DelaunayBackend<VertexData, CellData, D>
-where
-    VertexData: delaunay::core::DataType + Send + Sync,
-    CellData: delaunay::core::DataType + Send + Sync,
-{
-}
-
-impl<VertexData, CellData, const D: usize> TriangulationQuery
-    for DelaunayBackend<VertexData, CellData, D>
-where
-    VertexData: delaunay::core::DataType,
-    CellData: delaunay::core::DataType,
 {
     fn vertex_count(&self) -> usize {
         self.dt.number_of_vertices()
@@ -217,16 +267,49 @@ where
     fn edge_endpoints(
         &self,
         edge: &Self::EdgeHandle,
-    ) -> Result<(Self::VertexHandle, Self::VertexHandle), Self::Error> {
+    ) -> Option<(Self::VertexHandle, Self::VertexHandle)> {
         let (v0, v1) = edge.key.endpoints();
-        // Validate that both endpoint vertices exist in this triangulation
-        if self.dt.vertex_coords(v0).is_none() || self.dt.vertex_coords(v1).is_none() {
-            return Err(DelaunayError::InvalidEdge { v0, v1 });
+        let tds = self.dt.tds();
+
+        let contains_v0 = tds.contains_vertex_key(v0);
+        let contains_v1 = tds.contains_vertex_key(v1);
+        // Fast reject for invalid endpoint handles.
+        if !(contains_v0 && contains_v1) {
+            log::trace!(
+                "edge_endpoints: missing endpoint(s) for edge {:?} (contains_v0={}, contains_v1={})",
+                edge.key,
+                contains_v0,
+                contains_v1,
+            );
+            return None;
         }
-        Ok((
-            DelaunayVertexHandle { key: v0 },
-            DelaunayVertexHandle { key: v1 },
-        ))
+
+        // Validate membership using local adjacency around v0.
+        // This is O(deg(v0)) rather than scanning all edges.
+        let edge_exists = self.dt.incident_edges(v0).any(|candidate| {
+            let (c0, c1) = candidate.endpoints();
+            (c0 == v0 && c1 == v1) || (c0 == v1 && c1 == v0)
+        });
+
+        if edge_exists {
+            return Some((
+                DelaunayVertexHandle { key: v0 },
+                DelaunayVertexHandle { key: v1 },
+            ));
+        }
+
+        log::trace!(
+            "edge_endpoints: unable to resolve edge {:?} (contains_v0={}, contains_v1={}, edge_exists={}, V={}, E={}, F={})",
+            edge.key,
+            contains_v0,
+            contains_v1,
+            edge_exists,
+            self.dt.number_of_vertices(),
+            self.dt.as_triangulation().number_of_edges(),
+            self.dt.number_of_cells(),
+        );
+
+        None
     }
 
     fn adjacent_faces(
@@ -286,11 +369,8 @@ where
     }
 }
 
-impl<VertexData, CellData, const D: usize> TriangulationMut
+impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
     for DelaunayBackend<VertexData, CellData, D>
-where
-    VertexData: delaunay::core::DataType,
-    CellData: delaunay::core::DataType,
 {
     fn insert_vertex(
         &mut self,
@@ -366,14 +446,11 @@ where
     }
 }
 
-/// Type alias
-///
-/// Uses `()` vertex data — CDT metadata is tracked at the [`CdtTriangulation`](crate::cdt::triangulation::CdtTriangulation) level.
-pub type DelaunayBackend2D = DelaunayBackend<(), i32, 2>;
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
+
+    use crate::geometry::generators::build_delaunay2_with_data;
 
     use super::*;
 
@@ -381,7 +458,7 @@ mod tests {
     fn test_is_delaunay_various_sizes() {
         // is_delaunay() should pass for valid triangulations of all sizes
         for n in [3, 4, 10, 20] {
-            let dt = crate::util::generate_random_delaunay2(n, (0.0, 10.0));
+            let dt = crate::geometry::generators::random_delaunay2(n, (0.0, 10.0));
             let backend = DelaunayBackend::from_triangulation(dt);
             assert!(
                 backend.is_delaunay(),
@@ -393,7 +470,7 @@ mod tests {
     #[test]
     fn test_is_valid_and_is_delaunay_consistency() {
         // is_delaunay (Levels 1–4) implies is_valid (Levels 1–3)
-        let dt = crate::util::generate_random_delaunay2(5, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(5, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         assert!(backend.is_valid(), "Triangulation should be valid");
@@ -406,7 +483,7 @@ mod tests {
     #[test]
     fn test_is_delaunay_minimal_triangulation() {
         // Test with minimal triangulation (3 vertices)
-        let dt = crate::util::generate_random_delaunay2(3, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         assert!(backend.is_valid(), "Minimal triangulation should be valid");
@@ -426,7 +503,7 @@ mod tests {
 
     #[test]
     fn test_vertices_iterator() {
-        let dt = crate::util::generate_random_delaunay2(5, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(5, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let vertices: Vec<_> = backend.vertices().collect();
@@ -447,7 +524,7 @@ mod tests {
 
     #[test]
     fn test_edges_iterator() {
-        let dt = crate::util::generate_random_delaunay2(4, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(4, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let edges: Vec<_> = backend.edges().collect();
@@ -468,7 +545,7 @@ mod tests {
 
     #[test]
     fn test_faces_iterator() {
-        let dt = crate::util::generate_random_delaunay2(5, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(5, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let faces: Vec<_> = backend.faces().collect();
@@ -491,7 +568,7 @@ mod tests {
 
     #[test]
     fn test_vertex_coordinates() {
-        let dt = crate::util::generate_random_delaunay2(3, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let vertices: Vec<_> = backend.vertices().collect();
@@ -511,7 +588,7 @@ mod tests {
 
     #[test]
     fn test_vertex_coordinates_invalid_handle() {
-        let dt = crate::util::generate_random_delaunay2(3, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         // Use a high-generation key that cannot exist in the triangulation's slotmap
@@ -526,7 +603,7 @@ mod tests {
 
     #[test]
     fn test_face_vertices() {
-        let dt = crate::util::generate_random_delaunay2(3, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let faces: Vec<_> = backend.faces().collect();
@@ -550,7 +627,7 @@ mod tests {
 
     #[test]
     fn test_face_vertices_invalid_handle() {
-        let dt = crate::util::generate_random_delaunay2(3, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let bogus_key = CellKey::from(slotmap::KeyData::from_ffi(u64::MAX));
@@ -564,7 +641,7 @@ mod tests {
 
     #[test]
     fn test_edge_endpoints() {
-        let dt = crate::util::generate_random_delaunay2(4, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(4, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let edges: Vec<_> = backend.edges().collect();
@@ -590,8 +667,34 @@ mod tests {
     }
 
     #[test]
+    fn test_edge_endpoints_for_hand_built_triangle() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("Should build hand-built triangle");
+        let backend = DelaunayBackend::from_triangulation(dt);
+
+        let vertices: HashSet<_> = backend.vertices().collect();
+        let edges: Vec<_> = backend.edges().collect();
+
+        assert_eq!(edges.len(), 3, "Hand-built triangle should expose 3 edges");
+
+        for edge in &edges {
+            let (v0, v1) = backend
+                .edge_endpoints(edge)
+                .expect("Should retrieve endpoints for hand-built triangle edge");
+            assert!(
+                vertices.contains(&v0),
+                "First endpoint should be a valid vertex in the hand-built triangle"
+            );
+            assert!(
+                vertices.contains(&v1),
+                "Second endpoint should be a valid vertex in the hand-built triangle"
+            );
+        }
+    }
+
+    #[test]
     fn test_edge_endpoints_invalid_handle() {
-        let dt = crate::util::generate_random_delaunay2(3, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let k1 = VertexKey::from(slotmap::KeyData::from_ffi(u64::MAX - 1));
@@ -599,16 +702,61 @@ mod tests {
         let invalid_handle = DelaunayEdgeHandle {
             key: EdgeKey::new(k1, k2),
         };
-        let err = backend.edge_endpoints(&invalid_handle).unwrap_err();
         assert!(
-            matches!(err, DelaunayError::InvalidEdge { .. }),
-            "Expected InvalidEdge, got: {err}"
+            backend.edge_endpoints(&invalid_handle).is_none(),
+            "Invalid edge handle should return None"
+        );
+    }
+
+    #[test]
+    fn test_edge_endpoints_non_edge_with_existing_vertices_returns_none() {
+        let dt = build_delaunay2_with_data(&[
+            ([0.0, 0.0], 0),
+            ([2.0, 0.0], 0),
+            ([2.2, 1.2], 0),
+            ([1.0, 2.0], 0),
+            ([-0.2, 1.0], 0),
+        ])
+        .expect("Should build deterministic 5-point triangulation");
+        let backend = DelaunayBackend::from_triangulation(dt);
+
+        let edge_pairs: HashSet<_> = backend
+            .edges()
+            .map(|edge| {
+                let (a, b) = edge.key.endpoints();
+                (a, b)
+            })
+            .collect();
+
+        let vertex_keys: Vec<_> = backend.vertices().map(|vh| vh.key).collect();
+
+        let mut non_edge_pair = None;
+        'find_non_edge: for i in 0..vertex_keys.len() {
+            for j in (i + 1)..vertex_keys.len() {
+                let a = vertex_keys[i];
+                let b = vertex_keys[j];
+                if !edge_pairs.contains(&(a, b)) && !edge_pairs.contains(&(b, a)) {
+                    non_edge_pair = Some((a, b));
+                    break 'find_non_edge;
+                }
+            }
+        }
+
+        let (a, b) =
+            non_edge_pair.expect("A planar 5-vertex triangulation must have a non-edge pair");
+        let non_edge_handle = DelaunayEdgeHandle {
+            key: EdgeKey::new(a, b),
+        };
+
+        assert!(
+            backend.edge_endpoints(&non_edge_handle).is_none(),
+            "Non-edge handle with existing vertices should return None"
         );
     }
 
     #[test]
     fn test_adjacent_faces() {
-        let dt = crate::util::generate_random_delaunay2(4, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(4, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let vertices: Vec<_> = backend.vertices().collect();
@@ -638,7 +786,7 @@ mod tests {
 
     #[test]
     fn test_incident_edges() {
-        let dt = crate::util::generate_random_delaunay2(4, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(4, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let vertices: Vec<_> = backend.vertices().collect();
@@ -668,7 +816,7 @@ mod tests {
 
     #[test]
     fn test_face_neighbors() {
-        let dt = crate::util::generate_random_delaunay2(5, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(5, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let faces: Vec<_> = backend.faces().collect();
@@ -698,7 +846,7 @@ mod tests {
 
     #[test]
     fn test_face_neighbors_invalid_handle() {
-        let dt = crate::util::generate_random_delaunay2(3, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let bogus_key = CellKey::from(slotmap::KeyData::from_ffi(u64::MAX));
@@ -712,7 +860,7 @@ mod tests {
 
     #[test]
     fn test_adjacent_faces_invalid_handle() {
-        let dt = crate::util::generate_random_delaunay2(3, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let bogus_key = VertexKey::from(slotmap::KeyData::from_ffi(u64::MAX));
@@ -726,7 +874,7 @@ mod tests {
 
     #[test]
     fn test_incident_edges_invalid_handle() {
-        let dt = crate::util::generate_random_delaunay2(3, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let bogus_key = VertexKey::from(slotmap::KeyData::from_ffi(u64::MAX));
@@ -740,7 +888,7 @@ mod tests {
 
     #[test]
     fn test_dimension() {
-        let dt = crate::util::generate_random_delaunay2(3, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
         assert_eq!(backend.dimension(), 2, "DelaunayBackend2D should be 2D");
     }
@@ -748,7 +896,7 @@ mod tests {
     #[test]
     fn test_euler_characteristic() {
         // For a planar triangulation without boundary: V - E + F = 1
-        let dt = crate::util::generate_seeded_delaunay2(6, (0.0, 10.0), 42);
+        let dt = crate::geometry::generators::seeded_delaunay2(6, (0.0, 10.0), 42);
         let backend = DelaunayBackend::from_triangulation(dt);
         let chi = backend.euler_characteristic();
         assert!(
@@ -760,7 +908,7 @@ mod tests {
     #[test]
     fn test_face_neighbor_symmetry() {
         // If face A lists B as a neighbor, then B must list A as a neighbor
-        let dt = crate::util::generate_seeded_delaunay2(8, (0.0, 10.0), 42);
+        let dt = crate::geometry::generators::seeded_delaunay2(8, (0.0, 10.0), 42);
         let backend = DelaunayBackend::from_triangulation(dt);
 
         for face in backend.faces() {
@@ -783,7 +931,7 @@ mod tests {
     fn test_topology_consistency() {
         // Test that topology is consistent across different query methods
         // Use a fixed seed for reproducibility and to avoid random topology issues
-        let dt = crate::util::generate_seeded_delaunay2(6, (0.0, 10.0), 42);
+        let dt = crate::geometry::generators::seeded_delaunay2(6, (0.0, 10.0), 42);
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let vertex_count = backend.vertex_count();
@@ -794,8 +942,9 @@ mod tests {
         // For a triangulation without the outer infinite face: V - E + F = 1
         // For a triangulation with the outer infinite face: V - E + F = 2
         // Note: Random triangulations may occasionally have degeneracies that result in χ = 0
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-        let euler = vertex_count as i32 - edge_count as i32 + face_count as i32;
+        let euler = crate::util::saturating_usize_to_i32(vertex_count)
+            - crate::util::saturating_usize_to_i32(edge_count)
+            + crate::util::saturating_usize_to_i32(face_count);
         assert!(
             (0..=2).contains(&euler),
             "Euler characteristic should be in range [0, 2] for planar triangulation, got {euler} (V={vertex_count}, E={edge_count}, F={face_count})"
@@ -818,7 +967,7 @@ mod tests {
     #[test]
     fn test_minimal_triangulation_queries() {
         // Test with minimal valid triangulation (3 vertices, 1 face)
-        let dt = crate::util::generate_random_delaunay2(3, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         // Test all vertices are accessible
@@ -843,7 +992,7 @@ mod tests {
     #[test]
     fn test_topology_kind_is_euclidean() {
         // Triangulations built via the builder default to Euclidean topology
-        let dt = crate::util::generate_random_delaunay2(5, (0.0, 10.0));
+        let dt = crate::geometry::generators::random_delaunay2(5, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
         assert_eq!(
@@ -858,7 +1007,7 @@ mod tests {
         // is_valid() runs Levels 1–3 (structural/topological) via as_triangulation().validate();
         // is_delaunay() runs Levels 1–4 (including the Delaunay property).
         // For a well-formed Delaunay triangulation both should pass.
-        let dt = crate::util::generate_seeded_delaunay2(8, (0.0, 10.0), 99);
+        let dt = crate::geometry::generators::seeded_delaunay2(8, (0.0, 10.0), 99);
         let backend = DelaunayBackend::from_triangulation(dt);
 
         let valid = backend.is_valid();
@@ -875,9 +1024,9 @@ mod tests {
 
     #[test]
     fn test_builder_produces_correct_vertex_count() {
-        // Verify the builder path in generate_delaunay2_with_context preserves vertex count
+        // Verify the builder path in delaunay2_with_context preserves vertex count
         for n in [3, 5, 10, 20] {
-            let dt = crate::util::generate_delaunay2_with_context(n, (0.0, 10.0), Some(42))
+            let dt = crate::geometry::generators::delaunay2_with_context(n, (0.0, 10.0), Some(42))
                 .expect("Builder should succeed");
             assert_eq!(
                 dt.number_of_vertices(),
@@ -891,8 +1040,8 @@ mod tests {
     fn test_thread_safety() {
         fn assert_send_sync<T: Send + Sync>(_: &T) {}
 
-        // Verify the backend can be sent across threads (ThreadSafeBackend)
-        let dt = crate::util::generate_random_delaunay2(5, (0.0, 10.0));
+        // Verify the backend implements Send + Sync for safe concurrent use
+        let dt = crate::geometry::generators::random_delaunay2(5, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
         assert_send_sync(&backend);
     }

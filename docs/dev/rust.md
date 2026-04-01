@@ -162,11 +162,21 @@ Modules are declared from `src/lib.rs` (and `src/main.rs` for binaries), includi
 
 All public items must have documentation.
 
+Public functions and methods should include a `# Examples` section with a runnable doctest demonstrating basic usage. Doctests serve as both documentation and regression tests.
+
 After Rust changes, verify documentation builds:
 
 ```bash
 just doc-check
 ```
+
+---
+
+## Re-exports
+
+Types that are part of the crate's **stable public API** (documented, intended for external consumption) should be re-exported from the crate root (`src/lib.rs`). Internal-use public types (e.g., backend-specific handles) should not be re-exported to avoid API bloat.
+
+When adding a new public API type, add a corresponding `pub use` line in the re-export block at the top of `lib.rs`.
 
 ---
 
@@ -234,6 +244,24 @@ Before adding a dependency, consider:
 2. MSRV compatibility
 3. maintenance status
 4. dependency tree size
+
+---
+
+## Geometry Backend Isolation
+
+Direct `use delaunay::` imports are **restricted** to the `src/geometry/` subtree:
+
+- `src/geometry/backends/delaunay.rs` — wraps `delaunay` crate types behind trait-based handles
+- `src/geometry/generators.rs` — Delaunay triangulation generators (`delaunay2_with_context`, `build_delaunay2_with_data`)
+
+No module outside `src/geometry/` may import from the `delaunay` crate directly. Instead use:
+
+- The `DelaunayBackend2D` type alias (defined in `src/lib.rs` geometry module)
+- Handle types from `crate::geometry::backends::delaunay` (`DelaunayVertexHandle`, `DelaunayEdgeHandle`, `DelaunayFaceHandle`)
+- Trait methods from `TriangulationQuery` / `TriangulationMut`
+- Generator utilities from `crate::geometry::generators`
+
+This ensures the `delaunay` crate can be upgraded or replaced without touching CDT logic.
 
 ---
 
