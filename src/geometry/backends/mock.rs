@@ -156,11 +156,10 @@ impl TriangulationQuery for MockBackend {
     fn edge_endpoints(
         &self,
         edge: &Self::EdgeHandle,
-    ) -> Result<(Self::VertexHandle, Self::VertexHandle), Self::Error> {
+    ) -> Option<(Self::VertexHandle, Self::VertexHandle)> {
         self.edges
             .get(&edge.0)
             .map(|&(v1, v2)| (MockVertexHandle(v1), MockVertexHandle(v2)))
-            .ok_or(MockError::Edge(edge.0))
     }
 
     fn adjacent_faces(
