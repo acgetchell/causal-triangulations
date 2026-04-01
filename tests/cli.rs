@@ -99,7 +99,39 @@ fn cdt_cli_invalid_measurement_frequency_too_large() {
     cmd.arg("--simulate");
 
     cmd.assert().failure().stderr(predicate::str::contains(
-        "Measurement frequency cannot be greater than total steps",
+        "Invalid configuration: measurement_frequency (got: 200, expected: ≤ steps (100))",
+    ));
+}
+
+#[test]
+fn cdt_cli_accepts_boundary_aligned_measurement_schedule() {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+
+    cmd.arg("--vertices").arg("10");
+    cmd.arg("--timeslices").arg("3");
+    cmd.arg("--steps").arg("20");
+    cmd.arg("--thermalization-steps").arg("15");
+    cmd.arg("--measurement-frequency").arg("10");
+    cmd.arg("--seed").arg("42");
+    cmd.arg("--simulate");
+    cmd.env("RUST_LOG", "error");
+
+    cmd.assert().success();
+}
+
+#[test]
+fn cdt_cli_rejects_missing_post_thermalization_measurement() {
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+
+    cmd.arg("--vertices").arg("10");
+    cmd.arg("--timeslices").arg("3");
+    cmd.arg("--steps").arg("19");
+    cmd.arg("--thermalization-steps").arg("15");
+    cmd.arg("--measurement-frequency").arg("10");
+    cmd.arg("--simulate");
+
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "Invalid configuration: measurement schedule",
     ));
 }
 

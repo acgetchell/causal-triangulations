@@ -3,9 +3,7 @@
 //! This module contains integration tests that verify the complete CDT simulation
 //! workflows, topology preservation, error handling, and consistency between components.
 
-use causal_triangulations::cdt::action::ActionConfig;
-use causal_triangulations::cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig};
-use causal_triangulations::cdt::triangulation::CdtTriangulation;
+use causal_triangulations::prelude::*;
 
 #[cfg(test)]
 mod integration_tests {

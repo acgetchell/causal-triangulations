@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 #![allow(clippy::multiple_crate_versions)]
 #![warn(missing_docs)]
 
@@ -37,12 +38,13 @@ pub mod util;
 /// This module provides trait-based geometry operations that isolate CDT algorithms
 /// from specific geometry implementations.
 pub mod geometry {
-    /// CDT-agnostic mesh data structures.
-    pub mod mesh;
     /// High-level triangulation operations.
     pub mod operations;
     /// Core geometry traits for CDT abstraction.
     pub mod traits;
+
+    /// Delaunay triangulation generators.
+    pub mod generators;
 
     /// Geometry backend implementations.
     pub mod backends {
@@ -56,9 +58,8 @@ pub mod geometry {
     // Type aliases for common backend combinations
     /// 2D Delaunay backend (most common configuration).
     ///
-    /// Uses `f64` coordinates with `()` vertex data and `i32` cell data.
-    /// CDT metadata is tracked separately by [`CdtTriangulation`](crate::cdt::triangulation::CdtTriangulation).
-    pub type DelaunayBackend2D = backends::delaunay::DelaunayBackend<(), i32, 2>;
+    /// Uses `f64` coordinates with `u32` vertex data (time-slice labels) and `i32` cell data.
+    pub type DelaunayBackend2D = backends::delaunay::DelaunayBackend<u32, i32, 2>;
 
     /// Default backend type for 2D CDT simulations
     pub type DefaultBackend = DelaunayBackend2D;
@@ -73,6 +74,8 @@ pub mod cdt {
     pub mod action;
     /// Ergodic moves for triangulation modifications.
     pub mod ergodic_moves;
+    /// Foliation data structures (time labels, edge classification).
+    pub mod foliation;
     /// Metropolis-Hastings algorithm implementation.
     pub mod metropolis;
     /// CDT triangulation wrapper.
@@ -82,6 +85,7 @@ pub mod cdt {
 // Re-exports for convenience
 pub use cdt::action::{ActionConfig, compute_regge_action};
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
+pub use cdt::foliation::{CellType, EdgeType, Foliation};
 pub use cdt::metropolis::{CdtProposal, CdtTarget};
 pub use cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig, SimulationResultsBackend};
 pub use config::{CdtConfig, TestConfig};
@@ -92,6 +96,106 @@ use std::time::Duration;
 
 // Trait-based triangulation (recommended)
 pub use cdt::triangulation::CdtTriangulation;
+pub use geometry::traits::TriangulationQuery;
+
+/// Prelude module for convenient imports.
+///
+/// Provides commonly used types for CDT construction, simulation, and analysis.
+///
+/// # Quick start
+///
+/// ```
+/// use causal_triangulations::prelude::*;
+///
+/// let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)
+///     .expect("create seeded triangulation");
+/// assert!(tri.validate().is_ok());
+/// ```
+pub mod prelude {
+    // Core CDT types
+    pub use crate::CdtTriangulation;
+    pub use crate::geometry::CdtTriangulation2D;
+    pub use crate::geometry::traits::TriangulationQuery;
+
+    // Foliation / classification
+    pub use crate::cdt::foliation::{CellType, EdgeType, Foliation};
+
+    // Action
+    pub use crate::cdt::action::{ActionConfig, compute_regge_action};
+
+    // Ergodic moves
+    pub use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
+
+    // Metropolis simulation
+    pub use crate::cdt::metropolis::{
+        CdtProposal, CdtTarget, MetropolisAlgorithm, MetropolisConfig,
+    };
+
+    // Configuration and errors
+    pub use crate::config::CdtConfig;
+    pub use crate::errors::{CdtError, CdtResult};
+
+    /// Focused exports for CDT triangulation construction and queries.
+    ///
+    /// Lighter than `prelude::*` — just the types needed for building and
+    /// inspecting triangulations (the most common doctest pattern).
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
+    ///     .expect("create triangulation");
+    /// assert!(tri.vertex_count() >= 3);
+    /// ```
+    pub mod triangulation {
+        pub use crate::CdtTriangulation;
+        pub use crate::cdt::foliation::{CellType, EdgeType, Foliation};
+        pub use crate::errors::{CdtError, CdtResult};
+        pub use crate::geometry::traits::TriangulationQuery;
+    }
+
+    /// Focused exports for running CDT simulations.
+    pub mod simulation {
+        pub use crate::CdtTriangulation;
+        pub use crate::cdt::action::{ActionConfig, compute_regge_action};
+        pub use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
+        pub use crate::cdt::metropolis::{
+            CdtProposal, CdtTarget, MetropolisAlgorithm, MetropolisConfig,
+        };
+        pub use crate::config::CdtConfig;
+        pub use crate::errors::{CdtError, CdtResult};
+    }
+
+    /// Focused exports for geometry backend construction and querying.
+    ///
+    /// This prelude is intended for backend-level workflows (e.g. building
+    /// triangulations with explicit vertex data and running trait-based geometry
+    /// queries), without pulling in simulation-specific symbols.
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::*;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ])
+    /// .expect("build labeled triangle");
+    ///
+    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// assert!(backend.is_valid());
+    /// ```
+    pub mod geometry {
+        pub use crate::geometry::DelaunayBackend2D;
+        pub use crate::geometry::backends::delaunay::{
+            DelaunayBackend, DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
+        };
+        pub use crate::geometry::backends::mock::MockBackend;
+        pub use crate::geometry::generators::{build_delaunay2_with_data, delaunay2_with_context};
+        pub use crate::geometry::operations::TriangulationOps;
+        pub use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
+    }
+}
 
 /// Runs a CDT simulation with the specified configuration.
 ///
@@ -108,15 +212,14 @@ pub use cdt::triangulation::CdtTriangulation;
 ///
 /// # Errors
 ///
-/// Returns [`CdtError::InvalidParameters`] if the configuration fails validation
-/// (e.g., invalid measurement frequency, inconsistent parameters).
-/// Returns [`CdtError::UnsupportedDimension`] if an unsupported dimension (not 2D) is specified.
+/// Returns [`CdtError::InvalidConfiguration`] if the configuration fails validation
+/// (e.g., invalid measurement frequency or inconsistent parameters).
+/// Returns [`CdtError::UnsupportedDimension`] if a validated configuration requests
+/// a simulation dimension other than 2.
 /// Returns triangulation generation errors from the underlying triangulation creation.
 pub fn run_simulation(config: &CdtConfig) -> CdtResult<cdt::metropolis::SimulationResultsBackend> {
     // Validate configuration early to fail fast with clear error messages
-    if let Err(err) = config.validate() {
-        return Err(CdtError::InvalidParameters(err));
-    }
+    config.validate()?;
 
     let vertices = config.vertices;
     let timeslices = config.timeslices;
@@ -235,13 +338,17 @@ mod lib_tests {
         let result = run_simulation(&config);
         assert!(result.is_err(), "Should reject zero measurement frequency");
 
-        if let Err(CdtError::InvalidParameters(msg)) = result {
-            assert!(
-                msg.contains("Measurement frequency must be positive"),
-                "Error message should mention measurement frequency: {msg}"
-            );
+        if let Err(CdtError::InvalidConfiguration {
+            setting,
+            provided_value,
+            expected,
+        }) = result
+        {
+            assert_eq!(setting, "measurement_frequency");
+            assert_eq!(provided_value, "0");
+            assert_eq!(expected, "≥ 1");
         } else {
-            panic!("Expected InvalidParameters error");
+            panic!("Expected InvalidConfiguration error");
         }
     }
 
@@ -257,13 +364,17 @@ mod lib_tests {
             "Should reject measurement frequency greater than steps"
         );
 
-        if let Err(CdtError::InvalidParameters(msg)) = result {
-            assert!(
-                msg.contains("cannot be greater than total steps"),
-                "Error message should mention steps constraint: {msg}"
-            );
+        if let Err(CdtError::InvalidConfiguration {
+            setting,
+            provided_value,
+            expected,
+        }) = result
+        {
+            assert_eq!(setting, "measurement_frequency");
+            assert_eq!(provided_value, "200");
+            assert_eq!(expected, "≤ steps (100)");
         } else {
-            panic!("Expected InvalidParameters error");
+            panic!("Expected InvalidConfiguration error");
         }
     }
 
@@ -275,13 +386,17 @@ mod lib_tests {
         let result = run_simulation(&config);
         assert!(result.is_err(), "Should reject too few vertices");
 
-        if let Err(CdtError::InvalidParameters(msg)) = result {
-            assert!(
-                msg.contains("vertices must be at least 3"),
-                "Error message should mention vertex constraint: {msg}"
-            );
+        if let Err(CdtError::InvalidConfiguration {
+            setting,
+            provided_value,
+            expected,
+        }) = result
+        {
+            assert_eq!(setting, "vertices");
+            assert_eq!(provided_value, "2");
+            assert_eq!(expected, "≥ 3");
         } else {
-            panic!("Expected InvalidParameters error");
+            panic!("Expected InvalidConfiguration error");
         }
     }
 
@@ -293,13 +408,17 @@ mod lib_tests {
         let result = run_simulation(&config);
         assert!(result.is_err(), "Should reject negative temperature");
 
-        if let Err(CdtError::InvalidParameters(msg)) = result {
-            assert!(
-                msg.contains("Temperature must be positive"),
-                "Error message should mention temperature constraint: {msg}"
-            );
+        if let Err(CdtError::InvalidConfiguration {
+            setting,
+            provided_value,
+            expected,
+        }) = result
+        {
+            assert_eq!(setting, "temperature");
+            assert_eq!(provided_value, "-1");
+            assert_eq!(expected, "finite and positive");
         } else {
-            panic!("Expected InvalidParameters error");
+            panic!("Expected InvalidConfiguration error");
         }
     }
 

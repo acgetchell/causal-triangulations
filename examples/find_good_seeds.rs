@@ -11,7 +11,7 @@
     clippy::uninlined_format_args
 )]
 
-use causal_triangulations::cdt::triangulation::CdtTriangulation;
+use causal_triangulations::prelude::triangulation::*;
 
 /// Test a seed with given parameters and return Euler characteristic if valid.
 ///
