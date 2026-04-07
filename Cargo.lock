@@ -682,9 +682,9 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "markov-chain-monte-carlo"
-version = "0.1.0"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d09926c3ffb698bdc331fe2d12b8fbc2ff1ddb3ef798ebc2213b84660728ed41"
+checksum = "8fe2cb27f6677a7b14f7ef0c1ea8fe41ad58c13879ba3d58dd86d220c09705ec"
 dependencies = [
  "rand 0.10.0",
 ]
@@ -1216,7 +1216,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys",
