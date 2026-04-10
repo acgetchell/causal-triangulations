@@ -88,7 +88,7 @@ pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
 pub use cdt::foliation::{CellType, EdgeType, Foliation};
 pub use cdt::metropolis::{CdtProposal, CdtTarget};
 pub use cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig, SimulationResultsBackend};
-pub use config::{CdtConfig, TestConfig};
+pub use config::{CdtConfig, CdtTopology, TestConfig};
 pub use errors::{CdtError, CdtResult};
 
 use cdt::metropolis::Measurement;
@@ -132,7 +132,7 @@ pub mod prelude {
     };
 
     // Configuration and errors
-    pub use crate::config::CdtConfig;
+    pub use crate::config::{CdtConfig, CdtTopology};
     pub use crate::errors::{CdtError, CdtResult};
 
     /// Focused exports for CDT triangulation construction and queries.
@@ -233,14 +233,23 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<cdt::metropolis::Simulati
     log::info!("Dimensionality: {}", config.dimension.unwrap_or(2));
     log::info!("Number of vertices: {vertices}");
     log::info!("Number of timeslices: {timeslices}");
+    log::info!("Topology: {:?}", config.topology);
     log::info!("Using trait-based backend system");
 
-    // Create initial triangulation (seeded if seed is provided for full reproducibility)
-    let triangulation = if let Some(seed) = config.seed {
-        log::info!("RNG seed: {seed}");
-        CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?
-    } else {
-        CdtTriangulation::from_random_points(vertices, timeslices, 2)?
+    // Create initial triangulation based on topology
+    let triangulation = match config.topology {
+        config::CdtTopology::Toroidal => {
+            log::info!("Constructing toroidal CDT (S¹×S¹)");
+            CdtTriangulation::from_toroidal_cdt(vertices, timeslices)?
+        }
+        config::CdtTopology::OpenBoundary => {
+            if let Some(seed) = config.seed {
+                log::info!("RNG seed: {seed}");
+                CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?
+            } else {
+                CdtTriangulation::from_random_points(vertices, timeslices, 2)?
+            }
+        }
     };
 
     log::info!(
@@ -310,6 +319,7 @@ mod lib_tests {
             cosmological_constant: 0.1,
             simulate: false,
             seed: Some(42),
+            topology: config::CdtTopology::OpenBoundary,
         }
     }
 

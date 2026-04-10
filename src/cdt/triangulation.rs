@@ -6,6 +6,7 @@
 use crate::cdt::foliation::{
     CellType, EdgeType, Foliation, FoliationError, classify_cell, classify_edge,
 };
+use crate::config::CdtTopology;
 use crate::errors::{CdtError, CdtResult};
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
@@ -36,6 +37,8 @@ pub struct CdtMetadata {
     pub time_slices: u32,
     /// Dimensionality of the spacetime
     pub dimension: u8,
+    /// Topology of the spatial slices
+    pub topology: CdtTopology,
     /// Time when this triangulation was created
     pub creation_time: Instant,
     /// Time of last modification
@@ -99,8 +102,18 @@ pub enum SimulationEvent {
 }
 
 impl<B: TriangulationQuery> CdtTriangulation<B> {
-    /// Create new CDT triangulation
+    /// Create new CDT triangulation with open boundary topology.
     pub fn new(geometry: B, time_slices: u32, dimension: u8) -> Self {
+        Self::with_topology(geometry, time_slices, dimension, CdtTopology::OpenBoundary)
+    }
+
+    /// Create new CDT triangulation with explicit topology.
+    pub fn with_topology(
+        geometry: B,
+        time_slices: u32,
+        dimension: u8,
+        topology: CdtTopology,
+    ) -> Self {
         let vertex_count = geometry.vertex_count();
         let creation_event = SimulationEvent::Created {
             vertex_count,
@@ -112,6 +125,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             metadata: CdtMetadata {
                 time_slices,
                 dimension,
+                topology,
                 creation_time: Instant::now(),
                 last_modified: Instant::now(),
                 modification_count: 0,
@@ -218,20 +232,24 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     pub fn validate_topology(&self) -> CdtResult<()> {
         let euler_char = self.geometry.euler_characteristic();
 
-        // For 2D planar triangulations with boundary (random points), expect χ = 1
-        // For closed 2D surfaces, expect χ = 2. Since we generate from random points,
-        // we typically get triangulations with convex hull boundary (χ = 1)
-
         if self.dimension() == 2 {
-            // Planar triangulation with boundary should have χ = 1
-            // Closed surfaces would have χ = 2
-            if euler_char != 1 && euler_char != 2 {
+            let expected = match self.metadata.topology {
+                // Open boundary: planar with boundary χ=1, closed surface χ=2
+                CdtTopology::OpenBoundary => [1, 2].as_slice(),
+                // Toroidal (S¹×S¹): Euler characteristic must be 0
+                CdtTopology::Toroidal => [0].as_slice(),
+            };
+
+            if !expected.contains(&euler_char) {
+                let topo_label = match self.metadata.topology {
+                    CdtTopology::OpenBoundary => "open boundary (expected χ=1 or 2)",
+                    CdtTopology::Toroidal => "toroidal (expected χ=0)",
+                };
                 return Err(CdtError::ValidationFailed {
                     check: "topology".to_string(),
                     detail: format!(
-                        "Euler characteristic χ={euler_char} unexpected for 2D triangulation \
-                         (expected 1 for boundary or 2 for closed surface; \
-                         V={}, E={}, F={})",
+                        "Euler characteristic χ={euler_char} unexpected for 2D {topo_label} \
+                         triangulation (V={}, E={}, F={})",
                         self.geometry.vertex_count(),
                         self.geometry.edge_count(),
                         self.geometry.face_count(),
@@ -927,6 +945,81 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Err(CdtError::ValidationFailed {
             check: "cdt_construction".to_string(),
             detail: "from_cdt_strip is not yet implemented: requires explicit mesh backend"
+                .to_string(),
+        })
+    }
+
+    /// Construct a foliated 1+1 CDT on a torus (S¹×S¹).
+    ///
+    /// Places `vertices_per_slice` vertices per time slice, uniformly spaced
+    /// on S¹ (spatial coordinate periodic in `[0, 1)`).  Time slices wrap:
+    /// slice `num_slices - 1` connects back to slice `0`.  Each quad between
+    /// adjacent slices is split into one Up (2,1) and one Down (1,2) triangle.
+    ///
+    /// The triangulation is built by explicit combinatorial connectivity via
+    /// [`build_explicit_delaunay2_with_topology`](crate::geometry::generators::build_explicit_delaunay2_with_topology),
+    /// guaranteeing CDT-valid structure by construction.
+    ///
+    /// # Arguments
+    ///
+    /// * `vertices_per_slice` — Number of vertices in each spatial slice (≥ 3).
+    /// * `num_slices` — Number of time slices (≥ 2).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidGenerationParameters`] if `vertices_per_slice < 3`
+    /// or `num_slices < 2`.
+    /// Returns [`CdtError::ValidationFailed`] because the underlying `delaunay` crate
+    /// does not yet support non-sphere Euler characteristics for explicit cell
+    /// construction (see [delaunay#313]).
+    ///
+    /// [delaunay#313]: https://github.com/acgetchell/delaunay/issues/313
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// // Placeholder: currently returns an error pending delaunay#313.
+    /// let result = CdtTriangulation::from_toroidal_cdt(4, 3);
+    /// assert!(result.is_err());
+    /// ```
+    pub fn from_toroidal_cdt(vertices_per_slice: u32, num_slices: u32) -> CdtResult<Self> {
+        if vertices_per_slice < 3 {
+            return Err(CdtError::InvalidGenerationParameters {
+                issue: "Insufficient vertices per slice".to_string(),
+                provided_value: vertices_per_slice.to_string(),
+                expected_range: "≥ 3".to_string(),
+            });
+        }
+        if num_slices < 2 {
+            return Err(CdtError::InvalidGenerationParameters {
+                issue: "Insufficient number of time slices".to_string(),
+                provided_value: num_slices.to_string(),
+                expected_range: "≥ 2".to_string(),
+            });
+        }
+
+        // TODO(delaunay#313): Implement toroidal CDT construction once the
+        // delaunay crate's explicit cell builder supports non-sphere Euler
+        // characteristics.  All infrastructure is in place:
+        // - CdtTopology enum and config/CLI wiring
+        // - build_explicit_delaunay2_with_topology() generator
+        // - Topology-aware validate_topology() (χ=0 for toroidal)
+        // - run_simulation() dispatches on topology
+        //
+        // The constructor will:
+        // 1. Build vertex_specs with periodic spatial coordinates
+        // 2. Build explicit CDT cells (Up/Down per quad, wrapping in both dims)
+        // 3. Call build_explicit_delaunay2_with_topology with Pseudomanifold
+        // 4. Set GlobalTopology::Toroidal on the resulting DT
+        // 5. Derive foliation from vertex labels and validate
+
+        Err(CdtError::ValidationFailed {
+            check: "toroidal_construction".to_string(),
+            detail: "from_toroidal_cdt is not yet implemented: blocked on \
+                     delaunay#313 (explicit cell construction rejects non-sphere \
+                     Euler characteristic)"
                 .to_string(),
         })
     }
@@ -3186,6 +3279,46 @@ mod tests {
             }
             other => panic!("Expected ValidationFailed, got {other:?}"),
         }
+    }
+
+    // =========================================================================
+    // Toroidal CDT tests (placeholder — blocked on delaunay#313)
+    // =========================================================================
+
+    /// Helper: assert `from_toroidal_cdt` returns the expected placeholder error.
+    fn assert_toroidal_cdt_blocked(result: CdtResult<CdtTriangulation<DelaunayBackend2D>>) {
+        match result {
+            Err(CdtError::ValidationFailed { check, detail }) => {
+                assert_eq!(check, "toroidal_construction");
+                assert!(
+                    detail.contains("delaunay#313"),
+                    "Error should reference the blocking issue: {detail}"
+                );
+            }
+            Ok(_) => panic!("Expected toroidal construction to be blocked"),
+            Err(other) => panic!("Expected ValidationFailed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_from_toroidal_cdt_blocked() {
+        assert_toroidal_cdt_blocked(CdtTriangulation::from_toroidal_cdt(4, 3));
+    }
+
+    #[test]
+    fn test_from_toroidal_cdt_invalid_params() {
+        // Too few vertices per slice
+        assert!(CdtTriangulation::from_toroidal_cdt(2, 3).is_err());
+        // Too few slices
+        assert!(CdtTriangulation::from_toroidal_cdt(4, 1).is_err());
+    }
+
+    #[test]
+    fn test_validate_topology_open_boundary() {
+        let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("create triangulation");
+
+        // OpenBoundary topology should pass validation
+        assert!(tri.validate_topology().is_ok());
     }
 }
 

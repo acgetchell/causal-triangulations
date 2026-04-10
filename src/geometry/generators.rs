@@ -7,6 +7,7 @@
 
 use crate::errors::{CdtError, CdtResult};
 use delaunay::core::builder::DelaunayTriangulationBuilder;
+use delaunay::core::triangulation::TopologyGuarantee;
 use delaunay::geometry::kernel::AdaptiveKernel;
 use delaunay::geometry::point::Point;
 use delaunay::geometry::traits::coordinate::Coordinate;
@@ -124,6 +125,79 @@ pub fn build_delaunay2_with_data(
             (lo.min(v), hi.max(v))
         });
     DelaunayTriangulationBuilder::from_vertices(&vertices)
+        .build::<i32>()
+        .map_err(|e| CdtError::DelaunayGenerationFailed {
+            vertex_count,
+            coordinate_range,
+            attempt: 1,
+            underlying_error: e.to_string(),
+        })
+}
+
+/// Builds a 2D triangulation from explicit vertex coordinates, data, and cell connectivity.
+///
+/// Each vertex is specified as `([x, y], data)`.  Each cell is a `Vec<usize>` of
+/// vertex indices (must contain exactly 3 indices for 2D).  The triangulation is
+/// assembled combinatorially — **no Delaunay point-insertion** is performed.
+///
+/// The `topology_guarantee` parameter controls which topological invariants the
+/// builder validates.  Use [`TopologyGuarantee::Pseudomanifold`] for non-spherical
+/// topologies (e.g., torus with χ = 0).
+///
+/// This is the only call site for
+/// [`DelaunayTriangulationBuilder::from_vertices_and_cells`], maintaining
+/// geometry backend isolation.
+///
+/// # Errors
+///
+/// Returns error if vertex construction fails or the explicit cell builder
+/// rejects the input (e.g., invalid cell arity, out-of-bounds indices, or
+/// topological validation failure).
+pub fn build_explicit_delaunay2(
+    coords_with_data: &[([f64; 2], u32)],
+    cells: &[Vec<usize>],
+) -> CdtResult<DelaunayTriangulation2D> {
+    build_explicit_delaunay2_with_topology(coords_with_data, cells, TopologyGuarantee::DEFAULT)
+}
+
+/// Like [`build_explicit_delaunay2`] but with an explicit [`TopologyGuarantee`].
+///
+/// Use [`TopologyGuarantee::Pseudomanifold`] for meshes whose Euler characteristic
+/// differs from the default closed-sphere expectation (e.g., toroidal meshes with χ = 0).
+///
+/// # Errors
+///
+/// Same as [`build_explicit_delaunay2`].
+pub fn build_explicit_delaunay2_with_topology(
+    coords_with_data: &[([f64; 2], u32)],
+    cells: &[Vec<usize>],
+    topology_guarantee: TopologyGuarantee,
+) -> CdtResult<DelaunayTriangulation2D> {
+    let vertices: Vec<_> = coords_with_data
+        .iter()
+        .enumerate()
+        .map(|(i, (coord, data))| {
+            let point = Point::<f64, 2>::new(*coord);
+            VertexBuilder::<f64, u32, 2>::default()
+                .point(point)
+                .data(*data)
+                .build()
+                .map_err(|e| CdtError::VertexBuildFailed {
+                    context: format!("vertex {i}"),
+                    underlying_error: e.to_string(),
+                })
+        })
+        .collect::<CdtResult<Vec<_>>>()?;
+
+    let vertex_count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
+    let coordinate_range = coords_with_data
+        .iter()
+        .flat_map(|(c, _)| c.iter().copied())
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+            (lo.min(v), hi.max(v))
+        });
+    DelaunayTriangulationBuilder::from_vertices_and_cells(&vertices, cells)
+        .topology_guarantee(topology_guarantee)
         .build::<i32>()
         .map_err(|e| CdtError::DelaunayGenerationFailed {
             vertex_count,

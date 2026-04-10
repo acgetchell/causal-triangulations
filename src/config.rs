@@ -10,9 +10,29 @@
 use crate::cdt::action::ActionConfig;
 use crate::cdt::metropolis::MetropolisConfig;
 use crate::errors::{CdtError, CdtResult};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use dirs::home_dir;
 use std::path::{Component, Path, PathBuf};
+
+/// Topology of the spatial slices in the CDT triangulation.
+///
+/// Determines the boundary conditions for the simulation:
+/// - [`OpenBoundary`](Self::OpenBoundary) — finite strip with boundary (χ = 1)
+/// - [`Toroidal`](Self::Toroidal) — periodic in both space and time (S¹×S¹, χ = 0)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum CdtTopology {
+    /// Finite strip with open boundaries (Euler characteristic χ = 1).
+    ///
+    /// This is the current default while toroidal construction is blocked
+    /// on [delaunay#313](https://github.com/acgetchell/delaunay/issues/313).
+    #[default]
+    OpenBoundary,
+    /// Periodic in both space and time, forming a torus S¹×S¹ (χ = 0).
+    ///
+    /// Blocked on [delaunay#313](https://github.com/acgetchell/delaunay/issues/313);
+    /// will become the default once implemented.
+    Toroidal,
+}
 
 /// Main configuration structure for CDT simulations.
 ///
@@ -69,6 +89,10 @@ pub struct CdtConfig {
     /// Optional RNG seed for reproducible simulations
     #[arg(long)]
     pub seed: Option<u64>,
+
+    /// Topology of spatial slices
+    #[arg(long, value_enum, default_value_t = CdtTopology::default())]
+    pub topology: CdtTopology,
 }
 
 /// Controls how dimension overrides are applied when merging configuration.
@@ -114,6 +138,8 @@ pub struct CdtConfigOverrides {
         reason = "None=no override, Some(None)=clear seed, Some(Some(v))=set seed"
     )]
     pub seed: Option<Option<u64>>,
+    /// Optional override for the topology.
+    pub topology: Option<CdtTopology>,
 }
 
 impl CdtConfig {
@@ -179,6 +205,10 @@ impl CdtConfig {
 
         if let Some(seed) = overrides.seed {
             merged.seed = seed;
+        }
+
+        if let Some(topology) = overrides.topology {
+            merged.topology = topology;
         }
 
         merged
@@ -360,6 +390,7 @@ impl CdtConfig {
             cosmological_constant: 0.1,
             simulate: true,
             seed: None,
+            topology: CdtTopology::OpenBoundary,
         }
     }
 
@@ -451,6 +482,7 @@ impl TestConfig {
             cosmological_constant: 0.1,
             simulate: true,
             seed: None,
+            topology: CdtTopology::OpenBoundary,
         }
     }
 
@@ -470,6 +502,7 @@ impl TestConfig {
             cosmological_constant: 0.1,
             simulate: true,
             seed: None,
+            topology: CdtTopology::OpenBoundary,
         }
     }
 
@@ -489,6 +522,7 @@ impl TestConfig {
             cosmological_constant: 0.1,
             simulate: true,
             seed: None,
+            topology: CdtTopology::OpenBoundary,
         }
     }
 }
