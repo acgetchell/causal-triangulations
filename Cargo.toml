@@ -32,22 +32,22 @@ harness = false
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "4.6.0", features = [ "derive" ] }
-delaunay = "0.7.4"
-markov-chain-monte-carlo = "0.1.0"
+clap = { version = "4.6.1", features = [ "derive" ] }
+delaunay = "0.7.5"
+markov-chain-monte-carlo = "0.2.0"
 dirs = "6.0.0"
 env_logger = "0.11.10"
 float-ord = "0.3.2"
 log = "0.4.29"
 num-traits = "0.2.19"
-rand = "0.10.0"
+rand = "0.10.1"
 serde = { version = "1.0.228", features = [ "derive" ] }
 thiserror = "2.0.17"
 
 [dev-dependencies]
 approx = "0.5.1"
 slotmap = "1.1.1"
-assert_cmd = "2.2.0"
+assert_cmd = "2.2.1"
 criterion = { version = "0.8.2", features = [ "html_reports" ] }
 predicates = "3.1.4"
 proptest = "1.11.0"
