@@ -374,11 +374,12 @@ def create_tag(tag_version: str, *, force: bool = False) -> None:
             source_rel = source.relative_to(changelog.parent)
         except ValueError:
             source_rel = source
+        source_rel_posix = source_rel.as_posix()
         tag_message = (
             f"Version {version}\n\n"
             f"This release contains extensive changes. See full changelog:\n"
-            f"<{repo_url}/blob/{tag_version}/{source_rel}#{anchor}>\n\n"
-            f"For detailed release notes, refer to {source_rel} in the repository.\n"
+            f"<{repo_url}/blob/{tag_version}/{source_rel_posix}#{anchor}>\n\n"
+            f"For detailed release notes, refer to {source_rel_posix} in the repository.\n"
         )
         is_truncated = True
         print(f"{_BLUE}→ Creating annotated tag with CHANGELOG.md reference{_RESET}")

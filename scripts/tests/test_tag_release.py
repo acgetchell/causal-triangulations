@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import PureWindowsPath
 from unittest.mock import patch
 
 import pytest
 
-from tag_release import _get_repo_url, validate_semver
+from tag_release import _get_repo_url, create_tag, validate_semver
 
 # ---------------------------------------------------------------------------
 # _get_repo_url
@@ -81,3 +82,34 @@ class TestValidateSemver:
     def test_invalid_tags(self, tag: str) -> None:
         with pytest.raises(ValueError, match="SemVer"):
             validate_semver(tag)
+
+
+# ---------------------------------------------------------------------------
+# create_tag
+# ---------------------------------------------------------------------------
+
+
+class TestCreateTag:
+    def test_truncated_message_uses_posix_source_url(
+        self,
+        tmp_path,
+    ) -> None:
+        changelog = tmp_path / "CHANGELOG.md"
+        with (
+            patch("tag_release._tag_exists", return_value=False),
+            patch("tag_release.find_changelog", return_value=changelog),
+            patch("tag_release.extract_changelog_section") as mock_extract_changelog,
+            patch("tag_release._github_anchor", return_value="v123"),
+            patch("tag_release._get_repo_url", return_value="https://github.com/owner/repo"),
+            patch("tag_release.run_git_command_with_input") as mock_run_git_with_input,
+        ):
+            mock_extract_changelog.return_value = (
+                "x" * 125_001,
+                PureWindowsPath("docs\\archive\\changelog\\1.2.md"),
+            )
+
+            create_tag("v1.2.3")
+
+        tag_message = mock_run_git_with_input.call_args.kwargs["input_data"]
+        assert "<https://github.com/owner/repo/blob/v1.2.3/docs/archive/changelog/1.2.md#v123>" in tag_message
+        assert "docs\\archive\\changelog\\1.2.md" not in tag_message

@@ -340,9 +340,23 @@ semgrep: _ensure-uv
 semgrep-test: _ensure-uv
     #!/usr/bin/env bash
     set -euo pipefail
-    cd tests/semgrep
-    uv run semgrep scan --test --strict --config ../../semgrep.yaml src/project_rules/rust_style.rs
-    uv run semgrep scan --test --strict --config ../../semgrep.yaml scripts/tests/python_exceptions.py
+    config_dir="$(mktemp -d "${TMPDIR:-/tmp}/ct-semgrep-config.XXXXXX")"
+    cleanup() {
+        find "$config_dir" -type l -exec unlink {} \;
+        find "$config_dir" -depth -type d -exec rmdir {} +
+    }
+    trap cleanup EXIT
+
+    # Semgrep directory test mode maps fixture paths to config paths, so mirror
+    # each fixture to the shared config while keeping semgrep.yaml authoritative.
+    while IFS= read -r -d '' fixture; do
+        rel="${fixture#tests/semgrep/}"
+        config_path="$config_dir/${rel%.*}.yaml"
+        mkdir -p "$(dirname "$config_path")"
+        ln -s "$PWD/semgrep.yaml" "$config_path"
+    done < <(find tests/semgrep -type f ! -name '*.fixed' -print0)
+
+    uv run semgrep scan --test --strict --config "$config_dir" tests/semgrep
 
 # Running the binary
 run *args:
@@ -415,7 +429,7 @@ setup-tools:
         else
             echo "Install required tools via your system package manager, or ensure they are on PATH."
         fi
-    echo "Required tools: uv, jq, taplo, yamllint, shfmt, shellcheck, actionlint, git-cliff, dprint, typos, cargo-llvm-cov"
+        echo "Required tools: uv, jq, taplo, yamllint, shfmt, shellcheck, actionlint, git-cliff, dprint, typos, cargo-llvm-cov"
         echo ""
     fi
 
