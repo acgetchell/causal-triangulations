@@ -324,6 +324,7 @@ rules:
         - "/scripts/postprocess_changelog.py"
         - "/scripts/subprocess_utils.py"
         - "/scripts/tag_release.py"
+        - "/scripts/tests/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
     # Regex catches obvious unannotated definitions while avoiding a custom
     # Python parser rule that would duplicate ty.

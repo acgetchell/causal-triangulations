@@ -73,6 +73,25 @@ struct CachedValue<T> {
     modification_count: u64,
 }
 
+/// Rewrites explicit toroidal builder failures with CDT-level generation context.
+///
+/// The lower geometry builder reports failures in terms of its input shape; this
+/// helper preserves the underlying diagnostic while normalizing the public error
+/// fields to the toroidal CDT constructor's vertex count, domain, and first attempt.
+fn remap_toroidal_generation_error(error: CdtError, total_vertices: u32) -> CdtError {
+    match error {
+        CdtError::DelaunayGenerationFailed {
+            underlying_error, ..
+        } => CdtError::DelaunayGenerationFailed {
+            vertex_count: total_vertices,
+            coordinate_range: (0.0, 1.0),
+            attempt: 1,
+            underlying_error,
+        },
+        other => other,
+    }
+}
+
 /// Events in simulation history
 #[derive(Debug, Clone)]
 pub enum SimulationEvent {
@@ -1537,17 +1556,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
 
         let domain = [1.0_f64, 1.0_f64];
-        let dt = build_toroidal_delaunay2(&vertex_specs, &cells, domain).map_err(|e| match e {
-            CdtError::DelaunayGenerationFailed {
-                underlying_error, ..
-            } => CdtError::DelaunayGenerationFailed {
-                vertex_count: total_vertices,
-                coordinate_range: (0.0, 1.0),
-                attempt: 1,
-                underlying_error,
-            },
-            other => other,
-        })?;
+        let dt = build_toroidal_delaunay2(&vertex_specs, &cells, domain)
+            .map_err(|e| remap_toroidal_generation_error(e, total_vertices))?;
 
         let backend = DelaunayBackend2D::from_triangulation(dt);
         if backend.vertex_count() != total_vertices as usize {
@@ -2378,6 +2388,7 @@ mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
+    /// Builds a minimal labeled Delaunay backend for foliation and causality tests.
     fn labeled_triangle_backend(labels: [u32; 3]) -> DelaunayBackend2D {
         let dt = build_delaunay2_with_data(&[
             ([0.0, 0.0], labels[0]),
@@ -2386,6 +2397,42 @@ mod tests {
         ])
         .expect("Should build labeled triangle");
         DelaunayBackend2D::from_triangulation(dt)
+    }
+
+    #[test]
+    fn test_remap_toroidal_generation_error_updates_context() {
+        let remapped = remap_toroidal_generation_error(
+            CdtError::DelaunayGenerationFailed {
+                vertex_count: 3,
+                coordinate_range: (-1.0, 1.0),
+                attempt: 7,
+                underlying_error: "builder failed".to_string(),
+            },
+            12,
+        );
+
+        assert!(matches!(
+            remapped,
+            CdtError::DelaunayGenerationFailed {
+                vertex_count: 12,
+                coordinate_range: (0.0, 1.0),
+                attempt: 1,
+                ref underlying_error,
+            } if underlying_error == "builder failed"
+        ));
+    }
+
+    #[test]
+    fn test_remap_toroidal_generation_error_preserves_other_errors() {
+        let original = CdtError::InvalidGenerationParameters {
+            issue: "bad".to_string(),
+            provided_value: "x".to_string(),
+            expected_range: "y".to_string(),
+        };
+        assert_eq!(
+            remap_toroidal_generation_error(original.clone(), 12),
+            original
+        );
     }
 
     #[test]
@@ -3128,6 +3175,7 @@ mod tests {
     // Foliation tests
     // =========================================================================
 
+    /// Accepts the current point-set cylinder limitations while explicit strip construction is pending.
     fn assert_foliated_cylinder_known_failure(
         result: CdtResult<CdtTriangulation<DelaunayBackend2D>>,
     ) {
@@ -3993,6 +4041,7 @@ mod tests {
         );
     }
 
+    /// Builds stable diagnostic text for seeded-triangulation comparisons.
     fn deterministic_triangle_debug_summary(backend: &DelaunayBackend2D) -> String {
         let mut vertices: Vec<_> = backend
             .vertices()
@@ -4390,13 +4439,18 @@ mod tests {
 
                 let zero_count = labels.iter().filter(|&&label| label == 0).count();
                 let two_count = labels.iter().filter(|&&label| label == 2).count();
-                if zero_count == 1 && two_count == 2 {
+                let is_wrap_up = zero_count == 1 && two_count == 2;
+                let is_wrap_down = zero_count == 2 && two_count == 1;
+
+                if is_wrap_up {
                     assert_eq!(cell_type, CellType::Up);
-                    saw_wrap_up = true;
-                } else if zero_count == 2 && two_count == 1 {
-                    assert_eq!(cell_type, CellType::Down);
-                    saw_wrap_down = true;
                 }
+                if is_wrap_down {
+                    assert_eq!(cell_type, CellType::Down);
+                }
+
+                saw_wrap_up |= is_wrap_up;
+                saw_wrap_down |= is_wrap_down;
             }
         }
 

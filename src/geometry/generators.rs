@@ -8,13 +8,14 @@
 //! `docs/dev/rust.md § Geometry Backend Isolation`).
 
 use crate::errors::{CdtError, CdtResult};
-use delaunay::core::triangulation::TopologyGuarantee;
+pub use delaunay::core::triangulation::TopologyGuarantee;
 use delaunay::geometry::kernel::AdaptiveKernel;
 use delaunay::geometry::point::Point;
 use delaunay::geometry::traits::coordinate::Coordinate;
 use delaunay::geometry::util::{generate_random_points, generate_random_points_seeded};
 use delaunay::prelude::VertexBuilder;
-use delaunay::topology::traits::topological_space::{GlobalTopology, ToroidalConstructionMode};
+pub use delaunay::topology::traits::topological_space::GlobalTopology;
+use delaunay::topology::traits::topological_space::ToroidalConstructionMode;
 use delaunay::triangulation::{DelaunayTriangulation, DelaunayTriangulationBuilder};
 
 /// Type alias for the 2D Delaunay triangulation returned by this crate's generators.
@@ -22,6 +23,17 @@ use delaunay::triangulation::{DelaunayTriangulation, DelaunayTriangulationBuilde
 /// Uses [`AdaptiveKernel`] (the default for [`DelaunayTriangulationBuilder::build`]) and
 /// `u32` vertex data storing the per-vertex time-slice label (foliation).
 pub type DelaunayTriangulation2D = DelaunayTriangulation<AdaptiveKernel<f64>, u32, i32, 2>;
+
+/// Keeps `generate_delaunay2` vertex-build failures tied to the public constructor name.
+fn generate_delaunay2_vertex_build_error(
+    number_of_vertices: u32,
+    underlying_error: String,
+) -> CdtError {
+    CdtError::VertexBuildFailed {
+        context: format!("generate_delaunay2({number_of_vertices} vertices)"),
+        underlying_error,
+    }
+}
 
 /// Generates a Delaunay triangulation with optional seed for deterministic testing.
 ///
@@ -84,10 +96,7 @@ pub fn generate_delaunay2(
         .into_iter()
         .map(|point| VertexBuilder::<f64, u32, 2>::default().point(point).build())
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| CdtError::VertexBuildFailed {
-            context: format!("generate_delaunay2({number_of_vertices} vertices)"),
-            underlying_error: e.to_string(),
-        })?;
+        .map_err(|e| generate_delaunay2_vertex_build_error(number_of_vertices, e.to_string()))?;
 
     let dt = DelaunayTriangulationBuilder::from_vertices(&vertices)
         .build::<i32>()
@@ -222,13 +231,10 @@ pub fn build_delaunay2_from_cells(
 ///
 /// # Examples
 ///
-/// The `TopologyGuarantee` and `GlobalTopology` types come from the underlying
-/// `delaunay` crate — import them directly when calling this lower-level builder:
+/// Import topology metadata from this crate's geometry prelude:
 ///
 /// ```
 /// use causal_triangulations::prelude::geometry::*;
-/// use delaunay::core::triangulation::TopologyGuarantee;
-/// use delaunay::topology::traits::topological_space::GlobalTopology;
 ///
 /// // Single labeled triangle, default PL-manifold guarantee, Euclidean global topology.
 /// let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
@@ -393,6 +399,56 @@ pub(crate) fn seeded_delaunay2(
 mod tests {
     use super::*;
     use crate::errors::CdtError;
+    use std::collections::HashMap;
+
+    /// Produces an order-independent snapshot of vertices and cell connectivity for seeded tests.
+    fn triangulation_signature(dt: &DelaunayTriangulation2D) -> (Vec<String>, Vec<Vec<String>>) {
+        let mut vertex_coords: Vec<_> = dt
+            .vertices()
+            .map(|(_, vertex)| format!("{:?}", vertex.point().coords()))
+            .collect();
+        vertex_coords.sort();
+
+        let coord_by_key: HashMap<_, _> = dt
+            .vertices()
+            .map(|(key, vertex)| (key, format!("{:?}", vertex.point().coords())))
+            .collect();
+
+        let mut cells: Vec<_> = dt
+            .cells()
+            .map(|(_, cell)| {
+                let mut vertices: Vec<_> = cell
+                    .vertices()
+                    .iter()
+                    .map(|key| {
+                        coord_by_key
+                            .get(key)
+                            .cloned()
+                            .expect("cell vertices should refer to live vertices")
+                    })
+                    .collect();
+                vertices.sort();
+                vertices
+            })
+            .collect();
+        cells.sort();
+
+        (vertex_coords, cells)
+    }
+
+    #[test]
+    fn test_generate_delaunay2_vertex_build_error_context() {
+        let error = generate_delaunay2_vertex_build_error(5, "missing point".to_string());
+
+        assert!(matches!(
+            error,
+            CdtError::VertexBuildFailed {
+                ref context,
+                ref underlying_error,
+            } if context == "generate_delaunay2(5 vertices)"
+                && underlying_error == "missing point"
+        ));
+    }
 
     #[test]
     fn test_build_delaunay2_from_cells_single_triangle() {
@@ -505,6 +561,11 @@ mod tests {
             dt1.number_of_cells(),
             dt2.number_of_cells(),
             "Should have same cell count"
+        );
+        assert_eq!(
+            triangulation_signature(&dt1),
+            triangulation_signature(&dt2),
+            "Seeded generation should produce identical vertex coordinates and cell connectivity"
         );
     }
 

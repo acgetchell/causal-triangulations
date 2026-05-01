@@ -132,7 +132,7 @@ pub trait TriangulationQuery: GeometryBackend {
         let v = saturating_usize_to_i32(self.vertex_count());
         let e = saturating_usize_to_i32(self.edge_count());
         let f = saturating_usize_to_i32(self.face_count());
-        v - e + f
+        v.saturating_sub(e).saturating_add(f)
     }
 }
 

@@ -116,7 +116,10 @@ If you discover issues (bugs, formatting problems, etc.) after creating the chan
    just changelog
 
    # Commit updated changelog and any generated archive files
-   git add CHANGELOG.md docs/archive/changelog/
+   git add CHANGELOG.md
+   if [ -d docs/archive/changelog ]; then
+       git add docs/archive/changelog/
+   fi
    git commit -m "docs: update changelog with release fixes"
    ```
 

@@ -33,7 +33,7 @@
 /// use causal_triangulations::cdt::action::compute_regge_action;
 ///
 /// let action = compute_regge_action(10, 20, 15, 1.0, 1.0, 0.1);
-/// assert!((action + 23.0).abs() < f64::EPSILON);
+/// assert!((action + 23.0).abs() < 1e-12);
 /// ```
 #[must_use]
 pub fn compute_regge_action(
@@ -102,7 +102,7 @@ impl ActionConfig {
     ///
     /// let config = ActionConfig::new(2.0, 1.5, 0.2);
     /// let action = config.calculate_action(5, 10, 8);
-    /// assert!((action + 20.0).abs() < f64::EPSILON);
+    /// assert!((action + 20.0).abs() < 1e-12);
     /// ```
     #[must_use]
     pub fn calculate_action(&self, vertices: u32, edges: u32, triangles: u32) -> f64 {

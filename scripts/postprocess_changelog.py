@@ -47,6 +47,9 @@ _PR_LINK_RE = re.compile(r"\[#(\d+)\]\(https://github\.com/[^)]+/pull/\d+\)")
 # Commit-hash link to strip from summary lines.
 _COMMIT_LINK_RE = re.compile(r"\s*\[`[a-f0-9]{7}`\]\(https://github\.com/[^)]+/commit/[a-f0-9]+\)")
 
+# Leading git-cliff breaking marker to strip from normalized comparison keys.
+_BREAKING_MARKER_RE = re.compile(r"^\s*(?:[-*]\s+)?\[?\*\*breaking\*\*\]?\s*", re.IGNORECASE)
+
 # Leading ``* `` list marker to normalise to ``- `` (MD004).
 _STAR_LIST_RE = re.compile(r"^(\s*)\* ")
 
@@ -91,6 +94,7 @@ _SQUASH_HEADING_LABELS: dict[str, str] = {
 
 def _plain_summary(text: str) -> str:
     """Return a normalized comparison key for changelog entry text."""
+    text = _BREAKING_MARKER_RE.sub("", text)
     text = _COMMIT_LINK_RE.sub("", text)
     text = _PR_LINK_RE.sub("", text)
     text = re.sub(r"^\s*[-*]\s+", "", text)

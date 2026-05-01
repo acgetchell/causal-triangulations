@@ -117,10 +117,6 @@ impl MoveStatistics {
 
     /// Calculates acceptance rate for a specific move type.
     ///
-    /// # Panics
-    ///
-    /// This function should never panic as u64 to f64 conversion is always valid.
-    ///
     /// # Examples
     ///
     /// ```
@@ -143,17 +139,13 @@ impl MoveStatistics {
         if attempted == 0 {
             0.0
         } else {
-            <f64 as NumCast>::from(accepted).expect("u64 to f64 conversion should never fail")
-                / <f64 as NumCast>::from(attempted)
-                    .expect("u64 to f64 conversion should never fail")
+            let accepted = <f64 as NumCast>::from(accepted).unwrap_or(0.0);
+            let attempted = <f64 as NumCast>::from(attempted).unwrap_or(f64::INFINITY);
+            accepted / attempted
         }
     }
 
     /// Calculates overall acceptance rate.
-    ///
-    /// # Panics
-    ///
-    /// This function should never panic as u64 to f64 conversion is always valid.
     ///
     /// # Examples
     ///
@@ -179,9 +171,9 @@ impl MoveStatistics {
         if total_attempted == 0 {
             0.0
         } else {
-            <f64 as NumCast>::from(total_accepted).expect("u64 to f64 conversion should never fail")
-                / <f64 as NumCast>::from(total_attempted)
-                    .expect("u64 to f64 conversion should never fail")
+            let total_accepted = <f64 as NumCast>::from(total_accepted).unwrap_or(0.0);
+            let total_attempted = <f64 as NumCast>::from(total_attempted).unwrap_or(f64::INFINITY);
+            total_accepted / total_attempted
         }
     }
 }
@@ -488,11 +480,10 @@ mod tests {
             MoveResult::Success | MoveResult::GeometricViolation
         ));
         assert_eq!(system.stats.moves_13_attempted, 1);
-        if matches!(move_13, MoveResult::Success) {
-            assert_eq!(system.stats.moves_13_accepted, 1);
-        } else {
-            assert_eq!(system.stats.moves_13_accepted, 0);
-        }
+        assert_eq!(
+            system.stats.moves_13_accepted,
+            <u64 as From<bool>>::from(matches!(move_13, MoveResult::Success))
+        );
 
         let move_31 = system.attempt_31_move(&mut triangulation);
         assert!(matches!(
@@ -500,11 +491,10 @@ mod tests {
             MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
         ));
         assert_eq!(system.stats.moves_31_attempted, 1);
-        if matches!(move_31, MoveResult::Success) {
-            assert_eq!(system.stats.moves_31_accepted, 1);
-        } else {
-            assert_eq!(system.stats.moves_31_accepted, 0);
-        }
+        assert_eq!(
+            system.stats.moves_31_accepted,
+            <u64 as From<bool>>::from(matches!(move_31, MoveResult::Success))
+        );
 
         let edge_flip = system.attempt_edge_flip(&mut triangulation);
         assert!(matches!(
@@ -512,11 +502,10 @@ mod tests {
             MoveResult::Success | MoveResult::CausalityViolation
         ));
         assert_eq!(system.stats.edge_flips_attempted, 1);
-        if matches!(edge_flip, MoveResult::Success) {
-            assert_eq!(system.stats.edge_flips_accepted, 1);
-        } else {
-            assert_eq!(system.stats.edge_flips_accepted, 0);
-        }
+        assert_eq!(
+            system.stats.edge_flips_accepted,
+            <u64 as From<bool>>::from(matches!(edge_flip, MoveResult::Success))
+        );
     }
 
     #[test]

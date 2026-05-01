@@ -53,13 +53,10 @@ struct UnorderedSet<V>(Vec<V>);
 
 impl<V: Eq + Hash> PartialEq for UnorderedSet<V> {
     fn eq(&self, other: &Self) -> bool {
-        if self.0.len() != other.0.len() {
-            return false;
-        }
-
-        // Compare as sets (order-independent). Facet vertex lists should not contain duplicates.
+        // Compare as sets (order-independent and duplicate-robust).
         let self_set: HashSet<_> = self.0.iter().collect();
-        other.0.iter().all(|v| self_set.contains(v))
+        let other_set: HashSet<_> = other.0.iter().collect();
+        self_set == other_set
     }
 }
 
@@ -67,8 +64,14 @@ impl<V: Eq + Hash> Eq for UnorderedSet<V> {}
 
 impl<V: Hash> Hash for UnorderedSet<V> {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // Order-independent hash by hashing each element and sorting the resulting u64s.
-        let mut hashes: Vec<u64> = self.0.iter().map(stable_hash).collect();
+        // Order-independent, duplicate-robust hash by hashing each unique element and sorting.
+        let mut hashes: Vec<u64> = self
+            .0
+            .iter()
+            .map(stable_hash)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
         hashes.sort_unstable();
         for h in hashes {
             state.write_u64(h);
@@ -365,18 +368,23 @@ mod tests {
     }
 
     #[test]
-    fn test_unordered_set_is_order_independent_and_len_sensitive() {
+    fn test_unordered_set_is_order_independent_and_duplicate_robust() {
         let key = UnorderedSet(vec![1_u8, 2, 3]);
         let reversed = UnorderedSet(vec![3_u8, 2, 1]);
         let shorter = UnorderedSet(vec![1_u8, 2]);
+        let deduped = UnorderedSet(vec![1_u8, 2]);
+        let duplicated = UnorderedSet(vec![1_u8, 1, 2]);
 
         assert_eq!(key, reversed);
         assert_ne!(key, shorter);
+        assert_eq!(deduped, duplicated);
 
         let mut set = HashSet::new();
         set.insert(key);
         assert!(set.contains(&reversed));
         assert!(!set.contains(&shorter));
+        set.insert(deduped);
+        assert!(set.contains(&duplicated));
     }
 
     #[test]
@@ -421,10 +429,13 @@ mod tests {
 
     #[test]
     fn test_is_delaunay_delegates_to_is_valid() {
-        let backend = MockBackend::create_triangle();
+        let backend = FixtureBackend {
+            vertices: vec![0],
+            edges: vec![],
+            faces: vec![],
+        };
 
-        // For our mock backend, is_delaunay should delegate to is_valid
-        // which returns true for a basic triangle
+        // The default is_delaunay implementation delegates to is_valid.
         assert!(backend.is_delaunay());
     }
 

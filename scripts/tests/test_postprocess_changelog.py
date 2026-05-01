@@ -186,6 +186,13 @@ def _commit(short: str = "abc1234", full: str = "abc1234deadbeef0123456789") -> 
     return f"[`{short}`]({_COMMIT_URL}/{full})"
 
 
+def _merged_pr_summary_block(text: str) -> str:
+    """Return the injected merged-PR summary block."""
+    start = text.index("### Merged Pull Requests")
+    end = text.find("\n### ", start + len("### Merged Pull Requests"))
+    return text[start:] if end == -1 else text[start:end]
+
+
 class TestCompactEntry:
     def test_strips_commit_hash_link(self) -> None:
         line = f"- Some feature {_commit()}"
@@ -233,9 +240,11 @@ class TestSummarySections:
     def test_injects_pr_summary(self) -> None:
         content = self._changelog(f"- Feature A {_pr(10)} {_commit()}\n- Plain commit {_commit('def5678', 'def5678deadbeef')}")
         result = _inject_summary_sections(content)
-        assert "### Merged Pull Requests" in result
+        summary_block = _merged_pr_summary_block(result)
+        assert "### Merged Pull Requests" in summary_block
         # PR entry in summary (without commit hash).
-        assert f"- Feature A {_pr(10)}" in result
+        assert f"- Feature A {_pr(10)}" in summary_block
+        assert "- Plain commit" not in summary_block
         # Plain entry only appears once (in Added, not in summary).
         plain_lines = [ln for ln in result.split("\n") if ln.startswith("- Plain commit")]
         assert len(plain_lines) == 1
@@ -296,7 +305,8 @@ class TestSummarySections:
     def test_multiple_pr_links_preserved(self) -> None:
         content = self._changelog(f"- Feature {_pr(10)} {_pr(20)} {_commit()}")
         result = _inject_summary_sections(content)
-        assert f"- Feature {_pr(10)} {_pr(20)}" in result
+        summary_block = _merged_pr_summary_block(result)
+        assert f"- Feature {_pr(10)} {_pr(20)}" in summary_block
 
 
 class TestListMarkerNormalization:
@@ -407,6 +417,10 @@ class TestSquashHeadingNormalization:
     def test_plain_summary_removes_links_and_conventional_prefix(self) -> None:
         line = f"- fix: Improve benchmark output {_pr(42)} {_commit()}"
         assert _plain_summary(line) == "improve benchmark output"
+
+    def test_plain_summary_removes_breaking_marker(self) -> None:
+        line = f"- [**breaking**] feat!: Remove old API {_pr(42)} {_commit()}"
+        assert _plain_summary(line) == "remove old api"
 
     def test_squash_heading_parts_maps_kind_to_changelog_label(self) -> None:
         assert _squash_heading_parts("  - perf(core): speed up predicates") == (

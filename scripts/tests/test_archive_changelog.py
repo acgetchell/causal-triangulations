@@ -119,6 +119,16 @@ class TestVersionSortKey:
             "0.6.1",
         ]
 
+    def test_prerelease_labels_stay_semantic(self) -> None:
+        labels = ["1.2.3", "1.2.3-rc.10", "1.2.3-rc.2", "1.2.3-alpha.1", "unreleased"]
+        assert sorted(labels, key=_version_sort_key) == [
+            "1.2.3-alpha.1",
+            "1.2.3-rc.2",
+            "1.2.3-rc.10",
+            "1.2.3",
+            "unreleased",
+        ]
+
 
 class TestParseChangelog:
     def test_splits_preamble_unreleased_versions(self) -> None:

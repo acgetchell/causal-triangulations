@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Error types for the CDT library.
 
 use crate::cdt::foliation::FoliationError;

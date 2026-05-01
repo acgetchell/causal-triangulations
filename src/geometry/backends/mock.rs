@@ -238,13 +238,8 @@ impl MockBackend {
             opposites.push(opposite);
         }
 
-        let [first, second] = opposites.as_slice() else {
-            return Err(MockError::NonFlippableEdge {
-                edge,
-                adjacent_faces: adjacent_faces.len(),
-                reason: "edge must be shared by exactly two faces",
-            });
-        };
+        let first = opposites[0];
+        let second = opposites[1];
 
         if first == second {
             return Err(MockError::NonFlippableEdge {
@@ -254,7 +249,7 @@ impl MockBackend {
             });
         }
 
-        if self.edge_exists_between(*first, *second) {
+        if self.edge_exists_between(first, second) {
             return Err(MockError::NonFlippableEdge {
                 edge,
                 adjacent_faces: adjacent_faces.len(),
@@ -262,7 +257,7 @@ impl MockBackend {
             });
         }
 
-        Ok((*first, *second))
+        Ok((first, second))
     }
 }
 
@@ -747,6 +742,50 @@ mod tests {
                 MockVertexHandle(2),
             ]
         );
+    }
+
+    #[test]
+    fn test_mock_backend_rejects_malformed_edge_flips() {
+        let mut backend = MockBackend::new(2);
+        backend.vertices.insert(0, vec![0.0, 0.0]);
+        backend.vertices.insert(1, vec![1.0, 0.0]);
+        backend.vertices.insert(2, vec![1.0, 1.0]);
+        backend.vertices.insert(3, vec![0.0, 1.0]);
+        backend.next_vertex_id = 4;
+
+        backend.edges.insert(0, (0, 1));
+        backend.faces.insert(0, vec![0, 1, 2, 3]);
+        backend.faces.insert(1, vec![0, 1, 2]);
+        assert!(matches!(
+            backend.flip_edge(MockEdgeHandle(0)),
+            Err(MockError::NonFlippableEdge {
+                edge: 0,
+                adjacent_faces: 2,
+                reason: "adjacent faces must be triangles",
+            })
+        ));
+
+        backend.faces.insert(0, vec![0, 1, 2]);
+        backend.faces.insert(1, vec![1, 0, 2]);
+        assert!(matches!(
+            backend.flip_edge(MockEdgeHandle(0)),
+            Err(MockError::NonFlippableEdge {
+                edge: 0,
+                adjacent_faces: 2,
+                reason: "opposite vertices must be distinct",
+            })
+        ));
+
+        backend.faces.insert(1, vec![1, 0, 3]);
+        backend.edges.insert(1, (2, 3));
+        assert!(matches!(
+            backend.flip_edge(MockEdgeHandle(0)),
+            Err(MockError::NonFlippableEdge {
+                edge: 0,
+                adjacent_faces: 2,
+                reason: "replacement edge already exists",
+            })
+        ));
     }
 
     #[test]
