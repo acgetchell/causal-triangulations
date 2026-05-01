@@ -25,6 +25,7 @@ src/
 Repository tooling:
 
 ```text
+.github/workflows/semgrep-sarif.yml # Repository Semgrep rule SARIF upload
 semgrep.yaml           # Repository-owned Semgrep rules
 docs/dev/python.md     # Python script style and validation guidance
 tests/semgrep/         # Semgrep rule fixtures run by `just semgrep-test`

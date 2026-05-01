@@ -3,6 +3,15 @@
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 use delaunay::prelude::DelaunayTriangulation;
 
+// ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+pub use delaunay::prelude::VertexBuilder;
+
+// ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+use delaunay::{core::DataType, geometry::kernel::AdaptiveKernel};
+
+// ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+pub use delaunay::{core::edge::EdgeKey, core::tds::VertexKey};
+
 pub fn production_stdio() {
     // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
     println!("debug output");

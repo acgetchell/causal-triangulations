@@ -292,6 +292,33 @@ mod tests {
     }
 
     #[test]
+    fn test_move_statistics_all_variants_and_zero_rates() {
+        let mut stats = MoveStatistics::new();
+
+        for move_type in [
+            MoveType::Move22,
+            MoveType::Move13Add,
+            MoveType::Move31Remove,
+            MoveType::EdgeFlip,
+        ] {
+            assert_relative_eq!(stats.acceptance_rate(move_type), 0.0);
+            stats.record_attempt(move_type);
+            stats.record_success(move_type);
+            assert_relative_eq!(stats.acceptance_rate(move_type), 1.0);
+        }
+
+        assert_eq!(stats.moves_22_attempted, 1);
+        assert_eq!(stats.moves_13_attempted, 1);
+        assert_eq!(stats.moves_31_attempted, 1);
+        assert_eq!(stats.edge_flips_attempted, 1);
+        assert_eq!(stats.moves_22_accepted, 1);
+        assert_eq!(stats.moves_13_accepted, 1);
+        assert_eq!(stats.moves_31_accepted, 1);
+        assert_eq!(stats.edge_flips_accepted, 1);
+        assert_relative_eq!(stats.total_acceptance_rate(), 1.0);
+    }
+
+    #[test]
     fn test_ergodics_system() {
         let mut system = ErgodicsSystem::new();
         let mut triangulation = vec![vec![0, 1, 2]];
@@ -305,6 +332,36 @@ mod tests {
 
         // Check that statistics are updated
         assert_eq!(system.stats.moves_22_attempted, 1);
+    }
+
+    #[test]
+    fn test_placeholder_move_attempts_update_per_move_statistics() {
+        let mut system = ErgodicsSystem::new();
+        let mut triangulation = vec![vec![0, 1, 2]];
+
+        let move_13 = system.attempt_13_move(&mut triangulation);
+        assert!(matches!(
+            move_13,
+            MoveResult::Success | MoveResult::GeometricViolation
+        ));
+        assert_eq!(system.stats.moves_13_attempted, 1);
+        assert!(system.stats.moves_13_accepted <= 1);
+
+        let move_31 = system.attempt_31_move(&mut triangulation);
+        assert!(matches!(
+            move_31,
+            MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
+        ));
+        assert_eq!(system.stats.moves_31_attempted, 1);
+        assert!(system.stats.moves_31_accepted <= 1);
+
+        let edge_flip = system.attempt_edge_flip(&mut triangulation);
+        assert!(matches!(
+            edge_flip,
+            MoveResult::Success | MoveResult::CausalityViolation
+        ));
+        assert_eq!(system.stats.edge_flips_attempted, 1);
+        assert!(system.stats.edge_flips_accepted <= 1);
     }
 
     #[test]

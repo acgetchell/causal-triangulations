@@ -505,7 +505,7 @@ class TestCodeBlockLanguage:
     def test_process_code_fence_opens_and_tags_bare_fence(self) -> None:
         result: list[str] = []
 
-        handled, in_code_block = _process_code_fence("```", result, in_code_block=False)
+        handled, in_code_block = _process_code_fence("```", result, in_code_block=False, next_line="let x = 1;")
 
         assert handled
         assert in_code_block
@@ -514,16 +514,25 @@ class TestCodeBlockLanguage:
     def test_process_code_fence_closes_existing_block(self) -> None:
         result: list[str] = []
 
-        handled, in_code_block = _process_code_fence("```", result, in_code_block=True)
+        handled, in_code_block = _process_code_fence("```", result, in_code_block=True, next_line=None)
 
         assert handled
         assert not in_code_block
         assert result == ["```"]
 
+    def test_process_code_fence_adds_blank_after_closing_fence(self) -> None:
+        result: list[str] = []
+
+        handled, in_code_block = _process_code_fence("```", result, in_code_block=True, next_line="following prose")
+
+        assert handled
+        assert not in_code_block
+        assert result == ["```", ""]
+
     def test_process_code_fence_ignores_regular_line(self) -> None:
         result: list[str] = []
 
-        handled, in_code_block = _process_code_fence("regular text", result, in_code_block=False)
+        handled, in_code_block = _process_code_fence("regular text", result, in_code_block=False, next_line=None)
 
         assert not handled
         assert not in_code_block
@@ -557,6 +566,14 @@ class TestCodeBlockLanguage:
 
         result = f.read_text(encoding="utf-8")
         assert long_code in result
+
+    def test_adds_blank_after_code_block_before_prose(self, tmp_path: Path) -> None:
+        f = tmp_path / "CHANGELOG.md"
+        f.write_text("```text\ncode\n```\nfollowing prose\n", encoding="utf-8")
+
+        postprocess(f)
+
+        assert f.read_text(encoding="utf-8") == "```text\ncode\n```\n\nfollowing prose\n"
 
 
 class TestIntegration:

@@ -112,7 +112,7 @@ rules:
         - "/src/**/*.rs"
       exclude:
         - "/src/geometry/**/*.rs"
-    pattern: use delaunay::$PATH;
+    pattern-regex: '^\s*(?:pub\s+)?use\s+delaunay::(?:[^;\n]*\{[^;\n]*\}|[^;\n]+)\s*;'
 
   - id: causal-triangulations.rust.expect-requires-reason
     languages:
@@ -226,8 +226,8 @@ rules:
         - "/scripts/postprocess_changelog.py"
         - "/scripts/subprocess_utils.py"
         - "/scripts/tag_release.py"
-        - "/tests/semgrep/scripts/tests/**/*.py"
-    pattern-regex: '^\s*except\s+Exception\s*:'
+        - "/scripts/tests/**/*.py"
+    pattern-regex: '^\s*except\s+Exception(?:\s+as\s+\w+)?\s*:'
 
   - id: causal-triangulations.python.no-adhoc-completedprocess-mock
     languages:
@@ -241,7 +241,7 @@ rules:
         mocks stay aligned with production subprocess APIs.
     paths:
       include:
-        - "/tests/semgrep/scripts/tests/**/*.py"
+        - "/scripts/tests/**/*.py"
     pattern-either:
       - patterns:
           - pattern-either:
@@ -295,6 +295,18 @@ rules:
                   $PROC = mock.MagicMock(...)
                   ...
                   $PROC.returncode = ...
+      - pattern: Mock(..., stdout=..., ...)
+      - pattern: unittest.mock.Mock(..., stdout=..., ...)
+      - pattern: mock.Mock(..., stdout=..., ...)
+      - pattern: MagicMock(..., stdout=..., ...)
+      - pattern: unittest.mock.MagicMock(..., stdout=..., ...)
+      - pattern: mock.MagicMock(..., stdout=..., ...)
+      - pattern: Mock(..., returncode=..., ...)
+      - pattern: unittest.mock.Mock(..., returncode=..., ...)
+      - pattern: mock.Mock(..., returncode=..., ...)
+      - pattern: MagicMock(..., returncode=..., ...)
+      - pattern: unittest.mock.MagicMock(..., returncode=..., ...)
+      - pattern: mock.MagicMock(..., returncode=..., ...)
 
   - id: causal-triangulations.python.no-untyped-defs-in-scripts
     languages:

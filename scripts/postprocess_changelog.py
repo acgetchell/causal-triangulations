@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
 """Post-process a git-cliff generated CHANGELOG.md.
 
 Applies lightweight markdown hygiene that is difficult to express in
@@ -413,7 +413,7 @@ def _normalize_indented_heading(line: str) -> str:
     return f"{match.group('indent')}**{title}**"
 
 
-def _process_code_fence(line: str, result: list[str], in_code_block: bool) -> tuple[bool, bool]:
+def _process_code_fence(line: str, result: list[str], in_code_block: bool, next_line: str | None) -> tuple[bool, bool]:
     """Handle fenced-code transitions and append the line when consumed."""
     stripped = line.lstrip()
     if not stripped.startswith("```"):
@@ -431,6 +431,8 @@ def _process_code_fence(line: str, result: list[str], in_code_block: bool) -> tu
         in_code_block = False
 
     result.append(line)
+    if not in_code_block and next_line is not None and next_line.strip():
+        result.append("")
     return True, in_code_block
 
 
@@ -485,7 +487,8 @@ def postprocess(path: Path) -> None:
 
     for idx, line in enumerate(lines):
         # --- fenced code-block tracking ---
-        handled, in_code_block = _process_code_fence(line, result, in_code_block)
+        next_line = lines[idx + 1] if idx + 1 < len(lines) else None
+        handled, in_code_block = _process_code_fence(line, result, in_code_block, next_line)
         if handled:
             continue
 

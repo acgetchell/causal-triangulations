@@ -8,7 +8,7 @@ across different platforms with proper mocking.
 
 import platform
 import subprocess
-from unittest.mock import Mock, mock_open, patch
+from unittest.mock import mock_open, patch
 
 import pytest
 
@@ -44,9 +44,7 @@ class TestHardwareInfo:
     @patch("hardware_utils.run_safe_command")
     def test_run_command_success(self, mock_run_safe, hardware):
         """Test successful command execution."""
-        mock_result = Mock()
-        mock_result.stdout = "test output\n"
-        mock_run_safe.return_value = mock_result
+        mock_run_safe.return_value = subprocess.CompletedProcess(args=["echo", "test"], returncode=0, stdout="test output\n", stderr="")
 
         result = hardware._run_command(["echo", "test"])
 

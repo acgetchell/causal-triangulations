@@ -377,10 +377,7 @@ Time: [1.0, 1.0, 1.0] µs
             baseline_file.write_text(baseline_content)
 
             # Mock successful cargo command
-            mock_result = Mock()
-            mock_result.returncode = 0
-            mock_result.stdout = ""
-            mock_cargo.return_value = mock_result
+            mock_cargo.return_value = subprocess.CompletedProcess(args=["cargo"], returncode=0, stdout="", stderr="")
 
             comparator = PerformanceComparator(temp_path)
             comparator.compare_with_baseline(baseline_file, dev_mode=dev_mode)
@@ -1374,8 +1371,13 @@ Hardware Information:
         """Test skip determination when no relevant changes found."""
         # Mock successful git commands
         mock_git.side_effect = [
-            Mock(returncode=0),  # git cat-file succeeds
-            Mock(returncode=0, stdout="docs/README.md\n.github/workflows/other.yml\n", stderr=""),  # git diff
+            subprocess.CompletedProcess(args=["git"], returncode=0, stdout="", stderr=""),  # git cat-file succeeds
+            subprocess.CompletedProcess(
+                args=["git"],
+                returncode=0,
+                stdout="docs/README.md\n.github/workflows/other.yml\n",
+                stderr="",
+            ),  # git diff
         ]
 
         should_skip, reason = BenchmarkRegressionHelper.determine_benchmark_skip("abc1234", "def4567")
@@ -1388,8 +1390,8 @@ Hardware Information:
         """Test skip determination when relevant changes are detected."""
         # Mock successful git commands
         mock_git.side_effect = [
-            Mock(returncode=0),  # git cat-file succeeds
-            Mock(returncode=0, stdout="src/core/mod.rs\nbenches/performance.rs\n", stderr=""),  # git diff
+            subprocess.CompletedProcess(args=["git"], returncode=0, stdout="", stderr=""),  # git cat-file succeeds
+            subprocess.CompletedProcess(args=["git"], returncode=0, stdout="src/core/mod.rs\nbenches/performance.rs\n", stderr=""),  # git diff
         ]
 
         should_skip, reason = BenchmarkRegressionHelper.determine_benchmark_skip("abc1234", "def4567")
@@ -1824,9 +1826,7 @@ class TestPerformanceSummaryGenerator:
     @patch("benchmark_utils.run_git_command")
     def test_get_current_version_with_tag(self, mock_git_command):
         """Test getting current version from git tags."""
-        mock_result = Mock()
-        mock_result.stdout.strip.return_value = "v1.2.3"
-        mock_git_command.return_value = mock_result
+        mock_git_command.return_value = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="v1.2.3", stderr="")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
@@ -1840,8 +1840,7 @@ class TestPerformanceSummaryGenerator:
     def test_get_current_version_fallback(self, mock_git_command):
         """Test fallback version detection when describe fails."""
         # First call (describe) fails, second call (tag -l) succeeds
-        mock_result = Mock()
-        mock_result.stdout.strip.return_value = "v0.1.0\nv0.2.0"
+        mock_result = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="v0.1.0\nv0.2.0", stderr="")
 
         # The second call is made within the exception handler
         def side_effect(*args, **kwargs):
@@ -1874,9 +1873,7 @@ class TestPerformanceSummaryGenerator:
     @patch("benchmark_utils.datetime")
     def test_get_version_date_with_tag(self, mock_datetime, mock_git_command):  # noqa: ARG002
         """Test getting version date from git tag."""
-        mock_result = Mock()
-        mock_result.stdout.strip.return_value = "2024-01-15"
-        mock_git_command.return_value = mock_result
+        mock_git_command.return_value = subprocess.CompletedProcess(args=["git"], returncode=0, stdout="2024-01-15", stderr="")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
@@ -2112,7 +2109,7 @@ Benchmark completed."""
     @patch("benchmark_utils.run_cargo_command")
     def test_run_circumsphere_benchmarks_success(self, mock_cargo):
         """Test running circumsphere benchmarks successfully."""
-        mock_cargo.return_value = Mock(stdout="")
+        mock_cargo.return_value = subprocess.CompletedProcess(args=["cargo"], returncode=0, stdout="", stderr="")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
@@ -2129,14 +2126,18 @@ Benchmark completed."""
     def test_run_circumsphere_benchmarks_with_numerical_data(self, mock_cargo):
         """Test running circumsphere benchmarks with numerical accuracy data."""
         # Mock cargo command to return output with numerical accuracy data
-        mock_result = Mock()
-        mock_result.stdout = """Running benchmarks...
+        mock_result = subprocess.CompletedProcess(
+            args=["cargo"],
+            returncode=0,
+            stdout="""Running benchmarks...
 Method Comparisons (1000 total tests):
   insphere vs insphere_distance:  820/1000 (82.0%)
   insphere vs insphere_lifted:  5/1000 (0.5%)
   insphere_distance vs insphere_lifted:  180/1000 (18.0%)
   All three methods agree:  2/1000 (0.2%)
-Benchmark completed."""
+Benchmark completed.""",
+            stderr="",
+        )
         mock_cargo.return_value = mock_result
 
         with tempfile.TemporaryDirectory() as temp_dir:

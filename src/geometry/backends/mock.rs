@@ -274,8 +274,12 @@ mod tests {
     #[test]
     fn test_mock_backend_creation() {
         let backend = MockBackend::new(2);
+        assert_eq!(backend.backend_name(), "mock");
         assert_eq!(backend.dimension(), 2);
         assert_eq!(backend.vertex_count(), 0);
+        assert_eq!(backend.edge_count(), 0);
+        assert_eq!(backend.face_count(), 0);
+        assert!(!backend.is_valid());
     }
 
     #[test]
@@ -285,5 +289,152 @@ mod tests {
         assert_eq!(backend.edge_count(), 3);
         assert_eq!(backend.face_count(), 1);
         assert!(backend.is_valid());
+    }
+
+    #[test]
+    fn test_mock_triangle_queries_return_expected_entities() {
+        let backend = MockBackend::create_triangle();
+        let vertex = backend
+            .vertices()
+            .next()
+            .expect("triangle should contain vertices");
+        let edge = backend
+            .edges()
+            .next()
+            .expect("triangle should contain edges");
+        let face = backend
+            .faces()
+            .next()
+            .expect("triangle should contain a face");
+
+        assert_eq!(
+            backend
+                .vertex_coordinates(&vertex)
+                .expect("valid vertex")
+                .len(),
+            2
+        );
+        assert_eq!(backend.face_vertices(&face).expect("valid face").len(), 3);
+        assert!(backend.edge_endpoints(&edge).is_some());
+        assert!(
+            backend
+                .adjacent_faces(&vertex)
+                .expect("valid vertex adjacency")
+                .is_empty()
+        );
+        assert!(
+            backend
+                .incident_edges(&vertex)
+                .expect("valid vertex incidence")
+                .is_empty()
+        );
+        assert!(
+            backend
+                .face_neighbors(&face)
+                .expect("valid face neighbors")
+                .is_empty()
+        );
+        assert_eq!(backend.euler_characteristic(), 1);
+    }
+
+    #[test]
+    fn test_mock_backend_rejects_invalid_handles() {
+        let mut backend = MockBackend::create_triangle();
+        let missing_vertex = MockVertexHandle(99);
+        let missing_edge = MockEdgeHandle(99);
+        let missing_face = MockFaceHandle(99);
+
+        assert!(matches!(
+            backend.vertex_coordinates(&missing_vertex),
+            Err(MockError::Vertex(99))
+        ));
+        assert!(matches!(
+            backend.face_vertices(&missing_face),
+            Err(MockError::Face(99))
+        ));
+        assert!(backend.edge_endpoints(&missing_edge).is_none());
+        assert!(matches!(
+            backend.remove_vertex(missing_vertex.clone()),
+            Err(MockError::Vertex(99))
+        ));
+        assert!(matches!(
+            backend.move_vertex(missing_vertex, &[1.0, 2.0]),
+            Err(MockError::Vertex(99))
+        ));
+        assert!(matches!(
+            backend.flip_edge(missing_edge),
+            Err(MockError::Edge(99))
+        ));
+        assert!(matches!(
+            backend.subdivide_face(missing_face, &[0.25, 0.25]),
+            Err(MockError::Face(99))
+        ));
+    }
+
+    #[test]
+    fn test_mock_backend_mutations_update_state() {
+        let mut backend = MockBackend::create_triangle();
+        backend.reserve_capacity(8, 4);
+
+        let vertex = backend
+            .insert_vertex(&[2.0, 3.0])
+            .expect("mock vertex insertion should succeed");
+        assert_eq!(
+            backend
+                .vertex_coordinates(&vertex)
+                .expect("inserted vertex should be queryable"),
+            vec![2.0, 3.0]
+        );
+
+        backend
+            .move_vertex(vertex.clone(), &[4.0, 5.0])
+            .expect("mock vertex move should succeed");
+        assert_eq!(
+            backend
+                .vertex_coordinates(&vertex)
+                .expect("moved vertex should be queryable"),
+            vec![4.0, 5.0]
+        );
+
+        let edge = backend
+            .edges()
+            .next()
+            .expect("triangle should contain edges");
+        let flip = backend
+            .flip_edge(edge.clone())
+            .expect("mock edge flip should succeed");
+        assert_eq!(flip.new_edge, edge);
+        assert!(flip.affected_faces.is_empty());
+        assert!(backend.can_flip_edge(&edge));
+
+        let face = backend
+            .faces()
+            .next()
+            .expect("triangle should contain a face");
+        let subdivision = backend
+            .subdivide_face(face.clone(), &[0.25, 0.25])
+            .expect("mock face subdivision should succeed");
+        assert_eq!(subdivision.removed_face, face);
+        assert!(subdivision.new_faces.is_empty());
+        assert_eq!(
+            backend
+                .vertex_coordinates(&subdivision.new_vertex)
+                .expect("subdivision vertex should be queryable"),
+            vec![0.25, 0.25]
+        );
+
+        let removed_faces = backend
+            .remove_vertex(vertex)
+            .expect("mock vertex removal should succeed");
+        assert!(removed_faces.is_empty());
+
+        backend.clear();
+        assert_eq!(backend.vertex_count(), 0);
+        assert_eq!(backend.edge_count(), 0);
+        assert_eq!(backend.face_count(), 0);
+        assert!(!backend.is_valid());
+        assert_eq!(backend.vertices().count(), 0);
+        assert_eq!(backend.edges().count(), 0);
+        assert_eq!(backend.faces().count(), 0);
     }
 }

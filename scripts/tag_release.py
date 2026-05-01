@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
 """Create annotated git tags from CHANGELOG.md sections.
 
 Handles GitHub's 125KB tag-annotation size limit by falling back to a short

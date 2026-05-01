@@ -5,10 +5,10 @@ Provides common testing utilities that can be reused across multiple test files.
 """
 
 import os
+import subprocess
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import Mock
 
 import pytest
 
@@ -65,12 +65,8 @@ def mock_git_command_result():
             # mock_result.stdout.strip() will return "v0.4.2"
     """
 
-    def _create_mock_result(output: str) -> Mock:
-        """Create a mock CompletedProcess object for git commands."""
-        mock_result = Mock()
-        mock_result.stdout = output  # mimic CompletedProcess.stdout (str)
-        mock_result.returncode = 0
-        mock_result.args = ["git"]
-        return mock_result
+    def _create_mock_result(output: str) -> subprocess.CompletedProcess[str]:
+        """Create a typed CompletedProcess object for git commands."""
+        return subprocess.CompletedProcess(args=["git"], returncode=0, stdout=output, stderr="")
 
     return _create_mock_result

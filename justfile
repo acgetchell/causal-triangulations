@@ -467,11 +467,12 @@ setup-tools:
         echo "  ✓ git-cliff ${git_cliff_version}"
     fi
 
-    if ! have cargo-llvm-cov; then
-        echo "  ⏳ Installing cargo-llvm-cov {{cargo_llvm_cov_version}} (cargo)..."
-        cargo install --locked cargo-llvm-cov --version {{cargo_llvm_cov_version}}
+    cargo_llvm_cov_version="{{cargo_llvm_cov_version}}"
+    if ! have cargo-llvm-cov || [[ "$(cargo-llvm-cov --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$cargo_llvm_cov_version" ]]; then
+        echo "  ⏳ Installing cargo-llvm-cov ${cargo_llvm_cov_version} (cargo)..."
+        cargo install --locked cargo-llvm-cov --version "${cargo_llvm_cov_version}"
     else
-        echo "  ✓ cargo-llvm-cov"
+        echo "  ✓ cargo-llvm-cov ${cargo_llvm_cov_version}"
     fi
 
     echo ""

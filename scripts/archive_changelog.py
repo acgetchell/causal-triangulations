@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S uv run
 """Archive completed minor series from CHANGELOG.md into per-minor files.
 
 Parses the full CHANGELOG.md (produced by git-cliff + postprocess-changelog)
@@ -325,9 +325,9 @@ def archive_changelog(
 
     # Compute relative path from changelog location to archive dir.
     try:
-        archive_dir_rel = str(archive_dir.relative_to(changelog_path.parent))
+        archive_dir_rel = archive_dir.relative_to(changelog_path.parent).as_posix()
     except ValueError:
-        archive_dir_rel = str(archive_dir)
+        archive_dir_rel = archive_dir.as_posix()
 
     root_text = build_root(
         preamble,
