@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Ergodic moves for 2D Causal Dynamical Triangulations.
 //!
 //! This module implements the standard ergodic moves used in CDT:
@@ -59,12 +61,31 @@ pub struct MoveStatistics {
 
 impl MoveStatistics {
     /// Creates a new statistics tracker.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::cdt::ergodic_moves::MoveStatistics;
+    ///
+    /// let stats = MoveStatistics::new();
+    /// assert_eq!(stats.moves_22_attempted, 0);
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Records an attempted move.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::cdt::ergodic_moves::{MoveStatistics, MoveType};
+    ///
+    /// let mut stats = MoveStatistics::new();
+    /// stats.record_attempt(MoveType::Move22);
+    /// assert_eq!(stats.moves_22_attempted, 1);
+    /// ```
     pub const fn record_attempt(&mut self, move_type: MoveType) {
         match move_type {
             MoveType::Move22 => self.moves_22_attempted += 1,
@@ -75,6 +96,16 @@ impl MoveStatistics {
     }
 
     /// Records a successful move.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::cdt::ergodic_moves::{MoveStatistics, MoveType};
+    ///
+    /// let mut stats = MoveStatistics::new();
+    /// stats.record_success(MoveType::EdgeFlip);
+    /// assert_eq!(stats.edge_flips_accepted, 1);
+    /// ```
     pub const fn record_success(&mut self, move_type: MoveType) {
         match move_type {
             MoveType::Move22 => self.moves_22_accepted += 1,
@@ -89,6 +120,17 @@ impl MoveStatistics {
     /// # Panics
     ///
     /// This function should never panic as u64 to f64 conversion is always valid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::cdt::ergodic_moves::{MoveStatistics, MoveType};
+    ///
+    /// let mut stats = MoveStatistics::new();
+    /// stats.record_attempt(MoveType::Move22);
+    /// stats.record_success(MoveType::Move22);
+    /// assert!((stats.acceptance_rate(MoveType::Move22) - 1.0).abs() < f64::EPSILON);
+    /// ```
     #[must_use]
     pub fn acceptance_rate(&self, move_type: MoveType) -> f64 {
         let (attempted, accepted) = match move_type {
@@ -112,6 +154,17 @@ impl MoveStatistics {
     /// # Panics
     ///
     /// This function should never panic as u64 to f64 conversion is always valid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::cdt::ergodic_moves::{MoveStatistics, MoveType};
+    ///
+    /// let mut stats = MoveStatistics::new();
+    /// stats.record_attempt(MoveType::Move22);
+    /// stats.record_success(MoveType::Move22);
+    /// assert!((stats.total_acceptance_rate() - 1.0).abs() < f64::EPSILON);
+    /// ```
     #[must_use]
     pub fn total_acceptance_rate(&self) -> f64 {
         let total_attempted = self.moves_22_attempted
@@ -143,6 +196,15 @@ pub struct ErgodicsSystem {
 
 impl ErgodicsSystem {
     /// Creates a new ergodics system.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::ErgodicsSystem;
+    ///
+    /// let system = ErgodicsSystem::new();
+    /// assert_eq!(system.stats.moves_22_attempted, 0);
+    /// ```
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -152,6 +214,19 @@ impl ErgodicsSystem {
     }
 
     /// Selects a random move type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{ErgodicsSystem, MoveType};
+    ///
+    /// let mut system = ErgodicsSystem::new();
+    /// let move_type = system.select_random_move();
+    /// assert!(matches!(
+    ///     move_type,
+    ///     MoveType::Move22 | MoveType::Move13Add | MoveType::Move31Remove | MoveType::EdgeFlip
+    /// ));
+    /// ```
     #[must_use]
     pub fn select_random_move(&mut self) -> MoveType {
         match self.rng.random_range(0..4) {
@@ -169,6 +244,21 @@ impl ErgodicsSystem {
     ///
     /// **Note**: This is currently a placeholder implementation for testing.
     /// Full integration with delaunay crate Tds is planned for future versions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{ErgodicsSystem, MoveResult};
+    ///
+    /// let mut system = ErgodicsSystem::new();
+    /// let mut triangulation = vec![vec![0, 1, 2], vec![2, 1, 3]];
+    /// let result = system.attempt_22_move(&mut triangulation);
+    /// assert!(matches!(
+    ///     result,
+    ///     MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
+    /// ));
+    /// assert_eq!(system.stats.moves_22_attempted, 1);
+    /// ```
     pub fn attempt_22_move(&mut self, _triangulation: &mut Vec<Vec<usize>>) -> MoveResult {
         self.stats.record_attempt(MoveType::Move22);
 
@@ -195,6 +285,18 @@ impl ErgodicsSystem {
     ///
     /// **Note**: This is currently a placeholder implementation for testing.
     /// Full integration with delaunay crate Tds is planned for future versions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{ErgodicsSystem, MoveResult};
+    ///
+    /// let mut system = ErgodicsSystem::new();
+    /// let mut triangulation = vec![vec![0, 1, 2]];
+    /// let result = system.attempt_13_move(&mut triangulation);
+    /// assert!(matches!(result, MoveResult::Success | MoveResult::GeometricViolation));
+    /// assert_eq!(system.stats.moves_13_attempted, 1);
+    /// ```
     pub fn attempt_13_move(&mut self, _triangulation: &mut Vec<Vec<usize>>) -> MoveResult {
         self.stats.record_attempt(MoveType::Move13Add);
 
@@ -215,6 +317,21 @@ impl ErgodicsSystem {
     ///
     /// **Note**: This is currently a placeholder implementation for testing.
     /// Full integration with delaunay crate Tds is planned for future versions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{ErgodicsSystem, MoveResult};
+    ///
+    /// let mut system = ErgodicsSystem::new();
+    /// let mut triangulation = vec![vec![0, 1, 2], vec![0, 2, 3], vec![0, 3, 1]];
+    /// let result = system.attempt_31_move(&mut triangulation);
+    /// assert!(matches!(
+    ///     result,
+    ///     MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
+    /// ));
+    /// assert_eq!(system.stats.moves_31_attempted, 1);
+    /// ```
     pub fn attempt_31_move(&mut self, _triangulation: &mut Vec<Vec<usize>>) -> MoveResult {
         self.stats.record_attempt(MoveType::Move31Remove);
 
@@ -240,6 +357,18 @@ impl ErgodicsSystem {
     ///
     /// **Note**: This is currently a placeholder implementation for testing.
     /// Full integration with delaunay crate Tds is planned for future versions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{ErgodicsSystem, MoveResult};
+    ///
+    /// let mut system = ErgodicsSystem::new();
+    /// let mut triangulation = vec![vec![0, 1, 2], vec![2, 1, 3]];
+    /// let result = system.attempt_edge_flip(&mut triangulation);
+    /// assert!(matches!(result, MoveResult::Success | MoveResult::CausalityViolation));
+    /// assert_eq!(system.stats.edge_flips_attempted, 1);
+    /// ```
     pub fn attempt_edge_flip(&mut self, _triangulation: &mut Vec<Vec<usize>>) -> MoveResult {
         self.stats.record_attempt(MoveType::EdgeFlip);
 
@@ -254,6 +383,20 @@ impl ErgodicsSystem {
     }
 
     /// Attempts a random ergodic move on the triangulation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{ErgodicsSystem, MoveResult};
+    ///
+    /// let mut system = ErgodicsSystem::new();
+    /// let mut triangulation = vec![vec![0, 1, 2]];
+    /// let result = system.attempt_random_move(&mut triangulation);
+    /// assert!(matches!(
+    ///     result,
+    ///     MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
+    /// ));
+    /// ```
     pub fn attempt_random_move(&mut self, triangulation: &mut Vec<Vec<usize>>) -> MoveResult {
         let move_type = self.select_random_move();
         match move_type {
@@ -345,7 +488,11 @@ mod tests {
             MoveResult::Success | MoveResult::GeometricViolation
         ));
         assert_eq!(system.stats.moves_13_attempted, 1);
-        assert!(system.stats.moves_13_accepted <= 1);
+        if matches!(move_13, MoveResult::Success) {
+            assert_eq!(system.stats.moves_13_accepted, 1);
+        } else {
+            assert_eq!(system.stats.moves_13_accepted, 0);
+        }
 
         let move_31 = system.attempt_31_move(&mut triangulation);
         assert!(matches!(
@@ -353,7 +500,11 @@ mod tests {
             MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
         ));
         assert_eq!(system.stats.moves_31_attempted, 1);
-        assert!(system.stats.moves_31_accepted <= 1);
+        if matches!(move_31, MoveResult::Success) {
+            assert_eq!(system.stats.moves_31_accepted, 1);
+        } else {
+            assert_eq!(system.stats.moves_31_accepted, 0);
+        }
 
         let edge_flip = system.attempt_edge_flip(&mut triangulation);
         assert!(matches!(
@@ -361,7 +512,11 @@ mod tests {
             MoveResult::Success | MoveResult::CausalityViolation
         ));
         assert_eq!(system.stats.edge_flips_attempted, 1);
-        assert!(system.stats.edge_flips_accepted <= 1);
+        if matches!(edge_flip, MoveResult::Success) {
+            assert_eq!(system.stats.edge_flips_accepted, 1);
+        } else {
+            assert_eq!(system.stats.edge_flips_accepted, 0);
+        }
     }
 
     #[test]
@@ -388,5 +543,12 @@ mod tests {
         stats.record_attempt(MoveType::Move13Add);
 
         assert_relative_eq!(stats.total_acceptance_rate(), 0.5);
+    }
+
+    #[test]
+    fn test_total_acceptance_rate_without_attempts() {
+        let stats = MoveStatistics::new();
+
+        assert_relative_eq!(stats.total_acceptance_rate(), 0.0);
     }
 }

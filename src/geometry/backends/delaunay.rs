@@ -108,6 +108,22 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     DelaunayBackend<VertexData, CellData, D>
 {
     /// Create a new Delaunay backend from an existing Delaunay triangulation
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::backends::delaunay::DelaunayBackend;
+    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::geometry::traits::TriangulationQuery;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0_u32),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ]).unwrap();
+    /// let backend = DelaunayBackend::<u32, i32, 2>::from_triangulation(dt);
+    /// assert_eq!(backend.vertex_count(), 3);
+    /// ```
     #[must_use]
     pub const fn from_triangulation(
         dt: DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D>,
@@ -116,6 +132,21 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     }
 
     /// Access the underlying Delaunay triangulation (read-only)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::DelaunayBackend2D;
+    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0_u32),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ]).unwrap();
+    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// assert_eq!(backend.triangulation().number_of_vertices(), 3);
+    /// ```
     #[must_use]
     pub const fn triangulation(
         &self,
@@ -128,6 +159,21 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// Uses the upstream cumulative validation (`DelaunayTriangulation::validate`) which
     /// checks neighbor pointer consistency, Euler characteristic, coherent orientation
     /// (Levels 1–3) and the Delaunay in-sphere property (Level 4).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::DelaunayBackend2D;
+    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0_u32),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ]).unwrap();
+    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// assert!(backend.is_delaunay());
+    /// ```
     #[must_use]
     pub fn is_delaunay(&self) -> bool {
         self.dt.validate().is_ok()
@@ -138,18 +184,65 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     ///
     /// This exposes the [`GlobalTopology`](delaunay::topology::traits::GlobalTopology)
     /// metadata attached by [`DelaunayTriangulationBuilder`](delaunay::triangulation::builder::DelaunayTriangulationBuilder) at construction time.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::DelaunayBackend2D;
+    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0_u32),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ]).unwrap();
+    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// let _kind = backend.topology_kind();
+    /// ```
     #[must_use]
     pub const fn topology_kind(&self) -> delaunay::topology::traits::TopologyKind {
         self.dt.topology_kind()
     }
 
     /// Returns the vertex payload for `key`, if present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::DelaunayBackend2D;
+    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0_u32),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ]).unwrap();
+    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// let (key, _) = backend.triangulation().vertices().next().unwrap();
+    /// assert!(backend.vertex_data_by_key(key).is_some());
+    /// ```
     #[must_use]
     pub fn vertex_data_by_key(&self, key: VertexKey) -> Option<VertexData> {
         self.dt.tds().get_vertex_by_key(key)?.data().copied()
     }
 
     /// Returns the cell payload for `key`, if present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::DelaunayBackend2D;
+    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0_u32),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ]).unwrap();
+    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// let (key, _) = backend.triangulation().cells().next().unwrap();
+    /// assert_eq!(backend.cell_data_by_key(key), None);
+    /// ```
     #[must_use]
     pub fn cell_data_by_key(&self, key: CellKey) -> Option<CellData> {
         self.dt.tds().get_cell(key)?.data().copied()
@@ -162,6 +255,24 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// # Errors
     ///
     /// Returns [`DelaunayError::InvalidVertex`] if `key` is not present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::DelaunayBackend2D;
+    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0_u32),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ]).unwrap();
+    /// let mut backend = DelaunayBackend2D::from_triangulation(dt);
+    /// let (key, _) = backend.triangulation().vertices().next().unwrap();
+    /// let previous = backend.set_vertex_data_by_key(key, Some(3)).unwrap();
+    /// assert!(previous.is_some());
+    /// assert_eq!(backend.vertex_data_by_key(key), Some(3));
+    /// ```
     pub fn set_vertex_data_by_key(
         &mut self,
         key: VertexKey,
@@ -179,6 +290,24 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// # Errors
     ///
     /// Returns [`DelaunayError::InvalidFace`] if `key` is not present.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::DelaunayBackend2D;
+    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0_u32),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ]).unwrap();
+    /// let mut backend = DelaunayBackend2D::from_triangulation(dt);
+    /// let (key, _) = backend.triangulation().cells().next().unwrap();
+    /// let previous = backend.set_cell_data_by_key(key, Some(1)).unwrap();
+    /// assert_eq!(previous, None);
+    /// assert_eq!(backend.cell_data_by_key(key), Some(1));
+    /// ```
     pub fn set_cell_data_by_key(
         &mut self,
         key: CellKey,

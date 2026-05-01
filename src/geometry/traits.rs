@@ -147,6 +147,16 @@ pub struct FlipResult<E, F> {
 
 impl<E, F> FlipResult<E, F> {
     /// Create a new flip result
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::traits::FlipResult;
+    ///
+    /// let result = FlipResult::new("new edge", vec!["left face", "right face"]);
+    /// assert_eq!(result.new_edge, "new edge");
+    /// assert_eq!(result.affected_faces.len(), 2);
+    /// ```
     pub const fn new(new_edge: E, affected_faces: Vec<F>) -> Self {
         Self {
             new_edge,
@@ -168,6 +178,16 @@ pub struct SubdivisionResult<V, F> {
 
 impl<V, F> SubdivisionResult<V, F> {
     /// Create a new subdivision result
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::traits::SubdivisionResult;
+    ///
+    /// let result = SubdivisionResult::new("new vertex", vec!["f0", "f1", "f2"], "old face");
+    /// assert_eq!(result.new_vertex, "new vertex");
+    /// assert_eq!(result.removed_face, "old face");
+    /// ```
     pub const fn new(new_vertex: V, new_faces: Vec<F>, removed_face: F) -> Self {
         Self {
             new_vertex,
@@ -211,7 +231,6 @@ pub trait TriangulationMut: TriangulationQuery {
     ///
     /// # Errors
     /// Returns error if the edge cannot be flipped
-    #[allow(clippy::type_complexity)]
     fn flip_edge(
         &mut self,
         edge: Self::EdgeHandle,
@@ -224,7 +243,6 @@ pub trait TriangulationMut: TriangulationQuery {
     ///
     /// # Errors
     /// Returns error if the face cannot be subdivided
-    #[allow(clippy::type_complexity)]
     fn subdivide_face(
         &mut self,
         face: Self::FaceHandle,

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Basic example of using the Causal Dynamical Triangulations library
 //!
 //! This example shows how to:

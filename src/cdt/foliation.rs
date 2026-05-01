@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Foliation data structures for Causal Dynamical Triangulations.
 //!
 //! A **foliation** assigns each vertex to a discrete time slice, enabling
@@ -40,6 +42,15 @@ pub enum CellType {
 
 impl CellType {
     /// Encode as the `i32` value stored in cell data.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::CellType;
+    ///
+    /// assert_eq!(CellType::Up.to_i32(), 1);
+    /// assert_eq!(CellType::Down.to_i32(), -1);
+    /// ```
     #[must_use]
     pub const fn to_i32(self) -> i32 {
         match self {
@@ -51,6 +62,15 @@ impl CellType {
     /// Decode from the `i32` value stored in cell data.
     ///
     /// Returns `None` for values that do not represent a valid cell type.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::CellType;
+    ///
+    /// assert_eq!(CellType::from_i32(1), Some(CellType::Up));
+    /// assert_eq!(CellType::from_i32(0), None);
+    /// ```
     #[must_use]
     pub const fn from_i32(value: i32) -> Option<Self> {
         match value {
@@ -64,6 +84,16 @@ impl CellType {
 /// Classifies an edge given the time labels of its two endpoints.
 ///
 /// Returns `None` if either label is `None` (unlabeled vertex).
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::cdt::foliation::{classify_edge, EdgeType};
+///
+/// assert_eq!(classify_edge(Some(2), Some(2)), Some(EdgeType::Spacelike));
+/// assert_eq!(classify_edge(Some(2), Some(3)), Some(EdgeType::Timelike));
+/// assert_eq!(classify_edge(Some(2), None), None);
+/// ```
 #[must_use]
 pub fn classify_edge(t0: Option<u32>, t1: Option<u32>) -> Option<EdgeType> {
     let t0 = t0?;
@@ -81,6 +111,16 @@ pub fn classify_edge(t0: Option<u32>, t1: Option<u32>) -> Option<EdgeType> {
 ///
 /// Returns `None` if any label is missing, if the triangle is degenerate
 /// (all vertices at the same time), or if it spans more than one time slice.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::cdt::foliation::{classify_cell, CellType};
+///
+/// assert_eq!(classify_cell(Some(0), Some(0), Some(1)), Some(CellType::Up));
+/// assert_eq!(classify_cell(Some(0), Some(1), Some(1)), Some(CellType::Down));
+/// assert_eq!(classify_cell(Some(0), Some(0), Some(0)), None);
+/// ```
 #[must_use]
 pub fn classify_cell(t0: Option<u32>, t1: Option<u32>, t2: Option<u32>) -> Option<CellType> {
     let t0 = t0?;
@@ -309,6 +349,17 @@ impl Foliation {
     ///
     /// Returns error if `slice_sizes.len() != num_slices` or if any slice is
     /// empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::Foliation;
+    ///
+    /// let foliation = Foliation::from_slice_sizes(vec![3, 4], 2)
+    ///     .expect("both slices are non-empty");
+    /// assert_eq!(foliation.num_slices(), 2);
+    /// assert_eq!(foliation.labeled_vertex_count(), 7);
+    /// ```
     pub fn from_slice_sizes(
         slice_sizes: Vec<usize>,
         num_slices: u32,
@@ -329,18 +380,45 @@ impl Foliation {
     }
 
     /// Returns the number of vertices in each time slice.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::Foliation;
+    ///
+    /// let foliation = Foliation::from_slice_sizes(vec![3, 4], 2).unwrap();
+    /// assert_eq!(foliation.slice_sizes(), &[3, 4]);
+    /// ```
     #[must_use]
     pub fn slice_sizes(&self) -> &[usize] {
         &self.slice_sizes
     }
 
     /// Returns the total number of time slices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::Foliation;
+    ///
+    /// let foliation = Foliation::from_slice_sizes(vec![3, 4], 2).unwrap();
+    /// assert_eq!(foliation.num_slices(), 2);
+    /// ```
     #[must_use]
     pub const fn num_slices(&self) -> u32 {
         self.num_slices
     }
 
     /// Returns the total number of labeled vertices (sum of all slice sizes).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::Foliation;
+    ///
+    /// let foliation = Foliation::from_slice_sizes(vec![3, 4], 2).unwrap();
+    /// assert_eq!(foliation.labeled_vertex_count(), 7);
+    /// ```
     #[must_use]
     pub fn labeled_vertex_count(&self) -> usize {
         self.slice_sizes.iter().sum()

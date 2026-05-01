@@ -595,7 +595,7 @@ class TestIntegration:
         result = f.read_text(encoding="utf-8")
         for line in result.split("\n"):
             if line.strip():
-                assert len(line) <= 160 or "[" in line, f"Line too long ({len(line)}): {line[:80]}..."
+                assert len(line) <= 160 or "](" in line or "http" in line, f"Line too long ({len(line)}): {line[:80]}..."
 
     def test_summary_sections_in_full_pipeline(self, tmp_path: Path) -> None:
         """Summary sections are injected and survive reflow."""

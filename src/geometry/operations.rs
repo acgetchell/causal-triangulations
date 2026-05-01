@@ -8,6 +8,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
+/// Produces comparable endpoint hashes so unordered keys can avoid requiring `Ord`.
 fn stable_hash<T: Hash>(value: &T) -> u64 {
     let mut hasher = DefaultHasher::new();
     value.hash(&mut hasher);
@@ -132,6 +133,15 @@ fn boundary_facets<B: TriangulationQuery + ?Sized>(tri: &B) -> Vec<Vec<B::Vertex
 /// Common utility operations for triangulations
 pub trait TriangulationOps: TriangulationQuery {
     /// Check if the triangulation satisfies Delaunay property (if applicable)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::*;
+    ///
+    /// let backend = MockBackend::create_triangle();
+    /// assert!(backend.is_delaunay());
+    /// ```
     fn is_delaunay(&self) -> bool {
         // Delegate to the backend's validation method
         // For Delaunay backends with appropriate trait bounds, this checks the
@@ -147,6 +157,16 @@ pub trait TriangulationOps: TriangulationQuery {
     /// - For 2D triangulations, these are the vertices incident to at least one boundary edge.
     /// - For higher dimensions, these are the vertices incident to at least one boundary facet.
     /// - The returned vertex order is **unspecified**.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::*;
+    ///
+    /// let backend = MockBackend::create_triangle();
+    /// let hull = backend.convex_hull();
+    /// assert_eq!(hull.len(), 3);
+    /// ```
     fn convex_hull(&self) -> Vec<Self::VertexHandle> {
         let mut hull_vertices: HashSet<Self::VertexHandle> = HashSet::new();
 

@@ -12,6 +12,15 @@ use delaunay::{core::DataType, geometry::kernel::AdaptiveKernel};
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 pub use delaunay::{core::edge::EdgeKey, core::tds::VertexKey};
 
+// ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+pub(crate) use delaunay::prelude::Tds;
+
+// ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+pub(super) use delaunay::{core::cell::CellKey, core::facet::Facet};
+
+// ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+use delaunay as dt;
+
 pub fn production_stdio() {
     // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
     println!("debug output");

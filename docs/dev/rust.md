@@ -164,6 +164,8 @@ All public items must have documentation.
 
 Public functions and methods should include a `# Examples` section with a runnable doctest demonstrating basic usage. Doctests serve as both documentation and regression tests.
 
+Private helper functions should have a `///` doc comment that explains why the helper exists, especially when it encodes an invariant, isolates validation, or keeps a mutation path consistent.
+
 After Rust changes, verify documentation builds:
 
 ```bash

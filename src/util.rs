@@ -10,6 +10,15 @@ use rand::random;
 ///
 /// Useful for Euler characteristic calculations where simplex counts
 /// are `usize` but arithmetic needs signed integers.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::util::saturating_usize_to_i32;
+///
+/// assert_eq!(saturating_usize_to_i32(42), 42);
+/// assert_eq!(saturating_usize_to_i32(usize::MAX), i32::MAX);
+/// ```
 #[must_use]
 pub fn saturating_usize_to_i32(n: usize) -> i32 {
     i32::try_from(n).unwrap_or(i32::MAX)
@@ -18,6 +27,15 @@ pub fn saturating_usize_to_i32(n: usize) -> i32 {
 /// Convert a y-coordinate to a time-slice index via `round()`, clamped to `[0, max_t]`.
 ///
 /// Returns `None` if the rounded value is negative or exceeds `u32::MAX`.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::util::y_to_time_bucket;
+///
+/// assert_eq!(y_to_time_bucket(1.6, 4), Some(2));
+/// assert_eq!(y_to_time_bucket(-0.6, 4), None);
+/// ```
 #[must_use]
 pub fn y_to_time_bucket(y: f64, max_t: u32) -> Option<u32> {
     let rounded = y.round();
@@ -27,6 +45,15 @@ pub fn y_to_time_bucket(y: f64, max_t: u32) -> Option<u32> {
 /// Convert a non-negative `f64` band index to `u32`, clamped to `[0, max_t]`.
 ///
 /// Returns 0 if the value is negative or NaN.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::util::f64_band_to_u32;
+///
+/// assert_eq!(f64_band_to_u32(2.0, 4), 2);
+/// assert_eq!(f64_band_to_u32(10.0, 4), 4);
+/// ```
 #[must_use]
 pub fn f64_band_to_u32(band_index: f64, max_t: u32) -> u32 {
     num_traits::ToPrimitive::to_u32(&band_index)
@@ -39,6 +66,15 @@ pub fn f64_band_to_u32(band_index: f64, max_t: u32) -> u32 {
 /// # Returns
 ///
 /// A random `f64` value in the range [0.0, 1.0).
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::util::generate_random_float;
+///
+/// let value = generate_random_float();
+/// assert!((0.0..1.0).contains(&value));
+/// ```
 #[must_use]
 pub fn generate_random_float() -> f64 {
     random::<f64>()

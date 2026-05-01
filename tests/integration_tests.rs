@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Comprehensive integration tests for CDT-RS.
 //!
 //! This module contains integration tests that verify the complete CDT simulation

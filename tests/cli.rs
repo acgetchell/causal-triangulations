@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Command-line interface integration tests for the CDT-RS application.
 //!
 //! This module contains tests that verify the behavior of the command-line

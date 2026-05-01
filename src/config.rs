@@ -149,6 +149,22 @@ impl CdtConfig {
     /// Override fields that are `None` are ignored, leaving the original configuration values
     /// unchanged. When an override value is provided, it replaces the corresponding field in
     /// the returned configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::config::{CdtConfig, CdtConfigOverrides};
+    ///
+    /// let base = CdtConfig::new(10, 2);
+    /// let overrides = CdtConfigOverrides {
+    ///     vertices: Some(24),
+    ///     ..CdtConfigOverrides::default()
+    /// };
+    ///
+    /// let merged = base.merge_with_override(&overrides);
+    /// assert_eq!(merged.vertices, 24);
+    /// assert_eq!(merged.timeslices, 2);
+    /// ```
     #[must_use]
     pub fn merge_with_override(&self, overrides: &CdtConfigOverrides) -> Self {
         let mut merged = self.clone();
@@ -217,6 +233,16 @@ impl CdtConfig {
 
     /// Resolves a candidate path against a base directory, expanding user home references
     /// and normalizing relative segments (e.g., `.` and `..`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::PathBuf;
+    /// use causal_triangulations::CdtConfig;
+    ///
+    /// let resolved = CdtConfig::resolve_path("/tmp/project", "data/../config.toml");
+    /// assert_eq!(resolved, PathBuf::from("/tmp/project/config.toml"));
+    /// ```
     #[must_use]
     pub fn resolve_path(base_dir: impl AsRef<Path>, candidate: impl AsRef<Path>) -> PathBuf {
         let candidate = candidate.as_ref();
@@ -250,6 +276,7 @@ impl CdtConfig {
     }
 }
 
+/// Normalizes paths without touching the filesystem so config parsing stays side-effect free.
 fn normalize_components(path: &Path) -> PathBuf {
     let mut normalized = PathBuf::new();
 
@@ -284,6 +311,7 @@ fn normalize_components(path: &Path) -> PathBuf {
     }
 }
 
+/// Builds a typed configuration error from displayable values without duplicating field names.
 fn invalid_configuration(
     setting: &str,
     provided_value: &impl std::fmt::Display,
@@ -292,6 +320,7 @@ fn invalid_configuration(
     invalid_configuration_from_parts(setting, provided_value.to_string(), expected.to_string())
 }
 
+/// Preserves already-formatted validation values when shared validators produce owned strings.
 fn invalid_configuration_from_parts(
     setting: &str,
     provided_value: String,
@@ -304,6 +333,7 @@ fn invalid_configuration_from_parts(
     }
 }
 
+/// Shares simulation schedule validation between top-level config and Metropolis config.
 pub(crate) fn validate_simulation_settings(
     temperature: f64,
     steps: u32,
@@ -376,6 +406,17 @@ impl CdtConfig {
     }
 
     /// Creates a new `CdtConfig` with specified basic parameters and default action parameters.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{CdtConfig, CdtTopology};
+    ///
+    /// let config = CdtConfig::new(16, 4);
+    /// assert_eq!(config.vertices, 16);
+    /// assert_eq!(config.timeslices, 4);
+    /// assert_eq!(config.topology, CdtTopology::OpenBoundary);
+    /// ```
     #[must_use]
     pub const fn new(vertices: u32, timeslices: u32) -> Self {
         Self {
@@ -396,6 +437,19 @@ impl CdtConfig {
     }
 
     /// Creates a `MetropolisConfig` from this configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::CdtConfig;
+    ///
+    /// let config = CdtConfig {
+    ///     seed: Some(42),
+    ///     ..CdtConfig::new(16, 4)
+    /// };
+    /// let metropolis = config.to_metropolis_config();
+    /// assert_eq!(metropolis.seed, Some(42));
+    /// ```
     #[must_use]
     pub const fn to_metropolis_config(&self) -> MetropolisConfig {
         let config = MetropolisConfig::new(
@@ -412,12 +466,33 @@ impl CdtConfig {
     }
 
     /// Creates an `ActionConfig` from this configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::CdtConfig;
+    ///
+    /// let action = CdtConfig::new(16, 4).to_action_config();
+    /// assert!((action.coupling_0 - 1.0).abs() < f64::EPSILON);
+    /// ```
     #[must_use]
     pub const fn to_action_config(&self) -> ActionConfig {
         ActionConfig::new(self.coupling_0, self.coupling_2, self.cosmological_constant)
     }
 
     /// Gets the effective dimension (defaults to 2 if not specified).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::CdtConfig;
+    ///
+    /// let config = CdtConfig {
+    ///     dimension: None,
+    ///     ..CdtConfig::new(16, 4)
+    /// };
+    /// assert_eq!(config.dimension(), 2);
+    /// ```
     #[must_use]
     pub const fn dimension(&self) -> u8 {
         match self.dimension {
@@ -434,6 +509,15 @@ impl CdtConfig {
     /// Toroidal topology additionally requires `timeslices ≥ 3`,
     /// `vertices ≥ 3 · timeslices`, and `vertices` evenly divisible by
     /// `timeslices` so each spatial slice carries the same `N ≥ 3` vertices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::CdtConfig;
+    ///
+    /// let config = CdtConfig::new(16, 4);
+    /// assert!(config.validate().is_ok());
+    /// ```
     pub fn validate(&self) -> CdtResult<()> {
         if self.vertices < 3 {
             return Err(invalid_configuration("vertices", &self.vertices, &"≥ 3"));
@@ -510,6 +594,15 @@ pub struct TestConfig;
 
 impl TestConfig {
     /// Creates a small, fast configuration suitable for unit tests.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::TestConfig;
+    ///
+    /// let config = TestConfig::small();
+    /// assert_eq!(config.steps, 10);
+    /// ```
     #[must_use]
     pub const fn small() -> CdtConfig {
         CdtConfig {
@@ -530,6 +623,15 @@ impl TestConfig {
     }
 
     /// Creates a medium-sized configuration for integration tests.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::TestConfig;
+    ///
+    /// let config = TestConfig::medium();
+    /// assert_eq!(config.vertices, 64);
+    /// ```
     #[must_use]
     pub const fn medium() -> CdtConfig {
         CdtConfig {
@@ -550,6 +652,15 @@ impl TestConfig {
     }
 
     /// Creates a large configuration for performance testing.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::TestConfig;
+    ///
+    /// let config = TestConfig::large();
+    /// assert_eq!(config.vertices, 256);
+    /// ```
     #[must_use]
     pub const fn large() -> CdtConfig {
         CdtConfig {
@@ -763,6 +874,23 @@ mod tests {
             other => panic!("Unexpected validation result: {other:?}"),
         }
 
+        let thermalization_exceeds_steps = CdtConfig {
+            steps: 10,
+            thermalization_steps: 11,
+            measurement_frequency: 1,
+            ..CdtConfig::new(32, 3)
+        };
+        assert!(matches!(
+            thermalization_exceeds_steps.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "thermalization_steps"
+                && provided_value == "11"
+                && expected == "≤ steps (10)"
+        ));
+
         let overflowed_post_thermalization_boundary = CdtConfig {
             steps: u32::MAX,
             thermalization_steps: u32::MAX,
@@ -867,6 +995,23 @@ mod tests {
             open_boundary_indivisible.validate().is_ok(),
             "OpenBoundary should not require vertex/timeslice divisibility"
         );
+
+        let toroidal_min_total_overflow = CdtConfig {
+            topology: CdtTopology::Toroidal,
+            vertices: u32::MAX,
+            timeslices: u32::MAX,
+            ..CdtConfig::new(u32::MAX, u32::MAX)
+        };
+        assert!(matches!(
+            toroidal_min_total_overflow.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "timeslices"
+                && provided_value == u32::MAX.to_string()
+                && expected == "3 · timeslices must fit in u32 for toroidal topology"
+        ));
     }
 
     #[test]
@@ -920,6 +1065,51 @@ mod tests {
     }
 
     #[test]
+    fn test_merge_with_override_updates_remaining_fields() {
+        let base = CdtConfig::new(10, 2);
+        let overrides = CdtConfigOverrides {
+            timeslices: Some(5),
+            steps: Some(250),
+            thermalization_steps: Some(25),
+            measurement_frequency: Some(5),
+            coupling_0: Some(1.5),
+            coupling_2: Some(2.5),
+            cosmological_constant: Some(0.25),
+            seed: Some(Some(99)),
+            topology: Some(CdtTopology::Toroidal),
+            ..CdtConfigOverrides::default()
+        };
+
+        let merged = base.merge_with_override(&overrides);
+
+        assert_eq!(merged.timeslices, 5);
+        assert_eq!(merged.steps, 250);
+        assert_eq!(merged.thermalization_steps, 25);
+        assert_eq!(merged.measurement_frequency, 5);
+        assert_relative_eq!(merged.coupling_0, 1.5);
+        assert_relative_eq!(merged.coupling_2, 2.5);
+        assert_relative_eq!(merged.cosmological_constant, 0.25);
+        assert_eq!(merged.seed, Some(99));
+        assert_eq!(merged.topology, CdtTopology::Toroidal);
+    }
+
+    #[test]
+    fn test_merge_with_override_can_clear_seed() {
+        let base = CdtConfig {
+            seed: Some(77),
+            ..CdtConfig::new(10, 2)
+        };
+        let overrides = CdtConfigOverrides {
+            seed: Some(None),
+            ..CdtConfigOverrides::default()
+        };
+
+        let merged = base.merge_with_override(&overrides);
+
+        assert_eq!(merged.seed, None);
+    }
+
+    #[test]
     fn test_merge_with_override_can_clear_dimension() {
         let base = CdtConfig::new(10, 2);
         let overrides = CdtConfigOverrides {
@@ -951,6 +1141,27 @@ mod tests {
     fn test_resolve_path_with_home_expansion() {
         let home = home_dir().expect("Home directory must be resolvable for this test");
         let resolved = CdtConfig::resolve_path("/tmp", PathBuf::from("~/config.toml"));
+        assert_eq!(resolved, home.join("config.toml"));
+    }
+
+    #[test]
+    fn test_resolve_path_with_home_directory_only() {
+        let home = home_dir().expect("Home directory must be resolvable for this test");
+        let resolved = CdtConfig::resolve_path("/tmp", PathBuf::from("~"));
+        assert_eq!(resolved, home);
+    }
+
+    #[test]
+    fn test_resolve_path_with_trailing_home_separator() {
+        let home = home_dir().expect("Home directory must be resolvable for this test");
+        let resolved = CdtConfig::resolve_path("/tmp", PathBuf::from("~/"));
+        assert_eq!(resolved, home);
+    }
+
+    #[test]
+    fn test_resolve_path_with_windows_style_home_separator() {
+        let home = home_dir().expect("Home directory must be resolvable for this test");
+        let resolved = CdtConfig::resolve_path("/tmp", PathBuf::from("~\\config.toml"));
         assert_eq!(resolved, home.join("config.toml"));
     }
 

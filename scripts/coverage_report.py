@@ -49,11 +49,11 @@ class CoverageEntry:
 
 def parse_args() -> argparse.Namespace:
     """
-    Parse command-line options for summarizing Tarpaulin coverage data.
+    Parse command-line options for summarizing Cobertura XML coverage data.
 
     Returns:
-        argparse.Namespace: Parsed arguments including report path, prefix filter,
-            result limit, and sort order flag.
+        argparse.Namespace: Parsed arguments containing the report path,
+            optional path-prefix filter, result limit, and sort order flag.
     """
     parser = argparse.ArgumentParser(description="Summarize Cobertura XML coverage report.")
     parser.add_argument(

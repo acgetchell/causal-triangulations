@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Comprehensive benchmarks for Causal Dynamical Triangulations operations.
 //!
 //! This benchmark suite measures the performance of key CDT operations including:
@@ -6,8 +8,6 @@
 //! - Metropolis-Hastings simulation steps
 //! - Action calculations
 //! - Ergodic move operations
-
-#![allow(missing_docs)] // Allow missing docs for criterion-generated functions
 
 use causal_triangulations::prelude::simulation::{
     ActionConfig, ErgodicsSystem, MetropolisAlgorithm, MetropolisConfig, MoveType,

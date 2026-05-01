@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Delaunay triangulation generators.
 //!
 //! This module constructs 2D Delaunay triangulations via the `delaunay` crate.
@@ -443,7 +445,10 @@ mod tests {
         let mut vertices: Vec<([f64; 2], u32)> = Vec::with_capacity(N * T);
         for t in 0..T {
             for i in 0..N {
-                #[allow(clippy::cast_precision_loss)]
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "small deterministic test indices are converted to normalized f64 coordinates"
+                )]
                 let coord = [i as f64 / N as f64, t as f64 / T as f64];
                 let label = u32::try_from(t).expect("slice index fits in u32");
                 vertices.push((coord, label));
@@ -706,9 +711,17 @@ mod tests {
         // Test that generated triangulations satisfy basic topological properties
         let dt = random_delaunay2(8, (0.0, 10.0));
 
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_possible_wrap,
+            reason = "test triangulation sizes are tiny and fit in i32"
+        )]
         let v = dt.number_of_vertices() as i32;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_possible_wrap,
+            reason = "test triangulation sizes are tiny and fit in i32"
+        )]
         let c = dt.number_of_cells() as i32; // faces in 2D
 
         // Basic sanity checks

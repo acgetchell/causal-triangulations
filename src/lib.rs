@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
-#![allow(clippy::multiple_crate_versions)]
+#![expect(
+    clippy::multiple_crate_versions,
+    reason = "transitive dependencies currently resolve several shared crate versions"
+)]
 #![warn(missing_docs)]
 
 //! Causal Dynamical Triangulations library for quantum gravity simulations.
@@ -232,6 +235,22 @@ pub mod prelude {
 /// Returns [`CdtError::UnsupportedDimension`] if a validated configuration requests
 /// a simulation dimension other than 2.
 /// Returns triangulation generation errors from the underlying triangulation creation.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::{CdtConfig, run_simulation};
+///
+/// let config = CdtConfig {
+///     steps: 1,
+///     thermalization_steps: 0,
+///     measurement_frequency: 1,
+///     seed: Some(7),
+///     ..CdtConfig::new(5, 2)
+/// };
+/// let results = run_simulation(&config).unwrap();
+/// assert_eq!(results.steps.len(), 1);
+/// ```
 pub fn run_simulation(config: &CdtConfig) -> CdtResult<cdt::metropolis::SimulationResultsBackend> {
     // Validate configuration early to fail fast with clear error messages
     config.validate()?;

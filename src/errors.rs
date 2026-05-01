@@ -120,6 +120,7 @@ pub enum CdtError {
     Mcmc(String),
 }
 
+/// Keeps causality error formatting centralized so open and toroidal distances stay consistent.
 fn format_causality_violation(time_0: u32, time_1: u32, step_distance: u32) -> String {
     let raw = time_0.abs_diff(time_1);
     if raw == step_distance {
