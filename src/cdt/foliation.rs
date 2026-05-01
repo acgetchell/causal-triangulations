@@ -155,6 +155,59 @@ pub enum FoliationError {
         /// Total labeled vertex count.
         labeled: usize,
     },
+    /// The spacelike subgraph of a toroidal spatial slice does not contain
+    /// every labeled vertex of that slice.
+    ///
+    /// On a toroidal CDT every vertex of slice `t` must participate in at
+    /// least one spacelike edge so the spacelike subgraph forms a closed S¹.
+    /// This variant fires when the number of distinct vertices observed in
+    /// the spacelike edges of slice `t` differs from `slice_sizes[t]`.
+    SpacelikeSubgraphSizeMismatch {
+        /// Slice index whose spacelike subgraph has the wrong vertex count.
+        slice: usize,
+        /// Number of distinct vertices observed via spacelike edges.
+        observed: usize,
+        /// Expected vertex count from `slice_sizes[slice]`.
+        expected: usize,
+    },
+    /// A vertex on a toroidal spatial slice has the wrong number of
+    /// spacelike neighbours (it must have exactly 2 to form a closed S¹).
+    SpacelikeDegreeViolation {
+        /// Slice index where the violation was detected.
+        slice: usize,
+        /// Human-readable identifier for the offending vertex (e.g.
+        /// `"VertexKey(123v1)"`).  Pre-formatted so this enum stays
+        /// backend-agnostic.
+        vertex: String,
+        /// Observed number of spacelike neighbours (expected 2).
+        observed_degree: usize,
+    },
+    /// The spacelike subgraph of a toroidal spatial slice is not a single
+    /// closed S¹ cycle (e.g. multiple disjoint cycles, a non-simple cycle,
+    /// or a cycle whose length differs from `slice_sizes[t]`).
+    SpacelikeNonClosedRing {
+        /// Slice index where the violation was detected.
+        slice: usize,
+        /// Number of vertices reached when walking from an arbitrary start.
+        walked: usize,
+        /// Expected number of vertices in the closed ring.
+        expected: usize,
+    },
+    /// A toroidal spatial slice is missing the timelike adjacency required
+    /// for temporal wrap-around — every slice must have at least one
+    /// timelike edge to both its `(t-1) mod T` and `(t+1) mod T` neighbours.
+    ///
+    /// This catches "toroidal-tagged but actually a cylinder" misuse where
+    /// the underlying mesh has open time boundaries.  χ = 0 alone does not
+    /// distinguish a torus from a cylinder, so we additionally verify the
+    /// temporal wrap.
+    MissingTemporalWrapAround {
+        /// Slice index that is missing a timelike neighbour.
+        slice: usize,
+        /// The expected neighbour slice (either `(slice-1) mod T` or
+        /// `(slice+1) mod T`) that has no incident timelike edge.
+        missing_neighbor: usize,
+    },
 }
 
 impl fmt::Display for FoliationError {
@@ -194,6 +247,41 @@ impl fmt::Display for FoliationError {
             Self::SliceSizeSumMismatch { sum, labeled } => write!(
                 f,
                 "slice_sizes sum ({sum}) does not match labeled vertex count ({labeled})"
+            ),
+            Self::SpacelikeSubgraphSizeMismatch {
+                slice,
+                observed,
+                expected,
+            } => write!(
+                f,
+                "toroidal spatial slice {slice} spacelike subgraph contains {observed} \
+                 vertices but slice_sizes reports {expected}"
+            ),
+            Self::SpacelikeDegreeViolation {
+                slice,
+                vertex,
+                observed_degree,
+            } => write!(
+                f,
+                "toroidal spatial slice {slice} vertex {vertex} has {observed_degree} \
+                 spacelike neighbours, expected exactly 2 for a closed S¹"
+            ),
+            Self::SpacelikeNonClosedRing {
+                slice,
+                walked,
+                expected,
+            } => write!(
+                f,
+                "toroidal spatial slice {slice} is not a single closed S¹: walked a \
+                 cycle of length {walked} but slice has {expected} vertices"
+            ),
+            Self::MissingTemporalWrapAround {
+                slice,
+                missing_neighbor,
+            } => write!(
+                f,
+                "toroidal foliation has no timelike edge from slice {slice} to slice \
+                 {missing_neighbor}; toroidal topology requires temporal wrap-around"
             ),
         }
     }
@@ -488,6 +576,92 @@ mod tests {
         assert_ne!(
             FoliationError::EmptySlice { slice: 0 },
             FoliationError::EmptySlice { slice: 1 },
+        );
+    }
+
+    #[test]
+    fn test_foliation_error_spacelike_subgraph_size_mismatch_display() {
+        let err = FoliationError::SpacelikeSubgraphSizeMismatch {
+            slice: 2,
+            observed: 4,
+            expected: 5,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("slice 2")
+                && msg.contains("contains 4")
+                && msg.contains("reports 5")
+                && msg.contains("toroidal"),
+            "Display should describe the toroidal slice and both vertex counts: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_foliation_error_spacelike_degree_violation_display() {
+        let err = FoliationError::SpacelikeDegreeViolation {
+            slice: 1,
+            vertex: "VertexKey(7v3)".to_string(),
+            observed_degree: 3,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("slice 1")
+                && msg.contains("VertexKey(7v3)")
+                && msg.contains("3 spacelike neighbours")
+                && msg.contains("closed S¹"),
+            "Display should identify the slice, vertex, observed degree, and S¹ expectation: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_foliation_error_spacelike_non_closed_ring_display() {
+        let err = FoliationError::SpacelikeNonClosedRing {
+            slice: 0,
+            walked: 3,
+            expected: 6,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("slice 0")
+                && msg.contains("length 3")
+                && msg.contains("6 vertices")
+                && msg.contains("closed S¹"),
+            "Display should describe slice index, walked length, expected ring length, and S¹ expectation: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_foliation_error_missing_temporal_wraparound_display() {
+        let err = FoliationError::MissingTemporalWrapAround {
+            slice: 0,
+            missing_neighbor: 2,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("slice 0")
+                && msg.contains("slice 2")
+                && msg.contains("temporal wrap-around"),
+            "Display should describe missing wrap-around between specific slices: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_foliation_error_spacelike_variant_equality() {
+        let a = FoliationError::SpacelikeSubgraphSizeMismatch {
+            slice: 2,
+            observed: 4,
+            expected: 5,
+        };
+        let b = a.clone();
+        let c = FoliationError::SpacelikeSubgraphSizeMismatch {
+            slice: 2,
+            observed: 5,
+            expected: 5,
+        };
+        assert_eq!(a, b, "identical Spacelike* variants should compare equal");
+        assert_ne!(
+            a, c,
+            "Spacelike* variants differing in any field should compare unequal"
         );
     }
 }

@@ -10,9 +10,29 @@
 use crate::cdt::action::ActionConfig;
 use crate::cdt::metropolis::MetropolisConfig;
 use crate::errors::{CdtError, CdtResult};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use dirs::home_dir;
 use std::path::{Component, Path, PathBuf};
+
+/// Topology of the spatial slices in the CDT triangulation.
+///
+/// Determines the boundary conditions for the simulation:
+/// - [`OpenBoundary`](Self::OpenBoundary) — finite strip with boundary (χ = 1)
+/// - [`Toroidal`](Self::Toroidal) — periodic in both space and time (S¹×S¹, χ = 0)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum CdtTopology {
+    /// Finite strip with open boundaries (Euler characteristic χ = 1 for
+    /// disk-like or χ = 2 for sphere-like configurations).
+    #[default]
+    OpenBoundary,
+    /// Periodic in both space and time, forming a torus S¹×S¹ (χ = 0).
+    ///
+    /// Built via
+    /// [`CdtTriangulation::from_toroidal_cdt`](crate::cdt::triangulation::CdtTriangulation::from_toroidal_cdt),
+    /// which constructs an explicit `(N · T)`-vertex mesh with both spatial
+    /// and temporal wrap-around.
+    Toroidal,
+}
 
 /// Main configuration structure for CDT simulations.
 ///
@@ -69,6 +89,10 @@ pub struct CdtConfig {
     /// Optional RNG seed for reproducible simulations
     #[arg(long)]
     pub seed: Option<u64>,
+
+    /// Topology of spatial slices
+    #[arg(long, value_enum, default_value_t = CdtTopology::default())]
+    pub topology: CdtTopology,
 }
 
 /// Controls how dimension overrides are applied when merging configuration.
@@ -114,6 +138,8 @@ pub struct CdtConfigOverrides {
         reason = "None=no override, Some(None)=clear seed, Some(Some(v))=set seed"
     )]
     pub seed: Option<Option<u64>>,
+    /// Optional override for the topology.
+    pub topology: Option<CdtTopology>,
 }
 
 impl CdtConfig {
@@ -179,6 +205,10 @@ impl CdtConfig {
 
         if let Some(seed) = overrides.seed {
             merged.seed = seed;
+        }
+
+        if let Some(topology) = overrides.topology {
+            merged.topology = topology;
         }
 
         merged
@@ -360,6 +390,7 @@ impl CdtConfig {
             cosmological_constant: 0.1,
             simulate: true,
             seed: None,
+            topology: CdtTopology::OpenBoundary,
         }
     }
 
@@ -399,6 +430,9 @@ impl CdtConfig {
     /// # Errors
     ///
     /// Returns a structured error describing the invalid configuration entry.
+    /// Toroidal topology additionally requires `timeslices ≥ 3`,
+    /// `vertices ≥ 3 · timeslices`, and `vertices` evenly divisible by
+    /// `timeslices` so each spatial slice carries the same `N ≥ 3` vertices.
     pub fn validate(&self) -> CdtResult<()> {
         if self.vertices < 3 {
             return Err(invalid_configuration("vertices", &self.vertices, &"≥ 3"));
@@ -416,6 +450,45 @@ impl CdtConfig {
             && !(2..=3).contains(&dim)
         {
             return Err(invalid_configuration("dimension", &dim, &"2 or 3"));
+        }
+
+        if matches!(self.topology, CdtTopology::Toroidal) {
+            // Toroidal topology requires T ≥ 3 (T = 2 makes adjacent slices
+            // share two timelike sides per spatial edge, producing a
+            // non-manifold mesh) and vertices distributed evenly among
+            // slices with at least 3 per slice (any fewer and the spatial
+            // ring degenerates).
+            if self.timeslices < 3 {
+                return Err(invalid_configuration(
+                    "timeslices",
+                    &self.timeslices,
+                    &"≥ 3 for toroidal topology",
+                ));
+            }
+            if !self.vertices.is_multiple_of(self.timeslices) {
+                return Err(invalid_configuration_from_parts(
+                    "vertices",
+                    self.vertices.to_string(),
+                    format!(
+                        "divisible by timeslices ({}) for toroidal topology",
+                        self.timeslices
+                    ),
+                ));
+            }
+            let min_total = self.timeslices.checked_mul(3).ok_or_else(|| {
+                invalid_configuration_from_parts(
+                    "timeslices",
+                    self.timeslices.to_string(),
+                    "3 · timeslices must fit in u32 for toroidal topology".to_string(),
+                )
+            })?;
+            if self.vertices < min_total {
+                return Err(invalid_configuration_from_parts(
+                    "vertices",
+                    self.vertices.to_string(),
+                    format!("≥ 3 · timeslices ({min_total}) for toroidal topology"),
+                ));
+            }
         }
 
         validate_simulation_settings(
@@ -451,6 +524,7 @@ impl TestConfig {
             cosmological_constant: 0.1,
             simulate: true,
             seed: None,
+            topology: CdtTopology::OpenBoundary,
         }
     }
 
@@ -470,6 +544,7 @@ impl TestConfig {
             cosmological_constant: 0.1,
             simulate: true,
             seed: None,
+            topology: CdtTopology::OpenBoundary,
         }
     }
 
@@ -489,6 +564,7 @@ impl TestConfig {
             cosmological_constant: 0.1,
             simulate: true,
             seed: None,
+            topology: CdtTopology::OpenBoundary,
         }
     }
 }
@@ -709,6 +785,87 @@ mod tests {
             }
             other => panic!("Unexpected validation result: {other:?}"),
         }
+    }
+
+    #[test]
+    fn test_config_validation_toroidal_topology() {
+        // Valid toroidal config: T=3, N=4 vertices/slice, total=12
+        let valid_toroidal = CdtConfig {
+            topology: CdtTopology::Toroidal,
+            vertices: 12,
+            timeslices: 3,
+            ..CdtConfig::new(12, 3)
+        };
+        assert!(
+            valid_toroidal.validate().is_ok(),
+            "Valid toroidal config (T=3, V=12) should validate"
+        );
+
+        // T < 3 must be rejected for toroidal topology.
+        let toroidal_t_too_small = CdtConfig {
+            topology: CdtTopology::Toroidal,
+            vertices: 6,
+            timeslices: 2,
+            ..CdtConfig::new(6, 2)
+        };
+        assert!(matches!(
+            toroidal_t_too_small.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "timeslices"
+                && provided_value == "2"
+                && expected == "≥ 3 for toroidal topology"
+        ));
+
+        // Vertices not divisible by timeslices must be rejected.
+        let toroidal_indivisible = CdtConfig {
+            topology: CdtTopology::Toroidal,
+            vertices: 11,
+            timeslices: 3,
+            ..CdtConfig::new(11, 3)
+        };
+        assert!(matches!(
+            toroidal_indivisible.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "vertices"
+                && provided_value == "11"
+                && expected == "divisible by timeslices (3) for toroidal topology"
+        ));
+
+        // Fewer than 3 vertices per slice must be rejected (e.g. T=3, N=2).
+        let toroidal_too_few_per_slice = CdtConfig {
+            topology: CdtTopology::Toroidal,
+            vertices: 6,
+            timeslices: 3,
+            ..CdtConfig::new(6, 3)
+        };
+        assert!(matches!(
+            toroidal_too_few_per_slice.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "vertices"
+                && provided_value == "6"
+                && expected == "≥ 3 · timeslices (9) for toroidal topology"
+        ));
+
+        // OpenBoundary must NOT enforce divisibility/T≥3 rules.
+        let open_boundary_indivisible = CdtConfig {
+            topology: CdtTopology::OpenBoundary,
+            vertices: 11,
+            timeslices: 3,
+            ..CdtConfig::new(11, 3)
+        };
+        assert!(
+            open_boundary_indivisible.validate().is_ok(),
+            "OpenBoundary should not require vertex/timeslice divisibility"
+        );
     }
 
     #[test]

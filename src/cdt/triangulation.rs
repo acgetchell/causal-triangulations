@@ -3,17 +3,19 @@
 //! This module provides CDT-specific triangulation data structures that work
 //! with any geometry backend implementing the trait interfaces.
 
-use crate::cdt::foliation::{
-    CellType, EdgeType, Foliation, FoliationError, classify_cell, classify_edge,
-};
+use crate::cdt::foliation::{CellType, EdgeType, Foliation, FoliationError, classify_cell};
+use crate::config::CdtTopology;
 use crate::errors::{CdtError, CdtResult};
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
 };
-use crate::geometry::generators::{build_delaunay2_with_data, delaunay2_with_context};
+use crate::geometry::generators::{
+    build_delaunay2_with_data, build_explicit_delaunay2_toroidal, delaunay2_with_context,
+};
 use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
 use crate::util::f64_band_to_u32;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 /// CDT-specific triangulation wrapper - completely geometry-agnostic
@@ -36,6 +38,8 @@ pub struct CdtMetadata {
     pub time_slices: u32,
     /// Dimensionality of the spacetime
     pub dimension: u8,
+    /// Topology of the spatial slices
+    pub topology: CdtTopology,
     /// Time when this triangulation was created
     pub creation_time: Instant,
     /// Time of last modification
@@ -99,8 +103,43 @@ pub enum SimulationEvent {
 }
 
 impl<B: TriangulationQuery> CdtTriangulation<B> {
-    /// Create new CDT triangulation
+    /// Create new CDT triangulation with open boundary topology.
     pub fn new(geometry: B, time_slices: u32, dimension: u8) -> Self {
+        Self::with_topology(geometry, time_slices, dimension, CdtTopology::OpenBoundary)
+    }
+
+    /// Create new CDT triangulation with explicit topology.
+    ///
+    /// Wraps an existing geometry backend and tags it with [`CdtTopology`].
+    /// The backend itself is not modified — pass a backend whose Euler
+    /// characteristic matches the supplied topology, otherwise
+    /// [`Self::validate_topology`] will reject it.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ])
+    /// .expect("build labeled triangle");
+    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    ///
+    /// let tri = CdtTriangulation::with_topology(backend, 2, 2, CdtTopology::OpenBoundary);
+    /// assert!(matches!(tri.metadata().topology, CdtTopology::OpenBoundary));
+    /// assert_eq!(tri.time_slices(), 2);
+    /// assert_eq!(tri.dimension(), 2);
+    /// ```
+    pub fn with_topology(
+        geometry: B,
+        time_slices: u32,
+        dimension: u8,
+        topology: CdtTopology,
+    ) -> Self {
         let vertex_count = geometry.vertex_count();
         let creation_event = SimulationEvent::Created {
             vertex_count,
@@ -112,6 +151,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             metadata: CdtMetadata {
                 time_slices,
                 dimension,
+                topology,
                 creation_time: Instant::now(),
                 last_modified: Instant::now(),
                 modification_count: 0,
@@ -218,20 +258,24 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     pub fn validate_topology(&self) -> CdtResult<()> {
         let euler_char = self.geometry.euler_characteristic();
 
-        // For 2D planar triangulations with boundary (random points), expect χ = 1
-        // For closed 2D surfaces, expect χ = 2. Since we generate from random points,
-        // we typically get triangulations with convex hull boundary (χ = 1)
-
         if self.dimension() == 2 {
-            // Planar triangulation with boundary should have χ = 1
-            // Closed surfaces would have χ = 2
-            if euler_char != 1 && euler_char != 2 {
+            let expected = match self.metadata.topology {
+                // Open boundary: planar with boundary χ=1, closed surface χ=2
+                CdtTopology::OpenBoundary => [1, 2].as_slice(),
+                // Toroidal (S¹×S¹): Euler characteristic must be 0
+                CdtTopology::Toroidal => [0].as_slice(),
+            };
+
+            if !expected.contains(&euler_char) {
+                let topo_label = match self.metadata.topology {
+                    CdtTopology::OpenBoundary => "open boundary (expected χ=1 or 2)",
+                    CdtTopology::Toroidal => "toroidal (expected χ=0)",
+                };
                 return Err(CdtError::ValidationFailed {
                     check: "topology".to_string(),
                     detail: format!(
-                        "Euler characteristic χ={euler_char} unexpected for 2D triangulation \
-                         (expected 1 for boundary or 2 for closed surface; \
-                         V={}, E={}, F={})",
+                        "Euler characteristic χ={euler_char} unexpected for 2D {topo_label} \
+                         triangulation (V={}, E={}, F={})",
                         self.geometry.vertex_count(),
                         self.geometry.edge_count(),
                         self.geometry.face_count(),
@@ -380,6 +424,187 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     slice,
                     expected,
                     actual,
+                }
+                .into());
+            }
+        }
+
+        // Toroidal topology adds two stronger structural invariants:
+        //  - every spatial slice forms a closed S¹ (each vertex has exactly
+        //    two spacelike neighbours and the subgraph of each slice is a
+        //    single cycle); and
+        //  - the time direction wraps: every slice has timelike adjacency to
+        //    both `(t-1) mod T` and `(t+1) mod T`.  χ = 0 alone does not
+        //    distinguish a torus from a cylinder, so we check the wrap
+        //    explicitly.
+        if matches!(self.metadata.topology, CdtTopology::Toroidal) {
+            self.validate_toroidal_spatial_rings()?;
+            self.validate_toroidal_temporal_wraparound()?;
+        }
+
+        Ok(())
+    }
+
+    /// Validates that the time direction wraps for toroidal topology.
+    ///
+    /// For each slice `t` (with `T = time_slices`), checks that the foliation
+    /// has at least one timelike edge to slice `(t - 1) mod T` and at least
+    /// one to slice `(t + 1) mod T`.  Cylinders (open in time) have χ = 0
+    /// like the torus, so this check is what actually distinguishes them.
+    fn validate_toroidal_temporal_wraparound(&self) -> CdtResult<()> {
+        let total = self.metadata.time_slices;
+        if total < 2 {
+            return Ok(());
+        }
+        let num_slices = total as usize;
+
+        // Collect, per slice, the set of slices reached via timelike (step
+        // distance == 1) edges.
+        let mut neighbor_slices: Vec<HashSet<usize>> = vec![HashSet::new(); num_slices];
+        for edge in self.geometry.edges() {
+            let Some((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
+                continue;
+            };
+            let Some(t0) = self.geometry.vertex_data_by_key(v0.vertex_key()) else {
+                continue;
+            };
+            let Some(t1) = self.geometry.vertex_data_by_key(v1.vertex_key()) else {
+                continue;
+            };
+            if t0 >= total || t1 >= total {
+                continue;
+            }
+            if self.time_step_distance(t0, t1) != 1 {
+                continue;
+            }
+            let s0 = t0 as usize;
+            let s1 = t1 as usize;
+            neighbor_slices[s0].insert(s1);
+            neighbor_slices[s1].insert(s0);
+        }
+
+        for (slice, neighbors) in neighbor_slices.iter().enumerate() {
+            let prev = if slice == 0 {
+                num_slices - 1
+            } else {
+                slice - 1
+            };
+            let next = (slice + 1) % num_slices;
+            if !neighbors.contains(&prev) {
+                return Err(FoliationError::MissingTemporalWrapAround {
+                    slice,
+                    missing_neighbor: prev,
+                }
+                .into());
+            }
+            if !neighbors.contains(&next) {
+                return Err(FoliationError::MissingTemporalWrapAround {
+                    slice,
+                    missing_neighbor: next,
+                }
+                .into());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validates that every spatial slice forms a closed S¹.
+    ///
+    /// For each time slice `t` we iterate over backend edges, count incident
+    /// spacelike edges (`|Δt| = 0`) per vertex, and walk the resulting
+    /// spacelike subgraph to verify it is a single cycle of length
+    /// `slice_sizes[t]`.
+    fn validate_toroidal_spatial_rings(&self) -> CdtResult<()> {
+        let Some(foliation) = &self.foliation else {
+            return Ok(());
+        };
+
+        let num_slices = foliation.slice_sizes().len();
+        let mut spacelike_neighbors: Vec<HashMap<DelaunayVertexHandle, Vec<DelaunayVertexHandle>>> =
+            vec![HashMap::new(); num_slices];
+
+        for edge in self.geometry.edges() {
+            let Some((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
+                continue;
+            };
+            let Some(t0) = self.geometry.vertex_data_by_key(v0.vertex_key()) else {
+                continue;
+            };
+            let Some(t1) = self.geometry.vertex_data_by_key(v1.vertex_key()) else {
+                continue;
+            };
+            if t0 != t1 {
+                continue;
+            }
+            let slice = t0 as usize;
+            if slice >= num_slices {
+                continue;
+            }
+            spacelike_neighbors[slice]
+                .entry(v0.clone())
+                .or_default()
+                .push(v1.clone());
+            spacelike_neighbors[slice].entry(v1).or_default().push(v0);
+        }
+
+        for (slice, adjacency) in spacelike_neighbors.iter().enumerate() {
+            let expected_size = foliation.slice_sizes()[slice];
+            if adjacency.len() != expected_size {
+                return Err(FoliationError::SpacelikeSubgraphSizeMismatch {
+                    slice,
+                    observed: adjacency.len(),
+                    expected: expected_size,
+                }
+                .into());
+            }
+            for (vertex, neighbors) in adjacency {
+                if neighbors.len() != 2 {
+                    return Err(FoliationError::SpacelikeDegreeViolation {
+                        slice,
+                        vertex: format!("{:?}", vertex.vertex_key()),
+                        observed_degree: neighbors.len(),
+                    }
+                    .into());
+                }
+            }
+
+            // Walk the cycle starting from any vertex; verify it visits every
+            // vertex of the slice and closes back on itself.
+            let Some(start) = adjacency.keys().next() else {
+                continue;
+            };
+            let mut visited: HashSet<DelaunayVertexHandle> = HashSet::new();
+            visited.insert(start.clone());
+            let mut prev = start.clone();
+            let mut current = adjacency[start][0].clone();
+            while current != *start {
+                if !visited.insert(current.clone()) {
+                    // Non-simple cycle: a vertex was revisited before the walk
+                    // returned to `start`.  Surface this through the same
+                    // typed variant as a short cycle — both indicate the
+                    // spacelike subgraph isn't a single closed S¹.
+                    return Err(FoliationError::SpacelikeNonClosedRing {
+                        slice,
+                        walked: visited.len(),
+                        expected: expected_size,
+                    }
+                    .into());
+                }
+                let neighbors = &adjacency[&current];
+                let next = if neighbors[0] == prev {
+                    neighbors[1].clone()
+                } else {
+                    neighbors[0].clone()
+                };
+                prev = current;
+                current = next;
+            }
+            if visited.len() != expected_size {
+                return Err(FoliationError::SpacelikeNonClosedRing {
+                    slice,
+                    walked: visited.len(),
+                    expected: expected_size,
                 }
                 .into());
             }
@@ -931,6 +1156,168 @@ impl CdtTriangulation<DelaunayBackend2D> {
         })
     }
 
+    /// Construct a foliated 1+1 CDT on a torus (S¹×S¹).
+    ///
+    /// Places `vertices_per_slice` vertices per time slice, uniformly spaced
+    /// on S¹ (spatial coordinate periodic in `[0, 1)`).  Time slices wrap:
+    /// slice `num_slices - 1` connects back to slice `0`.  Each quad between
+    /// adjacent slices is split into one Up (2,1) and one Down (1,2) triangle.
+    ///
+    /// The triangulation is built by explicit combinatorial connectivity via
+    /// [`crate::geometry::generators::build_explicit_delaunay2_toroidal`],
+    /// which sets `TopologyGuarantee::Pseudomanifold` and
+    /// `GlobalTopology::Toroidal` so the underlying validator expects χ = 0.
+    ///
+    /// # Mesh structure
+    ///
+    /// With `N = vertices_per_slice` and `T = num_slices` the resulting mesh
+    /// has `N · T` vertices, `3 · N · T` edges, and `2 · N · T` triangles
+    /// (`V − E + F = 0`, the Euler characteristic of the torus).  Each pair of
+    /// adjacent slices `(t, t+1) mod T` and each spatial pair `(i, i+1) mod N`
+    /// contribute exactly one Up `(i, t), (i+1, t), (i, t+1)` and one Down
+    /// `(i+1, t), (i+1, t+1), (i, t+1)` triangle, so every triangle has
+    /// exactly one spacelike edge and two timelike edges by construction.
+    ///
+    /// # Arguments
+    ///
+    /// * `vertices_per_slice` — Number of vertices in each spatial slice (≥ 3).
+    /// * `num_slices` — Number of time slices (≥ 3 to keep `t-1` and `t+1`
+    ///   distinct after wrap-around).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidGenerationParameters`] if `vertices_per_slice < 3`
+    /// or `num_slices < 3`.
+    /// Returns [`CdtError::DelaunayGenerationFailed`] if the underlying explicit
+    /// builder rejects the mesh, and [`CdtError::ValidationFailed`] if the
+    /// constructed triangulation fails CDT validation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// let tri = CdtTriangulation::from_toroidal_cdt(4, 3)
+    ///     .expect("build toroidal CDT");
+    /// assert_eq!(tri.vertex_count(), 12);
+    /// assert_eq!(tri.face_count(), 24);
+    /// assert!(tri.has_foliation());
+    /// ```
+    pub fn from_toroidal_cdt(vertices_per_slice: u32, num_slices: u32) -> CdtResult<Self> {
+        if vertices_per_slice < 3 {
+            return Err(CdtError::InvalidGenerationParameters {
+                issue: "Insufficient vertices per slice".to_string(),
+                provided_value: vertices_per_slice.to_string(),
+                expected_range: "≥ 3".to_string(),
+            });
+        }
+        if num_slices < 3 {
+            // With T=2 the wrap-around makes every pair of adjacent slices
+            // identify (t-1, t) with (t, t+1), so each spatial edge would be
+            // shared by 4 triangles instead of 2 — a non-manifold mesh.
+            return Err(CdtError::InvalidGenerationParameters {
+                issue: "Insufficient number of time slices".to_string(),
+                provided_value: num_slices.to_string(),
+                expected_range: "≥ 3".to_string(),
+            });
+        }
+
+        let total_vertices = vertices_per_slice.checked_mul(num_slices).ok_or_else(|| {
+            CdtError::InvalidGenerationParameters {
+                issue: "Vertex count overflow".to_string(),
+                provided_value: format!("{vertices_per_slice} × {num_slices}"),
+                expected_range: "product ≤ u32::MAX".to_string(),
+            }
+        })?;
+
+        let n = vertices_per_slice as usize;
+        let t_count = num_slices as usize;
+
+        // Index helper: vertex (i, t) → i + t * N. Both axes are periodic.
+        let index = |i: usize, t: usize| -> usize { (t % t_count) * n + (i % n) };
+
+        // --- Vertex coordinates (S¹ × S¹) ---
+        //
+        // Spatial coordinate: x_i = i / N is periodic in [0, 1).
+        // Time coordinate: t_t = t / T is periodic in [0, 1) so the metadata
+        // domain matches what we pass to GlobalTopology::Toroidal.
+        let n_f = f64::from(vertices_per_slice);
+        let t_f = f64::from(num_slices);
+        let mut vertex_specs: Vec<([f64; 2], u32)> = Vec::with_capacity(total_vertices as usize);
+        for t in 0..num_slices {
+            for i in 0..vertices_per_slice {
+                let x = f64::from(i) / n_f;
+                let y = f64::from(t) / t_f;
+                vertex_specs.push(([x, y], t));
+            }
+        }
+
+        // --- Explicit cells (Up + Down per (i, t) quad) ---
+        let mut cells: Vec<Vec<usize>> = Vec::with_capacity(2 * total_vertices as usize);
+        for t in 0..t_count {
+            let t_next = (t + 1) % t_count;
+            for i in 0..n {
+                let i_next = (i + 1) % n;
+                // Up (2,1): two vertices on slice t, one on slice t+1.
+                cells.push(vec![index(i, t), index(i_next, t), index(i, t_next)]);
+                // Down (1,2): one vertex on slice t, two on slice t+1.
+                cells.push(vec![
+                    index(i_next, t),
+                    index(i_next, t_next),
+                    index(i, t_next),
+                ]);
+            }
+        }
+
+        let domain = [1.0_f64, 1.0_f64];
+        let dt =
+            build_explicit_delaunay2_toroidal(&vertex_specs, &cells, domain).map_err(
+                |e| match e {
+                    CdtError::DelaunayGenerationFailed {
+                        underlying_error, ..
+                    } => CdtError::DelaunayGenerationFailed {
+                        vertex_count: total_vertices,
+                        coordinate_range: (0.0, 1.0),
+                        attempt: 1,
+                        underlying_error,
+                    },
+                    other => other,
+                },
+            )?;
+
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+        if backend.vertex_count() != total_vertices as usize {
+            return Err(CdtError::DelaunayGenerationFailed {
+                vertex_count: total_vertices,
+                coordinate_range: (0.0, 1.0),
+                attempt: 1,
+                underlying_error: format!(
+                    "explicit toroidal builder produced {} vertices, expected {}",
+                    backend.vertex_count(),
+                    total_vertices,
+                ),
+            });
+        }
+
+        let slice_sizes = vec![n; t_count];
+        let foliation =
+            Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
+
+        let mut tri = Self::with_topology(backend, num_slices, 2, CdtTopology::Toroidal);
+        tri.foliation = Some(foliation);
+        tri.mark_foliation_synchronized();
+
+        // Propagate inner errors as-is so callers can pattern-match on the
+        // typed variant (e.g. `FoliationError::SpacelikeNonClosedRing` or
+        // `CausalityViolation`) instead of parsing a wrapped string.  Each
+        // inner validator already produces a precise, structured error.
+        tri.validate_foliation()?;
+        tri.validate_causality_delaunay()?;
+        tri.validate_topology()?;
+
+        Ok(tri)
+    }
+
     // -------------------------------------------------------------------------
     // Foliation assignment
     // -------------------------------------------------------------------------
@@ -1119,10 +1506,85 @@ impl CdtTriangulation<DelaunayBackend2D> {
     // Cell (triangle) classification
     // -------------------------------------------------------------------------
 
+    /// Computes the temporal step distance between two time labels.
+    ///
+    /// For `OpenBoundary` topology this is just `t0.abs_diff(t1)`; for
+    /// `Toroidal` topology it is the circular distance
+    /// `min(d, T − d)` where `T = time_slices`, so the wrap-around edge
+    /// between slice `T − 1` and slice `0` reads as distance `1`.
+    ///
+    /// Out-of-range labels (`t ≥ time_slices`) bypass the toroidal wrap and
+    /// fall through to the raw difference so callers (e.g. validators) can
+    /// still detect them as causality violations rather than silently folding
+    /// `t == time_slices` into distance 0 via `min(T, 0)`.
+    #[must_use]
+    fn time_step_distance(&self, t0: u32, t1: u32) -> u32 {
+        let raw = t0.abs_diff(t1);
+        if matches!(self.metadata.topology, CdtTopology::Toroidal) {
+            let total = self.metadata.time_slices;
+            if total > 0 && t0 < total && t1 < total {
+                return raw.min(total - raw);
+            }
+        }
+        raw
+    }
+
+    /// Topology-aware variant of [`crate::cdt::foliation::classify_cell`].
+    ///
+    /// Uses [`Self::time_step_distance`] so the spacelike/timelike split
+    /// honours toroidal wrap.  Distinguishes Up vs Down by checking whether
+    /// the apex sits at `base + 1` or `base - 1` modulo `time_slices`.
+    fn classify_cell_with_topology(&self, t0: u32, t1: u32, t2: u32) -> Option<CellType> {
+        let mut dists = [
+            self.time_step_distance(t0, t1),
+            self.time_step_distance(t1, t2),
+            self.time_step_distance(t0, t2),
+        ];
+        dists.sort_unstable();
+        if dists != [0, 1, 1] {
+            return None;
+        }
+
+        let (base_slice, apex_slice) = if t0 == t1 {
+            (t0, t2)
+        } else if t1 == t2 {
+            (t1, t0)
+        } else if t0 == t2 {
+            (t0, t1)
+        } else {
+            return None;
+        };
+
+        let total = self.metadata.time_slices;
+        let toroidal = matches!(self.metadata.topology, CdtTopology::Toroidal) && total > 0;
+        let up_apex = if toroidal {
+            (base_slice + 1) % total
+        } else {
+            base_slice.checked_add(1)?
+        };
+        let down_apex = if toroidal {
+            if base_slice == 0 {
+                total - 1
+            } else {
+                base_slice - 1
+            }
+        } else {
+            base_slice.checked_sub(1)?
+        };
+        if apex_slice == up_apex {
+            Some(CellType::Up)
+        } else if apex_slice == down_apex {
+            Some(CellType::Down)
+        } else {
+            None
+        }
+    }
+
     /// Returns the causal classification of an edge from endpoint time labels.
     ///
     /// Returns `None` if no foliation is present, the edge endpoints cannot be
-    /// resolved, or either endpoint is missing a time label.
+    /// resolved, or either endpoint is missing a time label.  Distance is
+    /// circular when the topology is `Toroidal`.
     ///
     /// # Examples
     ///
@@ -1152,7 +1614,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let t0 = self.geometry.vertex_data_by_key(v0.vertex_key())?;
         let t1 = self.geometry.vertex_data_by_key(v1.vertex_key())?;
 
-        Some(match t0.abs_diff(t1) {
+        Some(match self.time_step_distance(t0, t1) {
             0 => EdgeType::Spacelike,
             1 => EdgeType::Timelike,
             _ => EdgeType::Acausal,
@@ -1187,10 +1649,13 @@ impl CdtTriangulation<DelaunayBackend2D> {
         if verts.len() != 3 {
             return None;
         }
-        let t0 = self.geometry.vertex_data_by_key(verts[0].vertex_key());
-        let t1 = self.geometry.vertex_data_by_key(verts[1].vertex_key());
-        let t2 = self.geometry.vertex_data_by_key(verts[2].vertex_key());
-        classify_cell(t0, t1, t2)
+        let t0 = self.geometry.vertex_data_by_key(verts[0].vertex_key())?;
+        let t1 = self.geometry.vertex_data_by_key(verts[1].vertex_key())?;
+        let t2 = self.geometry.vertex_data_by_key(verts[2].vertex_key())?;
+        match self.metadata.topology {
+            CdtTopology::Toroidal => self.classify_cell_with_topology(t0, t1, t2),
+            CdtTopology::OpenBoundary => classify_cell(Some(t0), Some(t1), Some(t2)),
+        }
     }
 
     /// Reads the stored cell type from cell data, if previously classified.
@@ -1257,10 +1722,18 @@ impl CdtTriangulation<DelaunayBackend2D> {
             self.geometry.vertex_data_by_key(verts[2].vertex_key())?,
         ];
 
+        let edge_classify = |a: u32, b: u32| -> Option<EdgeType> {
+            Some(match self.time_step_distance(a, b) {
+                0 => EdgeType::Spacelike,
+                1 => EdgeType::Timelike,
+                _ => EdgeType::Acausal,
+            })
+        };
+
         Some([
-            classify_edge(Some(t[0]), Some(t[1]))?,
-            classify_edge(Some(t[1]), Some(t[2]))?,
-            classify_edge(Some(t[2]), Some(t[0]))?,
+            edge_classify(t[0], t[1])?,
+            edge_classify(t[1], t[2])?,
+            edge_classify(t[2], t[0])?,
         ])
     }
 
@@ -1524,17 +1997,21 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 })?;
 
             // CDT triangle invariant: exactly 1 spacelike edge, 2 timelike edges.
+            // On Toroidal topology the wrap-around edge between slice T−1 and 0
+            // is timelike, so we use the topology-aware step distance.
             let mut spacelike = 0;
             let mut timelike = 0;
 
             for (a, b) in [(t0, t1), (t1, t2), (t2, t0)] {
-                match a.abs_diff(b) {
+                let step_distance = self.time_step_distance(a, b);
+                match step_distance {
                     0 => spacelike += 1,
                     1 => timelike += 1,
                     _ => {
                         return Err(CdtError::CausalityViolation {
                             time_0: a.min(b),
                             time_1: a.max(b),
+                            step_distance,
                         });
                     }
                 }
@@ -3133,17 +3610,81 @@ mod tests {
             "Explicitly acausal edge should fail causality validation"
         );
 
-        // Verify the error is a CausalityViolation with |Δt| > 1
-        if let Err(CdtError::CausalityViolation { time_0, time_1 }) = result {
+        // Verify the error is a CausalityViolation reporting step_distance > 1.
+        // OpenBoundary topology means step_distance == |Δt|.
+        if let Err(CdtError::CausalityViolation {
+            time_0,
+            time_1,
+            step_distance,
+        }) = result
+        {
             assert!(
-                time_0.abs_diff(time_1) > 1,
-                "CausalityViolation should report |Δt| > 1, got t0={time_0}, t1={time_1}"
+                step_distance > 1,
+                "CausalityViolation should report step_distance > 1, got step_distance={step_distance} (t0={time_0}, t1={time_1})"
+            );
+            assert_eq!(
+                step_distance,
+                time_0.abs_diff(time_1),
+                "OpenBoundary step_distance must equal |Δt|; got step_distance={step_distance}, |Δt|={}",
+                time_0.abs_diff(time_1)
             );
         } else {
             panic!(
                 "Expected CausalityViolation error, got {result:?}; {}",
                 deterministic_triangle_debug_summary(tri.geometry())
             );
+        }
+    }
+
+    #[test]
+    fn test_toroidal_causality_violation_reports_circular_step_distance() {
+        // Build a real toroidal CDT with T=10 so wrap-around is non-trivial:
+        // mutating a slice-0 vertex to slice 8 makes its same-slice spacelike
+        // edges read as (raw |Δt|=8, circular distance 2), which exceeds the
+        // adjacency threshold of 1.  The reported step_distance must be the
+        // circular distance, not the raw difference.
+        let mut tri =
+            CdtTriangulation::from_toroidal_cdt(3, 10).expect("build toroidal CDT (3, 10)");
+
+        let slice0_vertex = tri
+            .geometry()
+            .vertices()
+            .find(|vh| tri.geometry().vertex_data_by_key(vh.vertex_key()) == Some(0))
+            .expect("Toroidal CDT should contain slice-0 vertices")
+            .vertex_key();
+
+        {
+            let mut geometry_mut = tri.geometry_mut();
+            let _previous_label = geometry_mut
+                .set_vertex_data_by_key(slice0_vertex, Some(8))
+                .expect("Expected valid vertex key while mutating label");
+        }
+
+        let result = tri.validate_causality_delaunay();
+        match result {
+            Err(CdtError::CausalityViolation {
+                time_0,
+                time_1,
+                step_distance,
+            }) => {
+                let raw = time_0.abs_diff(time_1);
+                let circular = raw.min(10 - raw);
+                assert_eq!(
+                    step_distance, circular,
+                    "Toroidal step_distance must equal circular distance min(|Δt|, T−|Δt|); \
+                     got step_distance={step_distance}, raw |Δt|={raw}, T=10"
+                );
+                assert!(
+                    step_distance > 1,
+                    "Violation must exceed adjacency threshold; got step_distance={step_distance}"
+                );
+                assert!(
+                    step_distance < raw,
+                    "With T=10 and labels {{0,1,8}}, every violation crosses the wrap; \
+                     step_distance={step_distance} should be < raw |Δt|={raw}"
+                );
+            }
+            other => panic!("Expected CausalityViolation on toroidal triangle, got {other:?}"),
         }
     }
 
@@ -3186,6 +3727,104 @@ mod tests {
             }
             other => panic!("Expected ValidationFailed, got {other:?}"),
         }
+    }
+
+    // =========================================================================
+    // Toroidal CDT tests
+    // =========================================================================
+
+    #[test]
+    fn test_from_toroidal_cdt_basic() {
+        let tri = CdtTriangulation::from_toroidal_cdt(4, 3)
+            .expect("toroidal CDT should build with delaunay v0.7.6");
+
+        // V = N*T = 12, F = 2*N*T = 24, E = 3*N*T = 36, χ = 0.
+        assert_eq!(tri.vertex_count(), 12);
+        assert_eq!(tri.face_count(), 24);
+        assert_eq!(tri.edge_count(), 36);
+        assert_eq!(tri.geometry().euler_characteristic(), 0);
+        assert_eq!(tri.dimension(), 2);
+        assert_eq!(tri.time_slices(), 3);
+        assert!(matches!(tri.metadata().topology, CdtTopology::Toroidal));
+    }
+
+    #[test]
+    fn test_from_toroidal_cdt_various_sizes() {
+        for (n, t) in [(3_u32, 3_u32), (4, 3), (5, 4), (6, 5), (8, 4)] {
+            let tri = CdtTriangulation::from_toroidal_cdt(n, t)
+                .unwrap_or_else(|err| panic!("toroidal CDT N={n} T={t} should build: {err}"));
+            let nt = (n as usize) * (t as usize);
+            assert_eq!(tri.vertex_count(), nt);
+            assert_eq!(tri.face_count(), 2 * nt);
+            assert_eq!(tri.edge_count(), 3 * nt);
+            assert_eq!(tri.geometry().euler_characteristic(), 0);
+        }
+    }
+
+    #[test]
+    fn test_from_toroidal_cdt_foliation_per_slice() {
+        let tri = CdtTriangulation::from_toroidal_cdt(5, 4).expect("build toroidal CDT");
+        assert!(tri.has_foliation());
+        assert_eq!(tri.slice_sizes(), &[5, 5, 5, 5]);
+        for t in 0..4 {
+            assert_eq!(
+                tri.vertices_at_time(t).len(),
+                5,
+                "slice {t} should contain N=5 vertices"
+            );
+        }
+    }
+
+    #[test]
+    fn test_from_toroidal_cdt_validate_passes() {
+        let tri = CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
+        assert!(tri.validate_topology().is_ok());
+        assert!(tri.validate_foliation().is_ok());
+        assert!(tri.validate_causality().is_ok());
+    }
+
+    #[test]
+    fn test_from_toroidal_cdt_each_slice_is_closed_s1() {
+        // The toroidal validate_foliation extension already enforces that
+        // each slice is a closed S¹; building a torus and validating again
+        // exercises that path explicitly.
+        let tri = CdtTriangulation::from_toroidal_cdt(6, 4).expect("build toroidal CDT");
+        tri.validate_foliation()
+            .expect("explicit toroidal CDT must satisfy closed-S¹ per-slice invariant");
+    }
+
+    #[test]
+    fn test_from_toroidal_cdt_invalid_params() {
+        // Too few vertices per slice (N < 3 — no proper cycle).
+        assert!(CdtTriangulation::from_toroidal_cdt(2, 3).is_err());
+        // Too few slices (T < 3 — wrap-around makes the mesh non-manifold).
+        assert!(CdtTriangulation::from_toroidal_cdt(4, 1).is_err());
+        assert!(CdtTriangulation::from_toroidal_cdt(4, 2).is_err());
+    }
+
+    #[test]
+    fn test_validate_topology_open_boundary() {
+        let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("create triangulation");
+
+        // OpenBoundary topology should pass validation
+        assert!(tri.validate_topology().is_ok());
+    }
+
+    #[test]
+    fn test_validate_topology_toroidal_rejects_chi_nonzero() {
+        // Build a non-toroidal triangulation, then label its metadata as
+        // Toroidal so validate_topology() expects χ=0 but gets χ1.
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("Should build labeled triangle");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let tri = CdtTriangulation::with_topology(backend, 2, 2, CdtTopology::Toroidal);
+
+        let result = tri.validate_topology();
+        assert!(matches!(
+            result,
+            Err(CdtError::ValidationFailed { ref check, ref detail })
+                if check == "topology" && detail.contains("toroidal (expected χ=0)")
+        ));
     }
 }
 

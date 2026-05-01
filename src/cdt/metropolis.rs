@@ -269,10 +269,10 @@ impl MetropolisAlgorithm {
         let mut chain = Chain::new(triangulation, &target)?;
 
         {
-            let g = chain.state.geometry();
+            let g = chain.state().geometry();
             measurements.push(Measurement {
                 step: 0,
-                action: -chain.log_prob * self.config.temperature,
+                action: -chain.log_prob() * self.config.temperature,
                 vertices: u32::try_from(g.vertex_count()).unwrap_or_default(),
                 edges: u32::try_from(g.edge_count()).unwrap_or_default(),
                 triangles: u32::try_from(g.face_count()).unwrap_or_default(),
@@ -283,9 +283,9 @@ impl MetropolisAlgorithm {
         let mut rng = StdRng::seed_from_u64(seed);
 
         for step_num in 0..self.config.steps {
-            let action_before = -chain.log_prob * self.config.temperature;
+            let action_before = -chain.log_prob() * self.config.temperature;
             let accepted = chain.step_mut(&target, &proposal, &mut rng)?;
-            let action_after = -chain.log_prob * self.config.temperature;
+            let action_after = -chain.log_prob() * self.config.temperature;
 
             // TODO: Record actual move type once #55 provides real moves
             let mc_step = MonteCarloStep {
@@ -308,7 +308,7 @@ impl MetropolisAlgorithm {
             // on a measurement boundary. The initial state at step 0 was already
             // captured before entering the loop.
             if completed_steps % self.config.measurement_frequency == 0 {
-                let g = chain.state.geometry();
+                let g = chain.state().geometry();
                 measurements.push(Measurement {
                     step: completed_steps,
                     action: action_after,
@@ -343,7 +343,7 @@ impl MetropolisAlgorithm {
             steps: mc_steps,
             measurements,
             elapsed_time,
-            triangulation: chain.state,
+            triangulation: chain.into_state(),
         })
     }
 }
