@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from tag_release import _get_repo_url, create_tag, validate_semver
+from tag_release import _get_repo_url, create_tag, main, validate_semver
 
 # ---------------------------------------------------------------------------
 # _get_repo_url
@@ -113,3 +113,23 @@ class TestCreateTag:
         tag_message = mock_run_git_with_input.call_args.kwargs["input_data"]
         assert "<https://github.com/owner/repo/blob/v1.2.3/docs/archive/changelog/1.2.md#v123>" in tag_message
         assert "docs\\archive\\changelog\\1.2.md" not in tag_message
+
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
+
+def test_main_handles_git_timeout(capsys) -> None:
+    with (
+        patch("sys.argv", ["tag-release", "v1.2.3"]),
+        patch(
+            "tag_release.create_tag",
+            side_effect=subprocess.TimeoutExpired(cmd=["git", "tag"], timeout=30),
+        ),
+        pytest.raises(SystemExit) as exc_info,
+    ):
+        main()
+
+    assert exc_info.value.code == 1
+    assert "Error: Command '['git', 'tag']' timed out after 30 seconds" in capsys.readouterr().err

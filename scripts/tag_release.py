@@ -452,6 +452,7 @@ def main() -> None:
         LookupError,
         ExecutableNotFoundError,
         subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
     ) as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)

@@ -68,7 +68,13 @@ jobs:
         continue-on-error: true
 
       - name: Upload SARIF results
-        if: always() && hashFiles('rust-clippy-results.sarif') != ''
+        if: >-
+          always()
+          && hashFiles('rust-clippy-results.sarif') != ''
+          && (
+            github.event_name != 'pull_request'
+            || github.event.pull_request.head.repo.full_name == github.repository
+          )
         uses: github/codeql-action/upload-sarif@b25d0ebf40e5b63ee81e1bd6e5d2a12b7c2aeb61 # v4
         with:
           sarif_file: rust-clippy-results.sarif

@@ -218,8 +218,186 @@ impl<T: TriangulationQuery> TriangulationOps for T {}
 mod tests {
     use super::*;
     use crate::geometry::backends::mock::MockBackend;
-    use crate::geometry::traits::TriangulationQuery;
+    use crate::geometry::traits::{GeometryBackend, TriangulationQuery};
     use std::collections::HashSet;
+
+    #[derive(Debug, Clone)]
+    struct FixtureBackend {
+        vertices: Vec<usize>,
+        edges: Vec<(usize, Option<(usize, usize)>)>,
+        faces: Vec<(usize, Option<Vec<usize>>)>,
+    }
+
+    #[derive(Debug, PartialEq, Eq, thiserror::Error)]
+    enum FixtureError {
+        #[error("invalid face")]
+        InvalidFace,
+        #[error("invalid vertex")]
+        InvalidVertex,
+    }
+
+    impl GeometryBackend for FixtureBackend {
+        type Coordinate = f64;
+        type VertexHandle = usize;
+        type EdgeHandle = usize;
+        type FaceHandle = usize;
+        type Error = FixtureError;
+
+        fn backend_name(&self) -> &'static str {
+            "fixture"
+        }
+    }
+
+    impl TriangulationQuery for FixtureBackend {
+        fn vertex_count(&self) -> usize {
+            self.vertices.len()
+        }
+
+        fn edge_count(&self) -> usize {
+            self.edges.len()
+        }
+
+        fn face_count(&self) -> usize {
+            self.faces.len()
+        }
+
+        fn dimension(&self) -> usize {
+            1
+        }
+
+        fn vertices(&self) -> Box<dyn Iterator<Item = Self::VertexHandle> + '_> {
+            Box::new(self.vertices.iter().copied())
+        }
+
+        fn edges(&self) -> Box<dyn Iterator<Item = Self::EdgeHandle> + '_> {
+            Box::new(self.edges.iter().map(|(edge, _)| *edge))
+        }
+
+        fn faces(&self) -> Box<dyn Iterator<Item = Self::FaceHandle> + '_> {
+            Box::new(self.faces.iter().map(|(face, _)| *face))
+        }
+
+        fn vertex_coordinates(
+            &self,
+            vertex: &Self::VertexHandle,
+        ) -> Result<Vec<Self::Coordinate>, Self::Error> {
+            self.vertices
+                .contains(vertex)
+                .then_some(vec![0.0])
+                .ok_or(FixtureError::InvalidVertex)
+        }
+
+        fn face_vertices(
+            &self,
+            face: &Self::FaceHandle,
+        ) -> Result<Vec<Self::VertexHandle>, Self::Error> {
+            self.faces
+                .iter()
+                .find(|(candidate, _)| candidate == face)
+                .and_then(|(_, vertices)| vertices.clone())
+                .ok_or(FixtureError::InvalidFace)
+        }
+
+        fn edge_endpoints(
+            &self,
+            edge: &Self::EdgeHandle,
+        ) -> Option<(Self::VertexHandle, Self::VertexHandle)> {
+            self.edges
+                .iter()
+                .find(|(candidate, _)| candidate == edge)
+                .and_then(|(_, endpoints)| *endpoints)
+        }
+
+        fn adjacent_faces(
+            &self,
+            vertex: &Self::VertexHandle,
+        ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
+            self.vertices
+                .contains(vertex)
+                .then_some(Vec::new())
+                .ok_or(FixtureError::InvalidVertex)
+        }
+
+        fn incident_edges(
+            &self,
+            vertex: &Self::VertexHandle,
+        ) -> Result<Vec<Self::EdgeHandle>, Self::Error> {
+            self.vertices
+                .contains(vertex)
+                .then_some(Vec::new())
+                .ok_or(FixtureError::InvalidVertex)
+        }
+
+        fn face_neighbors(
+            &self,
+            face: &Self::FaceHandle,
+        ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
+            self.faces
+                .iter()
+                .any(|(candidate, _)| candidate == face)
+                .then_some(Vec::new())
+                .ok_or(FixtureError::InvalidFace)
+        }
+
+        fn is_valid(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn test_unordered_set_is_order_independent_and_len_sensitive() {
+        let key = UnorderedSet(vec![1_u8, 2, 3]);
+        let reversed = UnorderedSet(vec![3_u8, 2, 1]);
+        let shorter = UnorderedSet(vec![1_u8, 2]);
+
+        assert_eq!(key, reversed);
+        assert_ne!(key, shorter);
+
+        let mut set = HashSet::new();
+        set.insert(key);
+        assert!(set.contains(&reversed));
+        assert!(!set.contains(&shorter));
+    }
+
+    #[test]
+    fn test_boundary_facets_skip_invalid_and_degenerate_faces() {
+        let backend = FixtureBackend {
+            vertices: vec![0, 1, 2],
+            edges: vec![(0, Some((0, 1))), (1, None)],
+            faces: vec![(0, Some(vec![0, 1])), (1, None), (2, Some(vec![2]))],
+        };
+
+        assert_eq!(backend.backend_name(), "fixture");
+        assert_eq!(backend.vertex_count(), 3);
+        assert_eq!(backend.edge_count(), 2);
+        assert_eq!(backend.face_count(), 3);
+        assert_eq!(backend.dimension(), 1);
+        assert_eq!(backend.vertices().collect::<Vec<_>>(), vec![0, 1, 2]);
+        assert_eq!(backend.vertex_coordinates(&0), Ok(vec![0.0]));
+        assert!(matches!(
+            backend.vertex_coordinates(&99),
+            Err(FixtureError::InvalidVertex)
+        ));
+        assert_eq!(backend.adjacent_faces(&0), Ok(Vec::new()));
+        assert!(matches!(
+            backend.adjacent_faces(&99),
+            Err(FixtureError::InvalidVertex)
+        ));
+        assert_eq!(backend.incident_edges(&0), Ok(Vec::new()));
+        assert!(matches!(
+            backend.incident_edges(&99),
+            Err(FixtureError::InvalidVertex)
+        ));
+        assert_eq!(backend.face_neighbors(&0), Ok(Vec::new()));
+        assert!(matches!(
+            backend.face_neighbors(&99),
+            Err(FixtureError::InvalidFace)
+        ));
+
+        let hull: HashSet<_> = backend.convex_hull().into_iter().collect();
+        assert_eq!(hull, HashSet::from([0, 1]));
+        assert!(backend.boundary_edges().is_empty());
+    }
 
     #[test]
     fn test_is_delaunay_delegates_to_is_valid() {

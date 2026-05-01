@@ -1021,6 +1021,63 @@ mod tests {
     }
 
     #[test]
+    fn test_mutation_methods_report_not_implemented_contract() {
+        let dt = generate_delaunay2(4, (0.0, 10.0), Some(17)).expect("Builder should succeed");
+        let mut backend = DelaunayBackend::from_triangulation(dt);
+        let original_counts = (
+            backend.vertex_count(),
+            backend.edge_count(),
+            backend.face_count(),
+        );
+        let vertex = backend.vertices().next().expect("valid vertex handle");
+        let edge = backend.edges().next().expect("valid edge handle");
+        let face = backend.faces().next().expect("valid face handle");
+
+        assert!(matches!(
+            backend.insert_vertex(&[0.0, 0.0]),
+            Err(DelaunayError::NotImplemented {
+                operation: "insert_vertex",
+            })
+        ));
+        assert!(matches!(
+            backend.remove_vertex(vertex.clone()),
+            Err(DelaunayError::NotImplemented {
+                operation: "remove_vertex",
+            })
+        ));
+        assert!(matches!(
+            backend.move_vertex(vertex, &[1.0, 1.0]),
+            Err(DelaunayError::NotImplemented {
+                operation: "move_vertex",
+            })
+        ));
+        assert!(matches!(
+            backend.flip_edge(edge.clone()),
+            Err(DelaunayError::NotImplemented {
+                operation: "flip_edge",
+            })
+        ));
+        assert!(!backend.can_flip_edge(&edge));
+        assert!(matches!(
+            backend.subdivide_face(face, &[0.5, 0.5]),
+            Err(DelaunayError::NotImplemented {
+                operation: "subdivide_face",
+            })
+        ));
+
+        backend.clear();
+        backend.reserve_capacity(32, 64);
+        assert_eq!(
+            (
+                backend.vertex_count(),
+                backend.edge_count(),
+                backend.face_count(),
+            ),
+            original_counts
+        );
+    }
+
+    #[test]
     fn test_builder_produces_correct_vertex_count() {
         // Verify the builder path in generate_delaunay2 preserves vertex count
         for n in [3, 5, 10, 20] {
