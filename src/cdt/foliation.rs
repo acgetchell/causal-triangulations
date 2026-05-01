@@ -193,6 +193,21 @@ pub enum FoliationError {
         /// Expected number of vertices in the closed ring.
         expected: usize,
     },
+    /// A toroidal spatial slice is missing the timelike adjacency required
+    /// for temporal wrap-around — every slice must have at least one
+    /// timelike edge to both its `(t-1) mod T` and `(t+1) mod T` neighbours.
+    ///
+    /// This catches "toroidal-tagged but actually a cylinder" misuse where
+    /// the underlying mesh has open time boundaries.  χ = 0 alone does not
+    /// distinguish a torus from a cylinder, so we additionally verify the
+    /// temporal wrap.
+    MissingTemporalWrapAround {
+        /// Slice index that is missing a timelike neighbour.
+        slice: usize,
+        /// The expected neighbour slice (either `(slice-1) mod T` or
+        /// `(slice+1) mod T`) that has no incident timelike edge.
+        missing_neighbor: usize,
+    },
 }
 
 impl fmt::Display for FoliationError {
@@ -259,6 +274,14 @@ impl fmt::Display for FoliationError {
                 f,
                 "toroidal spatial slice {slice} is not a single closed S¹: walked a \
                  cycle of length {walked} but slice has {expected} vertices"
+            ),
+            Self::MissingTemporalWrapAround {
+                slice,
+                missing_neighbor,
+            } => write!(
+                f,
+                "toroidal foliation has no timelike edge from slice {slice} to slice \
+                 {missing_neighbor}; toroidal topology requires temporal wrap-around"
             ),
         }
     }
@@ -604,6 +627,21 @@ mod tests {
                 && msg.contains("6 vertices")
                 && msg.contains("closed S¹"),
             "Display should describe slice index, walked length, expected ring length, and S¹ expectation: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_foliation_error_missing_temporal_wraparound_display() {
+        let err = FoliationError::MissingTemporalWrapAround {
+            slice: 0,
+            missing_neighbor: 2,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("slice 0")
+                && msg.contains("slice 2")
+                && msg.contains("temporal wrap-around"),
+            "Display should describe missing wrap-around between specific slices: {msg}"
         );
     }
 

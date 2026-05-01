@@ -240,11 +240,17 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<cdt::metropolis::Simulati
     log::info!("Topology: {:?}", config.topology);
     log::info!("Using trait-based backend system");
 
-    // Create initial triangulation based on topology
+    // Create initial triangulation based on topology.
+    //
+    // `config.vertices` is always the *total* vertex count.  For
+    // [`CdtTopology::Toroidal`], `validate()` has already checked that
+    // `vertices % timeslices == 0` and `vertices >= 3 * timeslices`, so we
+    // can safely divide to recover N = vertices/T per slice.
     let triangulation = match config.topology {
         config::CdtTopology::Toroidal => {
             log::info!("Constructing toroidal CDT (S¹×S¹)");
-            CdtTriangulation::from_toroidal_cdt(vertices, timeslices)?
+            let vertices_per_slice = vertices / timeslices;
+            CdtTriangulation::from_toroidal_cdt(vertices_per_slice, timeslices)?
         }
         config::CdtTopology::OpenBoundary => {
             if let Some(seed) = config.seed {
@@ -448,5 +454,44 @@ mod lib_tests {
         assert_relative_eq!(action_config.coupling_0, 1.0);
         assert_relative_eq!(action_config.coupling_2, 1.0);
         assert_relative_eq!(action_config.cosmological_constant, 0.1);
+    }
+
+    #[test]
+    fn test_run_simulation_toroidal_uses_total_vertex_count() {
+        // For toroidal topology `config.vertices` is the *total* vertex
+        // count.  With vertices=12, timeslices=3 we expect a triangulation
+        // with exactly 12 vertices (4 per slice on a 3-slice torus), not
+        // 36 (which would result from treating the field as per-slice).
+        let config = CdtConfig {
+            dimension: Some(2),
+            vertices: 12,
+            timeslices: 3,
+            temperature: 1.0,
+            steps: 10,
+            thermalization_steps: 5,
+            measurement_frequency: 2,
+            coupling_0: 1.0,
+            coupling_2: 1.0,
+            cosmological_constant: 0.1,
+            simulate: false,
+            seed: None,
+            topology: config::CdtTopology::Toroidal,
+        };
+
+        let results = run_simulation(&config).expect("toroidal simulation should run");
+        assert_eq!(
+            results.triangulation.vertex_count(),
+            12,
+            "Toroidal run_simulation must treat config.vertices as the TOTAL vertex count"
+        );
+        assert_eq!(
+            results.triangulation.time_slices(),
+            3,
+            "Toroidal run_simulation must preserve the configured timeslice count"
+        );
+        assert!(matches!(
+            results.triangulation.metadata().topology,
+            config::CdtTopology::Toroidal
+        ));
     }
 }

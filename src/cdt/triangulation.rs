@@ -429,12 +429,81 @@ impl CdtTriangulation<DelaunayBackend2D> {
             }
         }
 
-        // Toroidal topology adds a stronger structural invariant: every spatial
-        // slice forms a closed S¹ (each vertex has exactly two spacelike
-        // neighbours and the spacelike subgraph of each slice is a single
-        // cycle, not several disjoint cycles or open chains).
+        // Toroidal topology adds two stronger structural invariants:
+        //  - every spatial slice forms a closed S¹ (each vertex has exactly
+        //    two spacelike neighbours and the subgraph of each slice is a
+        //    single cycle); and
+        //  - the time direction wraps: every slice has timelike adjacency to
+        //    both `(t-1) mod T` and `(t+1) mod T`.  χ = 0 alone does not
+        //    distinguish a torus from a cylinder, so we check the wrap
+        //    explicitly.
         if matches!(self.metadata.topology, CdtTopology::Toroidal) {
             self.validate_toroidal_spatial_rings()?;
+            self.validate_toroidal_temporal_wraparound()?;
+        }
+
+        Ok(())
+    }
+
+    /// Validates that the time direction wraps for toroidal topology.
+    ///
+    /// For each slice `t` (with `T = time_slices`), checks that the foliation
+    /// has at least one timelike edge to slice `(t - 1) mod T` and at least
+    /// one to slice `(t + 1) mod T`.  Cylinders (open in time) have χ = 0
+    /// like the torus, so this check is what actually distinguishes them.
+    fn validate_toroidal_temporal_wraparound(&self) -> CdtResult<()> {
+        let total = self.metadata.time_slices;
+        if total < 2 {
+            return Ok(());
+        }
+        let num_slices = total as usize;
+
+        // Collect, per slice, the set of slices reached via timelike (step
+        // distance == 1) edges.
+        let mut neighbor_slices: Vec<HashSet<usize>> = vec![HashSet::new(); num_slices];
+        for edge in self.geometry.edges() {
+            let Some((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
+                continue;
+            };
+            let Some(t0) = self.geometry.vertex_data_by_key(v0.vertex_key()) else {
+                continue;
+            };
+            let Some(t1) = self.geometry.vertex_data_by_key(v1.vertex_key()) else {
+                continue;
+            };
+            if t0 >= total || t1 >= total {
+                continue;
+            }
+            if self.time_step_distance(t0, t1) != 1 {
+                continue;
+            }
+            let s0 = t0 as usize;
+            let s1 = t1 as usize;
+            neighbor_slices[s0].insert(s1);
+            neighbor_slices[s1].insert(s0);
+        }
+
+        for (slice, neighbors) in neighbor_slices.iter().enumerate() {
+            let prev = if slice == 0 {
+                num_slices - 1
+            } else {
+                slice - 1
+            };
+            let next = (slice + 1) % num_slices;
+            if !neighbors.contains(&prev) {
+                return Err(FoliationError::MissingTemporalWrapAround {
+                    slice,
+                    missing_neighbor: prev,
+                }
+                .into());
+            }
+            if !neighbors.contains(&next) {
+                return Err(FoliationError::MissingTemporalWrapAround {
+                    slice,
+                    missing_neighbor: next,
+                }
+                .into());
+            }
         }
 
         Ok(())
@@ -1443,12 +1512,17 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// `Toroidal` topology it is the circular distance
     /// `min(d, T − d)` where `T = time_slices`, so the wrap-around edge
     /// between slice `T − 1` and slice `0` reads as distance `1`.
+    ///
+    /// Out-of-range labels (`t ≥ time_slices`) bypass the toroidal wrap and
+    /// fall through to the raw difference so callers (e.g. validators) can
+    /// still detect them as causality violations rather than silently folding
+    /// `t == time_slices` into distance 0 via `min(T, 0)`.
     #[must_use]
     fn time_step_distance(&self, t0: u32, t1: u32) -> u32 {
         let raw = t0.abs_diff(t1);
         if matches!(self.metadata.topology, CdtTopology::Toroidal) {
             let total = self.metadata.time_slices;
-            if total > 0 && raw <= total {
+            if total > 0 && t0 < total && t1 < total {
                 return raw.min(total - raw);
             }
         }
