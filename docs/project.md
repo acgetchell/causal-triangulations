@@ -36,14 +36,24 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 ### `cdt/triangulation.rs` — Foliation integration
 
 - `from_foliated_cylinder(vertices_per_slice, num_slices, seed)` _(crate-internal, provisional)_ — point-set strip constructor used for internal diagnostics while explicit strip construction lands
+- `from_toroidal_cdt(vertices_per_slice, num_slices)` — explicit S¹×S¹ toroidal CDT (χ = 0); requires `vertices_per_slice ≥ 3` and `num_slices ≥ 3`
 - `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`
-- Validation: `validate_foliation()` (structural), `validate_causality()` (no edge spans >1 slice)
+- Validation: `validate_topology()` (χ expectation depends on `CdtTopology`), `validate_foliation()` (structural; closed S¹ spacelike rings on toroidal), `validate_causality()` (no edge spans >1 slice)
+
+### `config.rs` — `CdtTopology` enum
+
+- `OpenBoundary` (default) — finite strip with boundary, χ ∈ {1, 2}
+- `Toroidal` — periodic in space and time, S¹×S¹, χ = 0
+- Wired through `CdtConfig.topology`, `CdtConfigOverrides.topology`, the CLI `--topology` flag, and `CdtMetadata.topology`
+- `run_simulation()` dispatches on topology: `Toroidal` → `from_toroidal_cdt`, `OpenBoundary` → `from_seeded_points` / `from_random_points`
 
 ### `geometry/generators.rs` — Delaunay triangulation generators
 
 - `delaunay2_with_context` — builds a 2D Delaunay triangulation with optional seed
 - `build_delaunay2_with_data` — builds from coordinate + vertex-data pairs
+- `build_explicit_delaunay2` / `build_explicit_delaunay2_with_topology` — builds from explicit cell connectivity (no Delaunay point insertion); the latter also accepts `TopologyGuarantee` and `GlobalTopology` metadata so non-sphere Euler characteristics validate correctly
+- `build_explicit_delaunay2_toroidal` — convenience wrapper for explicit toroidal meshes (χ = 0)
 - `random_delaunay2`, `seeded_delaunay2` — convenience wrappers
 - `DelaunayTriangulation2D` — type alias for the concrete 2D triangulation type
 
@@ -57,6 +67,6 @@ Together with `backends/delaunay.rs`, this module is the only place that directl
 
 ## Key Dependencies
 
-- `delaunay` (v0.7.4) — geometry backend (Delaunay triangulations, vertex data for time labels, `set_vertex_data_by_key` for O(1) label mutation)
+- `delaunay` (v0.7.6) — geometry backend (Delaunay triangulations, vertex data for time labels, `set_vertex_data_by_key` for O(1) label mutation)
 - `markov-chain-monte-carlo` — MCMC framework (`Chain::step_mut`, `ProposalMut`, `Target`)
 - `num-traits` — `ToPrimitive` for safe float→integer conversion

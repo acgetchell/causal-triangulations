@@ -156,7 +156,7 @@ Key principle:
 
 - **Language**: Rust
 - **Project**: {2,3,4}D Causal Dynamical Triangulations library
-- **MSRV**: 1.94.0
+- **MSRV**: 1.95.0
 - **Edition**: 2024
 - **Unsafe code**: forbidden (`#![forbid(unsafe_code)]`)
 - **Architecture**: CDT physics layered over a pluggable geometry backend (`delaunay` crate). Direct `use delaunay::` imports are restricted to `src/geometry/` (`backends/delaunay.rs` and `generators.rs`); all other modules use the trait-based abstractions and `DelaunayBackend2D` type alias (see `docs/dev/rust.md § Geometry Backend Isolation`)

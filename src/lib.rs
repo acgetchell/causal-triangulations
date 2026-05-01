@@ -88,7 +88,7 @@ pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
 pub use cdt::foliation::{CellType, EdgeType, Foliation};
 pub use cdt::metropolis::{CdtProposal, CdtTarget};
 pub use cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig, SimulationResultsBackend};
-pub use config::{CdtConfig, TestConfig};
+pub use config::{CdtConfig, CdtTopology, TestConfig};
 pub use errors::{CdtError, CdtResult};
 
 use cdt::metropolis::Measurement;
@@ -118,7 +118,7 @@ pub mod prelude {
     pub use crate::geometry::traits::TriangulationQuery;
 
     // Foliation / classification
-    pub use crate::cdt::foliation::{CellType, EdgeType, Foliation};
+    pub use crate::cdt::foliation::{CellType, EdgeType, Foliation, FoliationError};
 
     // Action
     pub use crate::cdt::action::{ActionConfig, compute_regge_action};
@@ -132,7 +132,7 @@ pub mod prelude {
     };
 
     // Configuration and errors
-    pub use crate::config::CdtConfig;
+    pub use crate::config::{CdtConfig, CdtTopology};
     pub use crate::errors::{CdtError, CdtResult};
 
     /// Focused exports for CDT triangulation construction and queries.
@@ -149,7 +149,8 @@ pub mod prelude {
     /// ```
     pub mod triangulation {
         pub use crate::CdtTriangulation;
-        pub use crate::cdt::foliation::{CellType, EdgeType, Foliation};
+        pub use crate::cdt::foliation::{CellType, EdgeType, Foliation, FoliationError};
+        pub use crate::config::CdtTopology;
         pub use crate::errors::{CdtError, CdtResult};
         pub use crate::geometry::traits::TriangulationQuery;
     }
@@ -162,7 +163,7 @@ pub mod prelude {
         pub use crate::cdt::metropolis::{
             CdtProposal, CdtTarget, MetropolisAlgorithm, MetropolisConfig,
         };
-        pub use crate::config::CdtConfig;
+        pub use crate::config::{CdtConfig, CdtTopology};
         pub use crate::errors::{CdtError, CdtResult};
     }
 
@@ -191,7 +192,10 @@ pub mod prelude {
             DelaunayBackend, DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
         };
         pub use crate::geometry::backends::mock::MockBackend;
-        pub use crate::geometry::generators::{build_delaunay2_with_data, delaunay2_with_context};
+        pub use crate::geometry::generators::{
+            build_delaunay2_with_data, build_explicit_delaunay2, build_explicit_delaunay2_toroidal,
+            build_explicit_delaunay2_with_topology, delaunay2_with_context,
+        };
         pub use crate::geometry::operations::TriangulationOps;
         pub use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
     }
@@ -233,14 +237,29 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<cdt::metropolis::Simulati
     log::info!("Dimensionality: {}", config.dimension.unwrap_or(2));
     log::info!("Number of vertices: {vertices}");
     log::info!("Number of timeslices: {timeslices}");
+    log::info!("Topology: {:?}", config.topology);
     log::info!("Using trait-based backend system");
 
-    // Create initial triangulation (seeded if seed is provided for full reproducibility)
-    let triangulation = if let Some(seed) = config.seed {
-        log::info!("RNG seed: {seed}");
-        CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?
-    } else {
-        CdtTriangulation::from_random_points(vertices, timeslices, 2)?
+    // Create initial triangulation based on topology.
+    //
+    // `config.vertices` is always the *total* vertex count.  For
+    // [`CdtTopology::Toroidal`], `validate()` has already checked that
+    // `vertices % timeslices == 0` and `vertices >= 3 * timeslices`, so we
+    // can safely divide to recover N = vertices/T per slice.
+    let triangulation = match config.topology {
+        config::CdtTopology::Toroidal => {
+            log::info!("Constructing toroidal CDT (S¹×S¹)");
+            let vertices_per_slice = vertices / timeslices;
+            CdtTriangulation::from_toroidal_cdt(vertices_per_slice, timeslices)?
+        }
+        config::CdtTopology::OpenBoundary => {
+            if let Some(seed) = config.seed {
+                log::info!("RNG seed: {seed}");
+                CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?
+            } else {
+                CdtTriangulation::from_random_points(vertices, timeslices, 2)?
+            }
+        }
     };
 
     log::info!(
@@ -310,6 +329,7 @@ mod lib_tests {
             cosmological_constant: 0.1,
             simulate: false,
             seed: Some(42),
+            topology: config::CdtTopology::OpenBoundary,
         }
     }
 
@@ -434,5 +454,44 @@ mod lib_tests {
         assert_relative_eq!(action_config.coupling_0, 1.0);
         assert_relative_eq!(action_config.coupling_2, 1.0);
         assert_relative_eq!(action_config.cosmological_constant, 0.1);
+    }
+
+    #[test]
+    fn test_run_simulation_toroidal_uses_total_vertex_count() {
+        // For toroidal topology `config.vertices` is the *total* vertex
+        // count.  With vertices=12, timeslices=3 we expect a triangulation
+        // with exactly 12 vertices (4 per slice on a 3-slice torus), not
+        // 36 (which would result from treating the field as per-slice).
+        let config = CdtConfig {
+            dimension: Some(2),
+            vertices: 12,
+            timeslices: 3,
+            temperature: 1.0,
+            steps: 10,
+            thermalization_steps: 5,
+            measurement_frequency: 2,
+            coupling_0: 1.0,
+            coupling_2: 1.0,
+            cosmological_constant: 0.1,
+            simulate: false,
+            seed: None,
+            topology: config::CdtTopology::Toroidal,
+        };
+
+        let results = run_simulation(&config).expect("toroidal simulation should run");
+        assert_eq!(
+            results.triangulation.vertex_count(),
+            12,
+            "Toroidal run_simulation must treat config.vertices as the TOTAL vertex count"
+        );
+        assert_eq!(
+            results.triangulation.time_slices(),
+            3,
+            "Toroidal run_simulation must preserve the configured timeslice count"
+        );
+        assert!(matches!(
+            results.triangulation.metadata().topology,
+            config::CdtTopology::Toroidal
+        ));
     }
 }

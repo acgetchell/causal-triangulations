@@ -32,7 +32,7 @@ The library currently supports an initial 2D CDT implementation, with planned ex
 
 ## ⚙️ Requirements
 
-- Rust 1.94 or newer (required by dependencies such as `delaunay` and `la-stack`)
+- Rust 1.95 or newer (required by dependencies such as `delaunay` and `la-stack`)
 
 **Why Rust for CDT?**
 

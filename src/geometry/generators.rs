@@ -6,19 +6,20 @@
 //! `docs/dev/rust.md § Geometry Backend Isolation`).
 
 use crate::errors::{CdtError, CdtResult};
-use delaunay::core::builder::DelaunayTriangulationBuilder;
+use delaunay::core::triangulation::TopologyGuarantee;
 use delaunay::geometry::kernel::AdaptiveKernel;
 use delaunay::geometry::point::Point;
 use delaunay::geometry::traits::coordinate::Coordinate;
 use delaunay::geometry::util::{generate_random_points, generate_random_points_seeded};
 use delaunay::prelude::VertexBuilder;
+use delaunay::topology::traits::topological_space::{GlobalTopology, ToroidalConstructionMode};
+use delaunay::triangulation::{DelaunayTriangulation, DelaunayTriangulationBuilder};
 
 /// Type alias for the 2D Delaunay triangulation returned by this crate's generators.
 ///
 /// Uses [`AdaptiveKernel`] (the default for [`DelaunayTriangulationBuilder::build`]) and
 /// `u32` vertex data storing the per-vertex time-slice label (foliation).
-pub type DelaunayTriangulation2D =
-    delaunay::core::delaunay_triangulation::DelaunayTriangulation<AdaptiveKernel<f64>, u32, i32, 2>;
+pub type DelaunayTriangulation2D = DelaunayTriangulation<AdaptiveKernel<f64>, u32, i32, 2>;
 
 /// Generates a Delaunay triangulation with optional seed for deterministic testing.
 ///
@@ -133,6 +134,200 @@ pub fn build_delaunay2_with_data(
         })
 }
 
+/// Builds a 2D triangulation from explicit vertex coordinates, data, and cell connectivity.
+///
+/// Each vertex is specified as `([x, y], data)`.  Each cell is a `Vec<usize>` of
+/// vertex indices (must contain exactly 3 indices for 2D).  The triangulation is
+/// assembled combinatorially — **no Delaunay point-insertion** is performed.
+///
+/// Topology defaults to [`TopologyGuarantee::DEFAULT`] (PL-manifold) and
+/// [`GlobalTopology::Euclidean`].  For non-spherical meshes (e.g. torus with
+/// χ = 0), use [`build_explicit_delaunay2_with_topology`] or the convenience
+/// wrapper [`build_explicit_delaunay2_toroidal`] instead.
+///
+/// This is one of the only call sites for
+/// [`DelaunayTriangulationBuilder::from_vertices_and_cells`], maintaining
+/// geometry backend isolation.
+///
+/// # Errors
+///
+/// Returns error if vertex construction fails or the explicit cell builder
+/// rejects the input (e.g., invalid cell arity, out-of-bounds indices, or
+/// topological validation failure).
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::geometry::*;
+///
+/// // Single labeled triangle (PL-manifold-with-boundary, Euclidean):
+/// let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
+/// let cells = vec![vec![0, 1, 2]];
+///
+/// let dt = build_explicit_delaunay2(&vertices, &cells)
+///     .expect("explicit single-triangle mesh");
+/// assert_eq!(dt.number_of_vertices(), 3);
+/// assert_eq!(dt.number_of_cells(), 1);
+/// ```
+pub fn build_explicit_delaunay2(
+    coords_with_data: &[([f64; 2], u32)],
+    cells: &[Vec<usize>],
+) -> CdtResult<DelaunayTriangulation2D> {
+    build_explicit_delaunay2_with_topology(
+        coords_with_data,
+        cells,
+        TopologyGuarantee::DEFAULT,
+        GlobalTopology::Euclidean,
+    )
+}
+
+/// Like [`build_explicit_delaunay2`] but with explicit [`TopologyGuarantee`] and
+/// [`GlobalTopology`] metadata.
+///
+/// Use [`TopologyGuarantee::Pseudomanifold`] for meshes whose Euler characteristic
+/// differs from the default closed-sphere expectation, and pair it with the
+/// matching [`GlobalTopology`] (e.g., [`GlobalTopology::Toroidal`] with
+/// [`ToroidalConstructionMode::Explicit`]) so the builder validates against the
+/// correct expected χ.
+///
+/// # Errors
+///
+/// Same as [`build_explicit_delaunay2`].
+///
+/// # Examples
+///
+/// The `TopologyGuarantee` and `GlobalTopology` types come from the underlying
+/// `delaunay` crate — import them directly when calling this lower-level builder:
+///
+/// ```
+/// use causal_triangulations::prelude::geometry::*;
+/// use delaunay::core::triangulation::TopologyGuarantee;
+/// use delaunay::topology::traits::topological_space::GlobalTopology;
+///
+/// // Single labeled triangle, default PL-manifold guarantee, Euclidean global topology.
+/// let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
+/// let cells = vec![vec![0, 1, 2]];
+///
+/// let dt = build_explicit_delaunay2_with_topology(
+///     &vertices,
+///     &cells,
+///     TopologyGuarantee::DEFAULT,
+///     GlobalTopology::Euclidean,
+/// )
+/// .expect("explicit single-triangle mesh");
+/// assert_eq!(dt.number_of_vertices(), 3);
+/// assert_eq!(dt.number_of_cells(), 1);
+/// ```
+pub fn build_explicit_delaunay2_with_topology(
+    coords_with_data: &[([f64; 2], u32)],
+    cells: &[Vec<usize>],
+    topology_guarantee: TopologyGuarantee,
+    global_topology: GlobalTopology<2>,
+) -> CdtResult<DelaunayTriangulation2D> {
+    let vertices: Vec<_> = coords_with_data
+        .iter()
+        .enumerate()
+        .map(|(i, (coord, data))| {
+            let point = Point::<f64, 2>::new(*coord);
+            VertexBuilder::<f64, u32, 2>::default()
+                .point(point)
+                .data(*data)
+                .build()
+                .map_err(|e| CdtError::VertexBuildFailed {
+                    context: format!("vertex {i}"),
+                    underlying_error: e.to_string(),
+                })
+        })
+        .collect::<CdtResult<Vec<_>>>()?;
+
+    let vertex_count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
+    let coordinate_range = coords_with_data
+        .iter()
+        .flat_map(|(c, _)| c.iter().copied())
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+            (lo.min(v), hi.max(v))
+        });
+    DelaunayTriangulationBuilder::from_vertices_and_cells(&vertices, cells)
+        .topology_guarantee(topology_guarantee)
+        .global_topology(global_topology)
+        .build::<i32>()
+        .map_err(|e| CdtError::DelaunayGenerationFailed {
+            vertex_count,
+            coordinate_range,
+            attempt: 1,
+            underlying_error: e.to_string(),
+        })
+}
+
+/// Convenience wrapper for building a 2D toroidal explicit triangulation.
+///
+/// Sets [`TopologyGuarantee::Pseudomanifold`] and
+/// [`GlobalTopology::Toroidal`] with [`ToroidalConstructionMode::Explicit`]
+/// so the builder validates the mesh against χ = 0 instead of the default
+/// closed-sphere expectation.
+///
+/// In practice, most callers use the higher-level
+/// [`CdtTriangulation::from_toroidal_cdt`](crate::CdtTriangulation::from_toroidal_cdt)
+/// constructor, which assembles the vertex/cell layout for an `N × T` torus and
+/// then delegates here.
+///
+/// # Errors
+///
+/// Same as [`build_explicit_delaunay2_with_topology`].
+///
+/// # Examples
+///
+/// Build a 3 × 3 toroidal mesh by hand (V = 9, E = 27, F = 18, χ = 0):
+///
+/// ```
+/// use causal_triangulations::prelude::geometry::*;
+///
+/// const N: usize = 3;
+/// const T: usize = 3;
+///
+/// // Vertex (i, t) lives at index i + t*N, with x = i/N, y = t/T, label = t.
+/// let mut vertices: Vec<([f64; 2], u32)> = Vec::with_capacity(N * T);
+/// for t in 0..T {
+///     for i in 0..N {
+///         #[allow(clippy::cast_precision_loss)]
+///         let coord = [i as f64 / N as f64, t as f64 / T as f64];
+///         let label = u32::try_from(t).expect("slice index fits in u32");
+///         vertices.push((coord, label));
+///     }
+/// }
+///
+/// // Each (i, t) quad contributes one Up and one Down triangle.
+/// let mut cells: Vec<Vec<usize>> = Vec::with_capacity(2 * N * T);
+/// for t in 0..T {
+///     let t_next = (t + 1) % T;
+///     for i in 0..N {
+///         let i_next = (i + 1) % N;
+///         cells.push(vec![i + t * N, i_next + t * N, i + t_next * N]);
+///         cells.push(vec![i_next + t * N, i_next + t_next * N, i + t_next * N]);
+///     }
+/// }
+///
+/// let dt = build_explicit_delaunay2_toroidal(&vertices, &cells, [1.0, 1.0])
+///     .expect("explicit 3×3 toroidal mesh");
+/// assert_eq!(dt.number_of_vertices(), N * T);
+/// assert_eq!(dt.number_of_cells(), 2 * N * T);
+/// ```
+pub fn build_explicit_delaunay2_toroidal(
+    coords_with_data: &[([f64; 2], u32)],
+    cells: &[Vec<usize>],
+    domain: [f64; 2],
+) -> CdtResult<DelaunayTriangulation2D> {
+    build_explicit_delaunay2_with_topology(
+        coords_with_data,
+        cells,
+        TopologyGuarantee::Pseudomanifold,
+        GlobalTopology::Toroidal {
+            domain,
+            mode: ToroidalConstructionMode::Explicit,
+        },
+    )
+}
+
 // =========================================================================
 // Test helpers (panicking convenience wrappers, compiled only during tests)
 // =========================================================================
@@ -172,6 +367,79 @@ pub(crate) fn seeded_delaunay2(
 mod tests {
     use super::*;
     use crate::errors::CdtError;
+
+    #[test]
+    fn test_build_explicit_delaunay2_single_triangle() {
+        // Default topology (PL-manifold + Euclidean) should accept a single
+        // triangle with the standard 0-1 strip labeling.
+        let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
+        let cells = vec![vec![0, 1, 2]];
+
+        let dt = build_explicit_delaunay2(&vertices, &cells)
+            .expect("single-triangle explicit mesh should build with defaults");
+        assert_eq!(dt.number_of_vertices(), 3);
+        assert_eq!(dt.number_of_cells(), 1);
+    }
+
+    #[test]
+    fn test_build_explicit_delaunay2_rejects_out_of_bounds_index() {
+        // Cell references vertex 3 which doesn't exist (only indices 0..3 are valid).
+        let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
+        let cells = vec![vec![0, 1, 3]];
+
+        let result = build_explicit_delaunay2(&vertices, &cells);
+        assert!(
+            matches!(result, Err(CdtError::DelaunayGenerationFailed { .. })),
+            "explicit builder must reject out-of-bounds vertex indices, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_explicit_delaunay2_with_topology_explicit_euclidean() {
+        // Same single-triangle mesh, but with explicit topology metadata.
+        let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
+        let cells = vec![vec![0, 1, 2]];
+
+        let dt = build_explicit_delaunay2_with_topology(
+            &vertices,
+            &cells,
+            TopologyGuarantee::DEFAULT,
+            GlobalTopology::Euclidean,
+        )
+        .expect("single-triangle explicit mesh with explicit topology should build");
+        assert_eq!(dt.number_of_vertices(), 3);
+        assert_eq!(dt.number_of_cells(), 1);
+    }
+
+    #[test]
+    fn test_build_explicit_delaunay2_toroidal_3x3_chi_zero() {
+        // A real 3×3 toroidal mesh: V=9, F=18, E=27, χ=0.
+        const N: usize = 3;
+        const T: usize = 3;
+        let mut vertices: Vec<([f64; 2], u32)> = Vec::with_capacity(N * T);
+        for t in 0..T {
+            for i in 0..N {
+                #[allow(clippy::cast_precision_loss)]
+                let coord = [i as f64 / N as f64, t as f64 / T as f64];
+                let label = u32::try_from(t).expect("slice index fits in u32");
+                vertices.push((coord, label));
+            }
+        }
+        let mut cells: Vec<Vec<usize>> = Vec::with_capacity(2 * N * T);
+        for t in 0..T {
+            let t_next = (t + 1) % T;
+            for i in 0..N {
+                let i_next = (i + 1) % N;
+                cells.push(vec![i + t * N, i_next + t * N, i + t_next * N]);
+                cells.push(vec![i_next + t * N, i_next + t_next * N, i + t_next * N]);
+            }
+        }
+
+        let dt = build_explicit_delaunay2_toroidal(&vertices, &cells, [1.0, 1.0])
+            .expect("3×3 toroidal mesh should build");
+        assert_eq!(dt.number_of_vertices(), N * T);
+        assert_eq!(dt.number_of_cells(), 2 * N * T);
+    }
 
     #[test]
     fn test_delaunay2_with_context_valid_parameters() {
