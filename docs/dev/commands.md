@@ -63,6 +63,7 @@ Lint checks include:
 
 ```bash
 cargo clippy
+semgrep
 ```
 
 Warnings are treated as errors in CI.
@@ -99,11 +100,34 @@ This runs:
 
 - formatting checks
 - lint checks
+- repository-owned Semgrep rules
 - unit tests
 - integration tests
 - documentation builds
 - example builds
 - benchmark compilation
+
+## Semgrep
+
+Repository-owned Semgrep rules live in `semgrep.yaml`. They encode focused project invariants that are not already covered by Rust, Clippy, Ruff, or ShellCheck.
+
+Commands:
+
+```bash
+just semgrep       # Run repository-owned rules
+just semgrep-test  # Verify Semgrep rule fixtures
+```
+
+## Coverage
+
+Coverage is generated with `cargo-llvm-cov`, matching the Codecov workflow.
+
+Commands:
+
+```bash
+just coverage     # HTML report at target/llvm-cov/html/index.html
+just coverage-ci  # Cobertura XML at coverage/cobertura.xml
+```
 
 ---
 
@@ -301,4 +325,12 @@ Regenerate with:
 
 ```bash
 just changelog
+```
+
+This runs `git-cliff`, applies the Python postprocessor, and archives completed minor release series under `docs/archive/changelog/`.
+
+Create annotated release tags from the generated changelog with:
+
+```bash
+just changelog-tag v0.1.0
 ```

@@ -104,23 +104,22 @@ just run-example     # Basic simulation
 See [`examples/basic_cdt.rs`](examples/basic_cdt.rs) for a complete working example:
 
 ```rust
-use causal_triangulations::{
-    CdtConfig, MetropolisConfig, ActionConfig, MetropolisAlgorithm,
-    geometry::CdtTriangulation2D,
+use causal_triangulations::prelude::simulation::{
+    ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
 };
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> CdtResult<()> {
     // Create triangulation from random points
-    let triangulation = CdtTriangulation2D::from_random_points(20, 1, 2)?;
-    
+    let triangulation = CdtTriangulation::from_random_points(20, 1, 2)?;
+
     // Configure Monte Carlo simulation
     let metropolis_config = MetropolisConfig::new(1.0, 1000, 100, 10);
     let action_config = ActionConfig::default();
-    let mut algorithm = MetropolisAlgorithm::new(metropolis_config, action_config);
-    
+    let algorithm = MetropolisAlgorithm::new(metropolis_config, action_config);
+
     // Run simulation
-    let results = algorithm.run(triangulation);
-    
+    let results = algorithm.run(triangulation)?;
+
     println!("Acceptance rate: {:.3}", results.acceptance_rate());
     println!("Average action: {:.3}", results.average_action());
     Ok(())

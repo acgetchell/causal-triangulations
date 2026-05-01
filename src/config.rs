@@ -17,7 +17,8 @@ use std::path::{Component, Path, PathBuf};
 /// Topology of the spatial slices in the CDT triangulation.
 ///
 /// Determines the boundary conditions for the simulation:
-/// - [`OpenBoundary`](Self::OpenBoundary) — finite strip with boundary (χ = 1)
+/// - [`OpenBoundary`](Self::OpenBoundary) — open-boundary generation; topology
+///   validation accepts disk-like χ = 1 and sphere-like χ = 2 configurations
 /// - [`Toroidal`](Self::Toroidal) — periodic in both space and time (S¹×S¹, χ = 0)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
 pub enum CdtTopology {
@@ -90,7 +91,7 @@ pub struct CdtConfig {
     #[arg(long)]
     pub seed: Option<u64>,
 
-    /// Topology of spatial slices
+    /// Topology and boundary conditions for triangulation generation
     #[arg(long, value_enum, default_value_t = CdtTopology::default())]
     pub topology: CdtTopology,
 }

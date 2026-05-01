@@ -275,6 +275,7 @@ impl Default for ErgodicsSystem {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
+    use std::collections::HashSet;
 
     #[test]
     fn test_move_statistics() {
@@ -311,7 +312,7 @@ mod tests {
         let mut system = ErgodicsSystem::new();
 
         // Test that we get different move types
-        let mut move_types = std::collections::HashSet::new();
+        let mut move_types = HashSet::new();
         for _ in 0..100 {
             move_types.insert(system.select_random_move());
         }

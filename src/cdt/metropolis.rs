@@ -699,7 +699,7 @@ mod tests {
             action_config: ActionConfig::default(),
             steps: vec![],
             measurements,
-            elapsed_time: std::time::Duration::from_millis(100),
+            elapsed_time: Duration::from_millis(100),
             triangulation,
         };
 

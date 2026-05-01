@@ -228,8 +228,7 @@ impl TriangulationMut for MockBackend {
     fn flip_edge(
         &mut self,
         edge: Self::EdgeHandle,
-    ) -> Result<FlipResult<Self::VertexHandle, Self::EdgeHandle, Self::FaceHandle>, Self::Error>
-    {
+    ) -> Result<FlipResult<Self::EdgeHandle, Self::FaceHandle>, Self::Error> {
         if !self.edges.contains_key(&edge.0) {
             return Err(MockError::Edge(edge.0));
         }
@@ -245,10 +244,7 @@ impl TriangulationMut for MockBackend {
         &mut self,
         face: Self::FaceHandle,
         point: &[Self::Coordinate],
-    ) -> Result<
-        SubdivisionResult<Self::VertexHandle, Self::EdgeHandle, Self::FaceHandle>,
-        Self::Error,
-    > {
+    ) -> Result<SubdivisionResult<Self::VertexHandle, Self::FaceHandle>, Self::Error> {
         if !self.faces.contains_key(&face.0) {
             return Err(MockError::Face(face.0));
         }

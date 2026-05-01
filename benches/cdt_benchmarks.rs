@@ -9,7 +9,10 @@
 
 #![allow(missing_docs)] // Allow missing docs for criterion-generated functions
 
-use causal_triangulations::prelude::*;
+use causal_triangulations::prelude::simulation::{
+    ActionConfig, ErgodicsSystem, MetropolisAlgorithm, MetropolisConfig, MoveType,
+};
+use causal_triangulations::prelude::triangulation::{CdtTriangulation2D, TriangulationQuery};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
 

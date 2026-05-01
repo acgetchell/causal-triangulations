@@ -135,6 +135,16 @@ pub mod prelude {
     pub use crate::config::{CdtConfig, CdtTopology};
     pub use crate::errors::{CdtError, CdtResult};
 
+    /// Focused exports for configuration parsing and presets.
+    pub mod config {
+        pub use crate::config::{CdtConfig, CdtConfigOverrides, CdtTopology, TestConfig};
+    }
+
+    /// Focused exports for crate error handling.
+    pub mod errors {
+        pub use crate::errors::{CdtError, CdtResult};
+    }
+
     /// Focused exports for CDT triangulation construction and queries.
     ///
     /// Lighter than `prelude::*` — just the types needed for building and
@@ -152,6 +162,7 @@ pub mod prelude {
         pub use crate::cdt::foliation::{CellType, EdgeType, Foliation, FoliationError};
         pub use crate::config::CdtTopology;
         pub use crate::errors::{CdtError, CdtResult};
+        pub use crate::geometry::CdtTriangulation2D;
         pub use crate::geometry::traits::TriangulationQuery;
     }
 
@@ -193,8 +204,8 @@ pub mod prelude {
         };
         pub use crate::geometry::backends::mock::MockBackend;
         pub use crate::geometry::generators::{
-            build_delaunay2_with_data, build_explicit_delaunay2, build_explicit_delaunay2_toroidal,
-            build_explicit_delaunay2_with_topology, delaunay2_with_context,
+            build_delaunay2_from_cells, build_delaunay2_with_data, build_delaunay2_with_topology,
+            build_toroidal_delaunay2, generate_delaunay2,
         };
         pub use crate::geometry::operations::TriangulationOps;
         pub use crate::geometry::traits::{TriangulationMut, TriangulationQuery};

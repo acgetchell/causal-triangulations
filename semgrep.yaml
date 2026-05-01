@@ -1,0 +1,318 @@
+---
+# Repository-owned Semgrep rules.
+#
+# Keep this file small and project-specific. Broad default/community rules have
+# been noisy for Rust libraries and duplicate CodeQL, cargo-audit, Clippy, Ruff,
+# and ShellCheck coverage.
+
+rules:
+  - id: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    languages:
+      - rust
+    severity: WARNING
+    message: "Use log macros for production diagnostics instead of stdout/stderr macros."
+    metadata:
+      category: maintainability
+      rationale: "Runtime diagnostics should be filterable through log/env_logger."
+    paths:
+      include:
+        - "/src/**/*.rs"
+      exclude:
+        - "/tests/**"
+        - "/examples/**"
+        - "/benches/**"
+    patterns:
+      - pattern-either:
+          - pattern: println!(...)
+          - pattern: eprintln!(...)
+      - pattern-not-inside: |
+          mod tests {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          fn $FUNC(...) {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          fn $FUNC(...) {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          impl $TYPE {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          impl $TYPE {
+              ...
+          }
+
+  - id: causal-triangulations.rust.no-env-gated-stdio-diagnostics
+    languages:
+      - rust
+    severity: WARNING
+    message: "Environment-gated diagnostics should use log macros instead of stdio macros."
+    metadata:
+      category: maintainability
+      rationale: "Debug hooks should remain filterable through log/env_logger."
+    paths:
+      include:
+        - "/src/**/*.rs"
+    pattern-either:
+      - pattern: |
+          if std::env::var_os($NAME).is_some() {
+              ...
+              println!(...);
+              ...
+          }
+      - pattern: |
+          if std::env::var_os($NAME).is_some() {
+              ...
+              eprintln!(...);
+              ...
+          }
+      - pattern: |
+          if env::var_os($NAME).is_some() {
+              ...
+              println!(...);
+              ...
+          }
+      - pattern: |
+          if env::var_os($NAME).is_some() {
+              ...
+              eprintln!(...);
+              ...
+          }
+
+  - id: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+    languages:
+      - rust
+    severity: WARNING
+    message: "Keep direct delaunay imports inside src/geometry; use CDT geometry abstractions elsewhere."
+    metadata:
+      category: architecture
+      rationale: >-
+        CDT physics should depend on the trait-based geometry layer rather than
+        the concrete delaunay backend.
+    paths:
+      include:
+        - "/src/**/*.rs"
+      exclude:
+        - "/src/geometry/**/*.rs"
+    pattern: use delaunay::$PATH;
+
+  - id: causal-triangulations.rust.expect-requires-reason
+    languages:
+      - rust
+    severity: WARNING
+    message: 'Add reason = "..." to #[expect(...)] so lint suppressions remain auditable.'
+    metadata:
+      category: maintainability
+      rationale: >-
+        Repository guidance prefers documented lint expectations over
+        unexplained suppressions.
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/**/*.rs"
+        - "/benches/**/*.rs"
+    patterns:
+      # Regex keeps this intentionally scoped to one-line `#[expect(...)]`
+      # attributes; multiline attributes remain a review concern.
+      - pattern-regex: '^\s*#\s*\[\s*expect\s*\([^\]\n]*\)\s*\]'
+      - pattern-not-regex: '\breason\s*='
+
+  - id: causal-triangulations.rust.no-box-dyn-error-in-src
+    languages:
+      - rust
+    severity: WARNING
+    message: "Use a typed error enum in production src/ instead of Box<dyn Error>, &dyn Error, or anyhow::Error."
+    metadata:
+      category: maintainability
+      rationale: >-
+        Public and production fallible paths should preserve typed error
+        contracts rather than erasing error shape behind dynamic errors.
+    paths:
+      include:
+        - "/src/**/*.rs"
+      exclude:
+        - "/tests/**"
+        - "/examples/**"
+        - "/benches/**"
+    patterns:
+      # Regex is deliberate here: Rust AST patterns over-match associated
+      # error types such as serde's `S::Error`; this rule is about exact
+      # dynamic-error spellings in production code.
+      - pattern-regex: >-
+          ^[ \t]*[^\n]*(\bBox\s*<\s*dyn\s+(std::error::)?Error\b|&\s*dyn\s+(std::error::)?Error\b|\banyhow::Error\b)
+      - pattern-not-regex: '^[ \t]*(//|///|/\*|\*)'
+      - pattern-not-inside: |
+          mod tests {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          fn $FUNC(...) {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          fn $FUNC(...) {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          impl $TYPE {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          impl $TYPE {
+              ...
+          }
+
+  - id: causal-triangulations.python.no-raw-exception-in-tests
+    languages:
+      - python
+    severity: WARNING
+    message: "Raise a specific exception type in Python tests instead of raw Exception."
+    metadata:
+      category: maintainability
+      rationale: "Typed exceptions make test failures and expected errors easier to diagnose."
+    paths:
+      include:
+        - "/scripts/tests/**/*.py"
+        - "/tests/semgrep/scripts/tests/**/*.py"
+    pattern: raise Exception(...)
+
+  - id: causal-triangulations.python.no-broad-exception
+    languages:
+      - python
+    severity: WARNING
+    message: "Catch a specific exception type instead of broad Exception."
+    metadata:
+      category: maintainability
+      rationale: >-
+        Python tooling should surface expected failure modes explicitly instead
+        of swallowing unrelated errors.
+    paths:
+      include:
+        - "/scripts/archive_changelog.py"
+        - "/scripts/benchmark_models.py"
+        - "/scripts/coverage_report.py"
+        - "/scripts/postprocess_changelog.py"
+        - "/scripts/subprocess_utils.py"
+        - "/scripts/tag_release.py"
+        - "/tests/semgrep/scripts/tests/**/*.py"
+    pattern-regex: '^\s*except\s+Exception\s*:'
+
+  - id: causal-triangulations.python.no-adhoc-completedprocess-mock
+    languages:
+      - python
+    severity: WARNING
+    message: "Use subprocess.CompletedProcess[str] instead of ad hoc Mock stdout/returncode objects."
+    metadata:
+      category: maintainability
+      rationale: >-
+        Command-wrapper tests should use the real subprocess result shape so
+        mocks stay aligned with production subprocess APIs.
+    paths:
+      include:
+        - "/tests/semgrep/scripts/tests/**/*.py"
+    pattern-either:
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  $PROC = Mock(...)
+                  ...
+                  $PROC.stdout = ...
+              - pattern: |
+                  $PROC = unittest.mock.Mock(...)
+                  ...
+                  $PROC.stdout = ...
+              - pattern: |
+                  $PROC = mock.Mock(...)
+                  ...
+                  $PROC.stdout = ...
+              - pattern: |
+                  $PROC = MagicMock(...)
+                  ...
+                  $PROC.stdout = ...
+              - pattern: |
+                  $PROC = unittest.mock.MagicMock(...)
+                  ...
+                  $PROC.stdout = ...
+              - pattern: |
+                  $PROC = mock.MagicMock(...)
+                  ...
+                  $PROC.stdout = ...
+      - patterns:
+          - pattern-either:
+              - pattern: |
+                  $PROC = Mock(...)
+                  ...
+                  $PROC.returncode = ...
+              - pattern: |
+                  $PROC = unittest.mock.Mock(...)
+                  ...
+                  $PROC.returncode = ...
+              - pattern: |
+                  $PROC = mock.Mock(...)
+                  ...
+                  $PROC.returncode = ...
+              - pattern: |
+                  $PROC = MagicMock(...)
+                  ...
+                  $PROC.returncode = ...
+              - pattern: |
+                  $PROC = unittest.mock.MagicMock(...)
+                  ...
+                  $PROC.returncode = ...
+              - pattern: |
+                  $PROC = mock.MagicMock(...)
+                  ...
+                  $PROC.returncode = ...
+
+  - id: causal-triangulations.python.no-untyped-defs-in-scripts
+    languages:
+      - python
+    severity: WARNING
+    message: "Add an explicit return annotation to script functions."
+    metadata:
+      category: maintainability
+      rationale: "Typed script helpers are easier for ty and reviewers to reason about."
+    paths:
+      include:
+        - "/scripts/archive_changelog.py"
+        - "/scripts/benchmark_models.py"
+        - "/scripts/coverage_report.py"
+        - "/scripts/postprocess_changelog.py"
+        - "/scripts/subprocess_utils.py"
+        - "/scripts/tag_release.py"
+        - "/tests/semgrep/scripts/tests/**/*.py"
+    # Regex catches obvious unannotated definitions while avoiding a custom
+    # Python parser rule that would duplicate ty.
+    pattern-regex: '^( {0,4}|\t)(async\s+)?def\s+[A-Za-z_][A-Za-z0-9_]*\([^#\n]*\)\s*:'

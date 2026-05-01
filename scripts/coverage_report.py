@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Utility for summarizing Tarpaulin coverage results.
+Utility for summarizing cargo-llvm-cov Cobertura coverage results.
 
-The script expects a JSON report produced by `cargo tarpaulin --out Json`
-(Default location: `tarpaulin-report.json`). It prints all files that have
-coverable lines, sorted by ascending coverage percentage. Entries can be
-filtered by a path prefix so you can focus on application code (e.g. `src/`).
+The script expects a Cobertura XML report produced by `just coverage-ci`
+(Default location: `coverage/cobertura.xml`). It prints all files that have
+coverable lines, sorted by ascending coverage percentage. Entries can be filtered
+by a path prefix so you can focus on application code (e.g. `src/`).
 
 Example usage (run from repo root):
 
@@ -16,15 +16,15 @@ Example usage (run from repo root):
 from __future__ import annotations
 
 import argparse
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING
+from xml.etree import ElementTree as ET
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-DEFAULT_REPORT = Path("tarpaulin-report.json")
+DEFAULT_REPORT = Path("coverage/cobertura.xml")
 
 
 @dataclass(frozen=True)
@@ -55,12 +55,12 @@ def parse_args() -> argparse.Namespace:
         argparse.Namespace: Parsed arguments including report path, prefix filter,
             result limit, and sort order flag.
     """
-    parser = argparse.ArgumentParser(description="Summarize Tarpaulin JSON coverage report.")
+    parser = argparse.ArgumentParser(description="Summarize Cobertura XML coverage report.")
     parser.add_argument(
         "--report",
         type=Path,
         default=DEFAULT_REPORT,
-        help="Path to tarpaulin JSON report (default: %(default)s).",
+        help="Path to Cobertura XML report (default: %(default)s).",
     )
     parser.add_argument(
         "--prefix",
@@ -81,15 +81,15 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_report(report_path: Path) -> dict[str, Any]:
+def load_report(report_path: Path) -> ET.Element:
     """
-    Load and parse the Tarpaulin coverage report from disk.
+    Load and parse the Cobertura coverage report from disk.
 
     Args:
-        report_path (Path): Path to the Tarpaulin JSON coverage report.
+        report_path (Path): Path to the Cobertura XML coverage report.
 
     Returns:
-        dict[str, Any]: Parsed JSON payload describing coverage information.
+        ET.Element: Parsed XML root describing coverage information.
 
     Raises:
         SystemExit: If the report file does not exist.
@@ -97,35 +97,34 @@ def load_report(report_path: Path) -> dict[str, Any]:
     if not report_path.is_file():
         raise SystemExit(f"Coverage report not found: {report_path}")
 
-    with report_path.open("r", encoding="utf-8") as handle:
-        data: object = json.load(handle)
-
-    if not isinstance(data, dict):
-        raise SystemExit(f"Coverage report root must be a JSON object: {report_path}")
-
-    return cast("dict[str, Any]", data)
+    try:
+        return ET.parse(report_path).getroot()  # noqa: S314 - local cargo-llvm-cov report.
+    except ET.ParseError as exc:
+        raise SystemExit(f"Coverage report must be valid XML: {report_path}") from exc
 
 
-def coverage_entries(data: dict) -> Iterable[CoverageEntry]:
+def coverage_entries(root: ET.Element) -> Iterable[CoverageEntry]:
     """
-    Iterate over coverage entries extracted from Tarpaulin JSON data.
+    Iterate over coverage entries extracted from Cobertura XML data.
 
     Args:
-        data (dict): Parsed JSON representation of the Tarpaulin report.
+        root (ET.Element): Parsed Cobertura XML root.
 
     Yields:
         CoverageEntry: Coverage details for each file with coverable lines.
     """
-    files = data.get("files", [])
-    for entry in files:
-        coverable = entry.get("coverable", 0)
-        covered = entry.get("covered", 0)
-        if not coverable:
-            continue
-        raw_path = entry.get("path")
+    for class_element in root.findall(".//class"):
+        raw_path = class_element.get("filename")
         if not raw_path:
             continue
-        path = Path(*raw_path) if isinstance(raw_path, (list, tuple)) else Path(raw_path)
+
+        lines = class_element.findall("./lines/line")
+        coverable = len(lines)
+        if not coverable:
+            continue
+
+        covered = sum(1 for line in lines if int(line.get("hits", "0")) > 0)
+        path = Path(raw_path)
         coverage = (covered / coverable) * 100
         yield CoverageEntry(coverage=coverage, coverable=coverable, covered=covered, path=path)
 

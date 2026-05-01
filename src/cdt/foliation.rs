@@ -10,7 +10,7 @@
 //! CGAL's `vertex->info()` used in CDT-plusplus.  The `Foliation` struct
 //! tracks only aggregate bookkeeping (per-slice counts and total slices).
 
-use std::fmt;
+use std::{error::Error, fmt};
 
 /// Classification of an edge
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -287,7 +287,7 @@ impl fmt::Display for FoliationError {
     }
 }
 
-impl std::error::Error for FoliationError {}
+impl Error for FoliationError {}
 
 /// Per-slice bookkeeping for a CDT triangulation.
 ///

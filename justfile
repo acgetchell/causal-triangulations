@@ -6,11 +6,29 @@
 # Use bash with strict error handling for all recipes
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+cargo_llvm_cov_version := "0.8.5"
+
+# Common cargo-llvm-cov arguments for all coverage runs.
+# Excludes benches/examples from reports while allowing integration tests to
+# exercise library code.
+_coverage_base_args := '''--ignore-filename-regex '(^|/)(benches|examples)/' \
+  --workspace --lib --tests \
+  --verbose'''
+
 # Internal helpers: ensure external tooling is installed
 _ensure-actionlint:
     #!/usr/bin/env bash
     set -euo pipefail
     command -v actionlint >/dev/null || { echo "❌ 'actionlint' not found. See 'just setup' or https://github.com/rhysd/actionlint"; exit 1; }
+
+_ensure-cargo-llvm-cov:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v cargo-llvm-cov >/dev/null; then
+        echo "❌ 'cargo-llvm-cov' not found. See 'just setup-tools' or install:"
+        echo "   cargo install --locked cargo-llvm-cov --version {{cargo_llvm_cov_version}}"
+        exit 1
+    fi
 
 _ensure-jq:
     #!/usr/bin/env bash
@@ -95,12 +113,16 @@ build:
 build-release:
     cargo build --release
 
-# Changelog management
-changelog: _ensure-uv _ensure-git-cliff
-    uv run changelog-utils generate
+# Changelog management (git-cliff + post-processing + archiving)
+changelog: _ensure-git-cliff python-sync
+    #!/usr/bin/env bash
+    set -euo pipefail
+    git-cliff -o CHANGELOG.md
+    uv run postprocess-changelog
+    uv run archive-changelog
 
-changelog-tag version: _ensure-uv
-    uv run changelog-utils tag {{version}}
+changelog-tag version: python-sync
+    uv run tag-release {{version}}
 
 changelog-update: changelog
     @echo "📝 Changelog updated successfully!"
@@ -128,7 +150,7 @@ ci-baseline tag="ci":
 # Clean build artifacts
 clean:
     cargo clean
-    rm -rf target/tarpaulin
+    rm -rf target/llvm-cov
     rm -rf coverage_report
     rm -rf coverage
 
@@ -141,13 +163,15 @@ commit-check: check test-all test-release bench-compile
     @echo "🚀 Ready to commit! All checks passed."
 
 # Coverage analysis for local development (HTML output)
-coverage:
-    cargo tarpaulin --exclude-files 'benches/**' --exclude-files 'examples/**' --exclude-files 'tests/**' --out Html --output-dir target/tarpaulin
-    @echo "📊 Coverage report generated: target/tarpaulin/tarpaulin-report.html"
+coverage: _ensure-cargo-llvm-cov
+    mkdir -p target/llvm-cov
+    cargo llvm-cov {{_coverage_base_args}} --html --output-dir target/llvm-cov
+    @echo "📊 Coverage report generated: target/llvm-cov/html/index.html"
 
-# Coverage analysis for CI (XML output for codecov/codacy)
-coverage-ci:
-    cargo tarpaulin --exclude-files 'benches/**' --exclude-files 'examples/**' --exclude-files 'tests/**' --out Xml --output-dir coverage
+# Coverage analysis for CI (Cobertura XML output for codecov/codacy)
+coverage-ci: _ensure-cargo-llvm-cov
+    mkdir -p coverage
+    cargo llvm-cov {{_coverage_base_args}} --cobertura --output-path coverage/cobertura.xml
 
 coverage-report *args: _ensure-uv
     uv run coverage_report {{args}}
@@ -214,6 +238,10 @@ help-workflows:
     @echo "  just changelog            # Generate/update CHANGELOG.md"
     @echo "  just changelog-tag <ver>  # Create git tag with changelog content"
     @echo ""
+    @echo "Static Analysis:"
+    @echo "  just semgrep             # Run repository-owned Semgrep rules"
+    @echo "  just semgrep-test        # Test repository-owned Semgrep rules"
+    @echo ""
     @echo "Running:"
     @echo "  just run -- <args>  # Run with custom arguments"
     @echo "  just run-example    # Run with example arguments"
@@ -224,8 +252,8 @@ help-workflows:
 # All linting: code + documentation + configuration
 lint: lint-code lint-docs lint-config
 
-# Code linting: Rust (fmt-check, clippy, docs) + Python (ruff, ty) + Shell scripts
-lint-code: fmt-check clippy doc-check python-lint shell-lint
+# Code linting: Rust (fmt-check, clippy, docs, Semgrep) + Python (ruff, ty) + Shell scripts
+lint-code: fmt-check clippy doc-check semgrep semgrep-test python-lint shell-lint
 
 # Configuration validation: JSON, TOML, YAML, GitHub Actions workflows
 lint-config: validate-json toml-lint toml-fmt-check yaml-lint action-lint
@@ -287,6 +315,9 @@ perf-report file="": _ensure-uv
 perf-trends days="7": _ensure-uv
     uv run performance-analysis --trends {{days}}
 
+python-sync: _ensure-uv
+    uv sync --group dev
+
 python-check: _ensure-uv
     uv run ruff format --check scripts/
     uv run ruff check scripts/
@@ -301,6 +332,17 @@ python-lint: python-check
 
 python-typecheck: _ensure-uv
     uv run ty check scripts/
+
+# Repository-owned Semgrep rules for project-specific diagnostics.
+semgrep: _ensure-uv
+    uv run semgrep --error --strict --timeout 30 --config semgrep.yaml .
+
+semgrep-test: _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd tests/semgrep
+    uv run semgrep scan --test --strict --config ../../semgrep.yaml src/project_rules/rust_style.rs
+    uv run semgrep scan --test --strict --config ../../semgrep.yaml scripts/tests/python_exceptions.py
 
 # Running the binary
 run *args:
@@ -373,7 +415,7 @@ setup-tools:
         else
             echo "Install required tools via your system package manager, or ensure they are on PATH."
         fi
-        echo "Required tools: uv, jq, taplo, yamllint, shfmt, shellcheck, actionlint, git-cliff, dprint, typos"
+    echo "Required tools: uv, jq, taplo, yamllint, shfmt, shellcheck, actionlint, git-cliff, dprint, typos, cargo-llvm-cov"
         echo ""
     fi
 
@@ -383,6 +425,7 @@ setup-tools:
         exit 1
     fi
     rustup component add clippy rustfmt rust-docs rust-src
+    rustup component add llvm-tools-preview
     echo ""
 
     echo "Ensuring Node/prettier (used by yaml-fix)..."
@@ -424,22 +467,18 @@ setup-tools:
         echo "  ✓ git-cliff ${git_cliff_version}"
     fi
 
-    if ! have cargo-tarpaulin; then
-        if [[ "$os" == "Linux" ]]; then
-            echo "  ⏳ Installing cargo-tarpaulin (cargo)..."
-            cargo install --locked cargo-tarpaulin
-        else
-            echo "  ⚠️  Skipping cargo-tarpaulin install on $os (coverage is typically Linux-only)"
-        fi
+    if ! have cargo-llvm-cov; then
+        echo "  ⏳ Installing cargo-llvm-cov {{cargo_llvm_cov_version}} (cargo)..."
+        cargo install --locked cargo-llvm-cov --version {{cargo_llvm_cov_version}}
     else
-        echo "  ✓ cargo-tarpaulin"
+        echo "  ✓ cargo-llvm-cov"
     fi
 
     echo ""
     echo "Verifying required commands are available..."
     missing=0
 
-    cmds=(uv jq taplo yamllint shfmt shellcheck actionlint git-cliff dprint typos)
+    cmds=(uv jq taplo yamllint shfmt shellcheck actionlint git-cliff dprint typos cargo-llvm-cov)
 
     # prettier (or npx as fallback) is required by the yaml-fix recipe
     if ! have prettier && ! have npx; then
@@ -450,10 +489,6 @@ setup-tools:
     else
         echo "  ✓ npx (prettier via npx)"
     fi
-    if [[ "$os" == "Linux" ]]; then
-        cmds+=(cargo-tarpaulin)
-    fi
-
     for cmd in "${cmds[@]}"; do
         if have "$cmd"; then
             echo "  ✓ $cmd"
@@ -676,4 +711,3 @@ yaml-lint: _ensure-yamllint
     else
         echo "No YAML files found to lint."
     fi
-

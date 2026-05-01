@@ -21,10 +21,11 @@ jobs:
     name: Code Coverage
     runs-on: ubuntu-latest
     env:
-      TARPAULIN_VERSION: "0.32.8"
+      CARGO_LLVM_COV_VERSION: "0.8.5"
+      JUST_VERSION: "1.50.0"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0 # Needed for codecov to analyze diff
 
@@ -34,19 +35,33 @@ jobs:
           cache: true
           # toolchain, components, etc. are specified in rust-toolchain.toml
 
-      - name: Cache tarpaulin
+      - name: Install LLVM coverage tools
+        run: rustup component add llvm-tools-preview
+
+      - name: Cache cargo-llvm-cov
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: ~/.cargo/bin/cargo-tarpaulin
-          key: tarpaulin-${{ runner.os }}-${{ env.TARPAULIN_VERSION }}
+          path: ~/.cargo/bin/cargo-llvm-cov
+          key: cargo-llvm-cov-${{ runner.os }}-${{ env.CARGO_LLVM_COV_VERSION }}
           restore-keys: |
-            tarpaulin-${{ runner.os }}-
+            cargo-llvm-cov-${{ runner.os }}-
 
-      - name: Install tarpaulin
+      - name: Install cargo-llvm-cov
         run: |
-          if ! command -v cargo-tarpaulin &> /dev/null; then
-            cargo install cargo-tarpaulin --locked --version "${TARPAULIN_VERSION}"
+          installed_version=""
+          if command -v cargo-llvm-cov &> /dev/null; then
+            installed_version="$(cargo llvm-cov --version)"
+            installed_version="${installed_version#cargo-llvm-cov }"
           fi
+
+          if [ "${installed_version}" != "${CARGO_LLVM_COV_VERSION}" ]; then
+            cargo install cargo-llvm-cov --locked --version "${CARGO_LLVM_COV_VERSION}"
+          fi
+
+      - name: Install just
+        uses: taiki-e/install-action@b651345a718c8f44efa2460560b3dbf29cbd7ee1 # v2.75.26
+        with:
+          tool: just@${{ env.JUST_VERSION }}
 
       - name: Run coverage
         run: |
@@ -54,28 +69,10 @@ jobs:
           mkdir -p coverage
           chmod 755 coverage
 
-          echo "::debug::Current directory: $(pwd)"
-          echo "::debug::Coverage directory permissions: $(ls -ld coverage)"
-          # Tarpaulin configuration (explicit arguments):
-          # - XML output: --out Xml
-          # - Output directory: --output-dir coverage
-          # - Exclusions: --exclude-files "benches/*" "examples/*"
-          # - All features: --all-features
-          # - Workspace: --workspace
-          # - Timeout: --timeout 120
-          # - Verbose: --verbose
-          # - Implicit test threads: --implicit-test-threads
-          echo "::group::Running tarpaulin"
-          # Use explicit arguments for reliability (config file approach has issues)
-          cargo tarpaulin \
-            --out Xml \
-            --output-dir coverage \
-            --exclude-files "benches/*" "examples/*" \
-            --all-features \
-            --workspace \
-            --timeout 120 \
-            --verbose \
-            --implicit-test-threads
+          echo "::group::Running cargo-llvm-cov"
+          # Use just coverage-ci for single source of truth.
+          # Configuration is maintained in justfile to avoid duplication.
+          just coverage-ci
           echo "::endgroup::"
 
           # Detailed sanity check: verify coverage report was generated
@@ -90,15 +87,50 @@ jobs:
           find . -name "*cobertura*" -type f -ls 2>/dev/null || echo "No cobertura files found"
 
           if [ ! -f coverage/cobertura.xml ]; then
-            echo "::error::coverage/cobertura.xml not found. Tarpaulin failed to generate XML output."
-            echo "::error::Check tarpaulin logs above for errors."
+            echo "::error::coverage/cobertura.xml not found. cargo-llvm-cov failed to generate XML output."
+            echo "::error::Check cargo-llvm-cov logs above for errors."
             exit 2
           else
-            echo "::notice::Coverage report generated successfully: $(wc -l < coverage/cobertura.xml) lines"
+            coverage_bytes=$(wc -c < coverage/cobertura.xml)
+            coverage_newlines=$(wc -l < coverage/cobertura.xml)
+            coverage_lines_covered=$(
+              grep -oE 'lines-covered="[0-9]+"' coverage/cobertura.xml \
+                | head -n1 \
+                | cut -d'"' -f2 || true
+            )
+            coverage_lines_valid=$(
+              grep -oE 'lines-valid="[0-9]+"' coverage/cobertura.xml \
+                | head -n1 \
+                | cut -d'"' -f2 || true
+            )
+            coverage_line_rate=$(
+              grep -oE 'line-rate="[0-9.]+"' coverage/cobertura.xml \
+                | head -n1 \
+                | cut -d'"' -f2 || true
+            )
+
+            if [ -n "${coverage_lines_covered}" ] \
+              && [ -n "${coverage_lines_valid}" ] \
+              && [ -n "${coverage_line_rate}" ]; then
+              echo "::notice::Coverage report generated successfully:"
+              echo "::notice::  bytes=${coverage_bytes}, xml_newlines=${coverage_newlines}"
+              echo "::notice::  covered=${coverage_lines_covered}, valid=${coverage_lines_valid}"
+              echo "::notice::  rate=${coverage_line_rate}"
+            else
+              echo "::warning::Coverage report generated (${coverage_bytes} bytes),"
+              echo "::warning::  could not parse Cobertura metrics; XML newlines=${coverage_newlines}"
+            fi
           fi
-          # Sanity: ensure benches/examples aren't present (defense-in-depth with .codecov.yml)
-          if rg -n '(^|/)(benches|examples)/' coverage/cobertura.xml; then
-            echo "::warning::benches/ or examples/ paths detected in coverage report"
+
+          # Sanity: ensure benches/examples aren't present (defense-in-depth with .codecov.yml).
+          if command -v rg >/dev/null 2>&1; then
+            if rg -n '(^|/)(benches|examples)/' coverage/cobertura.xml; then
+              echo "::warning::benches/ or examples/ paths detected in coverage report"
+            fi
+          else
+            if grep -nE '(^|/)(benches|examples)/' coverage/cobertura.xml; then
+              echo "::warning::benches/ or examples/ paths detected in coverage report"
+            fi
           fi
           echo "::endgroup::"
         env:

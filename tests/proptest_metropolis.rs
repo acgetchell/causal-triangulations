@@ -2,11 +2,12 @@
 //! Property-based tests for CDT Metropolis integration.
 
 use causal_triangulations::prelude::simulation::*;
+use causal_triangulations::prelude::triangulation::CdtTriangulation2D;
 use markov_chain_monte_carlo::Target;
 use proptest::prelude::*;
 
 /// Shared triangulation created once (fixed seed, cheap).
-fn test_triangulation() -> causal_triangulations::geometry::CdtTriangulation2D {
+fn test_triangulation() -> CdtTriangulation2D {
     CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Fixed-seed triangulation")
 }
 

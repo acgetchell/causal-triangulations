@@ -11,7 +11,7 @@ use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
 };
 use crate::geometry::generators::{
-    build_delaunay2_with_data, build_explicit_delaunay2_toroidal, delaunay2_with_context,
+    build_delaunay2_with_data, build_toroidal_delaunay2, generate_delaunay2,
 };
 use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
 use crate::util::f64_band_to_u32;
@@ -105,15 +105,23 @@ pub enum SimulationEvent {
 impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// Create new CDT triangulation with open boundary topology.
     pub fn new(geometry: B, time_slices: u32, dimension: u8) -> Self {
-        Self::with_topology(geometry, time_slices, dimension, CdtTopology::OpenBoundary)
+        Self::wrap_unchecked(geometry, time_slices, dimension, CdtTopology::OpenBoundary)
     }
 
     /// Create new CDT triangulation with explicit topology.
     ///
     /// Wraps an existing geometry backend and tags it with [`CdtTopology`].
-    /// The backend itself is not modified — pass a backend whose Euler
-    /// characteristic matches the supplied topology, otherwise
-    /// [`Self::validate_topology`] will reject it.
+    /// The backend itself is not modified; pass a backend whose Euler
+    /// characteristic and metadata invariants match the supplied topology,
+    /// otherwise this constructor or [`Self::validate_topology`] will reject it.
+    ///
+    /// Toroidal triangulations must use at least three time slices so the
+    /// periodic neighbors `t - 1` and `t + 1` remain distinct.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidTriangulationMetadata`] when the requested
+    /// topology metadata is internally inconsistent.
     ///
     /// # Examples
     ///
@@ -129,17 +137,57 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// .expect("build labeled triangle");
     /// let backend = DelaunayBackend2D::from_triangulation(dt);
     ///
-    /// let tri = CdtTriangulation::with_topology(backend, 2, 2, CdtTopology::OpenBoundary);
+    /// let tri = CdtTriangulation::with_topology(backend, 2, 2, CdtTopology::OpenBoundary)
+    ///     .expect("open-boundary metadata is valid");
     /// assert!(matches!(tri.metadata().topology, CdtTopology::OpenBoundary));
     /// assert_eq!(tri.time_slices(), 2);
     /// assert_eq!(tri.dimension(), 2);
+    /// ```
+    ///
+    /// ```rust
+    /// use causal_triangulations::prelude::errors::CdtError;
+    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ])
+    /// .expect("build labeled triangle");
+    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    ///
+    /// let err = CdtTriangulation::with_topology(backend, 2, 3, CdtTopology::Toroidal)
+    ///     .expect_err("toroidal metadata requires at least three time slices");
+    /// assert!(matches!(
+    ///     err,
+    ///     CdtError::InvalidTriangulationMetadata {
+    ///         field,
+    ///         topology,
+    ///         provided_value,
+    ///         expected,
+    ///     } if field == "timeslices"
+    ///         && topology == "toroidal"
+    ///         && provided_value == "2"
+    ///         && expected == "≥ 3"
+    /// ));
     /// ```
     pub fn with_topology(
         geometry: B,
         time_slices: u32,
         dimension: u8,
         topology: CdtTopology,
-    ) -> Self {
+    ) -> CdtResult<Self> {
+        Self::check_time_slices(topology, time_slices)?;
+        Ok(Self::wrap_unchecked(
+            geometry,
+            time_slices,
+            dimension,
+            topology,
+        ))
+    }
+
+    fn wrap_unchecked(geometry: B, time_slices: u32, dimension: u8, topology: CdtTopology) -> Self {
         let vertex_count = geometry.vertex_count();
         let creation_event = SimulationEvent::Created {
             vertex_count,
@@ -161,6 +209,19 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             foliation: None,
             foliation_synced_at_modification: None,
         }
+    }
+
+    fn check_time_slices(topology: CdtTopology, time_slices: u32) -> CdtResult<()> {
+        if matches!(topology, CdtTopology::Toroidal) && time_slices < 3 {
+            return Err(CdtError::InvalidTriangulationMetadata {
+                field: "timeslices".to_string(),
+                topology: "toroidal".to_string(),
+                provided_value: time_slices.to_string(),
+                expected: "≥ 3".to_string(),
+            });
+        }
+
+        Ok(())
     }
 
     /// Get immutable reference to underlying geometry
@@ -258,6 +319,8 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     pub fn validate_topology(&self) -> CdtResult<()> {
         let euler_char = self.geometry.euler_characteristic();
 
+        Self::check_time_slices(self.metadata.topology, self.metadata.time_slices)?;
+
         if self.dimension() == 2 {
             let expected = match self.metadata.topology {
                 // Open boundary: planar with boundary χ=1, closed surface χ=2
@@ -322,13 +385,43 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///
     /// If an existing foliation uses a different slice count, the foliation is
     /// cleared to avoid stale bookkeeping.
-    pub fn set_time_slices(&mut self, time_slices: u32) {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidTriangulationMetadata`] if the new slice
+    /// count would violate topology metadata invariants.
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::errors::CdtError;
+    /// use causal_triangulations::prelude::triangulation::CdtTriangulation;
+    ///
+    /// let mut tri = CdtTriangulation::from_toroidal_cdt(4, 3)
+    ///     .expect("build toroidal triangulation");
+    ///
+    /// let err = tri.set_time_slices(2).expect_err("T < 3 is invalid");
+    /// assert!(matches!(
+    ///     err,
+    ///     CdtError::InvalidTriangulationMetadata {
+    ///         field,
+    ///         topology,
+    ///         provided_value,
+    ///         expected,
+    ///     } if field == "timeslices"
+    ///         && topology == "toroidal"
+    ///         && provided_value == "2"
+    ///         && expected == "≥ 3"
+    /// ));
+    /// ```
+    pub fn set_time_slices(&mut self, time_slices: u32) -> CdtResult<()> {
+        Self::check_time_slices(self.metadata.topology, time_slices)?;
+
         if self.metadata.time_slices == time_slices {
-            return;
+            return Ok(());
         }
 
         self.apply_time_slices(time_slices);
         self.bump_modification_count();
+        Ok(())
     }
 
     /// Marks the triangulation metadata as modified.
@@ -823,7 +916,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             });
         }
 
-        let dt = delaunay2_with_context(vertices, (0.0, 10.0), None)?;
+        let dt = generate_delaunay2(vertices, (0.0, 10.0), None)?;
         let backend = DelaunayBackend2D::from_triangulation(dt);
 
         Ok(Self::new(backend, time_slices, dimension))
@@ -855,7 +948,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             });
         }
 
-        let dt = delaunay2_with_context(vertices, (0.0, 10.0), Some(seed))?;
+        let dt = generate_delaunay2(vertices, (0.0, 10.0), Some(seed))?;
         let backend = DelaunayBackend2D::from_triangulation(dt);
 
         Ok(Self::new(backend, time_slices, dimension))
@@ -1164,7 +1257,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// adjacent slices is split into one Up (2,1) and one Down (1,2) triangle.
     ///
     /// The triangulation is built by explicit combinatorial connectivity via
-    /// [`crate::geometry::generators::build_explicit_delaunay2_toroidal`],
+    /// [`crate::geometry::generators::build_toroidal_delaunay2`],
     /// which sets `TopologyGuarantee::Pseudomanifold` and
     /// `GlobalTopology::Toroidal` so the underlying validator expects χ = 0.
     ///
@@ -1270,20 +1363,17 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
 
         let domain = [1.0_f64, 1.0_f64];
-        let dt =
-            build_explicit_delaunay2_toroidal(&vertex_specs, &cells, domain).map_err(
-                |e| match e {
-                    CdtError::DelaunayGenerationFailed {
-                        underlying_error, ..
-                    } => CdtError::DelaunayGenerationFailed {
-                        vertex_count: total_vertices,
-                        coordinate_range: (0.0, 1.0),
-                        attempt: 1,
-                        underlying_error,
-                    },
-                    other => other,
-                },
-            )?;
+        let dt = build_toroidal_delaunay2(&vertex_specs, &cells, domain).map_err(|e| match e {
+            CdtError::DelaunayGenerationFailed {
+                underlying_error, ..
+            } => CdtError::DelaunayGenerationFailed {
+                vertex_count: total_vertices,
+                coordinate_range: (0.0, 1.0),
+                attempt: 1,
+                underlying_error,
+            },
+            other => other,
+        })?;
 
         let backend = DelaunayBackend2D::from_triangulation(dt);
         if backend.vertex_count() != total_vertices as usize {
@@ -1303,7 +1393,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let foliation =
             Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
 
-        let mut tri = Self::with_topology(backend, num_slices, 2, CdtTopology::Toroidal);
+        let mut tri = Self::with_topology(backend, num_slices, 2, CdtTopology::Toroidal)?;
         tri.foliation = Some(foliation);
         tri.mark_foliation_synchronized();
 
@@ -2038,7 +2128,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 mod tests {
     use super::*;
     use std::thread;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn test_from_random_points() {
@@ -2541,7 +2631,7 @@ mod tests {
 
     #[test]
     fn test_metadata_timestamps() {
-        let start_time = std::time::Instant::now();
+        let start_time = Instant::now();
 
         let mut triangulation =
             CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
@@ -3817,13 +3907,79 @@ mod tests {
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
             .expect("Should build labeled triangle");
         let backend = DelaunayBackend2D::from_triangulation(dt);
-        let tri = CdtTriangulation::with_topology(backend, 2, 2, CdtTopology::Toroidal);
+        let tri = CdtTriangulation::with_topology(backend, 3, 2, CdtTopology::Toroidal)
+            .expect("valid toroidal metadata");
 
         let result = tri.validate_topology();
         assert!(matches!(
             result,
             Err(CdtError::ValidationFailed { ref check, ref detail })
                 if check == "topology" && detail.contains("toroidal (expected χ=0)")
+        ));
+    }
+
+    #[test]
+    fn test_toroidal_rejects_few_slices() {
+        let mut tri = CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
+
+        let result = tri.set_time_slices(2);
+        assert!(matches!(
+            result,
+            Err(CdtError::InvalidTriangulationMetadata {
+                ref field,
+                ref topology,
+                ref provided_value,
+                ref expected,
+            }) if field == "timeslices"
+                && topology == "toroidal"
+                && provided_value == "2"
+                && expected == "≥ 3"
+        ));
+        assert_eq!(tri.time_slices(), 3);
+        assert!(tri.validate_topology().is_ok());
+    }
+
+    #[test]
+    fn test_toroidal_slice_check_not_dimension_gated() {
+        let mut tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)
+            .expect("create open-boundary triangulation");
+        tri.metadata.topology = CdtTopology::Toroidal;
+        tri.metadata.dimension = 3;
+        tri.metadata.time_slices = 2;
+
+        let result = tri.validate_topology();
+        assert!(matches!(
+            result,
+            Err(CdtError::InvalidTriangulationMetadata {
+                ref field,
+                ref topology,
+                ref provided_value,
+                ref expected,
+            }) if field == "timeslices"
+                && topology == "toroidal"
+                && provided_value == "2"
+                && expected == "≥ 3"
+        ));
+    }
+
+    #[test]
+    fn test_with_topology_rejects_few_toroidal_slices() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("Should build labeled triangle");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+
+        let result = CdtTriangulation::with_topology(backend, 2, 3, CdtTopology::Toroidal);
+        assert!(matches!(
+            result,
+            Err(CdtError::InvalidTriangulationMetadata {
+                ref field,
+                ref topology,
+                ref provided_value,
+                ref expected,
+            }) if field == "timeslices"
+                && topology == "toroidal"
+                && provided_value == "2"
+                && expected == "≥ 3"
         ));
     }
 }

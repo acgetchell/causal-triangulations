@@ -26,6 +26,7 @@ The `docs/dev/` directory contains the authoritative development guidance for th
 - **ALLOWED**: read‑only git commands (`git --no-pager status`, `git --no-pager diff`, `git --no-pager log`, `git --no-pager show`, `git --no-pager blame`)
 - **ALWAYS** use `git --no-pager` when reading git output
 - Suggest git commands that modify version control state for the user to run manually
+- When suggesting branch names, prefer `{type}/{issue}-descriptor-or-two`, e.g. `fix/307-topology-validation`, `perf/315-bench-profile`, or `doc/329-branch-guidance`. If an environment requires an owner/tool prefix, keep this structure after the prefix, e.g. `codex/fix/307-topology-validation`.
 
 ### GitHub CLI (`gh`)
 
@@ -175,6 +176,8 @@ docs/project.md
 ---
 
 ## Python
+
+Detailed Python guidance lives in `docs/dev/python.md`.
 
 - Use `uv run` for all Python scripts (never `python3` or `python` directly)
 - Use pytest for tests (not unittest)
