@@ -118,7 +118,7 @@ pub mod prelude {
     pub use crate::geometry::traits::TriangulationQuery;
 
     // Foliation / classification
-    pub use crate::cdt::foliation::{CellType, EdgeType, Foliation};
+    pub use crate::cdt::foliation::{CellType, EdgeType, Foliation, FoliationError};
 
     // Action
     pub use crate::cdt::action::{ActionConfig, compute_regge_action};
@@ -149,7 +149,8 @@ pub mod prelude {
     /// ```
     pub mod triangulation {
         pub use crate::CdtTriangulation;
-        pub use crate::cdt::foliation::{CellType, EdgeType, Foliation};
+        pub use crate::cdt::foliation::{CellType, EdgeType, Foliation, FoliationError};
+        pub use crate::config::CdtTopology;
         pub use crate::errors::{CdtError, CdtResult};
         pub use crate::geometry::traits::TriangulationQuery;
     }
@@ -162,7 +163,7 @@ pub mod prelude {
         pub use crate::cdt::metropolis::{
             CdtProposal, CdtTarget, MetropolisAlgorithm, MetropolisConfig,
         };
-        pub use crate::config::CdtConfig;
+        pub use crate::config::{CdtConfig, CdtTopology};
         pub use crate::errors::{CdtError, CdtResult};
     }
 
@@ -191,7 +192,10 @@ pub mod prelude {
             DelaunayBackend, DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
         };
         pub use crate::geometry::backends::mock::MockBackend;
-        pub use crate::geometry::generators::{build_delaunay2_with_data, delaunay2_with_context};
+        pub use crate::geometry::generators::{
+            build_delaunay2_with_data, build_explicit_delaunay2, build_explicit_delaunay2_toroidal,
+            build_explicit_delaunay2_with_topology, delaunay2_with_context,
+        };
         pub use crate::geometry::operations::TriangulationOps;
         pub use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
     }

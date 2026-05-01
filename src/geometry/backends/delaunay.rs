@@ -11,10 +11,10 @@ use crate::geometry::traits::{
     FlipResult, GeometryBackend, SubdivisionResult, TriangulationMut, TriangulationQuery,
 };
 use delaunay::core::DataType;
-use delaunay::core::delaunay_triangulation::DelaunayTriangulation;
 use delaunay::core::edge::EdgeKey;
-use delaunay::core::triangulation_data_structure::{CellKey, VertexKey};
+use delaunay::core::tds::{CellKey, VertexKey};
 use delaunay::geometry::kernel::AdaptiveKernel;
+use delaunay::triangulation::DelaunayTriangulation;
 
 /// Delaunay backend wrapping the delaunay crate's triangulation (f64 coordinates).
 ///
@@ -137,7 +137,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// underlying triangulation.
     ///
     /// This exposes the [`GlobalTopology`](delaunay::topology::traits::GlobalTopology)
-    /// metadata attached by [`DelaunayTriangulationBuilder`](delaunay::core::builder::DelaunayTriangulationBuilder) at construction time.
+    /// metadata attached by [`DelaunayTriangulationBuilder`](delaunay::triangulation::builder::DelaunayTriangulationBuilder) at construction time.
     #[must_use]
     pub const fn topology_kind(&self) -> delaunay::topology::traits::TopologyKind {
         self.dt.topology_kind()

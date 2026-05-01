@@ -70,11 +70,20 @@ pub enum CdtError {
         detail: String,
     },
     /// An edge violates the causal structure by spanning more than one time slice
+    /// (or, on toroidal topology, more than one *circular* slice step).
     CausalityViolation {
-        /// Time label of the first endpoint
+        /// Time label of the first endpoint.
         time_0: u32,
-        /// Time label of the second endpoint
+        /// Time label of the second endpoint.
         time_1: u32,
+        /// Topology-aware temporal step distance between the two labels.
+        ///
+        /// On `OpenBoundary` topology this equals `time_0.abs_diff(time_1)`.
+        /// On `Toroidal` topology it is the circular distance
+        /// `min(d, T − d)`, so the wrap-around edge between slice `T − 1`
+        /// and slice `0` reads as `1` rather than `T − 1`.  This is the
+        /// quantity that triggers the violation (`step_distance > 1`).
+        step_distance: u32,
     },
     /// MCMC framework error (e.g. NaN in log-probability)
     Mcmc(String),
@@ -139,12 +148,28 @@ impl fmt::Display for CdtError {
                 f,
                 "Backend mutation failed [{operation}] on {target}: {detail}"
             ),
-            Self::CausalityViolation { time_0, time_1 } => {
-                let dt = time_0.abs_diff(*time_1);
-                write!(
-                    f,
-                    "Causality violation: edge spans {dt} time slices (t={time_0} to t={time_1}), maximum allowed is 1"
-                )
+            Self::CausalityViolation {
+                time_0,
+                time_1,
+                step_distance,
+            } => {
+                let raw = time_0.abs_diff(*time_1);
+                if raw == *step_distance {
+                    write!(
+                        f,
+                        "Causality violation: edge spans {step_distance} time-slice steps \
+                         (t={time_0} to t={time_1}), maximum allowed is 1"
+                    )
+                } else {
+                    // Toroidal: the displayed step distance is the circular
+                    // distance, smaller than the raw label difference.
+                    write!(
+                        f,
+                        "Causality violation: edge spans {step_distance} time-slice steps \
+                         (t={time_0} to t={time_1}, |Δt|={raw} on the time circle), \
+                         maximum allowed is 1"
+                    )
+                }
             }
             Self::Mcmc(msg) => write!(f, "MCMC error: {msg}"),
         }
@@ -283,15 +308,33 @@ mod tests {
     }
 
     #[test]
-    fn test_causality_violation_error() {
+    fn test_causality_violation_open_boundary_error() {
+        // OpenBoundary topology: step_distance == |Δt|.
         let error = CdtError::CausalityViolation {
             time_0: 0,
             time_1: 3,
+            step_distance: 3,
         };
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Causality violation: edge spans 3 time slices (t=0 to t=3), maximum allowed is 1"
+            "Causality violation: edge spans 3 time-slice steps (t=0 to t=3), maximum allowed is 1"
+        );
+    }
+
+    #[test]
+    fn test_causality_violation_toroidal_error_reports_circular_distance() {
+        // Toroidal T=10, t0=0, t1=8: raw |Δt|=8 but circular step distance is 2.
+        let error = CdtError::CausalityViolation {
+            time_0: 0,
+            time_1: 8,
+            step_distance: 2,
+        };
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Causality violation: edge spans 2 time-slice steps \
+             (t=0 to t=8, |Δt|=8 on the time circle), maximum allowed is 1"
         );
     }
 

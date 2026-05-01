@@ -182,7 +182,7 @@ dependencies = [
  "num-traits",
  "predicates",
  "proptest",
- "rand 0.10.0",
+ "rand 0.10.1",
  "serde",
  "slotmap",
  "thiserror",
@@ -365,15 +365,15 @@ checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "delaunay"
-version = "0.7.5"
+version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a58590d6d7af7947ef0e6c996f9dbd4f6dbc32f395498866a94fd8f017204d23"
+checksum = "83544bc4bf3c674cbe8e6e2d79b404e47287a199152017e4f200c13a42fb2fdf"
 dependencies = [
  "arc-swap",
  "la-stack",
  "num-traits",
  "ordered-float",
- "rand 0.10.0",
+ "rand 0.10.1",
  "rustc-hash",
  "serde",
  "slotmap",
@@ -638,9 +638,9 @@ dependencies = [
 
 [[package]]
 name = "la-stack"
-version = "0.3.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f02154c3637bfc64d8aef80c1ff018cc38585c9f1568d0fd75bb2e4bc88cb5f3"
+checksum = "938f8e88a7405e62e3f32dbf8e5a438ddd25812c7e401123ae255b08598a6a3b"
 dependencies = [
  "num-bigint",
  "num-rational",
@@ -682,11 +682,11 @@ checksum = "5e5032e24019045c762d3c0f28f5b6b8bbf38563a65908389bf7978758920897"
 
 [[package]]
 name = "markov-chain-monte-carlo"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fe2cb27f6677a7b14f7ef0c1ea8fe41ad58c13879ba3d58dd86d220c09705ec"
+checksum = "1f82ee9ef87baf12919174ad11bf89ead3d57cfc34161278a8ba800eb9a978f2"
 dependencies = [
- "rand 0.10.0",
+ "rand 0.10.1",
 ]
 
 [[package]]
@@ -960,9 +960,9 @@ dependencies = [
 
 [[package]]
 name = "rand"
-version = "0.10.0"
+version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc266eb313df6c5c09c1c7b1fbe2510961e5bcd3add930c1e31f7ed9da0feff8"
+checksum = "d2e8e8bcc7961af1fdac401278c6a831614941f6164ee3bf4ce61b7edb162207"
 dependencies = [
  "chacha20",
  "getrandom 0.4.2",
@@ -1315,13 +1315,13 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.23.0"
+version = "1.23.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ac8b6f42ead25368cf5b098aeb3dc8a1a2c05a3eee8a9a1a68c640edbfc79d9"
+checksum = "ddd74a9687298c6858e9b88ec8935ec45d22e8fd5e6394fa1bd4e99a87789c76"
 dependencies = [
  "getrandom 0.4.2",
  "js-sys",
- "rand 0.10.0",
+ "rand 0.10.1",
  "serde_core",
  "wasm-bindgen",
 ]

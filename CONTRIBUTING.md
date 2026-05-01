@@ -36,7 +36,7 @@ Our community is built on the principles of:
 
 Before you begin, ensure you have:
 
-1. **Rust 1.94.0** (pinned via `rust-toolchain.toml` - automatically handled by rustup)
+1. **Rust 1.95.0** (pinned via `rust-toolchain.toml` - automatically handled by rustup)
 2. **Git** for version control
 3. **Just** (command runner): `cargo install just`
 
@@ -122,7 +122,7 @@ Before you begin, ensure you have:
 
 When you enter the project directory, `rustup` will automatically:
 
-- **Install the correct Rust version** (1.94.0) if you don't have it
+- **Install the correct Rust version** (1.95.0) if you don't have it
 - **Switch to the pinned version** for this project
 - **Install required components** (clippy, rustfmt, rust-docs, rust-src, rust-analyzer)
 - **Add cross-compilation targets** for supported platforms
@@ -137,7 +137,7 @@ When you enter the project directory, `rustup` will automatically:
 **First time in the project?** You'll see:
 
 ```text
-info: syncing channel updates for '1.94.0-<your-platform>'
+info: syncing channel updates for '1.95.0-<your-platform>'
 info: downloading component 'cargo'
 info: downloading component 'clippy'
 ...
@@ -239,7 +239,7 @@ just help-workflows  # Detailed workflow guidance
 ### Rust Code Style
 
 - **Edition**: Rust 2024
-- **MSRV**: Rust 1.94.0 (pinned in `rust-toolchain.toml`)
+- **MSRV**: Rust 1.95.0 (pinned in `rust-toolchain.toml`)
 - **Formatting**: Use `rustfmt` (configured in `rustfmt.toml`)
 - **Linting**: Strict clippy with warnings as errors
 
