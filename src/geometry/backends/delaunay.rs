@@ -23,8 +23,9 @@ use delaunay::geometry::point::Point;
 use delaunay::geometry::traits::coordinate::Coordinate;
 use delaunay::prelude::VertexBuilder;
 use delaunay::prelude::triangulation::flips::BistellarFlips;
-use delaunay::topology::traits::TopologyKind;
+use delaunay::topology::traits::{GlobalTopology, TopologyKind};
 use delaunay::triangulation::DelaunayTriangulation;
+use std::collections::HashMap;
 
 /// Delaunay backend wrapping the delaunay crate's triangulation (f64 coordinates).
 ///
@@ -38,6 +39,8 @@ use delaunay::triangulation::DelaunayTriangulation;
 pub struct DelaunayBackend<VertexData: DataType, CellData: DataType, const D: usize> {
     /// The underlying Delaunay triangulation from the delaunay crate
     dt: DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D>,
+    /// Interior 2D edge to one incident facet suitable for k=2 local queries.
+    interior_facets_by_edge: HashMap<EdgeKey, FacetHandle>,
 }
 
 /// Opaque handle for vertices in Delaunay backend
@@ -212,11 +215,18 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
 
     /// Finds the 2D facet handle corresponding to a live interior edge.
     fn interior_facet_for_edge(&self, edge: EdgeKey) -> Option<FacetHandle> {
-        if D != 2 {
-            return None;
-        }
+        self.interior_facets_by_edge.get(&edge).copied()
+    }
 
-        for (cell_key, cell) in self.dt.cells() {
+    /// Builds the 2D interior edge-facet lookup from current cell adjacency.
+    fn build_interior_facets_by_edge(
+        dt: &DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D>,
+    ) -> HashMap<EdgeKey, FacetHandle> {
+        let mut facets_by_edge = HashMap::new();
+        if D != 2 {
+            return facets_by_edge;
+        }
+        for (cell_key, cell) in dt.cells() {
             let vertices = cell.vertices();
             let Some(neighbors) = cell.neighbors() else {
                 continue;
@@ -237,14 +247,23 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
                 let Some(v1) = facet_vertices.next() else {
                     continue;
                 };
-                if facet_vertices.next().is_none() && EdgeKey::new(v0, v1) == edge {
-                    let facet_index = u8::try_from(facet_index).ok()?;
-                    return Some(FacetHandle::new(cell_key, facet_index));
+                if facet_vertices.next().is_none() {
+                    let Ok(facet_index) = u8::try_from(facet_index) else {
+                        continue;
+                    };
+                    facets_by_edge
+                        .entry(EdgeKey::new(v0, v1))
+                        .or_insert_with(|| FacetHandle::new(cell_key, facet_index));
                 }
             }
         }
 
-        None
+        facets_by_edge
+    }
+
+    /// Refreshes cached edge adjacency after a topology mutation succeeds.
+    fn rebuild_interior_facet_index(&mut self) {
+        self.interior_facets_by_edge = Self::build_interior_facets_by_edge(&self.dt);
     }
 
     /// Returns whether the keyed edge is present in the triangulation.
@@ -277,10 +296,14 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// assert_eq!(backend.vertex_count(), 3);
     /// ```
     #[must_use]
-    pub const fn from_triangulation(
+    pub fn from_triangulation(
         dt: DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D>,
     ) -> Self {
-        Self { dt }
+        let interior_facets_by_edge = Self::build_interior_facets_by_edge(&dt);
+        Self {
+            dt,
+            interior_facets_by_edge,
+        }
     }
 
     /// Access the underlying Delaunay triangulation (read-only)
@@ -334,7 +357,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// Returns the high-level topology kind (`Euclidean`, `Toroidal`, etc.) of the
     /// underlying triangulation.
     ///
-    /// This exposes the [`GlobalTopology`](delaunay::topology::traits::GlobalTopology)
+    /// This exposes the [`GlobalTopology`]
     /// metadata attached by [`DelaunayTriangulationBuilder`](delaunay::triangulation::builder::DelaunayTriangulationBuilder) at construction time.
     ///
     /// # Examples
@@ -354,6 +377,26 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     #[must_use]
     pub const fn topology_kind(&self) -> TopologyKind {
         self.dt.topology_kind()
+    }
+
+    /// Returns the toroidal fundamental domain for periodic triangulations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// let tri = CdtTriangulation::from_toroidal_cdt(3, 3).unwrap();
+    /// assert_eq!(tri.geometry().periodic_domain(), Some([1.0, 1.0]));
+    /// ```
+    #[must_use]
+    pub const fn periodic_domain(&self) -> Option<[f64; D]> {
+        match self.dt.global_topology() {
+            GlobalTopology::Toroidal { domain, .. } => Some(domain),
+            GlobalTopology::Euclidean | GlobalTopology::Spherical | GlobalTopology::Hyperbolic => {
+                None
+            }
+        }
     }
 
     /// Returns the vertex payload for `key`, if present.
@@ -742,6 +785,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
                 coordinates: coords.to_vec(),
                 detail: err.to_string(),
             })?;
+        self.rebuild_interior_facet_index();
         Ok(DelaunayVertexHandle { key })
     }
 
@@ -761,6 +805,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
                 target: format!("vertex {:?}", vertex.key),
                 detail: err.to_string(),
             })?;
+        self.rebuild_interior_facet_index();
         Ok(info
             .new_cells
             .iter()
@@ -811,6 +856,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
                 ),
                 detail: err.to_string(),
             })?;
+        self.rebuild_interior_facet_index();
         let inserted: Vec<_> = info.inserted_face_vertices.iter().copied().collect();
         let [v0, v1] = inserted.as_slice() else {
             return Err(DelaunayError::UnexpectedFlipOutput {
@@ -856,6 +902,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
                     target: format!("face {:?} at point {:?}", face.key, point),
                     detail: err.to_string(),
                 })?;
+        self.rebuild_interior_facet_index();
         let Some(&new_vertex) = info.inserted_face_vertices.first() else {
             return Err(DelaunayError::UnexpectedFlipOutput {
                 operation: "flip_k1_insert",
@@ -1574,6 +1621,37 @@ mod tests {
                 backend.face_count(),
             ),
             counts_before_noops
+        );
+    }
+
+    #[test]
+    fn test_interior_facet_cache_updates_after_edge_flip() {
+        let dt = build_delaunay2_from_cells(
+            &[
+                ([0.0, 0.0], 0),
+                ([1.0, 0.0], 0),
+                ([0.0, 1.0], 1),
+                ([1.0, 1.0], 1),
+            ],
+            &[vec![0, 1, 2], vec![1, 3, 2]],
+        )
+        .expect("explicit square should build");
+        let mut backend = DelaunayBackend::from_triangulation(dt);
+        assert_eq!(backend.interior_facets_by_edge.len(), 1);
+
+        let edge = backend
+            .edges()
+            .find(|edge| backend.can_flip_edge(edge))
+            .expect("square has one interior edge");
+        let old_edge = edge.key;
+        let flip = backend.flip_edge(edge).expect("interior edge should flip");
+
+        assert_eq!(backend.interior_facets_by_edge.len(), 1);
+        assert!(!backend.interior_facets_by_edge.contains_key(&old_edge));
+        assert!(
+            backend
+                .interior_facets_by_edge
+                .contains_key(&flip.new_edge.key)
         );
     }
 

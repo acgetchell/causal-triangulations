@@ -23,6 +23,7 @@ Returned by each `attempt_*` method:
 - `CausalityViolation` — rejected because the move would break causal layering
 - `GeometricViolation` — rejected because no geometrically valid candidate move exists
 - `Rejected(CdtError)` — rejected for another reason, with details; backend mutation failures are reported as `CdtError::BackendMutationFailed` rather than collapsed into `GeometricViolation`
+- `HardFailure(CdtError)` — the move already mutated geometry but then failed a required post-mutation synchronization step; this is distinct from `Rejected(CdtError)`, which reports reversible rejection reasons before an accepted mutation is finalized. See the `MoveResult` enum and `HardFailure(CdtError)` variant in `src/cdt/ergodic_moves.rs`.
 
 ### `MoveStatistics`
 

@@ -358,7 +358,7 @@ impl ErgodicsSystem {
                 geometry.set_vertex_data_by_key(subdivision.new_vertex.vertex_key(), Some(label))
             };
             if let Err(err) = set_label {
-                return MoveResult::Rejected(CdtError::BackendMutationFailed {
+                return MoveResult::HardFailure(CdtError::BackendMutationFailed {
                     operation: "set_vertex_data_by_key".to_string(),
                     target: format!("vertex {:?}", subdivision.new_vertex.vertex_key()),
                     detail: err.to_string(),
@@ -752,17 +752,60 @@ fn centroid(triangulation: &CdtTriangulation2D, face: &DelaunayFaceHandle) -> Op
         return None;
     }
 
-    let mut centroid = [0.0, 0.0];
+    let mut coords = Vec::with_capacity(3);
     for vertex in vertices {
-        let coords = triangulation.geometry().vertex_coordinates(&vertex).ok()?;
-        let [x, y] = coords.as_slice() else {
+        let vertex_coords = triangulation.geometry().vertex_coordinates(&vertex).ok()?;
+        let [x, y] = vertex_coords.as_slice() else {
             return None;
         };
-        centroid[0] += *x;
-        centroid[1] += *y;
+        coords.push([*x, *y]);
+    }
+
+    if matches!(triangulation.metadata().topology, CdtTopology::Toroidal) {
+        return toroidal_centroid(&coords, triangulation.geometry().periodic_domain()?);
+    }
+
+    let mut centroid = [0.0, 0.0];
+    for [x, y] in coords {
+        centroid[0] += x;
+        centroid[1] += y;
     }
     centroid[0] /= 3.0;
     centroid[1] /= 3.0;
+    Some(centroid)
+}
+
+/// Computes a centroid in one periodic image, then wraps it back into the domain.
+fn toroidal_centroid(coords: &[[f64; 2]], domain: [f64; 2]) -> Option<[f64; 2]> {
+    let [reference, rest @ ..] = coords else {
+        return None;
+    };
+    if rest.len() != 2
+        || domain
+            .iter()
+            .any(|period| !period.is_finite() || *period <= 0.0)
+    {
+        return None;
+    }
+
+    let mut centroid = *reference;
+    for coord in rest {
+        for axis in 0..2 {
+            let period = domain[axis];
+            let mut unwrapped = coord[axis];
+            let delta = unwrapped - reference[axis];
+            if delta > period / 2.0 {
+                unwrapped -= period;
+            } else if delta < -period / 2.0 {
+                unwrapped += period;
+            }
+            centroid[axis] += unwrapped;
+        }
+    }
+
+    for axis in 0..2 {
+        centroid[axis] = (centroid[axis] / 3.0).rem_euclid(domain[axis]);
+    }
     Some(centroid)
 }
 
@@ -971,6 +1014,50 @@ mod tests {
         );
         assert!(triangulation.validate_causality().is_ok());
         assert!(triangulation.has_foliation());
+    }
+
+    #[test]
+    fn test_centroid_unwraps_toroidal_face_across_periodic_boundary() {
+        let triangulation =
+            CdtTriangulation2D::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
+        let face = triangulation
+            .geometry()
+            .faces()
+            .find(|face| {
+                let vertices = triangulation
+                    .geometry()
+                    .face_vertices(face)
+                    .expect("face vertices");
+                let mut zero_x = 0;
+                let mut boundary_x = 0;
+                let mut zero_y = 0;
+                let mut next_y = 0;
+                for vertex in vertices {
+                    let coords = triangulation
+                        .geometry()
+                        .vertex_coordinates(&vertex)
+                        .expect("vertex coordinates");
+                    if (coords[0] - 0.0).abs() < 1e-12 {
+                        zero_x += 1;
+                    }
+                    if (coords[0] - 0.75).abs() < 1e-12 {
+                        boundary_x += 1;
+                    }
+                    if (coords[1] - 0.0).abs() < 1e-12 {
+                        zero_y += 1;
+                    }
+                    if (coords[1] - (1.0 / 3.0)).abs() < 1e-12 {
+                        next_y += 1;
+                    }
+                }
+                zero_x == 1 && boundary_x == 2 && zero_y == 2 && next_y == 1
+            })
+            .expect("wrap-around face");
+
+        let point = centroid(&triangulation, &face).expect("toroidal centroid");
+
+        assert_relative_eq!(point[0], 5.0 / 6.0, epsilon = 1e-12);
+        assert_relative_eq!(point[1], 1.0 / 9.0, epsilon = 1e-12);
     }
 
     #[test]
