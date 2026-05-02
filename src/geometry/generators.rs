@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Delaunay triangulation generators.
 //!
 //! This module constructs 2D Delaunay triangulations via the `delaunay` crate.
@@ -6,13 +8,13 @@
 //! `docs/dev/rust.md § Geometry Backend Isolation`).
 
 use crate::errors::{CdtError, CdtResult};
-use delaunay::core::triangulation::TopologyGuarantee;
+pub use delaunay::core::triangulation::TopologyGuarantee;
 use delaunay::geometry::kernel::AdaptiveKernel;
 use delaunay::geometry::point::Point;
 use delaunay::geometry::traits::coordinate::Coordinate;
 use delaunay::geometry::util::{generate_random_points, generate_random_points_seeded};
 use delaunay::prelude::VertexBuilder;
-use delaunay::topology::traits::topological_space::{GlobalTopology, ToroidalConstructionMode};
+pub use delaunay::topology::traits::topological_space::{GlobalTopology, ToroidalConstructionMode};
 use delaunay::triangulation::{DelaunayTriangulation, DelaunayTriangulationBuilder};
 
 /// Type alias for the 2D Delaunay triangulation returned by this crate's generators.
@@ -20,6 +22,17 @@ use delaunay::triangulation::{DelaunayTriangulation, DelaunayTriangulationBuilde
 /// Uses [`AdaptiveKernel`] (the default for [`DelaunayTriangulationBuilder::build`]) and
 /// `u32` vertex data storing the per-vertex time-slice label (foliation).
 pub type DelaunayTriangulation2D = DelaunayTriangulation<AdaptiveKernel<f64>, u32, i32, 2>;
+
+/// Keeps `generate_delaunay2` vertex-build failures tied to the public constructor name.
+fn generate_delaunay2_vertex_build_error(
+    number_of_vertices: u32,
+    underlying_error: String,
+) -> CdtError {
+    CdtError::VertexBuildFailed {
+        context: format!("generate_delaunay2({number_of_vertices} vertices)"),
+        underlying_error,
+    }
+}
 
 /// Generates a Delaunay triangulation with optional seed for deterministic testing.
 ///
@@ -30,7 +43,17 @@ pub type DelaunayTriangulation2D = DelaunayTriangulation<AdaptiveKernel<f64>, u3
 /// # Errors
 ///
 /// Returns enhanced error information including vertex count, coordinate range, and underlying error.
-pub fn delaunay2_with_context(
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::geometry::*;
+///
+/// let dt = generate_delaunay2(5, (0.0, 1.0), Some(7))
+///     .expect("seeded generation succeeds");
+/// assert_eq!(dt.number_of_vertices(), 5);
+/// ```
+pub fn generate_delaunay2(
     number_of_vertices: u32,
     coordinate_range: (f64, f64),
     seed: Option<u64>,
@@ -72,10 +95,7 @@ pub fn delaunay2_with_context(
         .into_iter()
         .map(|point| VertexBuilder::<f64, u32, 2>::default().point(point).build())
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| CdtError::VertexBuildFailed {
-            context: format!("delaunay2_with_context({number_of_vertices} vertices)"),
-            underlying_error: e.to_string(),
-        })?;
+        .map_err(|e| generate_delaunay2_vertex_build_error(number_of_vertices, e.to_string()))?;
 
     let dt = DelaunayTriangulationBuilder::from_vertices(&vertices)
         .build::<i32>()
@@ -98,6 +118,20 @@ pub fn delaunay2_with_context(
 /// # Errors
 ///
 /// Returns error if vertex construction or Delaunay triangulation building fails.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::geometry::*;
+///
+/// let dt = build_delaunay2_with_data(&[
+///     ([0.0, 0.0], 0),
+///     ([1.0, 0.0], 0),
+///     ([0.5, 1.0], 1),
+/// ])
+/// .expect("build labeled triangle");
+/// assert_eq!(dt.number_of_vertices(), 3);
+/// ```
 pub fn build_delaunay2_with_data(
     coords_with_data: &[([f64; 2], u32)],
 ) -> CdtResult<DelaunayTriangulation2D> {
@@ -142,8 +176,8 @@ pub fn build_delaunay2_with_data(
 ///
 /// Topology defaults to [`TopologyGuarantee::DEFAULT`] (PL-manifold) and
 /// [`GlobalTopology::Euclidean`].  For non-spherical meshes (e.g. torus with
-/// χ = 0), use [`build_explicit_delaunay2_with_topology`] or the convenience
-/// wrapper [`build_explicit_delaunay2_toroidal`] instead.
+/// χ = 0), use [`build_delaunay2_with_topology`] or the convenience wrapper
+/// [`build_toroidal_delaunay2`] instead.
 ///
 /// This is one of the only call sites for
 /// [`DelaunayTriangulationBuilder::from_vertices_and_cells`], maintaining
@@ -164,16 +198,16 @@ pub fn build_delaunay2_with_data(
 /// let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
 /// let cells = vec![vec![0, 1, 2]];
 ///
-/// let dt = build_explicit_delaunay2(&vertices, &cells)
+/// let dt = build_delaunay2_from_cells(&vertices, &cells)
 ///     .expect("explicit single-triangle mesh");
 /// assert_eq!(dt.number_of_vertices(), 3);
 /// assert_eq!(dt.number_of_cells(), 1);
 /// ```
-pub fn build_explicit_delaunay2(
+pub fn build_delaunay2_from_cells(
     coords_with_data: &[([f64; 2], u32)],
     cells: &[Vec<usize>],
 ) -> CdtResult<DelaunayTriangulation2D> {
-    build_explicit_delaunay2_with_topology(
+    build_delaunay2_with_topology(
         coords_with_data,
         cells,
         TopologyGuarantee::DEFAULT,
@@ -181,7 +215,7 @@ pub fn build_explicit_delaunay2(
     )
 }
 
-/// Like [`build_explicit_delaunay2`] but with explicit [`TopologyGuarantee`] and
+/// Like [`build_delaunay2_from_cells`] but with explicit [`TopologyGuarantee`] and
 /// [`GlobalTopology`] metadata.
 ///
 /// Use [`TopologyGuarantee::Pseudomanifold`] for meshes whose Euler characteristic
@@ -192,23 +226,20 @@ pub fn build_explicit_delaunay2(
 ///
 /// # Errors
 ///
-/// Same as [`build_explicit_delaunay2`].
+/// Same as [`build_delaunay2_from_cells`].
 ///
 /// # Examples
 ///
-/// The `TopologyGuarantee` and `GlobalTopology` types come from the underlying
-/// `delaunay` crate — import them directly when calling this lower-level builder:
+/// Import topology metadata from this crate's geometry prelude:
 ///
 /// ```
 /// use causal_triangulations::prelude::geometry::*;
-/// use delaunay::core::triangulation::TopologyGuarantee;
-/// use delaunay::topology::traits::topological_space::GlobalTopology;
 ///
 /// // Single labeled triangle, default PL-manifold guarantee, Euclidean global topology.
 /// let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
 /// let cells = vec![vec![0, 1, 2]];
 ///
-/// let dt = build_explicit_delaunay2_with_topology(
+/// let dt = build_delaunay2_with_topology(
 ///     &vertices,
 ///     &cells,
 ///     TopologyGuarantee::DEFAULT,
@@ -218,7 +249,7 @@ pub fn build_explicit_delaunay2(
 /// assert_eq!(dt.number_of_vertices(), 3);
 /// assert_eq!(dt.number_of_cells(), 1);
 /// ```
-pub fn build_explicit_delaunay2_with_topology(
+pub fn build_delaunay2_with_topology(
     coords_with_data: &[([f64; 2], u32)],
     cells: &[Vec<usize>],
     topology_guarantee: TopologyGuarantee,
@@ -273,7 +304,7 @@ pub fn build_explicit_delaunay2_with_topology(
 ///
 /// # Errors
 ///
-/// Same as [`build_explicit_delaunay2_with_topology`].
+/// Same as [`build_delaunay2_with_topology`].
 ///
 /// # Examples
 ///
@@ -307,17 +338,17 @@ pub fn build_explicit_delaunay2_with_topology(
 ///     }
 /// }
 ///
-/// let dt = build_explicit_delaunay2_toroidal(&vertices, &cells, [1.0, 1.0])
+/// let dt = build_toroidal_delaunay2(&vertices, &cells, [1.0, 1.0])
 ///     .expect("explicit 3×3 toroidal mesh");
 /// assert_eq!(dt.number_of_vertices(), N * T);
 /// assert_eq!(dt.number_of_cells(), 2 * N * T);
 /// ```
-pub fn build_explicit_delaunay2_toroidal(
+pub fn build_toroidal_delaunay2(
     coords_with_data: &[([f64; 2], u32)],
     cells: &[Vec<usize>],
     domain: [f64; 2],
 ) -> CdtResult<DelaunayTriangulation2D> {
-    build_explicit_delaunay2_with_topology(
+    build_delaunay2_with_topology(
         coords_with_data,
         cells,
         TopologyGuarantee::Pseudomanifold,
@@ -339,7 +370,7 @@ pub(crate) fn random_delaunay2(
     number_of_vertices: u32,
     coordinate_range: (f64, f64),
 ) -> DelaunayTriangulation2D {
-    delaunay2_with_context(number_of_vertices, coordinate_range, None).unwrap_or_else(|_| {
+    generate_delaunay2(number_of_vertices, coordinate_range, None).unwrap_or_else(|_| {
         panic!(
             "Failed to generate random Delaunay triangulation with {number_of_vertices} vertices"
         )
@@ -354,7 +385,7 @@ pub(crate) fn seeded_delaunay2(
     coordinate_range: (f64, f64),
     seed: u64,
 ) -> DelaunayTriangulation2D {
-    delaunay2_with_context(number_of_vertices, coordinate_range, Some(seed)).unwrap_or_else(
+    generate_delaunay2(number_of_vertices, coordinate_range, Some(seed)).unwrap_or_else(
         |_| {
             panic!(
                 "Failed to generate seeded Delaunay triangulation with {number_of_vertices} vertices and seed {seed}"
@@ -367,27 +398,77 @@ pub(crate) fn seeded_delaunay2(
 mod tests {
     use super::*;
     use crate::errors::CdtError;
+    use std::collections::HashMap;
+
+    /// Produces an order-independent snapshot of vertices and cell connectivity for seeded tests.
+    fn triangulation_signature(dt: &DelaunayTriangulation2D) -> (Vec<String>, Vec<Vec<String>>) {
+        let mut vertex_coords: Vec<_> = dt
+            .vertices()
+            .map(|(_, vertex)| format!("{:?}", vertex.point().coords()))
+            .collect();
+        vertex_coords.sort();
+
+        let coord_by_key: HashMap<_, _> = dt
+            .vertices()
+            .map(|(key, vertex)| (key, format!("{:?}", vertex.point().coords())))
+            .collect();
+
+        let mut cells: Vec<_> = dt
+            .cells()
+            .map(|(_, cell)| {
+                let mut vertices: Vec<_> = cell
+                    .vertices()
+                    .iter()
+                    .map(|key| {
+                        coord_by_key
+                            .get(key)
+                            .cloned()
+                            .expect("cell vertices should refer to live vertices")
+                    })
+                    .collect();
+                vertices.sort();
+                vertices
+            })
+            .collect();
+        cells.sort();
+
+        (vertex_coords, cells)
+    }
 
     #[test]
-    fn test_build_explicit_delaunay2_single_triangle() {
+    fn test_generate_delaunay2_vertex_build_error_context() {
+        let error = generate_delaunay2_vertex_build_error(5, "missing point".to_string());
+
+        assert!(matches!(
+            error,
+            CdtError::VertexBuildFailed {
+                ref context,
+                ref underlying_error,
+            } if context == "generate_delaunay2(5 vertices)"
+                && underlying_error == "missing point"
+        ));
+    }
+
+    #[test]
+    fn test_build_delaunay2_from_cells_single_triangle() {
         // Default topology (PL-manifold + Euclidean) should accept a single
         // triangle with the standard 0-1 strip labeling.
         let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
         let cells = vec![vec![0, 1, 2]];
 
-        let dt = build_explicit_delaunay2(&vertices, &cells)
+        let dt = build_delaunay2_from_cells(&vertices, &cells)
             .expect("single-triangle explicit mesh should build with defaults");
         assert_eq!(dt.number_of_vertices(), 3);
         assert_eq!(dt.number_of_cells(), 1);
     }
 
     #[test]
-    fn test_build_explicit_delaunay2_rejects_out_of_bounds_index() {
+    fn test_build_delaunay2_from_cells_rejects_bad_index() {
         // Cell references vertex 3 which doesn't exist (only indices 0..3 are valid).
         let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
         let cells = vec![vec![0, 1, 3]];
 
-        let result = build_explicit_delaunay2(&vertices, &cells);
+        let result = build_delaunay2_from_cells(&vertices, &cells);
         assert!(
             matches!(result, Err(CdtError::DelaunayGenerationFailed { .. })),
             "explicit builder must reject out-of-bounds vertex indices, got {result:?}"
@@ -395,12 +476,12 @@ mod tests {
     }
 
     #[test]
-    fn test_build_explicit_delaunay2_with_topology_explicit_euclidean() {
+    fn test_build_delaunay2_with_topology_euclidean() {
         // Same single-triangle mesh, but with explicit topology metadata.
         let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
         let cells = vec![vec![0, 1, 2]];
 
-        let dt = build_explicit_delaunay2_with_topology(
+        let dt = build_delaunay2_with_topology(
             &vertices,
             &cells,
             TopologyGuarantee::DEFAULT,
@@ -412,14 +493,17 @@ mod tests {
     }
 
     #[test]
-    fn test_build_explicit_delaunay2_toroidal_3x3_chi_zero() {
+    fn test_build_toroidal_delaunay2_3x3_chi_zero() {
         // A real 3×3 toroidal mesh: V=9, F=18, E=27, χ=0.
         const N: usize = 3;
         const T: usize = 3;
         let mut vertices: Vec<([f64; 2], u32)> = Vec::with_capacity(N * T);
         for t in 0..T {
             for i in 0..N {
-                #[allow(clippy::cast_precision_loss)]
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "small deterministic test indices are converted to normalized f64 coordinates"
+                )]
                 let coord = [i as f64 / N as f64, t as f64 / T as f64];
                 let label = u32::try_from(t).expect("slice index fits in u32");
                 vertices.push((coord, label));
@@ -435,15 +519,15 @@ mod tests {
             }
         }
 
-        let dt = build_explicit_delaunay2_toroidal(&vertices, &cells, [1.0, 1.0])
+        let dt = build_toroidal_delaunay2(&vertices, &cells, [1.0, 1.0])
             .expect("3×3 toroidal mesh should build");
         assert_eq!(dt.number_of_vertices(), N * T);
         assert_eq!(dt.number_of_cells(), 2 * N * T);
     }
 
     #[test]
-    fn test_delaunay2_with_context_valid_parameters() {
-        let result = delaunay2_with_context(4, (0.0, 10.0), None);
+    fn test_generate_delaunay2_valid_parameters() {
+        let result = generate_delaunay2(4, (0.0, 10.0), None);
         assert!(
             result.is_ok(),
             "Should successfully generate triangulation with valid parameters"
@@ -455,10 +539,10 @@ mod tests {
     }
 
     #[test]
-    fn test_delaunay2_with_context_with_seed() {
+    fn test_generate_delaunay2_with_seed() {
         let seed = 12345;
-        let result1 = delaunay2_with_context(4, (0.0, 10.0), Some(seed));
-        let result2 = delaunay2_with_context(4, (0.0, 10.0), Some(seed));
+        let result1 = generate_delaunay2(4, (0.0, 10.0), Some(seed));
+        let result2 = generate_delaunay2(4, (0.0, 10.0), Some(seed));
 
         assert!(result1.is_ok(), "First generation should succeed");
         assert!(result2.is_ok(), "Second generation should succeed");
@@ -477,11 +561,16 @@ mod tests {
             dt2.number_of_cells(),
             "Should have same cell count"
         );
+        assert_eq!(
+            triangulation_signature(&dt1),
+            triangulation_signature(&dt2),
+            "Seeded generation should produce identical vertex coordinates and cell connectivity"
+        );
     }
 
     #[test]
-    fn test_delaunay2_with_context_insufficient_vertices() {
-        let result = delaunay2_with_context(2, (0.0, 10.0), None);
+    fn test_generate_delaunay2_insufficient_vertices() {
+        let result = generate_delaunay2(2, (0.0, 10.0), None);
         assert!(result.is_err(), "Should fail with insufficient vertices");
 
         match result.unwrap_err() {
@@ -499,8 +588,8 @@ mod tests {
     }
 
     #[test]
-    fn test_delaunay2_with_context_invalid_coordinate_range() {
-        let result = delaunay2_with_context(4, (10.0, 5.0), None);
+    fn test_generate_delaunay2_invalid_range() {
+        let result = generate_delaunay2(4, (10.0, 5.0), None);
         assert!(result.is_err(), "Should fail with invalid coordinate range");
 
         match result.unwrap_err() {
@@ -518,8 +607,8 @@ mod tests {
     }
 
     #[test]
-    fn test_delaunay2_with_context_equal_coordinate_range() {
-        let result = delaunay2_with_context(4, (5.0, 5.0), None);
+    fn test_generate_delaunay2_equal_range() {
+        let result = generate_delaunay2(4, (5.0, 5.0), None);
         assert!(result.is_err(), "Should fail with equal coordinate range");
 
         match result.unwrap_err() {
@@ -531,11 +620,11 @@ mod tests {
     }
 
     #[test]
-    fn test_delaunay2_with_context_various_sizes() {
+    fn test_generate_delaunay2_various_sizes() {
         let test_cases = [(3, "minimal"), (5, "small"), (10, "medium"), (20, "large")];
 
         for (vertex_count, description) in test_cases {
-            let result = delaunay2_with_context(vertex_count, (0.0, 100.0), None);
+            let result = generate_delaunay2(vertex_count, (0.0, 100.0), None);
             assert!(
                 result.is_ok(),
                 "Should generate {description} triangulation with {vertex_count} vertices"
@@ -555,11 +644,11 @@ mod tests {
     }
 
     #[test]
-    fn test_delaunay2_with_context_different_coordinate_ranges() {
+    fn test_generate_delaunay2_different_ranges() {
         let ranges = [(0.0, 1.0), (-10.0, 10.0), (100.0, 200.0), (-50.0, 0.0)];
 
         for range in ranges {
-            let result = delaunay2_with_context(4, range, None);
+            let result = generate_delaunay2(4, range, None);
             assert!(
                 result.is_ok(),
                 "Should generate triangulation with range {range:?}"
@@ -682,9 +771,17 @@ mod tests {
         // Test that generated triangulations satisfy basic topological properties
         let dt = random_delaunay2(8, (0.0, 10.0));
 
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_possible_wrap,
+            reason = "test triangulation sizes are tiny and fit in i32"
+        )]
         let v = dt.number_of_vertices() as i32;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_possible_wrap,
+            reason = "test triangulation sizes are tiny and fit in i32"
+        )]
         let c = dt.number_of_cells() as i32; // faces in 2D
 
         // Basic sanity checks
@@ -707,7 +804,7 @@ mod tests {
         ];
 
         for range in ranges {
-            let result = delaunay2_with_context(4, range, Some(789));
+            let result = generate_delaunay2(4, range, Some(789));
             assert!(result.is_ok(), "Should handle coordinate range {range:?}");
         }
     }

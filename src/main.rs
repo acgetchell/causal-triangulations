@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Causal Dynamical Triangulations binary executable.
 //!
 //! This is the main entry point for the CDT-RS application that creates

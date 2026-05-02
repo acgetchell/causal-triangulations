@@ -164,6 +164,8 @@ All public items must have documentation.
 
 Public functions and methods should include a `# Examples` section with a runnable doctest demonstrating basic usage. Doctests serve as both documentation and regression tests.
 
+Private helper functions should have a `///` doc comment that explains why the helper exists, especially when it encodes an invariant, isolates validation, or keeps a mutation path consistent.
+
 After Rust changes, verify documentation builds:
 
 ```bash
@@ -252,7 +254,7 @@ Before adding a dependency, consider:
 Direct `use delaunay::` imports are **restricted** to the `src/geometry/` subtree:
 
 - `src/geometry/backends/delaunay.rs` — wraps `delaunay` crate types behind trait-based handles
-- `src/geometry/generators.rs` — Delaunay triangulation generators (`delaunay2_with_context`, `build_delaunay2_with_data`)
+- `src/geometry/generators.rs` — Delaunay triangulation generators (`generate_delaunay2`, `build_delaunay2_with_data`)
 
 No module outside `src/geometry/` may import from the `delaunay` crate directly. Instead use:
 

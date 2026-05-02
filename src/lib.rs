@@ -1,5 +1,8 @@
 #![forbid(unsafe_code)]
-#![allow(clippy::multiple_crate_versions)]
+#![expect(
+    clippy::multiple_crate_versions,
+    reason = "transitive dependencies currently resolve several shared crate versions"
+)]
 #![warn(missing_docs)]
 
 //! Causal Dynamical Triangulations library for quantum gravity simulations.
@@ -66,6 +69,8 @@ pub mod geometry {
 
     /// Convenient alias for CDT triangulations using the default backend
     pub type CdtTriangulation2D = crate::cdt::triangulation::CdtTriangulation<DefaultBackend>;
+
+    pub use generators::{GlobalTopology, TopologyGuarantee, ToroidalConstructionMode};
 }
 
 /// Causal Dynamical Triangulations implementation modules.
@@ -135,6 +140,16 @@ pub mod prelude {
     pub use crate::config::{CdtConfig, CdtTopology};
     pub use crate::errors::{CdtError, CdtResult};
 
+    /// Focused exports for configuration parsing and presets.
+    pub mod config {
+        pub use crate::config::{CdtConfig, CdtConfigOverrides, CdtTopology, TestConfig};
+    }
+
+    /// Focused exports for crate error handling.
+    pub mod errors {
+        pub use crate::errors::{CdtError, CdtResult};
+    }
+
     /// Focused exports for CDT triangulation construction and queries.
     ///
     /// Lighter than `prelude::*` — just the types needed for building and
@@ -152,6 +167,7 @@ pub mod prelude {
         pub use crate::cdt::foliation::{CellType, EdgeType, Foliation, FoliationError};
         pub use crate::config::CdtTopology;
         pub use crate::errors::{CdtError, CdtResult};
+        pub use crate::geometry::CdtTriangulation2D;
         pub use crate::geometry::traits::TriangulationQuery;
     }
 
@@ -185,6 +201,12 @@ pub mod prelude {
     ///
     /// let backend = DelaunayBackend2D::from_triangulation(dt);
     /// assert!(backend.is_valid());
+    ///
+    /// let topology: GlobalTopology<2> = GlobalTopology::Toroidal {
+    ///     domain: [1.0, 1.0],
+    ///     mode: ToroidalConstructionMode::Explicit,
+    /// };
+    /// assert!(matches!(topology, GlobalTopology::Toroidal { .. }));
     /// ```
     pub mod geometry {
         pub use crate::geometry::DelaunayBackend2D;
@@ -193,8 +215,9 @@ pub mod prelude {
         };
         pub use crate::geometry::backends::mock::MockBackend;
         pub use crate::geometry::generators::{
-            build_delaunay2_with_data, build_explicit_delaunay2, build_explicit_delaunay2_toroidal,
-            build_explicit_delaunay2_with_topology, delaunay2_with_context,
+            GlobalTopology, TopologyGuarantee, ToroidalConstructionMode,
+            build_delaunay2_from_cells, build_delaunay2_with_data, build_delaunay2_with_topology,
+            build_toroidal_delaunay2, generate_delaunay2,
         };
         pub use crate::geometry::operations::TriangulationOps;
         pub use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
@@ -221,6 +244,22 @@ pub mod prelude {
 /// Returns [`CdtError::UnsupportedDimension`] if a validated configuration requests
 /// a simulation dimension other than 2.
 /// Returns triangulation generation errors from the underlying triangulation creation.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::{CdtConfig, run_simulation};
+///
+/// let config = CdtConfig {
+///     steps: 1,
+///     thermalization_steps: 0,
+///     measurement_frequency: 1,
+///     seed: Some(7),
+///     ..CdtConfig::new(5, 2)
+/// };
+/// let results = run_simulation(&config).unwrap();
+/// assert_eq!(results.steps.len(), 1);
+/// ```
 pub fn run_simulation(config: &CdtConfig) -> CdtResult<cdt::metropolis::SimulationResultsBackend> {
     // Validate configuration early to fail fast with clear error messages
     config.validate()?;

@@ -4,7 +4,8 @@
 name: "Clippy Security Analysis"
 
 on:
-  # Only run on schedule and manual trigger to avoid duplication with CI
+  pull_request:
+    branches: ["main"]
   schedule:
     - cron: "17 22 * * 0" # Weekly on Sunday
   workflow_dispatch:
@@ -22,6 +23,9 @@ jobs:
   clippy-sarif:
     name: Clippy SARIF Analysis
     runs-on: ubuntu-latest
+    env:
+      CLIPPY_SARIF_VERSION: "0.8.0"
+      SARIF_FMT_VERSION: "0.8.0"
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -31,45 +35,27 @@ jobs:
         with:
           cache: true
           # toolchain, components, etc. are specified in rust-toolchain.toml
-          components: clippy
-      - name: Cache clippy-sarif tools
+
+      - name: Cache clippy tools
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: ~/.cargo/clippy-sarif-tools
-          key: clippy-sarif-tools-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            clippy-sarif-tools-${{ runner.os }}-
+          path: |
+            ~/.cargo/bin/clippy-sarif
+            ~/.cargo/bin/sarif-fmt
+          key: clippy-sarif-${{ runner.os }}-${{ env.CLIPPY_SARIF_VERSION }}-sarif-fmt-${{ env.SARIF_FMT_VERSION }}
 
-      - name: Install clippy-sarif tooling
+      - name: Install clippy-sarif tools
         run: |
-          TOOL_ROOT="$HOME/.cargo/clippy-sarif-tools"
-          export PATH="$TOOL_ROOT/bin:$PATH"
-          echo "$TOOL_ROOT/bin" >> "$GITHUB_PATH"
-          # Check if tools are already installed (from cache)
-          if ! command -v clippy-sarif &> /dev/null || ! command -v sarif-fmt &> /dev/null; then
-            echo "Installing clippy-sarif and sarif-fmt..."
-            cargo install --locked --root "$TOOL_ROOT" clippy-sarif sarif-fmt
-          else
-            echo "clippy-sarif tools already installed"
+          if ! command -v clippy-sarif &> /dev/null; then
+            cargo install clippy-sarif --locked --version "${CLIPPY_SARIF_VERSION}"
+          fi
+          if ! command -v sarif-fmt &> /dev/null; then
+            cargo install sarif-fmt --locked --version "${SARIF_FMT_VERSION}"
           fi
 
       - name: Run clippy with SARIF output
         run: |
-          echo "Running clippy analysis with enhanced security checks..."
-
-          # Verify tools are available
-          if ! command -v clippy-sarif &> /dev/null; then
-            echo "❌ clippy-sarif not found"
-            exit 1
-          fi
-
-          if ! command -v sarif-fmt &> /dev/null; then
-            echo "❌ sarif-fmt not found"
-            exit 1
-          fi
-
-          # Run clippy with comprehensive checks
-          set -o pipefail
+          set -euo pipefail
           cargo clippy \
             --workspace \
             --all-targets \
@@ -79,29 +65,17 @@ jobs:
             clippy-sarif | \
             tee rust-clippy-results.sarif | \
             sarif-fmt
-
-          echo "✅ Clippy analysis completed successfully"
         continue-on-error: true
 
-      - name: Validate SARIF output
-        run: |
-          if [[ ! -f "rust-clippy-results.sarif" ]]; then
-            echo "❌ SARIF file not generated"
-            exit 1
-          fi
-
-          # Check if SARIF file is valid JSON
-          if ! python3 -m json.tool rust-clippy-results.sarif > /dev/null 2>&1; then
-            echo "⚠️  SARIF file may not be valid JSON, but continuing..."
-          else
-            echo "✅ SARIF file is valid JSON"
-          fi
-
-          echo "SARIF file size: $(du -h rust-clippy-results.sarif | cut -f1)"
-
       - name: Upload SARIF results
-        if: always() && hashFiles('rust-clippy-results.sarif') != ''
-        uses: github/codeql-action/upload-sarif@b36bf259c813715f76eafece573914b94412cd13 # v3
+        if: >-
+          always()
+          && hashFiles('rust-clippy-results.sarif') != ''
+          && (
+            github.event_name != 'pull_request'
+            || github.event.pull_request.head.repo.full_name == github.repository
+          )
+        uses: github/codeql-action/upload-sarif@b25d0ebf40e5b63ee81e1bd6e5d2a12b7c2aeb61 # v4
         with:
           sarif_file: rust-clippy-results.sarif
           category: "clippy"

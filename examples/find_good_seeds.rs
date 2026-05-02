@@ -1,32 +1,32 @@
+#![forbid(unsafe_code)]
+
 //! Script to find seeds that produce valid triangulations for testing
 //!
 //! This script tests different seeds with the triangulation generation
 //! and finds ones that produce Euler characteristics in the valid range.
 
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_sign_loss,
-    clippy::option_if_let_else,
-    clippy::uninlined_format_args
-)]
-
 use causal_triangulations::prelude::triangulation::*;
 
-/// Test a seed with given parameters and return Euler characteristic if valid.
+/// Keeps seed-search acceptance criteria in one place so both search loops use
+/// the same topology filter.
 ///
 /// Accepts χ=1 (planar with boundary, typical for random point sets) or χ=2 (closed surface).
-fn test_seed(seed: u64, vertices: u32, timeslices: u32) -> Option<(i32, usize, usize, usize)> {
+fn test_seed(seed: u64, vertices: u32, timeslices: u32) -> Option<(isize, usize, usize, usize)> {
     match CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed) {
         Ok(tri) => {
-            let v = tri.vertex_count() as i32;
-            let e = tri.edge_count() as i32;
-            let f = tri.face_count() as i32;
+            let v = isize::try_from(tri.vertex_count()).ok()?;
+            let e = isize::try_from(tri.edge_count()).ok()?;
+            let f = isize::try_from(tri.face_count()).ok()?;
             let euler = v - e + f;
 
             // Accept Euler characteristic 1 (planar with boundary) or 2 (closed surface)
             if euler == 1 || euler == 2 {
-                Some((euler, v as usize, e as usize, f as usize))
+                Some((
+                    euler,
+                    tri.vertex_count(),
+                    tri.edge_count(),
+                    tri.face_count(),
+                ))
             } else {
                 None
             }
@@ -46,10 +46,7 @@ fn main() {
     ];
 
     for (test_name, vertices, timeslices) in &test_configs {
-        println!(
-            "Finding seeds for {} (V={}, T={}):",
-            test_name, vertices, timeslices
-        );
+        println!("Finding seeds for {test_name} (V={vertices}, T={timeslices}):");
 
         let mut good_seeds = Vec::new();
 
@@ -58,10 +55,7 @@ fn main() {
             if let Some((euler, v, e, f)) = test_seed(seed, *vertices, *timeslices) {
                 good_seeds.push((seed, euler, v, e, f));
 
-                println!(
-                    "  Seed {}: V={}, E={}, F={}, Euler={}",
-                    seed, v, e, f, euler
-                );
+                println!("  Seed {seed}: V={v}, E={e}, F={f}, Euler={euler}");
 
                 // Stop after finding 5 good seeds for each test
                 if good_seeds.len() >= 5 {
@@ -86,15 +80,12 @@ fn main() {
     let known_seeds = [42, 123, 456, 789];
 
     for &seed in &known_seeds {
-        println!("Testing known seed {}:", seed);
+        println!("Testing known seed {seed}:");
         for (test_name, vertices, timeslices) in &test_configs {
             if let Some((euler, v, e, f)) = test_seed(seed, *vertices, *timeslices) {
-                println!(
-                    "  {}: V={}, E={}, F={}, Euler={}",
-                    test_name, v, e, f, euler
-                );
+                println!("  {test_name}: V={v}, E={e}, F={f}, Euler={euler}");
             } else {
-                println!("  {}: ❌ Failed", test_name);
+                println!("  {test_name}: ❌ Failed");
             }
         }
         println!();

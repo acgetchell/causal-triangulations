@@ -164,7 +164,7 @@ This command requires the [`actionlint`](https://github.com/rhysd/actionlint) bi
 
 ## Next Steps
 
-1. Run `cargo tarpaulin --out Json` to generate `tarpaulin-report.json`, then use `just coverage-report` for a per-file coverage summary. For an HTML report, run `just coverage` instead (output: `target/tarpaulin/tarpaulin-report.html`).
+1. Run `just coverage-ci` to generate `coverage/cobertura.xml`, then use `just coverage-report` for a per-file coverage summary. For an HTML report, run `just coverage` instead (output: `target/llvm-cov/html/index.html`).
 2. Prioritize testing unimplemented ergodic move operations
 3. Add integration tests for complete simulation workflows with moves
 4. Set up CI to track coverage trends over time

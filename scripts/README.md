@@ -6,7 +6,6 @@ This directory contains Python and shell tooling used by the CDT repository. Whe
 
 - Python 3.11+
 - `uv`
-- Node.js (for `npx` in changelog tooling)
 
 Install dev dependencies:
 
@@ -21,10 +20,14 @@ These are exposed via `pyproject.toml` so you can run them with `uv run ...`. Al
 ### Changelog utilities
 
 ```bash
-uv run changelog-utils
-uv run changelog-utils generate --debug
-uv run changelog-utils tag v0.1.0
+just changelog
+uv run postprocess-changelog --help
+uv run archive-changelog --help
+uv run tag-release v0.1.0 --help
+just changelog-tag v0.1.0
 ```
+
+`just changelog` runs `git-cliff`, applies markdown hygiene, and archives completed minor release series under `docs/archive/changelog/`.
 
 ### Benchmark utilities
 
@@ -46,12 +49,15 @@ uv run hardware-utils info --json
 ### CDT-specific helpers
 
 ```bash
+just coverage-ci
 uv run performance-analysis --help
 uv run coverage-report --help
 
 # Backwards-compatible alias
 uv run coverage_report --help
 ```
+
+`coverage-report` summarizes the Cobertura XML produced by `just coverage-ci`.
 
 ## Shell helpers
 

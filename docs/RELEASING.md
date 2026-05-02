@@ -68,7 +68,7 @@ rg -n "\bv?[0-9]+\.[0-9]+\.[0-9]+\b" README.md docs/ || true
 # Do not push this tag; it will be recreated later after merge
 git tag -a "$TAG" -m "causal-triangulations $TAG"
 
-# Generate changelog using the Python-based tool
+# Generate changelog, post-process it, and archive completed minor series
 just changelog
 ```
 
@@ -115,8 +115,11 @@ If you discover issues (bugs, formatting problems, etc.) after creating the chan
    git tag -a "$TAG" -m "causal-triangulations $TAG"
    just changelog
 
-   # Commit updated changelog
+   # Commit updated changelog and any generated archive files
    git add CHANGELOG.md
+   if [ -d docs/archive/changelog ]; then
+       git add docs/archive/changelog/
+   fi
    git commit -m "docs: update changelog with release fixes"
    ```
 
@@ -142,7 +145,8 @@ git pull --ff-only
 # Remove the temporary local tag if it exists
 git tag -d "$TAG" 2>/dev/null || true
 
-# Create the final annotated tag with the changelog section as the tag message
+# Create the final annotated tag with the changelog section as the tag message.
+# Archived versions are read from docs/archive/changelog/ automatically.
 # Note: For large changelogs (>125KB), this automatically creates an annotated tag
 # with a reference message pointing to CHANGELOG.md instead of the full content
 just changelog-tag "$TAG"
@@ -183,6 +187,8 @@ cargo publish
 
 - Never push the temporary tag created for changelog generation; only push the final tag after the PR is merged.
 - Keep the release PR strictly to version + changelog + documentation to maintain a clean history.
+- `just changelog` may create or update `docs/archive/changelog/`; include those files in the release PR with `CHANGELOG.md`.
+- The root changelog keeps Unreleased plus the active minor series; older completed minor series live in archive files.
 - If multiple crates or files reference the version, confirm all of them are updated consistently.
 - Run `just ci` before opening the release PR to catch any issues.
 - For future convenience, parts of this document can be automated into a release script.

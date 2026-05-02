@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Mock geometry backend for testing.
 //!
 //! This backend provides a simple, controllable implementation for unit testing
@@ -50,10 +52,56 @@ pub enum MockError {
     /// Invalid operation attempted
     #[error("Invalid operation: {0}")]
     Operation(String),
+
+    /// Coordinate arity does not match the mock backend dimension.
+    #[error("Invalid coordinate dimension for {operation}: got {actual}, expected {expected}")]
+    InvalidCoordinateDimension {
+        /// Mutation operation being attempted.
+        operation: &'static str,
+        /// Expected coordinate arity.
+        expected: usize,
+        /// Actual coordinate arity supplied by the caller.
+        actual: usize,
+    },
+
+    /// An edge exists, but its local topology cannot be flipped.
+    #[error(
+        "Edge {edge} cannot be flipped: found {adjacent_faces} adjacent faces, expected 2 ({reason})"
+    )]
+    NonFlippableEdge {
+        /// Edge handle that was requested.
+        edge: usize,
+        /// Number of faces incident to the edge.
+        adjacent_faces: usize,
+        /// Additional reason the edge cannot be flipped.
+        reason: &'static str,
+    },
+
+    /// A face exists, but its local topology cannot be subdivided.
+    #[error("Face {face} cannot be subdivided: found {vertex_count} vertices, expected {expected}")]
+    NonSubdividableFace {
+        /// Face handle that was requested.
+        face: usize,
+        /// Number of vertices currently stored for the face.
+        vertex_count: usize,
+        /// Expected local topology.
+        expected: &'static str,
+    },
 }
 
 impl MockBackend {
     /// Create a new mock backend
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::backends::mock::MockBackend;
+    /// use causal_triangulations::geometry::traits::TriangulationQuery;
+    ///
+    /// let backend = MockBackend::new(2);
+    /// assert_eq!(backend.dimension(), 2);
+    /// assert_eq!(backend.vertex_count(), 0);
+    /// ```
     #[must_use]
     pub fn new(dimension: usize) -> Self {
         Self {
@@ -68,6 +116,18 @@ impl MockBackend {
     }
 
     /// Create a simple triangle for testing
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::backends::mock::MockBackend;
+    /// use causal_triangulations::geometry::traits::TriangulationQuery;
+    ///
+    /// let backend = MockBackend::create_triangle();
+    /// assert_eq!(backend.vertex_count(), 3);
+    /// assert_eq!(backend.edge_count(), 3);
+    /// assert_eq!(backend.face_count(), 1);
+    /// ```
     #[must_use]
     pub fn create_triangle() -> Self {
         let mut backend = Self::new(2);
@@ -89,6 +149,117 @@ impl MockBackend {
         backend.next_face_id = 1;
 
         backend
+    }
+
+    /// Centralizes coordinate arity checks so mock mutations fail before state changes.
+    const fn validate_coordinate_dimension(
+        &self,
+        operation: &'static str,
+        coords: &[f64],
+    ) -> Result<(), MockError> {
+        if coords.len() == self.dimension {
+            return Ok(());
+        }
+
+        Err(MockError::InvalidCoordinateDimension {
+            operation,
+            expected: self.dimension,
+            actual: coords.len(),
+        })
+    }
+
+    /// Detects duplicate undirected edges before local topology mutations insert new edges.
+    fn edge_exists_between(&self, v0: usize, v1: usize) -> bool {
+        self.edges
+            .values()
+            .any(|&(a, b)| (a == v0 && b == v1) || (a == v1 && b == v0))
+    }
+
+    /// Resolves edge incidence from face storage so flip validation uses the same local topology it mutates.
+    fn adjacent_face_ids_for_edge(&self, v0: usize, v1: usize) -> Vec<usize> {
+        let mut face_ids: Vec<_> = self
+            .faces
+            .iter()
+            .filter_map(|(&face_id, vertices)| {
+                (vertices.contains(&v0) && vertices.contains(&v1)).then_some(face_id)
+            })
+            .collect();
+        face_ids.sort_unstable();
+        face_ids
+    }
+
+    /// Allocates edge IDs through one path so generated IDs stay monotonic after subdivisions.
+    const fn next_missing_edge_id(&mut self) -> usize {
+        let id = self.next_edge_id;
+        self.next_edge_id += 1;
+        id
+    }
+
+    /// Allocates face IDs through one path so generated IDs stay monotonic after subdivisions.
+    const fn next_missing_face_id(&mut self) -> usize {
+        let id = self.next_face_id;
+        self.next_face_id += 1;
+        id
+    }
+
+    /// Validates the exact local edge-flip preconditions before `flip_edge` mutates maps.
+    fn edge_flip_opposites(
+        &self,
+        edge: usize,
+        v0: usize,
+        v1: usize,
+        adjacent_faces: &[usize],
+    ) -> Result<(usize, usize), MockError> {
+        if adjacent_faces.len() != 2 {
+            return Err(MockError::NonFlippableEdge {
+                edge,
+                adjacent_faces: adjacent_faces.len(),
+                reason: "edge must be shared by exactly two faces",
+            });
+        }
+
+        let mut opposites = Vec::with_capacity(2);
+        for face_id in adjacent_faces {
+            let vertices = self.faces.get(face_id).ok_or(MockError::Face(*face_id))?;
+            if vertices.len() != 3 {
+                return Err(MockError::NonFlippableEdge {
+                    edge,
+                    adjacent_faces: adjacent_faces.len(),
+                    reason: "adjacent faces must be triangles",
+                });
+            }
+            let opposite = vertices
+                .iter()
+                .copied()
+                .find(|&vertex| vertex != v0 && vertex != v1)
+                .ok_or(MockError::NonFlippableEdge {
+                    edge,
+                    adjacent_faces: adjacent_faces.len(),
+                    reason: "adjacent triangle is missing an opposite vertex",
+                })?;
+            opposites.push(opposite);
+        }
+
+        let first = opposites[0];
+        let second = opposites[1];
+
+        if first == second {
+            return Err(MockError::NonFlippableEdge {
+                edge,
+                adjacent_faces: adjacent_faces.len(),
+                reason: "opposite vertices must be distinct",
+            });
+        }
+
+        if self.edge_exists_between(first, second) {
+            return Err(MockError::NonFlippableEdge {
+                edge,
+                adjacent_faces: adjacent_faces.len(),
+                reason: "replacement edge already exists",
+            });
+        }
+
+        Ok((first, second))
     }
 }
 
@@ -164,26 +335,70 @@ impl TriangulationQuery for MockBackend {
 
     fn adjacent_faces(
         &self,
-        _vertex: &Self::VertexHandle,
+        vertex: &Self::VertexHandle,
     ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
-        // Simplified implementation
-        Ok(Vec::new())
+        if !self.vertices.contains_key(&vertex.0) {
+            return Err(MockError::Vertex(vertex.0));
+        }
+
+        let mut faces: Vec<_> = self
+            .faces
+            .iter()
+            .filter_map(|(&face_id, vertices)| {
+                vertices
+                    .contains(&vertex.0)
+                    .then_some(MockFaceHandle(face_id))
+            })
+            .collect();
+        faces.sort_unstable_by_key(|face| face.0);
+        Ok(faces)
     }
 
     fn incident_edges(
         &self,
-        _vertex: &Self::VertexHandle,
+        vertex: &Self::VertexHandle,
     ) -> Result<Vec<Self::EdgeHandle>, Self::Error> {
-        // Simplified implementation
-        Ok(Vec::new())
+        if !self.vertices.contains_key(&vertex.0) {
+            return Err(MockError::Vertex(vertex.0));
+        }
+
+        let mut edges: Vec<_> = self
+            .edges
+            .iter()
+            .filter_map(|(&edge_id, &(v0, v1))| {
+                (v0 == vertex.0 || v1 == vertex.0).then_some(MockEdgeHandle(edge_id))
+            })
+            .collect();
+        edges.sort_unstable_by_key(|edge| edge.0);
+        Ok(edges)
     }
 
     fn face_neighbors(
         &self,
-        _face: &Self::FaceHandle,
+        face: &Self::FaceHandle,
     ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
-        // Simplified implementation
-        Ok(Vec::new())
+        if !self.faces.contains_key(&face.0) {
+            return Err(MockError::Face(face.0));
+        }
+
+        let face_vertices = &self.faces[&face.0];
+        let mut neighbors: Vec<_> = self
+            .faces
+            .iter()
+            .filter_map(|(&neighbor_id, neighbor_vertices)| {
+                if neighbor_id == face.0 {
+                    return None;
+                }
+
+                let shared_vertices = face_vertices
+                    .iter()
+                    .filter(|vertex| neighbor_vertices.contains(vertex))
+                    .count();
+                (shared_vertices >= 2).then_some(MockFaceHandle(neighbor_id))
+            })
+            .collect();
+        neighbors.sort_unstable_by_key(|neighbor| neighbor.0);
+        Ok(neighbors)
     }
 
     fn is_valid(&self) -> bool {
@@ -196,6 +411,7 @@ impl TriangulationMut for MockBackend {
         &mut self,
         coords: &[Self::Coordinate],
     ) -> Result<Self::VertexHandle, Self::Error> {
+        self.validate_coordinate_dimension("insert_vertex", coords)?;
         let id = self.next_vertex_id;
         self.next_vertex_id += 1;
         self.vertices.insert(id, coords.to_vec());
@@ -217,6 +433,7 @@ impl TriangulationMut for MockBackend {
         vertex: Self::VertexHandle,
         new_coords: &[Self::Coordinate],
     ) -> Result<(), Self::Error> {
+        self.validate_coordinate_dimension("move_vertex", new_coords)?;
         self.vertices
             .get_mut(&vertex.0)
             .map_or(Err(MockError::Vertex(vertex.0)), |coords| {
@@ -228,33 +445,75 @@ impl TriangulationMut for MockBackend {
     fn flip_edge(
         &mut self,
         edge: Self::EdgeHandle,
-    ) -> Result<FlipResult<Self::VertexHandle, Self::EdgeHandle, Self::FaceHandle>, Self::Error>
-    {
-        if !self.edges.contains_key(&edge.0) {
-            return Err(MockError::Edge(edge.0));
-        }
-        // Simplified implementation
-        Ok(FlipResult::new(edge, Vec::new()))
+    ) -> Result<FlipResult<Self::EdgeHandle, Self::FaceHandle>, Self::Error> {
+        let (v0, v1) = *self.edges.get(&edge.0).ok_or(MockError::Edge(edge.0))?;
+        let adjacent_faces = self.adjacent_face_ids_for_edge(v0, v1);
+        let (opposite_0, opposite_1) = self.edge_flip_opposites(edge.0, v0, v1, &adjacent_faces)?;
+
+        self.edges.insert(edge.0, (opposite_0, opposite_1));
+        self.faces
+            .insert(adjacent_faces[0], vec![opposite_0, opposite_1, v0]);
+        self.faces
+            .insert(adjacent_faces[1], vec![opposite_1, opposite_0, v1]);
+
+        Ok(FlipResult::new(
+            edge,
+            adjacent_faces.into_iter().map(MockFaceHandle).collect(),
+        ))
     }
 
-    fn can_flip_edge(&self, _edge: &Self::EdgeHandle) -> bool {
-        true
+    fn can_flip_edge(&self, edge: &Self::EdgeHandle) -> bool {
+        let Some(&(v0, v1)) = self.edges.get(&edge.0) else {
+            return false;
+        };
+        let adjacent_faces = self.adjacent_face_ids_for_edge(v0, v1);
+        self.edge_flip_opposites(edge.0, v0, v1, &adjacent_faces)
+            .is_ok()
     }
 
     fn subdivide_face(
         &mut self,
         face: Self::FaceHandle,
         point: &[Self::Coordinate],
-    ) -> Result<
-        SubdivisionResult<Self::VertexHandle, Self::EdgeHandle, Self::FaceHandle>,
-        Self::Error,
-    > {
-        if !self.faces.contains_key(&face.0) {
-            return Err(MockError::Face(face.0));
+    ) -> Result<SubdivisionResult<Self::VertexHandle, Self::FaceHandle>, Self::Error> {
+        self.validate_coordinate_dimension("subdivide_face", point)?;
+        let vertices = self
+            .faces
+            .get(&face.0)
+            .cloned()
+            .ok_or(MockError::Face(face.0))?;
+        if vertices.len() != 3 {
+            return Err(MockError::NonSubdividableFace {
+                face: face.0,
+                vertex_count: vertices.len(),
+                expected: "3 vertices",
+            });
         }
-        // Simplified implementation
+
         let new_vertex = self.insert_vertex(point)?;
-        Ok(SubdivisionResult::new(new_vertex, Vec::new(), face))
+        let new_vertex_id = new_vertex.0;
+        for &old_vertex in &vertices {
+            if !self.edge_exists_between(old_vertex, new_vertex_id) {
+                let edge_id = self.next_missing_edge_id();
+                self.edges.insert(edge_id, (old_vertex, new_vertex_id));
+            }
+        }
+
+        self.faces.remove(&face.0);
+        let new_faces = [
+            vec![vertices[0], vertices[1], new_vertex_id],
+            vec![vertices[1], vertices[2], new_vertex_id],
+            vec![vertices[2], vertices[0], new_vertex_id],
+        ]
+        .into_iter()
+        .map(|vertices| {
+            let face_id = self.next_missing_face_id();
+            self.faces.insert(face_id, vertices);
+            MockFaceHandle(face_id)
+        })
+        .collect();
+
+        Ok(SubdivisionResult::new(new_vertex, new_faces, face))
     }
 
     fn clear(&mut self) {
@@ -278,8 +537,12 @@ mod tests {
     #[test]
     fn test_mock_backend_creation() {
         let backend = MockBackend::new(2);
+        assert_eq!(backend.backend_name(), "mock");
         assert_eq!(backend.dimension(), 2);
         assert_eq!(backend.vertex_count(), 0);
+        assert_eq!(backend.edge_count(), 0);
+        assert_eq!(backend.face_count(), 0);
+        assert!(!backend.is_valid());
     }
 
     #[test]
@@ -289,5 +552,337 @@ mod tests {
         assert_eq!(backend.edge_count(), 3);
         assert_eq!(backend.face_count(), 1);
         assert!(backend.is_valid());
+    }
+
+    #[test]
+    fn test_mock_triangle_queries_return_expected_entities() {
+        let backend = MockBackend::create_triangle();
+        let vertex = MockVertexHandle(0);
+        let edge = MockEdgeHandle(0);
+        let face = MockFaceHandle(0);
+
+        assert_eq!(
+            backend
+                .vertex_coordinates(&vertex)
+                .expect("valid vertex")
+                .len(),
+            2
+        );
+        assert_eq!(backend.face_vertices(&face).expect("valid face").len(), 3);
+        assert!(backend.edge_endpoints(&edge).is_some());
+        assert_eq!(
+            backend
+                .adjacent_faces(&vertex)
+                .expect("valid vertex adjacency"),
+            vec![face.clone()]
+        );
+        assert_eq!(
+            backend
+                .incident_edges(&vertex)
+                .expect("valid vertex incidence"),
+            vec![MockEdgeHandle(0), MockEdgeHandle(2)]
+        );
+        assert!(
+            backend
+                .face_neighbors(&face)
+                .expect("valid face neighbors")
+                .is_empty()
+        );
+        assert_eq!(backend.euler_characteristic(), 1);
+    }
+
+    #[test]
+    fn test_mock_backend_rejects_invalid_handles() {
+        let mut backend = MockBackend::create_triangle();
+        let missing_vertex = MockVertexHandle(99);
+        let missing_edge = MockEdgeHandle(99);
+        let missing_face = MockFaceHandle(99);
+
+        assert!(matches!(
+            backend.vertex_coordinates(&missing_vertex),
+            Err(MockError::Vertex(99))
+        ));
+        assert!(matches!(
+            backend.face_vertices(&missing_face),
+            Err(MockError::Face(99))
+        ));
+        assert!(backend.edge_endpoints(&missing_edge).is_none());
+        assert!(matches!(
+            backend.adjacent_faces(&missing_vertex),
+            Err(MockError::Vertex(99))
+        ));
+        assert!(matches!(
+            backend.incident_edges(&missing_vertex),
+            Err(MockError::Vertex(99))
+        ));
+        assert!(matches!(
+            backend.face_neighbors(&missing_face),
+            Err(MockError::Face(99))
+        ));
+        assert!(matches!(
+            backend.remove_vertex(missing_vertex.clone()),
+            Err(MockError::Vertex(99))
+        ));
+        assert!(matches!(
+            backend.move_vertex(missing_vertex, &[1.0, 2.0]),
+            Err(MockError::Vertex(99))
+        ));
+        assert!(matches!(
+            backend.flip_edge(missing_edge),
+            Err(MockError::Edge(99))
+        ));
+        assert!(matches!(
+            backend.subdivide_face(missing_face, &[0.25, 0.25]),
+            Err(MockError::Face(99))
+        ));
+    }
+
+    #[test]
+    fn test_mock_backend_rejects_invalid_coordinate_dimensions() {
+        let mut backend = MockBackend::create_triangle();
+
+        assert!(matches!(
+            backend.insert_vertex(&[1.0]),
+            Err(MockError::InvalidCoordinateDimension {
+                operation: "insert_vertex",
+                expected: 2,
+                actual: 1,
+            })
+        ));
+        assert!(matches!(
+            backend.move_vertex(MockVertexHandle(0), &[1.0, 2.0, 3.0]),
+            Err(MockError::InvalidCoordinateDimension {
+                operation: "move_vertex",
+                expected: 2,
+                actual: 3,
+            })
+        ));
+        assert!(matches!(
+            backend.subdivide_face(MockFaceHandle(0), &[0.25]),
+            Err(MockError::InvalidCoordinateDimension {
+                operation: "subdivide_face",
+                expected: 2,
+                actual: 1,
+            })
+        ));
+    }
+
+    #[test]
+    fn test_mock_backend_basic_mutations_update_state() {
+        let mut backend = MockBackend::create_triangle();
+        backend.reserve_capacity(8, 4);
+
+        let vertex = backend
+            .insert_vertex(&[2.0, 3.0])
+            .expect("mock vertex insertion should succeed");
+        assert_eq!(
+            backend
+                .vertex_coordinates(&vertex)
+                .expect("inserted vertex should be queryable"),
+            vec![2.0, 3.0]
+        );
+
+        backend
+            .move_vertex(vertex.clone(), &[4.0, 5.0])
+            .expect("mock vertex move should succeed");
+        assert_eq!(
+            backend
+                .vertex_coordinates(&vertex)
+                .expect("moved vertex should be queryable"),
+            vec![4.0, 5.0]
+        );
+
+        let edge = backend
+            .edges()
+            .next()
+            .expect("triangle should contain edges");
+        assert!(matches!(
+            backend.flip_edge(edge.clone()),
+            Err(MockError::NonFlippableEdge {
+                edge: _,
+                adjacent_faces: 1,
+                reason: "edge must be shared by exactly two faces",
+            })
+        ));
+        assert!(!backend.can_flip_edge(&edge));
+        assert!(!backend.can_flip_edge(&MockEdgeHandle(99)));
+
+        let face = backend
+            .faces()
+            .next()
+            .expect("triangle should contain a face");
+        let subdivision = backend
+            .subdivide_face(face.clone(), &[0.25, 0.25])
+            .expect("mock face subdivision should succeed");
+        assert_eq!(subdivision.removed_face, face);
+        assert_eq!(subdivision.new_faces.len(), 3);
+        assert_eq!(
+            backend
+                .vertex_coordinates(&subdivision.new_vertex)
+                .expect("subdivision vertex should be queryable"),
+            vec![0.25, 0.25]
+        );
+        assert_eq!(backend.vertex_count(), 5);
+        assert_eq!(backend.face_count(), 3);
+
+        let removed_faces = backend
+            .remove_vertex(vertex)
+            .expect("mock vertex removal should succeed");
+        assert!(removed_faces.is_empty());
+
+        backend.clear();
+        assert_eq!(backend.vertex_count(), 0);
+        assert_eq!(backend.edge_count(), 0);
+        assert_eq!(backend.face_count(), 0);
+        assert!(!backend.is_valid());
+        assert_eq!(backend.vertices().count(), 0);
+        assert_eq!(backend.edges().count(), 0);
+        assert_eq!(backend.faces().count(), 0);
+    }
+
+    #[test]
+    fn test_mock_backend_flips_interior_edge() {
+        let mut backend = MockBackend::new(2);
+        backend.vertices.insert(0, vec![0.0, 0.0]);
+        backend.vertices.insert(1, vec![1.0, 0.0]);
+        backend.vertices.insert(2, vec![1.0, 1.0]);
+        backend.vertices.insert(3, vec![0.0, 1.0]);
+        backend.next_vertex_id = 4;
+        backend.edges.insert(0, (0, 1));
+        backend.edges.insert(1, (1, 2));
+        backend.edges.insert(2, (2, 3));
+        backend.edges.insert(3, (3, 0));
+        backend.edges.insert(4, (0, 2));
+        backend.next_edge_id = 5;
+        backend.faces.insert(0, vec![0, 1, 2]);
+        backend.faces.insert(1, vec![0, 2, 3]);
+        backend.next_face_id = 2;
+
+        let diagonal = MockEdgeHandle(4);
+        assert!(backend.can_flip_edge(&diagonal));
+
+        let flip = backend
+            .flip_edge(diagonal.clone())
+            .expect("interior diagonal should be flippable");
+
+        assert_eq!(flip.new_edge, diagonal);
+        assert_eq!(flip.affected_faces.len(), 2);
+        assert_eq!(
+            backend.edge_endpoints(&flip.new_edge),
+            Some((MockVertexHandle(1), MockVertexHandle(3)))
+        );
+        assert_eq!(
+            backend
+                .face_vertices(&MockFaceHandle(0))
+                .expect("updated face"),
+            vec![
+                MockVertexHandle(1),
+                MockVertexHandle(3),
+                MockVertexHandle(0),
+            ]
+        );
+        assert_eq!(
+            backend
+                .face_vertices(&MockFaceHandle(1))
+                .expect("updated face"),
+            vec![
+                MockVertexHandle(3),
+                MockVertexHandle(1),
+                MockVertexHandle(2),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_mock_backend_face_neighbors_return_shared_edge_faces() {
+        let mut backend = MockBackend::new(2);
+        backend.vertices.insert(0, vec![0.0, 0.0]);
+        backend.vertices.insert(1, vec![1.0, 0.0]);
+        backend.vertices.insert(2, vec![1.0, 1.0]);
+        backend.vertices.insert(3, vec![0.0, 1.0]);
+        backend.next_vertex_id = 4;
+        backend.faces.insert(0, vec![0, 1, 2]);
+        backend.faces.insert(1, vec![0, 2, 3]);
+        backend.next_face_id = 2;
+
+        assert_eq!(
+            backend
+                .face_neighbors(&MockFaceHandle(0))
+                .expect("face 0 should be valid"),
+            vec![MockFaceHandle(1)]
+        );
+        assert_eq!(
+            backend
+                .face_neighbors(&MockFaceHandle(1))
+                .expect("face 1 should be valid"),
+            vec![MockFaceHandle(0)]
+        );
+    }
+
+    #[test]
+    fn test_mock_backend_rejects_malformed_edge_flips() {
+        let mut backend = MockBackend::new(2);
+        backend.vertices.insert(0, vec![0.0, 0.0]);
+        backend.vertices.insert(1, vec![1.0, 0.0]);
+        backend.vertices.insert(2, vec![1.0, 1.0]);
+        backend.vertices.insert(3, vec![0.0, 1.0]);
+        backend.next_vertex_id = 4;
+
+        backend.edges.insert(0, (0, 1));
+        backend.faces.insert(0, vec![0, 1, 2, 3]);
+        backend.faces.insert(1, vec![0, 1, 2]);
+        assert!(matches!(
+            backend.flip_edge(MockEdgeHandle(0)),
+            Err(MockError::NonFlippableEdge {
+                edge: 0,
+                adjacent_faces: 2,
+                reason: "adjacent faces must be triangles",
+            })
+        ));
+
+        backend.faces.insert(0, vec![0, 1, 2]);
+        backend.faces.insert(1, vec![1, 0, 2]);
+        assert!(matches!(
+            backend.flip_edge(MockEdgeHandle(0)),
+            Err(MockError::NonFlippableEdge {
+                edge: 0,
+                adjacent_faces: 2,
+                reason: "opposite vertices must be distinct",
+            })
+        ));
+
+        backend.faces.insert(1, vec![1, 0, 3]);
+        backend.edges.insert(1, (2, 3));
+        assert!(matches!(
+            backend.flip_edge(MockEdgeHandle(0)),
+            Err(MockError::NonFlippableEdge {
+                edge: 0,
+                adjacent_faces: 2,
+                reason: "replacement edge already exists",
+            })
+        ));
+    }
+
+    #[test]
+    fn test_mock_backend_rejects_non_triangular_subdivision() {
+        let mut backend = MockBackend::new(2);
+        backend.vertices.insert(0, vec![0.0, 0.0]);
+        backend.vertices.insert(1, vec![1.0, 0.0]);
+        backend.vertices.insert(2, vec![1.0, 1.0]);
+        backend.vertices.insert(3, vec![0.0, 1.0]);
+        backend.next_vertex_id = 4;
+        backend.faces.insert(0, vec![0, 1, 2, 3]);
+        backend.next_face_id = 1;
+
+        assert!(matches!(
+            backend.subdivide_face(MockFaceHandle(0), &[0.5, 0.5]),
+            Err(MockError::NonSubdividableFace {
+                face: 0,
+                vertex_count: 4,
+                expected: "3 vertices",
+            })
+        ));
+        assert_eq!(backend.vertex_count(), 4);
+        assert_eq!(backend.face_count(), 1);
     }
 }

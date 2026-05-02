@@ -1,24 +1,27 @@
+#![forbid(unsafe_code)]
+
 //! Core geometry traits for CDT abstraction.
 //!
 //! This module defines the trait-based interface that completely isolates
 //! CDT algorithms from specific geometry implementations.
 
+use crate::util::saturating_usize_to_i32;
+use std::error::Error as StdError;
 use std::fmt::Debug;
 use std::hash::Hash;
-use std::marker::PhantomData;
 
 /// Core numeric trait for coordinates in geometric calculations.
 ///
 /// `num_traits::Float` already implies `Copy`, `Clone`, `PartialEq`, and `PartialOrd`.
-pub trait CoordinateScalar: Debug + 'static + num_traits::Float {}
+pub trait CoordinateScalar: Debug + num_traits::Float {}
 
-impl<T> CoordinateScalar for T where T: Debug + 'static + num_traits::Float {}
+impl<T: Debug + num_traits::Float> CoordinateScalar for T {}
 
 /// Handle types for geometry entities - completely opaque to prevent coupling
 pub trait GeometryHandle: Clone + Eq + Hash + Debug {}
 
 // Blanket implementation for any type satisfying the constraints
-impl<T> GeometryHandle for T where T: Clone + Eq + Hash + Debug {}
+impl<T: Clone + Eq + Hash + Debug> GeometryHandle for T {}
 
 /// Core geometry backend trait - completely abstracted from implementation details.
 pub trait GeometryBackend {
@@ -31,7 +34,7 @@ pub trait GeometryBackend {
     /// Opaque handle type for faces
     type FaceHandle: GeometryHandle;
     /// Error type for backend operations
-    type Error: std::error::Error + 'static;
+    type Error: StdError;
 
     /// Backend identifier for debugging
     fn backend_name(&self) -> &'static str;
@@ -128,54 +131,70 @@ pub trait TriangulationQuery: GeometryBackend {
 
     /// Calculate the Euler characteristic (V - E + F)
     fn euler_characteristic(&self) -> i32 {
-        let v = crate::util::saturating_usize_to_i32(self.vertex_count());
-        let e = crate::util::saturating_usize_to_i32(self.edge_count());
-        let f = crate::util::saturating_usize_to_i32(self.face_count());
-        v - e + f
+        let v = saturating_usize_to_i32(self.vertex_count());
+        let e = saturating_usize_to_i32(self.edge_count());
+        let f = saturating_usize_to_i32(self.face_count());
+        v.saturating_sub(e).saturating_add(f)
     }
 }
 
 /// Results from edge flip operations
 #[derive(Debug, Clone)]
-pub struct FlipResult<V, E, F> {
+pub struct FlipResult<E, F> {
     /// The new edge created by the flip
     pub new_edge: E,
     /// Faces affected by the flip operation
     pub affected_faces: Vec<F>,
-    _phantom: PhantomData<V>,
 }
 
-impl<V, E, F> FlipResult<V, E, F> {
+impl<E, F> FlipResult<E, F> {
     /// Create a new flip result
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::traits::FlipResult;
+    ///
+    /// let result = FlipResult::new("new edge", vec!["left face", "right face"]);
+    /// assert_eq!(result.new_edge, "new edge");
+    /// assert_eq!(result.affected_faces.len(), 2);
+    /// ```
     pub const fn new(new_edge: E, affected_faces: Vec<F>) -> Self {
         Self {
             new_edge,
             affected_faces,
-            _phantom: PhantomData,
         }
     }
 }
 
 /// Results from face subdivision operations
 #[derive(Debug, Clone)]
-pub struct SubdivisionResult<V, E, F> {
+pub struct SubdivisionResult<V, F> {
     /// The new vertex created at the subdivision point
     pub new_vertex: V,
     /// New faces created by subdividing the original face
     pub new_faces: Vec<F>,
     /// The face that was subdivided (now removed)
     pub removed_face: F,
-    _phantom: PhantomData<E>,
 }
 
-impl<V, E, F> SubdivisionResult<V, E, F> {
+impl<V, F> SubdivisionResult<V, F> {
     /// Create a new subdivision result
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::traits::SubdivisionResult;
+    ///
+    /// let result = SubdivisionResult::new("new vertex", vec!["f0", "f1", "f2"], "old face");
+    /// assert_eq!(result.new_vertex, "new vertex");
+    /// assert_eq!(result.removed_face, "old face");
+    /// ```
     pub const fn new(new_vertex: V, new_faces: Vec<F>, removed_face: F) -> Self {
         Self {
             new_vertex,
             new_faces,
             removed_face,
-            _phantom: PhantomData,
         }
     }
 }
@@ -214,11 +233,10 @@ pub trait TriangulationMut: TriangulationQuery {
     ///
     /// # Errors
     /// Returns error if the edge cannot be flipped
-    #[allow(clippy::type_complexity)]
     fn flip_edge(
         &mut self,
         edge: Self::EdgeHandle,
-    ) -> Result<FlipResult<Self::VertexHandle, Self::EdgeHandle, Self::FaceHandle>, Self::Error>;
+    ) -> Result<FlipResult<Self::EdgeHandle, Self::FaceHandle>, Self::Error>;
 
     /// Check if an edge can be flipped
     fn can_flip_edge(&self, edge: &Self::EdgeHandle) -> bool;
@@ -227,15 +245,11 @@ pub trait TriangulationMut: TriangulationQuery {
     ///
     /// # Errors
     /// Returns error if the face cannot be subdivided
-    #[allow(clippy::type_complexity)]
     fn subdivide_face(
         &mut self,
         face: Self::FaceHandle,
         point: &[Self::Coordinate],
-    ) -> Result<
-        SubdivisionResult<Self::VertexHandle, Self::EdgeHandle, Self::FaceHandle>,
-        Self::Error,
-    >;
+    ) -> Result<SubdivisionResult<Self::VertexHandle, Self::FaceHandle>, Self::Error>;
 
     /// Clear all elements from the triangulation
     fn clear(&mut self);

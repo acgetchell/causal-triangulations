@@ -51,6 +51,16 @@ impl Default for MetropolisConfig {
 
 impl MetropolisConfig {
     /// Creates a new Metropolis configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::MetropolisConfig;
+    ///
+    /// let config = MetropolisConfig::new(2.0, 500, 50, 5);
+    /// assert_eq!(config.steps, 500);
+    /// assert!(config.seed.is_none());
+    /// ```
     #[must_use]
     pub const fn new(
         temperature: f64,
@@ -68,6 +78,15 @@ impl MetropolisConfig {
     }
 
     /// Sets the RNG seed for reproducible simulations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::MetropolisConfig;
+    ///
+    /// let config = MetropolisConfig::new(1.0, 100, 10, 5).with_seed(42);
+    /// assert_eq!(config.seed, Some(42));
+    /// ```
     #[must_use]
     pub const fn with_seed(mut self, seed: u64) -> Self {
         self.seed = Some(seed);
@@ -75,6 +94,15 @@ impl MetropolisConfig {
     }
 
     /// Returns the inverse temperature (β = 1/T).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::MetropolisConfig;
+    ///
+    /// let config = MetropolisConfig::new(2.0, 100, 10, 5);
+    /// assert!((config.beta() - 0.5).abs() < f64::EPSILON);
+    /// ```
     #[must_use]
     pub fn beta(&self) -> f64 {
         1.0 / self.temperature
@@ -85,6 +113,15 @@ impl MetropolisConfig {
     /// # Errors
     ///
     /// Returns a structured error describing the invalid simulation setting.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::MetropolisConfig;
+    ///
+    /// let config = MetropolisConfig::new(1.0, 100, 10, 5);
+    /// assert!(config.validate().is_ok());
+    /// ```
     pub fn validate(&self) -> CdtResult<()> {
         validate_simulation_settings(
             self.temperature,
@@ -98,6 +135,7 @@ impl MetropolisConfig {
     }
 }
 
+/// Adapts shared schedule validation errors to the Metropolis-specific error variant.
 fn invalid_simulation_configuration_from_parts(
     setting: &str,
     provided_value: String,
@@ -157,6 +195,14 @@ pub struct CdtTarget {
 
 impl CdtTarget {
     /// Creates a new CDT target distribution.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{ActionConfig, CdtTarget};
+    ///
+    /// let _target = CdtTarget::new(ActionConfig::default(), 1.0);
+    /// ```
     #[must_use]
     pub const fn new(action_config: ActionConfig, temperature: f64) -> Self {
         Self {
@@ -221,6 +267,15 @@ pub struct MetropolisAlgorithm {
 
 impl MetropolisAlgorithm {
     /// Creates a new Metropolis algorithm instance.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{ActionConfig, MetropolisAlgorithm, MetropolisConfig};
+    ///
+    /// let config = MetropolisConfig::new(1.0, 10, 2, 1);
+    /// let _algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
+    /// ```
     #[must_use]
     pub const fn new(config: MetropolisConfig, action_config: ActionConfig) -> Self {
         Self {
@@ -246,6 +301,20 @@ impl MetropolisAlgorithm {
     /// [`MetropolisConfig::measurement_frequency`]. Downstream equilibrium
     /// filtering treats measurements with `step >= thermalization_steps` as
     /// post-thermalization.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{ActionConfig, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig};
+    ///
+    /// let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53).unwrap();
+    /// let config = MetropolisConfig::new(1.0, 2, 1, 1).with_seed(7);
+    /// let results = MetropolisAlgorithm::new(config, ActionConfig::default())
+    ///     .run(tri)
+    ///     .unwrap();
+    ///
+    /// assert_eq!(results.steps.len(), 2);
+    /// ```
     pub fn run(&self, triangulation: CdtTriangulation2D) -> CdtResult<SimulationResultsBackend> {
         // Validate configuration to fail fast before any work
         self.config.validate()?;
@@ -367,6 +436,20 @@ pub struct SimulationResultsBackend {
 
 impl SimulationResultsBackend {
     /// Calculates the acceptance rate for the simulation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{ActionConfig, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig};
+    ///
+    /// let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53).unwrap();
+    /// let config = MetropolisConfig::new(1.0, 1, 0, 1).with_seed(7);
+    /// let results = MetropolisAlgorithm::new(config, ActionConfig::default())
+    ///     .run(tri)
+    ///     .unwrap();
+    ///
+    /// assert!((0.0..=1.0).contains(&results.acceptance_rate()));
+    /// ```
     #[must_use]
     pub fn acceptance_rate(&self) -> f64 {
         if self.steps.is_empty() {
@@ -383,6 +466,20 @@ impl SimulationResultsBackend {
     }
 
     /// Calculates the average action over all measurements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{ActionConfig, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig};
+    ///
+    /// let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53).unwrap();
+    /// let config = MetropolisConfig::new(1.0, 1, 0, 1).with_seed(7);
+    /// let results = MetropolisAlgorithm::new(config, ActionConfig::default())
+    ///     .run(tri)
+    ///     .unwrap();
+    ///
+    /// assert!(results.average_action().is_finite());
+    /// ```
     #[must_use]
     pub fn average_action(&self) -> f64 {
         if self.measurements.is_empty() {
@@ -404,6 +501,21 @@ impl SimulationResultsBackend {
     /// [`MetropolisConfig::measurement_frequency`]. This accessor defines
     /// equilibrium as `measurement.step >= thermalization_steps`, so a
     /// measurement taken exactly on the thermalization boundary is included.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{ActionConfig, MetropolisAlgorithm, MetropolisConfig};
+    /// use causal_triangulations::CdtTriangulation;
+    ///
+    /// let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53).unwrap();
+    /// let config = MetropolisConfig::new(1.0, 2, 1, 1).with_seed(7);
+    /// let results = MetropolisAlgorithm::new(config, ActionConfig::default())
+    ///     .run(tri)
+    ///     .unwrap();
+    ///
+    /// assert!(!results.equilibrium_measurements().is_empty());
+    /// ```
     #[must_use]
     pub fn equilibrium_measurements(&self) -> Vec<&Measurement> {
         self.measurements
@@ -699,7 +811,7 @@ mod tests {
             action_config: ActionConfig::default(),
             steps: vec![],
             measurements,
-            elapsed_time: std::time::Duration::from_millis(100),
+            elapsed_time: Duration::from_millis(100),
             triangulation,
         };
 

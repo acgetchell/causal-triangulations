@@ -22,6 +22,19 @@ src/
     └── ergodic_moves.rs # Ergodic moves (2,2), (1,3), (3,1)
 ```
 
+Repository tooling:
+
+```text
+.github/workflows/semgrep-sarif.yml # Repository Semgrep rule SARIF upload
+semgrep.yaml           # Repository-owned Semgrep rules
+docs/dev/python.md     # Python script style and validation guidance
+tests/semgrep/         # Semgrep rule fixtures run by `just semgrep-test`
+scripts/archive_changelog.py # Split completed changelog minor series into archive files
+scripts/coverage_report.py # Cobertura coverage summary helper
+scripts/postprocess_changelog.py # Markdown hygiene for git-cliff changelogs
+scripts/tag_release.py # Annotated release tags from root or archived changelog sections
+```
+
 ## Key Modules
 
 ### `cdt/foliation.rs` — Foliation
@@ -50,10 +63,10 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 
 ### `geometry/generators.rs` — Delaunay triangulation generators
 
-- `delaunay2_with_context` — builds a 2D Delaunay triangulation with optional seed
+- `generate_delaunay2` — builds a 2D Delaunay triangulation with optional seed
 - `build_delaunay2_with_data` — builds from coordinate + vertex-data pairs
-- `build_explicit_delaunay2` / `build_explicit_delaunay2_with_topology` — builds from explicit cell connectivity (no Delaunay point insertion); the latter also accepts `TopologyGuarantee` and `GlobalTopology` metadata so non-sphere Euler characteristics validate correctly
-- `build_explicit_delaunay2_toroidal` — convenience wrapper for explicit toroidal meshes (χ = 0)
+- `build_delaunay2_from_cells` / `build_delaunay2_with_topology` — builds from explicit cell connectivity (no Delaunay point insertion); the latter also accepts `TopologyGuarantee` and `GlobalTopology` metadata so non-sphere Euler characteristics validate correctly
+- `build_toroidal_delaunay2` — convenience wrapper for explicit toroidal meshes (χ = 0)
 - `random_delaunay2`, `seeded_delaunay2` — convenience wrappers
 - `DelaunayTriangulation2D` — type alias for the concrete 2D triangulation type
 

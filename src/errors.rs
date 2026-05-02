@@ -1,14 +1,21 @@
+#![forbid(unsafe_code)]
+
 //! Error types for the CDT library.
 
 use crate::cdt::foliation::FoliationError;
-use std::fmt;
 
 /// Main error type for CDT operations.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum CdtError {
     /// Invalid dimension specified
+    #[error("Unsupported dimension: {0}. Only 2D is currently supported")]
     UnsupportedDimension(u32),
     /// Delaunay triangulation generation failed with detailed context
+    #[error(
+        "Delaunay triangulation generation failed: {vertex_count} vertices, range [{}, {}], attempt {attempt}: {underlying_error}",
+        coordinate_range.0,
+        coordinate_range.1
+    )]
     DelaunayGenerationFailed {
         /// Number of vertices requested for the triangulation
         vertex_count: u32,
@@ -20,6 +27,9 @@ pub enum CdtError {
         underlying_error: String,
     },
     /// Invalid generation parameters detected before attempting triangulation
+    #[error(
+        "Invalid triangulation parameters: {issue} (got: {provided_value}, expected: {expected_range})"
+    )]
     InvalidGenerationParameters {
         /// Description of the specific parameter issue
         issue: String,
@@ -29,6 +39,7 @@ pub enum CdtError {
         expected_range: String,
     },
     /// Top-level CDT configuration failed validation.
+    #[error("Invalid configuration: {setting} (got: {provided_value}, expected: {expected})")]
     InvalidConfiguration {
         /// Name of the invalid configuration setting.
         setting: String,
@@ -38,6 +49,9 @@ pub enum CdtError {
         expected: String,
     },
     /// Metropolis / simulation configuration failed validation.
+    #[error(
+        "Invalid simulation configuration: {setting} (got: {provided_value}, expected: {expected})"
+    )]
     InvalidSimulationConfiguration {
         /// Name of the invalid simulation setting.
         setting: String,
@@ -46,7 +60,22 @@ pub enum CdtError {
         /// Expected constraint for the setting.
         expected: String,
     },
+    /// Constructed triangulation metadata is internally inconsistent.
+    #[error(
+        "Invalid triangulation metadata: {field} for {topology} (got: {provided_value}, expected: {expected})"
+    )]
+    InvalidTriangulationMetadata {
+        /// Name of the invalid metadata field.
+        field: String,
+        /// Topology whose invariant was violated.
+        topology: String,
+        /// Value stored in the triangulation metadata.
+        provided_value: String,
+        /// Expected constraint for the metadata field.
+        expected: String,
+    },
     /// Validation of a constructed triangulation failed
+    #[error("Validation failed [{check}]: {detail}")]
     ValidationFailed {
         /// Name of the validation check that failed (e.g. "geometry", "topology", "Delaunay")
         check: String,
@@ -54,6 +83,7 @@ pub enum CdtError {
         detail: String,
     },
     /// Vertex construction failed during triangulation generation
+    #[error("Vertex construction failed [{context}]: {underlying_error}")]
     VertexBuildFailed {
         /// Human-readable context (e.g., function name or vertex index)
         context: String,
@@ -61,6 +91,7 @@ pub enum CdtError {
         underlying_error: String,
     },
     /// Backend payload mutation failed due to an invalid or unavailable handle.
+    #[error("Backend mutation failed [{operation}] on {target}: {detail}")]
     BackendMutationFailed {
         /// Mutation operation being attempted.
         operation: String,
@@ -71,6 +102,7 @@ pub enum CdtError {
     },
     /// An edge violates the causal structure by spanning more than one time slice
     /// (or, on toroidal topology, more than one *circular* slice step).
+    #[error("{}", format_causality_violation(*time_0, *time_1, *step_distance))]
     CausalityViolation {
         /// Time label of the first endpoint.
         time_0: u32,
@@ -86,93 +118,26 @@ pub enum CdtError {
         step_distance: u32,
     },
     /// MCMC framework error (e.g. NaN in log-probability)
+    #[error("MCMC error: {0}")]
     Mcmc(String),
 }
 
-impl fmt::Display for CdtError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::UnsupportedDimension(dim) => write!(
-                f,
-                "Unsupported dimension: {dim}. Only 2D is currently supported"
-            ),
-            Self::DelaunayGenerationFailed {
-                vertex_count,
-                coordinate_range,
-                attempt,
-                underlying_error,
-            } => write!(
-                f,
-                "Delaunay triangulation generation failed: {vertex_count} vertices, range [{}, {}], attempt {attempt}: {underlying_error}",
-                coordinate_range.0, coordinate_range.1
-            ),
-            Self::InvalidGenerationParameters {
-                issue,
-                provided_value,
-                expected_range,
-            } => write!(
-                f,
-                "Invalid triangulation parameters: {issue} (got: {provided_value}, expected: {expected_range})",
-            ),
-            Self::InvalidConfiguration {
-                setting,
-                provided_value,
-                expected,
-            } => write!(
-                f,
-                "Invalid configuration: {setting} (got: {provided_value}, expected: {expected})"
-            ),
-            Self::InvalidSimulationConfiguration {
-                setting,
-                provided_value,
-                expected,
-            } => write!(
-                f,
-                "Invalid simulation configuration: {setting} (got: {provided_value}, expected: {expected})"
-            ),
-            Self::ValidationFailed { check, detail } => {
-                write!(f, "Validation failed [{check}]: {detail}")
-            }
-            Self::VertexBuildFailed {
-                context,
-                underlying_error,
-            } => write!(
-                f,
-                "Vertex construction failed [{context}]: {underlying_error}"
-            ),
-            Self::BackendMutationFailed {
-                operation,
-                target,
-                detail,
-            } => write!(
-                f,
-                "Backend mutation failed [{operation}] on {target}: {detail}"
-            ),
-            Self::CausalityViolation {
-                time_0,
-                time_1,
-                step_distance,
-            } => {
-                let raw = time_0.abs_diff(*time_1);
-                if raw == *step_distance {
-                    write!(
-                        f,
-                        "Causality violation: edge spans {step_distance} time-slice steps \
-                         (t={time_0} to t={time_1}), maximum allowed is 1"
-                    )
-                } else {
-                    // Toroidal: the displayed step distance is the circular
-                    // distance, smaller than the raw label difference.
-                    write!(
-                        f,
-                        "Causality violation: edge spans {step_distance} time-slice steps \
-                         (t={time_0} to t={time_1}, |Δt|={raw} on the time circle), \
-                         maximum allowed is 1"
-                    )
-                }
-            }
-            Self::Mcmc(msg) => write!(f, "MCMC error: {msg}"),
-        }
+/// Keeps causality error formatting centralized so open and toroidal distances stay consistent.
+fn format_causality_violation(time_0: u32, time_1: u32, step_distance: u32) -> String {
+    let raw = time_0.abs_diff(time_1);
+    if raw == step_distance {
+        format!(
+            "Causality violation: edge spans {step_distance} time-slice steps \
+             (t={time_0} to t={time_1}), maximum allowed is 1"
+        )
+    } else {
+        // Toroidal: the displayed step distance is the circular distance,
+        // smaller than the raw label difference.
+        format!(
+            "Causality violation: edge spans {step_distance} time-slice steps \
+             (t={time_0} to t={time_1}, |Δt|={raw} on the time circle), \
+             maximum allowed is 1"
+        )
     }
 }
 
@@ -190,8 +155,6 @@ impl From<FoliationError> for CdtError {
         }
     }
 }
-
-impl std::error::Error for CdtError {}
 
 /// Result type for CDT operations.
 pub type CdtResult<T> = Result<T, CdtError>;
@@ -225,6 +188,21 @@ mod tests {
         assert_eq!(
             display,
             "Invalid simulation configuration: temperature (got: NaN, expected: finite and positive)"
+        );
+    }
+
+    #[test]
+    fn test_invalid_triangulation_metadata_error() {
+        let error = CdtError::InvalidTriangulationMetadata {
+            field: "timeslices".to_string(),
+            topology: "toroidal".to_string(),
+            provided_value: "2".to_string(),
+            expected: "≥ 3".to_string(),
+        };
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Invalid triangulation metadata: timeslices for toroidal (got: 2, expected: ≥ 3)"
         );
     }
 
@@ -423,12 +401,14 @@ mod tests {
 
     #[test]
     fn test_std_error_trait() {
+        use std::error::Error;
+
         let error = CdtError::InvalidConfiguration {
             setting: "temperature".to_string(),
             provided_value: "NaN".to_string(),
             expected: "finite and positive".to_string(),
         };
-        let _: &dyn std::error::Error = &error;
+        let _: &dyn Error = &error;
         // If this compiles, the trait is implemented correctly
     }
 }

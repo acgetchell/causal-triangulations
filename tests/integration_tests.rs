@@ -1,9 +1,14 @@
+#![forbid(unsafe_code)]
+
 //! Comprehensive integration tests for CDT-RS.
 //!
 //! This module contains integration tests that verify the complete CDT simulation
 //! workflows, topology preservation, error handling, and consistency between components.
 
-use causal_triangulations::prelude::*;
+use causal_triangulations::prelude::simulation::{
+    ActionConfig, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+};
+use std::time::Instant;
 
 #[cfg(test)]
 mod integration_tests {
@@ -218,7 +223,7 @@ mod integration_tests {
         assert!(faces > 0, "Should have positive face count");
 
         // Test that edge counting is efficient (doesn't hang)
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let _ = triangulation.edge_count();
         let elapsed = start.elapsed();
 

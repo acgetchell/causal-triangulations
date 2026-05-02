@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Basic example of using the Causal Dynamical Triangulations library
 //!
 //! This example shows how to:
@@ -6,10 +8,12 @@
 //! - Run a basic CDT simulation
 //! - Extract and display results
 
-use causal_triangulations::prelude::*;
+use causal_triangulations::prelude::simulation::{
+    CdtConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm,
+};
 use log::{LevelFilter, info};
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> CdtResult<()> {
     // Initialize logging
     env_logger::Builder::new()
         .filter_level(LevelFilter::Info)
