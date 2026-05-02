@@ -17,7 +17,7 @@ use crate::geometry::CdtTriangulation2D;
 use crate::geometry::traits::TriangulationQuery;
 use markov_chain_monte_carlo::{ProposalMut, Target};
 use num_traits::cast::NumCast;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
 use std::time::{Duration, Instant};
 
 // Test utilities are now handled through backend-agnostic CdtTriangulation::new
@@ -388,7 +388,6 @@ impl MetropolisAlgorithm {
                         action_change: applied_action - action_before,
                     });
             }
-
 
             steps.push(MonteCarloStep {
                 step,
