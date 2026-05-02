@@ -65,14 +65,9 @@ impl<V: Eq + Hash> Eq for UnorderedSet<V> {}
 impl<V: Hash> Hash for UnorderedSet<V> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         // Order-independent, duplicate-robust hash by hashing each unique element and sorting.
-        let mut hashes: Vec<u64> = self
-            .0
-            .iter()
-            .map(stable_hash)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect();
+        let mut hashes: Vec<u64> = self.0.iter().map(stable_hash).collect();
         hashes.sort_unstable();
+        hashes.dedup();
         for h in hashes {
             state.write_u64(h);
         }

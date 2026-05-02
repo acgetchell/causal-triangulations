@@ -39,15 +39,15 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 ### Additional Options
 
-- `--simulate`: Run full Monte Carlo simulation (default: true; pass `--simulate false` to only generate the triangulation without running Monte Carlo steps)
+- `--simulate`: Request full Monte Carlo simulation (default: false). Until real CDT move kernels land in #55/#56, this exits with an explicit unsupported-operation error instead of returning a zero-move simulation.
 
 ## Example Usage Scenarios
 
 ### 1. Small Test Simulation
 
 ```bash
-# Quick test with minimal parameters
-./target/release/cdt --vertices 5 --timeslices 2 --simulate
+# Quick triangulation-generation test with minimal parameters
+./target/release/cdt --vertices 5 --timeslices 2
 ```
 
 **Expected Output:**
@@ -120,7 +120,7 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 ```bash
 # Generate triangulation without running Monte Carlo simulation
-./target/release/cdt --vertices 100 --timeslices 20 --simulate false
+./target/release/cdt --vertices 100 --timeslices 20
 ```
 
 **Use Case:** Generate initial configurations for other analysis tools

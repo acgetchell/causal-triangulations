@@ -18,7 +18,6 @@ rules:
       include:
         - "/src/**/*.rs"
       exclude:
-        - "/tests/**"
         - "/examples/**"
         - "/benches/**"
     patterns:
@@ -158,7 +157,6 @@ rules:
       include:
         - "/src/**/*.rs"
       exclude:
-        - "/tests/**"
         - "/examples/**"
         - "/benches/**"
     patterns:
@@ -202,6 +200,24 @@ rules:
           impl $TYPE {
               ...
           }
+
+  - id: causal-triangulations.rust.no-stringly-domain-validation-errors
+    languages:
+      - rust
+    severity: WARNING
+    message: "Use the dedicated CdtError variant instead of stringly ValidationFailed for this domain."
+    metadata:
+      category: maintainability
+      rationale: >-
+        Topology, foliation, and unsupported construction failures have typed
+        variants; routing them through ValidationFailed loses programmatic
+        debuggability.
+    paths:
+      include:
+        - "/src/**/*.rs"
+    pattern-regex: >-
+      (?s)CdtError::ValidationFailed\s*\{[^}]*
+      check:\s*"(?:foliation|topology|cdt_construction)"\.to_string\(\)
 
   - id: causal-triangulations.python.no-raw-exception-in-tests
     languages:

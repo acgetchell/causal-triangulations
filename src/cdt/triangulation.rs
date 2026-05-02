@@ -16,6 +16,7 @@ use crate::geometry::generators::{
 use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
 use crate::util::f64_band_to_u32;
 use std::collections::{HashMap, HashSet};
+use std::ops::{Deref, DerefMut};
 use std::time::Instant;
 
 /// CDT-specific triangulation wrapper - completely geometry-agnostic
@@ -145,6 +146,33 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         Self::wrap_unchecked(geometry, time_slices, dimension, CdtTopology::OpenBoundary)
     }
 
+    /// Fallible constructor for a CDT triangulation with open boundary topology.
+    ///
+    /// Validates metadata before returning so callers cannot accidentally wrap a
+    /// backend with a mismatched dimension or zero time slices.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidTriangulationMetadata`] if the supplied
+    /// metadata is inconsistent with the backend or topology.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::CdtTriangulation;
+    ///
+    /// let backend = MockBackend::create_triangle();
+    /// let tri = CdtTriangulation::try_new(backend, 2, 2)
+    ///     .expect("metadata matches backend");
+    /// assert_eq!(tri.time_slices(), 2);
+    /// ```
+    pub fn try_new(geometry: B, time_slices: u32, dimension: u8) -> CdtResult<Self> {
+        let tri = Self::wrap_unchecked(geometry, time_slices, dimension, CdtTopology::OpenBoundary);
+        tri.validate_metadata()?;
+        Ok(tri)
+    }
+
     /// Create new CDT triangulation with explicit topology.
     ///
     /// Wraps an existing geometry backend and tags it with [`CdtTopology`].
@@ -217,6 +245,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ) -> CdtResult<Self> {
         let mut tri = Self::wrap_unchecked(geometry, time_slices, dimension, topology);
         tri.apply_time_slices(time_slices)?;
+        tri.validate_metadata()?;
         Ok(tri)
     }
 
@@ -247,12 +276,46 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
 
     /// Encodes topology-specific time-slice metadata invariants in one reusable check.
     fn check_time_slices(topology: CdtTopology, time_slices: u32) -> CdtResult<()> {
+        if time_slices == 0 {
+            return Err(CdtError::InvalidTriangulationMetadata {
+                field: "timeslices".to_string(),
+                topology: Self::topology_label(topology).to_string(),
+                provided_value: "0".to_string(),
+                expected: "≥ 1".to_string(),
+            });
+        }
+
         if matches!(topology, CdtTopology::Toroidal) && time_slices < 3 {
             return Err(CdtError::InvalidTriangulationMetadata {
                 field: "timeslices".to_string(),
-                topology: "toroidal".to_string(),
+                topology: Self::topology_label(topology).to_string(),
                 provided_value: time_slices.to_string(),
                 expected: "≥ 3".to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Human-readable topology label for metadata diagnostics.
+    const fn topology_label(topology: CdtTopology) -> &'static str {
+        match topology {
+            CdtTopology::OpenBoundary => "open boundary",
+            CdtTopology::Toroidal => "toroidal",
+        }
+    }
+
+    /// Validates CDT metadata against backend and topology invariants.
+    fn validate_metadata(&self) -> CdtResult<()> {
+        Self::check_time_slices(self.metadata.topology, self.metadata.time_slices)?;
+
+        let backend_dimension = self.geometry.dimension();
+        if usize::from(self.metadata.dimension) != backend_dimension {
+            return Err(CdtError::InvalidTriangulationMetadata {
+                field: "dimension".to_string(),
+                topology: Self::topology_label(self.metadata.topology).to_string(),
+                provided_value: self.metadata.dimension.to_string(),
+                expected: format!("backend dimension ({backend_dimension})"),
             });
         }
 
@@ -433,6 +496,8 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// assert!(tri.validate_topology().is_ok());
     /// ```
     pub fn validate_topology(&self) -> CdtResult<()> {
+        self.validate_metadata()?;
+
         let euler_char = self.geometry.euler_characteristic();
 
         if self.dimension() == 2 {
@@ -444,19 +509,13 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             };
 
             if !expected.contains(&euler_char) {
-                let topo_label = match self.metadata.topology {
-                    CdtTopology::OpenBoundary => "open boundary (expected χ=1 or 2)",
-                    CdtTopology::Toroidal => "toroidal (expected χ=0)",
-                };
-                return Err(CdtError::ValidationFailed {
-                    check: "topology".to_string(),
-                    detail: format!(
-                        "Euler characteristic χ={euler_char} unexpected for 2D {topo_label} \
-                         triangulation (V={}, E={}, F={})",
-                        self.geometry.vertex_count(),
-                        self.geometry.edge_count(),
-                        self.geometry.face_count(),
-                    ),
+                return Err(CdtError::TopologyMismatch {
+                    topology: Self::topology_label(self.metadata.topology).to_string(),
+                    euler_characteristic: euler_char,
+                    expected_euler_characteristics: expected.to_vec(),
+                    vertices: self.geometry.vertex_count(),
+                    edges: self.geometry.edge_count(),
+                    faces: self.geometry.face_count(),
                 });
             }
         }
@@ -927,14 +986,14 @@ impl<B> CdtGeometryMut<'_, B> {
     }
 }
 
-impl<B> std::ops::Deref for CdtGeometryMut<'_, B> {
+impl<B> Deref for CdtGeometryMut<'_, B> {
     type Target = B;
     fn deref(&self) -> &Self::Target {
         self.geometry
     }
 }
 
-impl<B> std::ops::DerefMut for CdtGeometryMut<'_, B> {
+impl<B> DerefMut for CdtGeometryMut<'_, B> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.mark_backend_mutation();
         self.geometry
@@ -1022,49 +1081,31 @@ impl CdtTriangulation<DelaunayBackend2D> {
         backend: &DelaunayBackend2D,
         num_slices: u32,
     ) -> CdtResult<Vec<usize>> {
-        const UNLABELED_VERTEX_EXAMPLE_LIMIT: usize = 4;
-
         if num_slices == 0 {
-            return Err(CdtError::ValidationFailed {
-                check: "foliation".to_string(),
-                detail: "cannot validate foliation with 0 time slices".to_string(),
-            });
+            return Err(FoliationError::SliceSizeMismatch {
+                slice_sizes_len: 0,
+                num_slices,
+            }
+            .into());
         }
 
         let mut slice_sizes = vec![0usize; num_slices as usize];
-        let mut unlabeled_vertex_count = 0usize;
-        let mut unlabeled_vertex_examples = Vec::with_capacity(UNLABELED_VERTEX_EXAMPLE_LIMIT);
 
-        for vh in backend.vertices() {
+        for (vertex, vh) in backend.vertices().enumerate() {
             if let Some(t) = backend.vertex_data_by_key(vh.vertex_key()) {
                 let idx = t as usize;
                 if idx >= slice_sizes.len() {
-                    return Err(CdtError::ValidationFailed {
-                        check: "foliation".to_string(),
-                        detail: format!(
-                            "vertex {:?} has out-of-range time label {t}; expected 0..{}",
-                            vh.vertex_key(),
-                            slice_sizes.len(),
-                        ),
-                    });
+                    return Err(FoliationError::OutOfRangeVertexLabel {
+                        vertex,
+                        label: t,
+                        expected_range_end: slice_sizes.len(),
+                    }
+                    .into());
                 }
                 slice_sizes[idx] += 1;
             } else {
-                unlabeled_vertex_count += 1;
-                if unlabeled_vertex_examples.len() < UNLABELED_VERTEX_EXAMPLE_LIMIT {
-                    unlabeled_vertex_examples.push(format!("{:?}", vh.vertex_key()));
-                }
+                return Err(FoliationError::MissingVertexLabel { vertex }.into());
             }
-        }
-
-        if unlabeled_vertex_count > 0 {
-            return Err(CdtError::ValidationFailed {
-                check: "foliation".to_string(),
-                detail: format!(
-                    "{unlabeled_vertex_count} vertices are missing time labels; example vertex keys (up to {UNLABELED_VERTEX_EXAMPLE_LIMIT}): [{}]",
-                    unlabeled_vertex_examples.join(", "),
-                ),
-            });
         }
 
         Ok(slice_sizes)
@@ -1103,7 +1144,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let dt = generate_delaunay2(vertices, (0.0, 10.0), None)?;
         let backend = DelaunayBackend2D::from_triangulation(dt);
 
-        Ok(Self::new(backend, time_slices, dimension))
+        Self::try_new(backend, time_slices, dimension)
     }
 
     /// Create a new CDT triangulation with Delaunay backend from random points using a fixed seed.
@@ -1144,7 +1185,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let dt = generate_delaunay2(vertices, (0.0, 10.0), Some(seed))?;
         let backend = DelaunayBackend2D::from_triangulation(dt);
 
-        Ok(Self::new(backend, time_slices, dimension))
+        Self::try_new(backend, time_slices, dimension)
     }
 
     /// Wrap a labeled 2D Delaunay backend and derive foliation from vertex data.
@@ -1185,6 +1226,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             return Err(CdtError::UnsupportedDimension(dimension.into()));
         }
 
+        Self::check_time_slices(CdtTopology::OpenBoundary, time_slices)?;
         let slice_sizes = Self::live_slice_sizes_from_vertex_labels(&backend, time_slices)?;
         for (slice, &size) in slice_sizes.iter().enumerate() {
             if size == 0 {
@@ -1194,7 +1236,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let foliation =
             Foliation::from_slice_sizes(slice_sizes, time_slices).map_err(CdtError::from)?;
 
-        let mut tri = Self::new(backend, time_slices, dimension);
+        let mut tri = Self::try_new(backend, time_slices, dimension)?;
         tri.foliation = Some(foliation);
         tri.mark_foliation_synchronized();
         Ok(tri)
@@ -1362,7 +1404,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         let foliation =
             Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
-        let mut tri = Self::new(backend, num_slices, 2);
+        let mut tri = Self::try_new(backend, num_slices, 2)?;
         tri.foliation = Some(foliation);
         tri.mark_foliation_synchronized();
 
@@ -1400,7 +1442,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// Returns [`CdtError::InvalidGenerationParameters`] if `vertices_per_slice < 4` or
     /// `num_slices < 2`.
-    /// Returns [`CdtError::ValidationFailed`] because explicit CDT mesh construction is
+    /// Returns [`CdtError::UnsupportedOperation`] because explicit CDT mesh construction is
     /// not yet implemented.
     ///
     /// # Examples
@@ -1435,10 +1477,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
         // 3. Splitting quads into valid CDT triangles
         // 4. Building backend without relying on Delaunay
 
-        Err(CdtError::ValidationFailed {
-            check: "cdt_construction".to_string(),
-            detail: "from_cdt_strip is not yet implemented: requires explicit mesh backend"
-                .to_string(),
+        Err(CdtError::UnsupportedOperation {
+            operation: "CdtTriangulation::from_cdt_strip".to_string(),
+            reason: "explicit CDT strip construction is not yet implemented; requires explicit mesh backend".to_string(),
         })
     }
 
@@ -1624,6 +1665,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// assert!(tri.has_foliation());
     /// assert_eq!(tri.slice_sizes().iter().sum::<usize>(), tri.vertex_count());
     /// ```
+    #[expect(
+        clippy::too_many_lines,
+        reason = "foliation assignment stages labels, writes backend payloads, and rolls back on failure to preserve atomic metadata/foliation invariants"
+    )]
     pub fn assign_foliation_by_y(&mut self, num_slices: u32) -> CdtResult<()> {
         if num_slices == 0 {
             return Err(CdtError::InvalidGenerationParameters {
@@ -1695,33 +1740,86 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let foliation =
             Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
 
-        self.apply_time_slices(num_slices)?;
+        Self::check_time_slices(self.metadata.topology, num_slices)?;
 
         // Clear stale cell classifications from any previous classify_all_cells() call,
         // since vertex time labels are about to change.
         let face_keys: Vec<_> = self.geometry.faces().map(|f| f.cell_key()).collect();
+        let previous_cell_data: Vec<_> = face_keys
+            .iter()
+            .map(|&key| (key, self.geometry.cell_data_by_key(key)))
+            .collect();
+        let previous_vertex_data: Vec<_> = assignments
+            .iter()
+            .map(|&(key, _)| (key, self.geometry.vertex_data_by_key(key)))
+            .collect();
+
+        let rollback_payloads = |geometry: &mut DelaunayBackend2D| -> Vec<String> {
+            let mut rollback_errors = Vec::new();
+
+            for &(key, data) in &previous_cell_data {
+                if let Err(err) = geometry.set_cell_data_by_key(key, data) {
+                    rollback_errors.push(format!("face {key:?}: {err}"));
+                }
+            }
+
+            for &(key, data) in &previous_vertex_data {
+                if let Err(err) = geometry.set_vertex_data_by_key(key, data) {
+                    rollback_errors.push(format!("vertex {key:?}: {err}"));
+                }
+            }
+
+            rollback_errors
+        };
 
         for &key in &face_keys {
             if let Err(err) = self.geometry.set_cell_data_by_key(key, None) {
-                return Err(CdtError::BackendMutationFailed {
-                    operation: "set_cell_data_by_key".to_string(),
-                    target: format!("face {key:?}"),
-                    detail: err.to_string(),
-                });
+                let operation = "set_cell_data_by_key".to_string();
+                let target = format!("face {key:?}");
+                let detail = err.to_string();
+                let rollback_errors = rollback_payloads(&mut self.geometry);
+                return if rollback_errors.is_empty() {
+                    Err(CdtError::BackendMutationFailed {
+                        operation,
+                        target,
+                        detail,
+                    })
+                } else {
+                    Err(CdtError::BackendRollbackFailed {
+                        operation,
+                        target,
+                        detail,
+                        rollback_errors: rollback_errors.join("; "),
+                    })
+                };
             }
         }
 
         // Write time labels directly to vertex data via set_vertex_data_by_key (O(1) per vertex).
         for (vertex_key, t) in assignments {
             if let Err(err) = self.geometry.set_vertex_data_by_key(vertex_key, Some(t)) {
-                return Err(CdtError::BackendMutationFailed {
-                    operation: "set_vertex_data_by_key".to_string(),
-                    target: format!("vertex {vertex_key:?}"),
-                    detail: format!("failed while assigning time label {t}: {err}"),
-                });
+                let operation = "set_vertex_data_by_key".to_string();
+                let target = format!("vertex {vertex_key:?}");
+                let detail = format!("failed while assigning time label {t}: {err}");
+                let rollback_errors = rollback_payloads(&mut self.geometry);
+                return if rollback_errors.is_empty() {
+                    Err(CdtError::BackendMutationFailed {
+                        operation,
+                        target,
+                        detail,
+                    })
+                } else {
+                    Err(CdtError::BackendRollbackFailed {
+                        operation,
+                        target,
+                        detail,
+                        rollback_errors: rollback_errors.join("; "),
+                    })
+                };
             }
         }
 
+        self.metadata.time_slices = num_slices;
         self.bump_modification_count();
         self.foliation = Some(foliation);
         self.mark_foliation_synchronized();
@@ -2557,6 +2655,78 @@ mod tests {
     }
 
     #[test]
+    fn test_try_new_rejects_zero_time_slices() {
+        let backend = labeled_triangle_backend([0, 0, 1]);
+        let result = CdtTriangulation::try_new(backend, 0, 2);
+
+        assert!(matches!(
+            result,
+            Err(CdtError::InvalidTriangulationMetadata {
+                ref field,
+                ref topology,
+                ref provided_value,
+                ref expected,
+            }) if field == "timeslices"
+                && topology == "open boundary"
+                && provided_value == "0"
+                && expected == "≥ 1"
+        ));
+    }
+
+    #[test]
+    fn test_try_new_rejects_dimension_mismatch() {
+        let backend = labeled_triangle_backend([0, 0, 1]);
+        let result = CdtTriangulation::try_new(backend, 2, 3);
+
+        assert!(matches!(
+            result,
+            Err(CdtError::InvalidTriangulationMetadata {
+                ref field,
+                ref topology,
+                ref provided_value,
+                ref expected,
+            }) if field == "dimension"
+                && topology == "open boundary"
+                && provided_value == "3"
+                && expected == "backend dimension (2)"
+        ));
+    }
+
+    #[test]
+    fn test_validate_topology_rejects_legacy_dimension_mismatch() {
+        let backend = labeled_triangle_backend([0, 0, 1]);
+        let tri = CdtTriangulation::new(backend, 2, 3);
+        let result = tri.validate_topology();
+
+        assert!(matches!(
+            result,
+            Err(CdtError::InvalidTriangulationMetadata {
+                ref field,
+                ref provided_value,
+                ref expected,
+                ..
+            }) if field == "dimension"
+                && provided_value == "3"
+                && expected == "backend dimension (2)"
+        ));
+    }
+
+    #[test]
+    fn test_from_seeded_points_rejects_zero_time_slices() {
+        let result = CdtTriangulation::from_seeded_points(5, 0, 2, 53);
+
+        assert!(matches!(
+            result,
+            Err(CdtError::InvalidTriangulationMetadata {
+                ref field,
+                ref provided_value,
+                ref expected,
+                ..
+            }) if field == "timeslices" && provided_value == "0" && expected == "≥ 1"
+        ));
+    }
+
+    #[test]
     fn test_invalid_vertex_count() {
         let invalid_counts = [0, 1, 2];
         for count in invalid_counts {
@@ -3003,13 +3173,17 @@ mod tests {
     }
 
     #[test]
-    fn test_zero_time_slices() {
+    fn test_zero_time_slices_rejected() {
         let result = CdtTriangulation::from_random_points(5, 0, 2);
-        // This should still work - time_slices is just metadata
-        assert!(result.is_ok(), "Should allow 0 time slices");
-
-        let triangulation = result.unwrap();
-        assert_eq!(triangulation.time_slices(), 0);
+        assert!(matches!(
+            result,
+            Err(CdtError::InvalidTriangulationMetadata {
+                ref field,
+                ref provided_value,
+                ref expected,
+                ..
+            }) if field == "timeslices" && provided_value == "0" && expected == "≥ 1"
+        ));
     }
 
     #[test]
@@ -3344,9 +3518,12 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(CdtError::ValidationFailed { ref check, ref detail })
-                if check == "foliation"
-                    && detail == "cannot validate foliation with 0 time slices"
+            Err(CdtError::InvalidTriangulationMetadata {
+                ref field,
+                ref provided_value,
+                ref expected,
+                ..
+            }) if field == "timeslices" && provided_value == "0" && expected == "≥ 1"
         ));
     }
 
@@ -3383,8 +3560,9 @@ mod tests {
         let result = tri.validate_foliation();
         assert!(matches!(
             result,
-            Err(CdtError::ValidationFailed { ref check, ref detail })
-                if check == "foliation" && detail.contains("missing a time label")
+            Err(CdtError::Foliation(FoliationError::MissingVertexLabel {
+                vertex: 0
+            }))
         ));
     }
 
@@ -3414,10 +3592,11 @@ mod tests {
         let result = tri.validate_foliation();
         assert!(matches!(
             result,
-            Err(CdtError::ValidationFailed { ref check, ref detail })
-                if check == "foliation"
-                    && detail.contains("out-of-range time label 7")
-                    && detail.contains("expected 0..2")
+            Err(CdtError::Foliation(FoliationError::OutOfRangeVertexLabel {
+                vertex: 0,
+                label: 7,
+                expected_range_end: 2,
+            }))
         ));
     }
 
@@ -3447,10 +3626,7 @@ mod tests {
         let result = tri.validate_foliation();
         assert!(matches!(
             result,
-            Err(CdtError::ValidationFailed { ref check, ref detail })
-                if check == "foliation"
-                    && detail.contains("stored count")
-                    && detail.contains("live labels report")
+            Err(CdtError::Foliation(FoliationError::LabelMismatch { .. }))
         ));
     }
 
@@ -3468,10 +3644,10 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(CdtError::ValidationFailed { ref check, ref detail })
-                if check == "foliation"
-                    && detail.contains("labeled vertex count (2)")
-                    && detail.contains("triangulation vertex count (3)")
+            Err(CdtError::Foliation(FoliationError::LabelCountMismatch {
+                labeled: 2,
+                expected: 3,
+            }))
         ));
     }
 
@@ -3484,8 +3660,11 @@ mod tests {
         let result = CdtTriangulation::from_labeled_delaunay(backend, 2, 2);
         assert!(matches!(
             result,
-            Err(CdtError::ValidationFailed { ref check, ref detail })
-                if check == "foliation" && detail.contains("out-of-range time label 5")
+            Err(CdtError::Foliation(FoliationError::OutOfRangeVertexLabel {
+                label: 5,
+                expected_range_end: 2,
+                ..
+            }))
         ));
     }
 
@@ -3498,8 +3677,7 @@ mod tests {
         let result = CdtTriangulation::from_labeled_delaunay(backend, 3, 2);
         assert!(matches!(
             result,
-            Err(CdtError::ValidationFailed { ref check, ref detail })
-                if check == "foliation" && detail.contains("time slice 1 is empty")
+            Err(CdtError::Foliation(FoliationError::EmptySlice { slice: 1 }))
         ));
     }
 
@@ -3601,9 +3779,9 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(CdtError::ValidationFailed { ref check, ref detail })
-                if check == "cdt_construction"
-                    && detail.contains("from_cdt_strip is not yet implemented")
+            Err(CdtError::UnsupportedOperation { ref operation, ref reason })
+                if operation == "CdtTriangulation::from_cdt_strip"
+                    && reason.contains("not yet implemented")
         ));
     }
 
@@ -3717,8 +3895,7 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(CdtError::ValidationFailed { ref check, ref detail })
-                if check == "foliation" && detail.contains("time slice") && detail.contains("empty")
+            Err(CdtError::Foliation(FoliationError::EmptySlice { .. }))
         ));
         assert_eq!(tri.time_slices(), initial_time_slices);
         assert_eq!(
@@ -4277,19 +4454,12 @@ mod tests {
 
     #[test]
     fn test_foliation_error_converts_to_cdt_error() {
-        // Verify From<FoliationError> for CdtError produces ValidationFailed
         let fol_err = FoliationError::EmptySlice { slice: 3 };
         let cdt_err: CdtError = fol_err.into();
 
         match cdt_err {
-            CdtError::ValidationFailed { check, detail } => {
-                assert_eq!(check, "foliation");
-                assert!(
-                    detail.contains('3') && detail.contains("empty"),
-                    "Detail should describe the empty slice: {detail}"
-                );
-            }
-            other => panic!("Expected ValidationFailed, got {other:?}"),
+            CdtError::Foliation(FoliationError::EmptySlice { slice }) => assert_eq!(slice, 3),
+            other => panic!("Expected Foliation error, got {other:?}"),
         }
     }
 
@@ -4303,16 +4473,16 @@ mod tests {
         let cdt_err: CdtError = fol_err.into();
 
         match cdt_err {
-            CdtError::ValidationFailed { check, detail } => {
-                assert_eq!(check, "foliation");
-                assert!(
-                    detail.contains("vertex index 2")
-                        && detail.contains("out-of-range time label 7")
-                        && detail.contains("expected 0..2"),
-                    "Detail should preserve out-of-range label context: {detail}"
-                );
+            CdtError::Foliation(FoliationError::OutOfRangeVertexLabel {
+                vertex,
+                label,
+                expected_range_end,
+            }) => {
+                assert_eq!(vertex, 2);
+                assert_eq!(label, 7);
+                assert_eq!(expected_range_end, 2);
             }
-            other => panic!("Expected ValidationFailed, got {other:?}"),
+            other => panic!("Expected Foliation error, got {other:?}"),
         }
     }
 
@@ -4482,9 +4652,12 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(CdtError::ValidationFailed { ref check, ref detail })
-                if check == "topology"
-                    && detail.contains("open boundary (expected χ=1 or 2)")
+            Err(CdtError::TopologyMismatch {
+                ref topology,
+                euler_characteristic: 0,
+                ref expected_euler_characteristics,
+                ..
+            }) if topology == "open boundary" && expected_euler_characteristics == &[1, 2]
         ));
     }
 
@@ -4501,8 +4674,12 @@ mod tests {
         let result = tri.validate_topology();
         assert!(matches!(
             result,
-            Err(CdtError::ValidationFailed { ref check, ref detail })
-                if check == "topology" && detail.contains("toroidal (expected χ=0)")
+            Err(CdtError::TopologyMismatch {
+                ref topology,
+                euler_characteristic: 1,
+                ref expected_euler_characteristics,
+                ..
+            }) if topology == "toroidal" && expected_euler_characteristics == &[0]
         ));
     }
 
@@ -4889,8 +5066,13 @@ mod prop_tests {
         ) {
             let result = CdtTriangulation::from_random_points(vertices, timeslices, 2);
 
-            if vertices >= 3 {
-                prop_assert!(result.is_ok(), "Should succeed with valid vertex count: {}", vertices);
+            if vertices >= 3 && timeslices >= 1 {
+                prop_assert!(
+                    result.is_ok(),
+                    "Should succeed with valid vertex/time-slice count: vertices={}, timeslices={}",
+                    vertices,
+                    timeslices
+                );
 
                 let triangulation = result.unwrap();
                 let vertex_count_u32 =
@@ -4899,7 +5081,12 @@ mod prop_tests {
                 prop_assert_eq!(triangulation.time_slices(), timeslices, "Time slices should match input");
                 prop_assert_eq!(triangulation.dimension(), 2, "Dimension should be 2");
             } else {
-                prop_assert!(result.is_err(), "Should fail with invalid vertex count: {}", vertices);
+                prop_assert!(
+                    result.is_err(),
+                    "Should fail with invalid parameters: vertices={}, timeslices={}",
+                    vertices,
+                    timeslices
+                );
             }
         }
 

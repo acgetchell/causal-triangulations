@@ -14,9 +14,9 @@
 //!
 //! - Integration with delaunay crate for proper Delaunay triangulations
 //! - 2D Regge Action calculation for CDT
-//! - Standard ergodic moves: (2,2), (1,3), and edge flips
-//! - Metropolis-Hastings algorithm with configurable temperature
-//! - Comprehensive statistics and measurement collection
+//! - Foliated 2D triangulation construction and validation
+//! - Planned ergodic moves and Metropolis-Hastings sampling once real CDT
+//!   move kernels are implemented
 //!
 //! # Example
 //!
@@ -91,12 +91,13 @@ pub mod cdt {
 pub use cdt::action::{ActionConfig, compute_regge_action};
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
 pub use cdt::foliation::{CellType, EdgeType, Foliation};
-pub use cdt::metropolis::{CdtProposal, CdtTarget};
-pub use cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig, SimulationResultsBackend};
+pub use cdt::metropolis::{
+    CdtProposal, CdtTarget, Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
+    SimulationResultsBackend,
+};
 pub use config::{CdtConfig, CdtTopology, TestConfig};
 pub use errors::{CdtError, CdtResult};
 
-use cdt::metropolis::Measurement;
 use std::time::Duration;
 
 // Trait-based triangulation (recommended)
@@ -133,7 +134,8 @@ pub mod prelude {
 
     // Metropolis simulation
     pub use crate::cdt::metropolis::{
-        CdtProposal, CdtTarget, MetropolisAlgorithm, MetropolisConfig,
+        CdtProposal, CdtTarget, Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
+        SimulationResultsBackend,
     };
 
     // Configuration and errors
@@ -177,7 +179,8 @@ pub mod prelude {
         pub use crate::cdt::action::{ActionConfig, compute_regge_action};
         pub use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
         pub use crate::cdt::metropolis::{
-            CdtProposal, CdtTarget, MetropolisAlgorithm, MetropolisConfig,
+            CdtProposal, CdtTarget, Measurement, MetropolisAlgorithm, MetropolisConfig,
+            MonteCarloStep, SimulationResultsBackend,
         };
         pub use crate::config::{CdtConfig, CdtTopology};
         pub use crate::errors::{CdtError, CdtResult};
@@ -255,12 +258,13 @@ pub mod prelude {
 ///     thermalization_steps: 0,
 ///     measurement_frequency: 1,
 ///     seed: Some(7),
+///     simulate: false,
 ///     ..CdtConfig::new(5, 2)
 /// };
 /// let results = run_simulation(&config).unwrap();
-/// assert_eq!(results.steps.len(), 1);
+/// assert_eq!(results.measurements.len(), 1);
 /// ```
-pub fn run_simulation(config: &CdtConfig) -> CdtResult<cdt::metropolis::SimulationResultsBackend> {
+pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend> {
     // Validate configuration early to fail fast with clear error messages
     config.validate()?;
 
@@ -286,12 +290,12 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<cdt::metropolis::Simulati
     // `vertices % timeslices == 0` and `vertices >= 3 * timeslices`, so we
     // can safely divide to recover N = vertices/T per slice.
     let triangulation = match config.topology {
-        config::CdtTopology::Toroidal => {
+        CdtTopology::Toroidal => {
             log::info!("Constructing toroidal CDT (S¹×S¹)");
             let vertices_per_slice = vertices / timeslices;
             CdtTriangulation::from_toroidal_cdt(vertices_per_slice, timeslices)?
         }
-        config::CdtTopology::OpenBoundary => {
+        CdtTopology::OpenBoundary => {
             if let Some(seed) = config.seed {
                 log::info!("RNG seed: {seed}");
                 CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?
@@ -332,7 +336,7 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<cdt::metropolis::Simulati
             u32::try_from(triangulation.face_count()).unwrap_or_default(),
         );
 
-        Ok(cdt::metropolis::SimulationResultsBackend {
+        Ok(SimulationResultsBackend {
             config: config.to_metropolis_config(),
             action_config: config.to_action_config(),
             steps: vec![],
@@ -368,7 +372,7 @@ mod lib_tests {
             cosmological_constant: 0.1,
             simulate: false,
             seed: Some(42),
-            topology: config::CdtTopology::OpenBoundary,
+            topology: CdtTopology::OpenBoundary,
         }
     }
 
@@ -482,6 +486,22 @@ mod lib_tests {
     }
 
     #[test]
+    fn test_run_simulation_rejects_simulate_until_real_moves_land() {
+        let mut config = create_test_config();
+        config.simulate = true;
+
+        let result = run_simulation(&config);
+        assert!(matches!(
+            result,
+            Err(CdtError::UnsupportedOperation {
+                ref operation,
+                ref reason,
+            }) if operation == "MetropolisAlgorithm::run"
+                && reason.contains("real CDT ergodic moves are not implemented yet")
+        ));
+    }
+
+    #[test]
     fn test_config_conversions() {
         let config = create_test_config();
 
@@ -514,7 +534,7 @@ mod lib_tests {
             cosmological_constant: 0.1,
             simulate: false,
             seed: None,
-            topology: config::CdtTopology::Toroidal,
+            topology: CdtTopology::Toroidal,
         };
 
         let results = run_simulation(&config).expect("toroidal simulation should run");
@@ -530,7 +550,7 @@ mod lib_tests {
         );
         assert!(matches!(
             results.triangulation.metadata().topology,
-            config::CdtTopology::Toroidal
+            CdtTopology::Toroidal
         ));
     }
 }

@@ -82,6 +82,27 @@ pub enum CdtError {
         /// Human-readable description of the failure
         detail: String,
     },
+    /// Topology metadata does not match the backend Euler characteristic.
+    #[error(
+        "Topology mismatch for {topology}: Euler characteristic χ={euler_characteristic}, expected one of {expected_euler_characteristics:?} (V={vertices}, E={edges}, F={faces})"
+    )]
+    TopologyMismatch {
+        /// Topology requested by CDT metadata.
+        topology: String,
+        /// Observed Euler characteristic from the backend.
+        euler_characteristic: i32,
+        /// Accepted Euler characteristics for the requested topology.
+        expected_euler_characteristics: Vec<i32>,
+        /// Backend vertex count at validation time.
+        vertices: usize,
+        /// Backend edge count at validation time.
+        edges: usize,
+        /// Backend face count at validation time.
+        faces: usize,
+    },
+    /// Foliation construction or validation failed with a typed foliation error.
+    #[error("Foliation validation failed: {0}")]
+    Foliation(#[from] FoliationError),
     /// Vertex construction failed during triangulation generation
     #[error("Vertex construction failed [{context}]: {underlying_error}")]
     VertexBuildFailed {
@@ -99,6 +120,28 @@ pub enum CdtError {
         target: String,
         /// Additional failure detail.
         detail: String,
+    },
+    /// Backend mutation failed and restoring previously staged payloads also failed.
+    #[error(
+        "Backend mutation failed [{operation}] on {target}: {detail}; rollback failed: {rollback_errors}"
+    )]
+    BackendRollbackFailed {
+        /// Mutation operation being attempted when the first failure occurred.
+        operation: String,
+        /// Human-readable target handle for the first failure.
+        target: String,
+        /// Primary mutation failure detail.
+        detail: String,
+        /// Rollback failure details for one or more payloads.
+        rollback_errors: String,
+    },
+    /// Requested operation is part of the planned API surface but is not implemented yet.
+    #[error("Unsupported operation [{operation}]: {reason}")]
+    UnsupportedOperation {
+        /// Operation being requested.
+        operation: String,
+        /// Human-readable explanation and migration/status detail.
+        reason: String,
     },
     /// An edge violates the causal structure by spanning more than one time slice
     /// (or, on toroidal topology, more than one *circular* slice step).
@@ -147,21 +190,13 @@ impl From<markov_chain_monte_carlo::McmcError> for CdtError {
     }
 }
 
-impl From<FoliationError> for CdtError {
-    fn from(err: FoliationError) -> Self {
-        Self::ValidationFailed {
-            check: "foliation".to_string(),
-            detail: err.to_string(),
-        }
-    }
-}
-
 /// Result type for CDT operations.
 pub type CdtResult<T> = Result<T, CdtError>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error;
 
     #[test]
     fn test_invalid_configuration_error() {
@@ -248,13 +283,40 @@ mod tests {
     #[test]
     fn test_validation_failed_error() {
         let error = CdtError::ValidationFailed {
-            check: "topology".to_string(),
-            detail: "Euler characteristic χ=3 unexpected (V=5, E=8, F=6)".to_string(),
+            check: "geometry".to_string(),
+            detail: "backend reported invalid triangulation structure".to_string(),
         };
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Validation failed [topology]: Euler characteristic χ=3 unexpected (V=5, E=8, F=6)"
+            "Validation failed [geometry]: backend reported invalid triangulation structure"
+        );
+    }
+
+    #[test]
+    fn test_topology_mismatch_error() {
+        let error = CdtError::TopologyMismatch {
+            topology: "toroidal".to_string(),
+            euler_characteristic: 1,
+            expected_euler_characteristics: vec![0],
+            vertices: 3,
+            edges: 3,
+            faces: 1,
+        };
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Topology mismatch for toroidal: Euler characteristic χ=1, expected one of [0] (V=3, E=3, F=1)"
+        );
+    }
+
+    #[test]
+    fn test_foliation_error_variant() {
+        let error = CdtError::Foliation(FoliationError::EmptySlice { slice: 3 });
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Foliation validation failed: time slice 3 is empty"
         );
     }
 
@@ -272,6 +334,22 @@ mod tests {
     }
 
     #[test]
+    fn test_backend_rollback_failed_error() {
+        let error = CdtError::BackendRollbackFailed {
+            operation: "set_vertex_data_by_key".to_string(),
+            target: "vertex VertexKey(123v1)".to_string(),
+            detail: "backend reported invalid vertex key".to_string(),
+            rollback_errors: "vertex VertexKey(7v1): backend reported invalid vertex key"
+                .to_string(),
+        };
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Backend mutation failed [set_vertex_data_by_key] on vertex VertexKey(123v1): backend reported invalid vertex key; rollback failed: vertex VertexKey(7v1): backend reported invalid vertex key"
+        );
+    }
+
+    #[test]
     fn test_backend_mutation_failed_error() {
         let error = CdtError::BackendMutationFailed {
             operation: "set_vertex_data".to_string(),
@@ -282,6 +360,19 @@ mod tests {
         assert_eq!(
             display,
             "Backend mutation failed [set_vertex_data] on vertex VertexKey(123v1): backend reported invalid vertex key"
+        );
+    }
+
+    #[test]
+    fn test_unsupported_operation_error() {
+        let error = CdtError::UnsupportedOperation {
+            operation: "MetropolisAlgorithm::run".to_string(),
+            reason: "real CDT ergodic moves are not implemented yet".to_string(),
+        };
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Unsupported operation [MetropolisAlgorithm::run]: real CDT ergodic moves are not implemented yet"
         );
     }
 
@@ -401,8 +492,6 @@ mod tests {
 
     #[test]
     fn test_std_error_trait() {
-        use std::error::Error;
-
         let error = CdtError::InvalidConfiguration {
             setting: "temperature".to_string(),
             provided_value: "NaN".to_string(),

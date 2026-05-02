@@ -106,7 +106,7 @@ fn cdt_cli_invalid_measurement_frequency_too_large() {
 }
 
 #[test]
-fn cdt_cli_accepts_boundary_aligned_measurement_schedule() {
+fn cdt_cli_rejects_simulate_until_real_moves_land() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
 
     cmd.arg("--vertices").arg("10");
@@ -118,7 +118,9 @@ fn cdt_cli_accepts_boundary_aligned_measurement_schedule() {
     cmd.arg("--simulate");
     cmd.env("RUST_LOG", "error");
 
-    cmd.assert().success();
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "Unsupported operation [MetropolisAlgorithm::run]",
+    ));
 }
 
 #[test]

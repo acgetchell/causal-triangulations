@@ -11,10 +11,12 @@
 
 use causal_triangulations::prelude::simulation::{
     ActionConfig, ErgodicsSystem, MetropolisAlgorithm, MetropolisConfig, MoveType,
+    SimulationResultsBackend,
 };
 use causal_triangulations::prelude::triangulation::{CdtTriangulation2D, TriangulationQuery};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
+use std::time::Duration;
 
 /// Benchmark triangulation creation with different vertex counts
 fn bench_triangulation_creation(c: &mut Criterion) {
@@ -262,10 +264,10 @@ fn bench_metropolis_simulation(c: &mut Criterion) {
                     let action_config = ActionConfig::default();
                     let algorithm = MetropolisAlgorithm::new(config, action_config);
 
-                    let results = algorithm
+                    let error = algorithm
                         .run(black_box(triangulation))
-                        .expect("Simulation should succeed");
-                    black_box(results)
+                        .expect_err("zero-move simulation should be rejected");
+                    black_box(error)
                 });
             },
         );
@@ -284,11 +286,14 @@ fn bench_simulation_analysis(c: &mut Criterion) {
 
     let config = MetropolisConfig::new(1.0, 100, 10, 5);
     let action_config = ActionConfig::default();
-    let algorithm = MetropolisAlgorithm::new(config, action_config);
-
-    let results = algorithm
-        .run(triangulation)
-        .expect("Simulation should succeed");
+    let results = SimulationResultsBackend {
+        config,
+        action_config,
+        steps: vec![],
+        measurements: vec![],
+        elapsed_time: Duration::from_millis(0),
+        triangulation,
+    };
 
     group.bench_function("acceptance_rate", |b| {
         b.iter(|| {

@@ -6,7 +6,7 @@
 //! workflows, topology preservation, error handling, and consistency between components.
 
 use causal_triangulations::prelude::simulation::{
-    ActionConfig, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    ActionConfig, CdtError, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
 };
 use std::time::Instant;
 
@@ -14,8 +14,21 @@ use std::time::Instant;
 mod integration_tests {
     use super::*;
 
+    fn assert_unsupported_simulation(err: CdtError) {
+        match err {
+            CdtError::UnsupportedOperation { operation, reason } => {
+                assert_eq!(operation, "MetropolisAlgorithm::run");
+                assert!(
+                    reason.contains("real CDT ergodic moves are not implemented yet"),
+                    "Unexpected unsupported-operation reason: {reason}"
+                );
+            }
+            other => panic!("Expected UnsupportedOperation, got {other:?}"),
+        }
+    }
+
     #[test]
-    fn test_complete_cdt_simulation_workflow() {
+    fn test_complete_cdt_simulation_workflow_hits_guardrail() {
         // Test full CDT simulation pipeline
         let triangulation = CdtTriangulation::from_random_points(8, 2, 2)
             .expect("Failed to create initial triangulation");
@@ -24,29 +37,12 @@ mod integration_tests {
         let action_config = ActionConfig::default();
         let algorithm = MetropolisAlgorithm::new(config, action_config);
 
-        // Run simulation
-        let results = algorithm
+        // Real move kernels are not implemented yet, so simulation must fail
+        // explicitly instead of returning a misleading zero-move result.
+        let err = algorithm
             .run(triangulation)
-            .expect("Simulation should succeed");
-
-        // Verify results
-        assert!(!results.steps.is_empty(), "Simulation should produce steps");
-        assert!(
-            !results.measurements.is_empty(),
-            "Simulation should produce measurements"
-        );
-        assert!(
-            results.acceptance_rate() >= 0.0,
-            "Acceptance rate should be non-negative"
-        );
-        assert!(
-            results.acceptance_rate() <= 1.0,
-            "Acceptance rate should not exceed 1.0"
-        );
-        assert!(
-            results.average_action().is_finite(),
-            "Average action should be finite"
-        );
+            .expect_err("zero-move simulation should be rejected");
+        assert_unsupported_simulation(err);
     }
 
     #[test]
@@ -167,8 +163,8 @@ mod integration_tests {
     }
 
     #[test]
-    fn test_simulation_reproducibility() {
-        // Test that simulations with same parameters produce consistent results structure
+    fn test_simulation_guardrail_reproducibility() {
+        // Test that valid simulation inputs consistently reach the guardrail.
         let triangulation1 = CdtTriangulation::from_random_points(5, 1, 2)
             .expect("Failed to create first triangulation");
         let triangulation2 = CdtTriangulation::from_random_points(5, 1, 2)
@@ -180,28 +176,15 @@ mod integration_tests {
         let algorithm1 = MetropolisAlgorithm::new(config.clone(), action_config.clone());
         let algorithm2 = MetropolisAlgorithm::new(config, action_config);
 
-        let results1 = algorithm1
+        let err1 = algorithm1
             .run(triangulation1)
-            .expect("Run 1 should succeed");
-        let results2 = algorithm2
+            .expect_err("Run 1 should hit guardrail");
+        let err2 = algorithm2
             .run(triangulation2)
-            .expect("Run 2 should succeed");
+            .expect_err("Run 2 should hit guardrail");
 
-        // Results should have same structure (though values may differ due to randomness)
-        assert_eq!(
-            results1.steps.len(),
-            results2.steps.len(),
-            "Should have same number of steps"
-        );
-        assert_eq!(
-            results1.measurements.len(),
-            results2.measurements.len(),
-            "Should have same number of measurements"
-        );
-
-        // Both should produce valid results
-        assert!(results1.acceptance_rate().is_finite() && results1.acceptance_rate() >= 0.0);
-        assert!(results2.acceptance_rate().is_finite() && results2.acceptance_rate() >= 0.0);
+        assert_eq!(err1, err2);
+        assert_unsupported_simulation(err1);
     }
 
     #[test]

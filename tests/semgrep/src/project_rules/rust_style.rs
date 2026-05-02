@@ -65,3 +65,36 @@ trait ProductionDynamicErrors {
 
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 fn doctest_style_error_is_ignored() {}
+
+enum CdtError {
+    ValidationFailed { check: String, detail: String },
+    TopologyMismatch,
+    Foliation,
+    UnsupportedOperation,
+}
+
+fn stringly_domain_validation_errors() {
+    // ruleid: causal-triangulations.rust.no-stringly-domain-validation-errors
+    let _ = CdtError::ValidationFailed {
+        check: "foliation".to_string(),
+        detail: "missing label".to_string(),
+    };
+
+    // ruleid: causal-triangulations.rust.no-stringly-domain-validation-errors
+    let _ = CdtError::ValidationFailed {
+        check: "topology".to_string(),
+        detail: "bad Euler characteristic".to_string(),
+    };
+
+    // ruleid: causal-triangulations.rust.no-stringly-domain-validation-errors
+    let _ = CdtError::ValidationFailed {
+        check: "cdt_construction".to_string(),
+        detail: "not implemented".to_string(),
+    };
+
+    // ok: causal-triangulations.rust.no-stringly-domain-validation-errors
+    let _ = CdtError::ValidationFailed {
+        check: "geometry".to_string(),
+        detail: "backend rejected structure".to_string(),
+    };
+}

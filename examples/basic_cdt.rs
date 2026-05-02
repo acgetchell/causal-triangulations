@@ -9,7 +9,7 @@
 //! - Extract and display results
 
 use causal_triangulations::prelude::simulation::{
-    CdtConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm,
+    CdtConfig, CdtError, CdtResult, CdtTriangulation, MetropolisAlgorithm,
 };
 use log::{LevelFilter, info};
 
@@ -54,7 +54,15 @@ fn main() -> CdtResult<()> {
     // Run the simulation
     info!("Running CDT simulation...");
     let algorithm = MetropolisAlgorithm::new(metropolis_config, action_config);
-    let results = algorithm.run(triangulation)?;
+    let results = match algorithm.run(triangulation) {
+        Ok(results) => results,
+        Err(CdtError::UnsupportedOperation { reason, .. }) => {
+            info!("Simulation unavailable: {reason}");
+            info!("Example completed after triangulation construction.");
+            return Ok(());
+        }
+        Err(err) => return Err(err),
+    };
 
     // Display results
     info!("Simulation completed!");
