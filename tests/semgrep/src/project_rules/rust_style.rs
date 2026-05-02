@@ -78,6 +78,14 @@ pub enum MissingNonExhaustiveError {
     InvalidInput,
 }
 
+mod nested_error_fixtures {
+    #[derive(Debug)]
+    // ruleid: causal-triangulations.rust.public-error-enums-non-exhaustive
+    pub enum NestedMissingNonExhaustiveError {
+        InvalidInput,
+    }
+}
+
 // ok: causal-triangulations.rust.public-error-enums-non-exhaustive
 #[non_exhaustive]
 pub enum ExtensibleError {

@@ -2267,9 +2267,17 @@ impl CdtTriangulation<DelaunayBackend2D> {
             .map_err(CdtError::from)?;
 
         self.foliation = Some(foliation);
-        self.mark_foliation_synchronized();
-        self.classify_all_cells()?;
-        Ok(())
+        match self.classify_all_cells() {
+            Ok(_) => {
+                self.mark_foliation_synchronized();
+                Ok(())
+            }
+            Err(err) => {
+                self.foliation = None;
+                self.foliation_synced_at_modification = None;
+                Err(err)
+            }
+        }
     }
 
     /// Validate CDT properties (geometry, Delaunay, topology, causality, foliation).

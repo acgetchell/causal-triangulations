@@ -195,13 +195,14 @@ fn bench_ergodic_moves(c: &mut Criterion) {
                 ([1.0, 0.0], 0),
                 ([0.0, 1.0], 1),
                 ([1.0, 1.0], 1),
+                ([1.0 / 3.0, 1.0 / 3.0], 1),
             ],
-            &[vec![0, 1, 2], vec![1, 3, 2]],
+            &[vec![4, 0, 1], vec![4, 1, 2], vec![4, 2, 0], vec![1, 3, 2]],
         )
-        .expect("build square CDT benchmark fixture");
+        .expect("build subdivided square CDT benchmark fixture");
         let backend = DelaunayBackend2D::from_triangulation(dt);
         CdtTriangulation2D::from_labeled_delaunay(backend, 2, 2)
-            .expect("wrap square CDT benchmark fixture")
+            .expect("wrap subdivided square CDT benchmark fixture")
     };
 
     // Benchmark different move types

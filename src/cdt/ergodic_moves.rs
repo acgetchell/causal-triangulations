@@ -11,10 +11,8 @@
 use crate::config::CdtTopology;
 use crate::errors::CdtError;
 use crate::geometry::CdtTriangulation2D;
-use crate::geometry::backends::delaunay::{
-    DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
-};
-use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
+use crate::geometry::backends::delaunay::{DelaunayFaceHandle, DelaunayVertexHandle};
+use crate::geometry::traits::{EdgeAdjacentFaces, TriangulationMut, TriangulationQuery};
 use num_traits::cast::NumCast;
 use rand::RngExt;
 use rand::rngs::ThreadRng;
@@ -43,6 +41,8 @@ pub enum MoveResult {
     GeometricViolation,
     /// Move was rejected for other reasons
     Rejected(CdtError),
+    /// Move mutated geometry but failed a required post-mutation invariant refresh
+    HardFailure(CdtError),
 }
 
 /// Statistics tracking for ergodic moves.
@@ -366,13 +366,7 @@ impl ErgodicsSystem {
             }
         }
 
-        match triangulation.synchronize_foliation_from_live_labels() {
-            Ok(()) => {
-                self.stats.record_success(MoveType::Move13Add);
-                MoveResult::Success
-            }
-            Err(err) => MoveResult::Rejected(err),
-        }
+        self.finish_mutated_move(triangulation, MoveType::Move13Add)
     }
 
     /// Attempts a (3,1) move on the triangulation.
@@ -439,13 +433,7 @@ impl ErgodicsSystem {
         };
 
         match removal {
-            Ok(_) => match triangulation.synchronize_foliation_from_live_labels() {
-                Ok(()) => {
-                    self.stats.record_success(MoveType::Move31Remove);
-                    MoveResult::Success
-                }
-                Err(err) => MoveResult::Rejected(err),
-            },
+            Ok(_) => self.finish_mutated_move(triangulation, MoveType::Move31Remove),
             Err(err) => reject_backend("remove_vertex", removal_target, &err),
         }
     }
@@ -526,28 +514,31 @@ impl ErgodicsSystem {
     ) -> MoveResult {
         self.stats.record_attempt(move_type);
 
-        let flippable_edges: Vec<_> = triangulation
-            .geometry()
-            .edges()
-            .filter(|edge| triangulation.geometry().can_flip_edge(edge))
-            .collect();
-        if flippable_edges.is_empty() {
-            return MoveResult::GeometricViolation;
+        let mut geometric_candidate_seen = false;
+        let mut causal_candidate_count = 0;
+        let mut selected_edge = None;
+
+        let geometry = triangulation.geometry();
+        for edge in geometry.edges() {
+            let Ok(Some(adjacent)) = geometry.edge_adjacent_faces(&edge) else {
+                continue;
+            };
+            geometric_candidate_seen = true;
+            if !flip_is_causal(triangulation, &adjacent) {
+                continue;
+            }
+
+            causal_candidate_count += 1;
+            if self.rng.random_range(0..causal_candidate_count) == 0 {
+                selected_edge = Some(edge);
+            }
         }
 
-        let candidates: Vec<_> = flippable_edges
-            .into_iter()
-            .filter(|edge| flip_is_causal(triangulation, edge))
-            .collect();
-
-        let Some(edge) =
-            pick(&mut self.rng, candidates.len()).map(|index| candidates[index].clone())
-        else {
-            return if triangulation.has_foliation() {
-                MoveResult::CausalityViolation
-            } else {
-                MoveResult::GeometricViolation
-            };
+        let Some(edge) = selected_edge else {
+            if geometric_candidate_seen && triangulation.has_foliation() {
+                return MoveResult::CausalityViolation;
+            }
+            return MoveResult::GeometricViolation;
         };
 
         let flip_target = format!("{edge:?}");
@@ -557,14 +548,23 @@ impl ErgodicsSystem {
         };
 
         match flip_result {
-            Ok(_) => match triangulation.synchronize_foliation_from_live_labels() {
-                Ok(()) => {
-                    self.stats.record_success(move_type);
-                    MoveResult::Success
-                }
-                Err(err) => MoveResult::Rejected(err),
-            },
+            Ok(_) => self.finish_mutated_move(triangulation, move_type),
             Err(err) => reject_backend("flip_edge", flip_target, &err),
+        }
+    }
+
+    /// Completes a move after the backend mutation has already succeeded.
+    fn finish_mutated_move(
+        &mut self,
+        triangulation: &mut CdtTriangulation2D,
+        move_type: MoveType,
+    ) -> MoveResult {
+        match triangulation.synchronize_foliation_from_live_labels() {
+            Ok(()) => {
+                self.stats.record_success(move_type);
+                MoveResult::Success
+            }
+            Err(err) => MoveResult::HardFailure(err),
         }
     }
 }
@@ -678,59 +678,39 @@ fn cdt_vertices(triangulation: &CdtTriangulation2D, vertices: &[DelaunayVertexHa
     cdt_labels(triangulation, [*t0, *t1, *t2])
 }
 
-/// Predicts the two old edge endpoints and two opposite vertices for a k=2 flip.
-///
-/// The CDT layer needs this before mutating so it can validate the two
-/// replacement triangles that the backend will create.
-fn flip_vertices(
+/// Checks the CDT triangle rule for three live backend vertices without allocation.
+fn cdt_vertex_triple(
     triangulation: &CdtTriangulation2D,
-    edge: &DelaunayEdgeHandle,
-) -> Option<(
-    DelaunayVertexHandle,
-    DelaunayVertexHandle,
-    DelaunayVertexHandle,
-    DelaunayVertexHandle,
-)> {
-    let (endpoint_0, endpoint_1) = triangulation.geometry().edge_endpoints(edge)?;
-    let mut opposite = Vec::with_capacity(2);
-
-    for face in triangulation.geometry().faces() {
-        let vertices = triangulation.geometry().face_vertices(&face).ok()?;
-        let has_endpoint_0 = vertices.iter().any(|vertex| vertex == &endpoint_0);
-        let has_endpoint_1 = vertices.iter().any(|vertex| vertex == &endpoint_1);
-        if has_endpoint_0 && has_endpoint_1 {
-            let third = vertices
-                .into_iter()
-                .find(|vertex| vertex != &endpoint_0 && vertex != &endpoint_1)?;
-            opposite.push(third);
-        }
+    vertices: [&DelaunayVertexHandle; 3],
+) -> bool {
+    if !triangulation.has_foliation() {
+        return true;
     }
 
-    let [opposite_0, opposite_1] = opposite.as_slice() else {
-        return None;
+    let labels = vertices.map(|vertex| {
+        triangulation
+            .geometry()
+            .vertex_data_by_key(vertex.vertex_key())
+    });
+    let [Some(t0), Some(t1), Some(t2)] = labels else {
+        return false;
     };
-    Some((
-        endpoint_0,
-        endpoint_1,
-        opposite_0.clone(),
-        opposite_1.clone(),
-    ))
+    cdt_labels(triangulation, [t0, t1, t2])
 }
 
 /// Checks whether flipping an edge would preserve CDT triangle causality.
 ///
 /// This is a pre-mutation guard for `(2,2)` and `EdgeFlip`, both of which share
 /// the same underlying Delaunay k=2 flip.
-fn flip_is_causal(triangulation: &CdtTriangulation2D, edge: &DelaunayEdgeHandle) -> bool {
-    let Some((endpoint_0, endpoint_1, opposite_0, opposite_1)) = flip_vertices(triangulation, edge)
-    else {
-        return false;
-    };
+fn flip_is_causal(
+    triangulation: &CdtTriangulation2D,
+    adjacent: &EdgeAdjacentFaces<DelaunayVertexHandle, DelaunayFaceHandle>,
+) -> bool {
+    let (endpoint_0, endpoint_1) = &adjacent.endpoints;
+    let (opposite_0, opposite_1) = &adjacent.opposite_vertices;
 
-    cdt_vertices(
-        triangulation,
-        &[endpoint_0, opposite_0.clone(), opposite_1.clone()],
-    ) && cdt_vertices(triangulation, &[endpoint_1, opposite_0, opposite_1])
+    cdt_vertex_triple(triangulation, [endpoint_0, opposite_0, opposite_1])
+        && cdt_vertex_triple(triangulation, [endpoint_1, opposite_0, opposite_1])
 }
 
 /// Finds the inserted vertex label that makes a `(1,3)` subdivision causal.
@@ -932,18 +912,17 @@ mod tests {
         let result = system.attempt_22_move(&mut triangulation);
 
         assert_eq!(system.stats.moves_22_attempted, 1);
-        if matches!(result, MoveResult::Success) {
-            assert_eq!(system.stats.moves_22_accepted, 1);
-            assert!(
-                triangulation
-                    .geometry()
-                    .triangulation()
-                    .tds()
-                    .is_valid()
-                    .is_ok()
-            );
-            assert!(triangulation.validate_causality().is_ok());
-        }
+        assert_eq!(result, MoveResult::Success);
+        assert_eq!(system.stats.moves_22_accepted, 1);
+        assert!(
+            triangulation
+                .geometry()
+                .triangulation()
+                .tds()
+                .is_valid()
+                .is_ok()
+        );
+        assert!(triangulation.validate_causality().is_ok());
     }
 
     #[test]
@@ -980,19 +959,18 @@ mod tests {
         let result = system.attempt_13_move(&mut triangulation);
 
         assert_eq!(system.stats.moves_13_attempted, 1);
-        if matches!(result, MoveResult::Success) {
-            assert_eq!(triangulation.vertex_count(), before_vertices + 1);
-            assert!(
-                triangulation
-                    .geometry()
-                    .triangulation()
-                    .tds()
-                    .is_valid()
-                    .is_ok()
-            );
-            assert!(triangulation.validate_causality().is_ok());
-            assert!(triangulation.has_foliation());
-        }
+        assert_eq!(result, MoveResult::Success);
+        assert_eq!(triangulation.vertex_count(), before_vertices + 1);
+        assert!(
+            triangulation
+                .geometry()
+                .triangulation()
+                .tds()
+                .is_valid()
+                .is_ok()
+        );
+        assert!(triangulation.validate_causality().is_ok());
+        assert!(triangulation.has_foliation());
     }
 
     #[test]
@@ -1006,18 +984,17 @@ mod tests {
         let result = system.attempt_31_move(&mut triangulation);
 
         assert_eq!(system.stats.moves_31_attempted, 1);
-        if matches!(result, MoveResult::Success) {
-            assert_eq!(triangulation.vertex_count(), before_vertices - 1);
-            assert!(
-                triangulation
-                    .geometry()
-                    .triangulation()
-                    .tds()
-                    .is_valid()
-                    .is_ok()
-            );
-            assert!(triangulation.validate_causality().is_ok());
-        }
+        assert_eq!(result, MoveResult::Success);
+        assert_eq!(triangulation.vertex_count(), before_vertices - 1);
+        assert!(
+            triangulation
+                .geometry()
+                .triangulation()
+                .tds()
+                .is_valid()
+                .is_ok()
+        );
+        assert!(triangulation.validate_causality().is_ok());
     }
 
     #[test]
@@ -1054,10 +1031,9 @@ mod tests {
 
         assert_eq!(system.stats.edge_flips_attempted, 1);
         assert_eq!(system.stats.moves_22_attempted, 0);
-        if matches!(result, MoveResult::Success) {
-            assert_eq!(system.stats.edge_flips_accepted, 1);
-            assert!(triangulation.validate_causality().is_ok());
-        }
+        assert_eq!(result, MoveResult::Success);
+        assert_eq!(system.stats.edge_flips_accepted, 1);
+        assert!(triangulation.validate_causality().is_ok());
     }
 
     #[test]

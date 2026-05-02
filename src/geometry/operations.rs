@@ -236,7 +236,7 @@ impl<T: TriangulationQuery> TriangulationOps for T {}
 mod tests {
     use super::*;
     use crate::geometry::backends::mock::MockBackend;
-    use crate::geometry::traits::{GeometryBackend, TriangulationQuery};
+    use crate::geometry::traits::{EdgeAdjacentFacesResult, GeometryBackend, TriangulationQuery};
     use std::collections::HashSet;
 
     #[derive(Debug, Clone)]
@@ -249,9 +249,11 @@ mod tests {
     #[derive(Debug, PartialEq, Eq, thiserror::Error)]
     enum FixtureError {
         #[error("invalid face")]
-        InvalidFace,
+        Face,
         #[error("invalid vertex")]
-        InvalidVertex,
+        Vertex,
+        #[error("invalid edge")]
+        Edge,
     }
 
     impl GeometryBackend for FixtureBackend {
@@ -302,7 +304,7 @@ mod tests {
             self.vertices
                 .contains(vertex)
                 .then_some(vec![0.0])
-                .ok_or(FixtureError::InvalidVertex)
+                .ok_or(FixtureError::Vertex)
         }
 
         fn face_vertices(
@@ -313,7 +315,7 @@ mod tests {
                 .iter()
                 .find(|(candidate, _)| candidate == face)
                 .and_then(|(_, vertices)| vertices.clone())
-                .ok_or(FixtureError::InvalidFace)
+                .ok_or(FixtureError::Face)
         }
 
         fn edge_endpoints(
@@ -326,6 +328,17 @@ mod tests {
                 .and_then(|(_, endpoints)| *endpoints)
         }
 
+        fn edge_adjacent_faces(
+            &self,
+            edge: &Self::EdgeHandle,
+        ) -> EdgeAdjacentFacesResult<Self::VertexHandle, Self::FaceHandle, Self::Error> {
+            self.edges
+                .iter()
+                .any(|(candidate, _)| candidate == edge)
+                .then_some(None)
+                .ok_or(FixtureError::Edge)
+        }
+
         fn adjacent_faces(
             &self,
             vertex: &Self::VertexHandle,
@@ -333,7 +346,7 @@ mod tests {
             self.vertices
                 .contains(vertex)
                 .then_some(Vec::new())
-                .ok_or(FixtureError::InvalidVertex)
+                .ok_or(FixtureError::Vertex)
         }
 
         fn incident_edges(
@@ -343,7 +356,7 @@ mod tests {
             self.vertices
                 .contains(vertex)
                 .then_some(Vec::new())
-                .ok_or(FixtureError::InvalidVertex)
+                .ok_or(FixtureError::Vertex)
         }
 
         fn face_neighbors(
@@ -354,7 +367,7 @@ mod tests {
                 .iter()
                 .any(|(candidate, _)| candidate == face)
                 .then_some(Vec::new())
-                .ok_or(FixtureError::InvalidFace)
+                .ok_or(FixtureError::Face)
         }
 
         fn is_valid(&self) -> bool {
@@ -399,22 +412,22 @@ mod tests {
         assert_eq!(backend.vertex_coordinates(&0), Ok(vec![0.0]));
         assert!(matches!(
             backend.vertex_coordinates(&99),
-            Err(FixtureError::InvalidVertex)
+            Err(FixtureError::Vertex)
         ));
         assert_eq!(backend.adjacent_faces(&0), Ok(Vec::new()));
         assert!(matches!(
             backend.adjacent_faces(&99),
-            Err(FixtureError::InvalidVertex)
+            Err(FixtureError::Vertex)
         ));
         assert_eq!(backend.incident_edges(&0), Ok(Vec::new()));
         assert!(matches!(
             backend.incident_edges(&99),
-            Err(FixtureError::InvalidVertex)
+            Err(FixtureError::Vertex)
         ));
         assert_eq!(backend.face_neighbors(&0), Ok(Vec::new()));
         assert!(matches!(
             backend.face_neighbors(&99),
-            Err(FixtureError::InvalidFace)
+            Err(FixtureError::Face)
         ));
 
         let hull: HashSet<_> = backend.convex_hull().into_iter().collect();

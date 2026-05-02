@@ -24,7 +24,7 @@ rules:
       - pattern-either:
           - pattern: println!(...)
           - pattern: eprintln!(...)
-      - pattern-not-inside: |
+      - pattern-not: |
           mod tests {
               ...
           }
@@ -215,7 +215,19 @@ rules:
       include:
         - "/src/**/*.rs"
         - "/tests/semgrep/src/**/*.rs"
-    pattern-regex: '(?m)(?<!#\[non_exhaustive\]\n)^pub\s+enum\s+[A-Za-z_][A-Za-z0-9_]*Error\b'
+    patterns:
+      - pattern: |
+          pub enum $X {
+              $Y
+          }
+      - metavariable-regex:
+          metavariable: $X
+          regex: ".*Error$"
+      - pattern-not: |
+          #[non_exhaustive]
+          pub enum $X {
+              $Y
+          }
 
   - id: causal-triangulations.rust.prefer-focused-prelude-imports-in-public-usage
     languages:

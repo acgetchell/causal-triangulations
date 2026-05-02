@@ -10,7 +10,8 @@
 // cspell:ignore vkey
 
 use crate::geometry::traits::{
-    FlipResult, GeometryBackend, SubdivisionResult, TriangulationMut, TriangulationQuery,
+    EdgeAdjacentFaces, EdgeAdjacentFacesResult, FlipResult, GeometryBackend, SubdivisionResult,
+    TriangulationMut, TriangulationQuery,
 };
 use delaunay::core::DataType;
 use delaunay::core::edge::EdgeKey;
@@ -226,14 +227,17 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
                     continue;
                 }
 
-                let facet_vertices: Vec<_> = vertices
+                let mut facet_vertices = vertices
                     .iter()
                     .enumerate()
-                    .filter_map(|(idx, &key)| (idx != facet_index).then_some(key))
-                    .collect();
-                if facet_vertices.len() == 2
-                    && EdgeKey::new(facet_vertices[0], facet_vertices[1]) == edge
-                {
+                    .filter_map(|(idx, &key)| (idx != facet_index).then_some(key));
+                let Some(v0) = facet_vertices.next() else {
+                    continue;
+                };
+                let Some(v1) = facet_vertices.next() else {
+                    continue;
+                };
+                if facet_vertices.next().is_none() && EdgeKey::new(v0, v1) == edge {
                     let facet_index = u8::try_from(facet_index).ok()?;
                     return Some(FacetHandle::new(cell_key, facet_index));
                 }
@@ -587,6 +591,82 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuer
         );
 
         None
+    }
+
+    fn edge_adjacent_faces(
+        &self,
+        edge: &Self::EdgeHandle,
+    ) -> EdgeAdjacentFacesResult<Self::VertexHandle, Self::FaceHandle, Self::Error> {
+        if !self.edge_exists(edge.key) {
+            return Err(DelaunayError::InvalidEdge {
+                v0: edge.key.v0(),
+                v1: edge.key.v1(),
+            });
+        }
+
+        let Some(facet) = self.interior_facet_for_edge(edge.key) else {
+            return Ok(None);
+        };
+        let face_0 = facet.cell_key();
+        let facet_index = <usize as From<_>>::from(facet.facet_index());
+        let Some(cell_0) = self.dt.tds().get_cell(face_0) else {
+            return Err(DelaunayError::InvalidFace { key: face_0 });
+        };
+        let vertices_0 = cell_0.vertices();
+        if vertices_0.len() != 3 || facet_index >= vertices_0.len() {
+            return Ok(None);
+        }
+        let Some(face_1) = cell_0
+            .neighbors()
+            .and_then(|neighbors| neighbors.get(facet_index).copied().flatten())
+        else {
+            return Ok(None);
+        };
+
+        let mut endpoints = vertices_0
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, &key)| (idx != facet_index).then_some(key));
+        let Some(endpoint_0) = endpoints.next() else {
+            return Ok(None);
+        };
+        let Some(endpoint_1) = endpoints.next() else {
+            return Ok(None);
+        };
+        if endpoints.next().is_some() {
+            return Ok(None);
+        }
+
+        let Some(vertices_1) = self.dt.cell_vertices(face_1) else {
+            return Err(DelaunayError::InvalidFace { key: face_1 });
+        };
+        if vertices_1.len() != 3 {
+            return Ok(None);
+        }
+        let Some(opposite_1) = vertices_1
+            .iter()
+            .copied()
+            .find(|&key| key != endpoint_0 && key != endpoint_1)
+        else {
+            return Ok(None);
+        };
+
+        Ok(Some(EdgeAdjacentFaces::new(
+            (
+                DelaunayVertexHandle { key: endpoint_0 },
+                DelaunayVertexHandle { key: endpoint_1 },
+            ),
+            (
+                DelaunayFaceHandle { key: face_0 },
+                DelaunayFaceHandle { key: face_1 },
+            ),
+            (
+                DelaunayVertexHandle {
+                    key: vertices_0[facet_index],
+                },
+                DelaunayVertexHandle { key: opposite_1 },
+            ),
+        )))
     }
 
     fn adjacent_faces(
