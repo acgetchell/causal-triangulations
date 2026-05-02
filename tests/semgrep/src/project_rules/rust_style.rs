@@ -82,14 +82,20 @@ fn stringly_domain_validation_errors() {
 
     // ruleid: causal-triangulations.rust.no-stringly-domain-validation-errors
     let _ = CdtError::ValidationFailed {
-        check: "topology".to_string(),
         detail: "bad Euler characteristic".to_string(),
+        check: String::from("topology"),
     };
 
     // ruleid: causal-triangulations.rust.no-stringly-domain-validation-errors
     let _ = CdtError::ValidationFailed {
-        check: "cdt_construction".to_string(),
+        check: "cdt_construction".into(),
         detail: "not implemented".to_string(),
+    };
+
+    // ruleid: causal-triangulations.rust.no-stringly-domain-validation-errors
+    let _ = CdtError::ValidationFailed {
+        detail: "slice count is invalid".to_string(),
+        check: "foliation",
     };
 
     // ok: causal-triangulations.rust.no-stringly-domain-validation-errors

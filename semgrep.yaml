@@ -216,8 +216,7 @@ rules:
       include:
         - "/src/**/*.rs"
     pattern-regex: >-
-      (?s)CdtError::ValidationFailed\s*\{[^}]*
-      check:\s*"(?:foliation|topology|cdt_construction)"\.to_string\(\)
+      (?s)CdtError::ValidationFailed\s*\{(?=[^}]*\bcheck\s*:\s*(?:"(?:foliation|topology|cdt_construction)"(?:\s*\.\s*(?:to_string|into)\s*\(\s*\))?|String\s*::\s*from\s*\(\s*"(?:foliation|topology|cdt_construction)"\s*\)))[^}]*\}
 
   - id: causal-triangulations.python.no-raw-exception-in-tests
     languages:

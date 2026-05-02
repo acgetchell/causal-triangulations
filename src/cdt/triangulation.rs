@@ -1737,10 +1737,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
             slice_sizes[t as usize] += 1;
         }
 
+        Self::check_time_slices(self.metadata.topology, num_slices)?;
+
         let foliation =
             Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
-
-        Self::check_time_slices(self.metadata.topology, num_slices)?;
 
         // Clear stale cell classifications from any previous classify_all_cells() call,
         // since vertex time labels are about to change.

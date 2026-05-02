@@ -257,10 +257,6 @@ pub struct MetropolisAlgorithm {
     /// Algorithm configuration
     config: MetropolisConfig,
     /// Action calculation configuration
-    #[expect(
-        dead_code,
-        reason = "stored for real Metropolis wiring once #55 provides reversible CDT moves"
-    )]
     action_config: ActionConfig,
 }
 
@@ -316,6 +312,7 @@ impl MetropolisAlgorithm {
     pub fn run(&self, _triangulation: CdtTriangulation2D) -> CdtResult<SimulationResultsBackend> {
         // Validate configuration to fail fast before any work
         self.config.validate()?;
+        self.action_config.validate()?;
 
         Err(CdtError::UnsupportedOperation {
             operation: "MetropolisAlgorithm::run".to_string(),
@@ -693,6 +690,30 @@ mod tests {
     }
 
     #[test]
+    fn test_run_validates_action_config_before_guardrail() {
+        let config = MetropolisConfig::new(1.0, 20, 15, 10).with_seed(42);
+        let action_config = ActionConfig::new(f64::INFINITY, 1.0, 0.1);
+        let algorithm = MetropolisAlgorithm::new(config, action_config);
+        let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
+
+        let err = algorithm
+            .run(tri)
+            .expect_err("invalid action config should be reported before the guardrail");
+        match err {
+            CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            } => {
+                assert_eq!(setting, "coupling_0");
+                assert_eq!(provided_value, "inf");
+                assert_eq!(expected, "finite");
+            }
+            other => panic!("Expected InvalidConfiguration, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_run_without_seed_reaches_guardrail() {
         let config = MetropolisConfig::new(1.0, 5, 1, 1); // no seed
         let algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
@@ -706,7 +727,33 @@ mod tests {
 
     #[test]
     fn test_simulation_results() {
-        let config = MetropolisConfig::default();
+        let config = MetropolisConfig::new(1.0, 20, 10, 5);
+        let steps = vec![
+            MonteCarloStep {
+                step: 1,
+                move_type: MoveType::Move22,
+                accepted: true,
+                action_before: 3.0,
+                action_after: Some(2.5),
+                delta_action: Some(-0.5),
+            },
+            MonteCarloStep {
+                step: 2,
+                move_type: MoveType::Move13Add,
+                accepted: false,
+                action_before: 2.5,
+                action_after: None,
+                delta_action: Some(0.8),
+            },
+            MonteCarloStep {
+                step: 3,
+                move_type: MoveType::Move31Remove,
+                accepted: true,
+                action_before: 2.5,
+                action_after: Some(2.0),
+                delta_action: Some(-0.5),
+            },
+        ];
         let measurements = vec![
             Measurement {
                 step: 0,
@@ -722,6 +769,13 @@ mod tests {
                 edges: 5,
                 triangles: 2,
             },
+            Measurement {
+                step: 15,
+                action: 3.0,
+                vertices: 5,
+                edges: 7,
+                triangles: 3,
+            },
         ];
 
         let triangulation =
@@ -730,12 +784,30 @@ mod tests {
         let results = SimulationResultsBackend {
             config,
             action_config: ActionConfig::default(),
-            steps: vec![],
+            steps,
             measurements,
             elapsed_time: Duration::from_millis(100),
             triangulation,
         };
 
-        assert_relative_eq!(results.average_action(), 1.5);
+        assert_relative_eq!(results.acceptance_rate(), 2.0 / 3.0);
+        assert_relative_eq!(results.average_action(), 2.0);
+
+        let equilibrium = results.equilibrium_measurements();
+        assert_eq!(equilibrium.len(), 2);
+        assert_eq!(equilibrium[0].step, 10);
+        assert_eq!(equilibrium[1].step, 15);
+    }
+
+    #[test]
+    fn test_cdt_proposal_placeholder_returns_no_move() {
+        use rand::{SeedableRng, rngs::StdRng};
+
+        let proposal = CdtProposal;
+        let mut triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
+        let mut rng = StdRng::seed_from_u64(7);
+
+        assert!(proposal.propose_mut(&mut triangulation, &mut rng).is_none());
+        proposal.undo(&mut triangulation, ());
     }
 }

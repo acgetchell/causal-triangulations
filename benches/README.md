@@ -32,8 +32,8 @@ cargo bench action_calculations
 # Ergodic move operations
 cargo bench ergodic_moves
 
-# Metropolis-Hastings simulation steps
-cargo bench metropolis_simulation
+# Metropolis-Hastings unsupported-operation guardrail
+cargo bench metropolis_errors
 
 # Simulation analysis operations
 cargo bench simulation_analysis
@@ -106,12 +106,12 @@ cargo bench -- --save-baseline my_baseline
   - `random_move_attempt`: Complete random move attempt
 - **Use Case**: Optimizing Monte Carlo move proposal
 
-### 6. Metropolis Simulation (`metropolis_simulation`)
+### 6. Metropolis Guardrails (`metropolis_errors`)
 
-- **Purpose**: Measures complete simulation step performance
-- **Test Configurations**: 10, 50, 100 MC steps
-- **Includes**: Move proposals, action calculations, acceptance decisions
-- **Use Case**: End-to-end simulation performance profiling
+- **Purpose**: Measures the current unsupported-operation short-circuit while real CDT moves are pending
+- **Test Configurations**: 10, 50, 100 requested MC steps
+- **Includes**: Configuration validation and the `MetropolisAlgorithm::run()` guardrail
+- **Use Case**: Tracking guardrail overhead until #55/#56 replace it with real move execution
 
 ### 7. Simulation Analysis (`simulation_analysis`)
 
