@@ -5,44 +5,53 @@
 //! This module contains integration tests that verify the complete CDT simulation
 //! workflows, topology preservation, error handling, and consistency between components.
 
-use causal_triangulations::prelude::simulation::{
-    ActionConfig, CdtError, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
-};
+use causal_triangulations::prelude::action::ActionConfig;
+use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
+use causal_triangulations::prelude::triangulation::CdtTriangulation;
 use std::time::Instant;
 
 #[cfg(test)]
 mod integration_tests {
     use super::*;
 
-    fn assert_unsupported_simulation(err: CdtError) {
-        match err {
-            CdtError::UnsupportedOperation { operation, reason } => {
-                assert_eq!(operation, "MetropolisAlgorithm::run");
-                assert!(
-                    reason.contains("real CDT ergodic moves are not implemented yet"),
-                    "Unexpected unsupported-operation reason: {reason}"
-                );
-            }
-            other => panic!("Expected UnsupportedOperation, got {other:?}"),
-        }
-    }
-
     #[test]
-    fn test_complete_cdt_simulation_workflow_hits_guardrail() {
+    fn test_complete_cdt_simulation_workflow_runs_moves() {
         // Test full CDT simulation pipeline
-        let triangulation = CdtTriangulation::from_random_points(8, 2, 2)
+        let triangulation = CdtTriangulation::from_seeded_points(32, 3, 2, 42)
             .expect("Failed to create initial triangulation");
 
-        let config = MetropolisConfig::new(1.0, 50, 10, 5);
+        let config = MetropolisConfig::new(1.0, 10, 5, 2).with_seed(42);
         let action_config = ActionConfig::default();
         let algorithm = MetropolisAlgorithm::new(config, action_config);
 
-        // Real move kernels are not implemented yet, so simulation must fail
-        // explicitly instead of returning a misleading zero-move result.
-        let err = algorithm
+        let results = algorithm
             .run(triangulation)
-            .expect_err("zero-move simulation should be rejected");
-        assert_unsupported_simulation(err);
+            .expect("simulation should execute real move loop");
+        assert_eq!(results.steps.len(), 10);
+        assert!(
+            results.acceptance_rate() > 0.0,
+            "real move loop should accept at least one move"
+        );
+        assert!(!results.measurements.is_empty());
+        assert!(results.average_action().is_finite());
+        assert!(
+            results.steps.iter().any(|step| {
+                step.action_after.is_some_and(|action_after| {
+                    (action_after - step.action_before).abs() > f64::EPSILON
+                })
+            }),
+            "accepted moves should change the action over time"
+        );
+        assert!(
+            results
+                .triangulation
+                .geometry()
+                .triangulation()
+                .tds()
+                .is_valid()
+                .is_ok(),
+            "final triangulation should remain structurally valid"
+        );
     }
 
     #[test]
@@ -163,28 +172,31 @@ mod integration_tests {
     }
 
     #[test]
-    fn test_simulation_guardrail_reproducibility() {
-        // Test that valid simulation inputs consistently reach the guardrail.
-        let triangulation1 = CdtTriangulation::from_random_points(5, 1, 2)
+    fn test_seeded_simulation_reproducibility() {
+        // Test that seeded simulation inputs consistently produce the same move trace.
+        let triangulation1 = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
             .expect("Failed to create first triangulation");
-        let triangulation2 = CdtTriangulation::from_random_points(5, 1, 2)
+        let triangulation2 = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
             .expect("Failed to create second triangulation");
 
-        let config = MetropolisConfig::new(1.0, 10, 2, 2);
+        let config = MetropolisConfig::new(1.0, 10, 2, 2).with_seed(123);
         let action_config = ActionConfig::default();
 
         let algorithm1 = MetropolisAlgorithm::new(config.clone(), action_config.clone());
         let algorithm2 = MetropolisAlgorithm::new(config, action_config);
 
-        let err1 = algorithm1
+        let results1 = algorithm1
             .run(triangulation1)
-            .expect_err("Run 1 should hit guardrail");
-        let err2 = algorithm2
+            .expect("Run 1 should succeed");
+        let results2 = algorithm2
             .run(triangulation2)
-            .expect_err("Run 2 should hit guardrail");
+            .expect("Run 2 should succeed");
 
-        assert_eq!(err1, err2);
-        assert_unsupported_simulation(err1);
+        assert_eq!(results1.steps.len(), results2.steps.len());
+        for (left, right) in results1.steps.iter().zip(results2.steps.iter()) {
+            assert_eq!(left.move_type, right.move_type);
+            assert_eq!(left.accepted, right.accepted);
+        }
     }
 
     #[test]

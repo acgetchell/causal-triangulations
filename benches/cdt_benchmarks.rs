@@ -5,15 +5,15 @@
 //! This benchmark suite measures the performance of key CDT operations including:
 //! - Triangulation creation and initialization
 //! - Geometry operations (edge counting, queries)
-//! - Metropolis-Hastings guardrail errors while real moves are pending
+//! - Metropolis-Hastings simulation steps
 //! - Action calculations
 //! - Ergodic move operations
 
+use causal_triangulations::prelude::action::ActionConfig;
 use causal_triangulations::prelude::geometry::{DelaunayBackend2D, build_delaunay2_from_cells};
-use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveType};
+use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveStatistics, MoveType};
 use causal_triangulations::prelude::simulation::{
-    ActionConfig, Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
-    SimulationResultsBackend,
+    Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep, SimulationResultsBackend,
 };
 use causal_triangulations::prelude::triangulation::{CdtTriangulation2D, TriangulationQuery};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -262,14 +262,13 @@ fn bench_ergodic_moves(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark Metropolis-Hastings guardrail errors while real moves are pending.
+/// Benchmark short Metropolis-Hastings simulations.
 fn bench_metropolis_simulation(c: &mut Criterion) {
-    let mut group = c.benchmark_group("metropolis_errors");
+    let mut group = c.benchmark_group("metropolis_simulation");
 
-    // Keep this path measured without presenting it as simulation throughput.
     for steps in [10, 50, 100] {
         group.bench_with_input(
-            BenchmarkId::new("metropolis_shortcircuit", steps),
+            BenchmarkId::new("metropolis_steps", steps),
             &steps,
             |b, &steps| {
                 b.iter(|| {
@@ -280,10 +279,10 @@ fn bench_metropolis_simulation(c: &mut Criterion) {
                     let action_config = ActionConfig::default();
                     let algorithm = MetropolisAlgorithm::new(config, action_config);
 
-                    let error = algorithm
+                    let results = algorithm
                         .run(black_box(triangulation))
-                        .expect_err("zero-move simulation should be rejected");
-                    black_box(error)
+                        .expect("simulation should run");
+                    black_box(results)
                 });
             },
         );
@@ -305,6 +304,7 @@ fn bench_simulation_analysis(c: &mut Criterion) {
     let results = SimulationResultsBackend {
         config,
         action_config,
+        move_stats: MoveStatistics::new(),
         steps: vec![
             MonteCarloStep {
                 step: 1,

@@ -1,8 +1,9 @@
 #![forbid(unsafe_code)]
 //! Property-based tests for CDT Metropolis integration.
 
-use causal_triangulations::prelude::simulation::*;
-use causal_triangulations::prelude::triangulation::CdtTriangulation2D;
+use causal_triangulations::prelude::action::ActionConfig;
+use causal_triangulations::prelude::simulation::CdtTarget;
+use causal_triangulations::prelude::triangulation::{CdtTriangulation, CdtTriangulation2D};
 use markov_chain_monte_carlo::Target;
 use proptest::prelude::*;
 

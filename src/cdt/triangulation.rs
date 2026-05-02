@@ -20,7 +20,7 @@ use std::ops::{Deref, DerefMut};
 use std::time::Instant;
 
 /// CDT-specific triangulation wrapper - completely geometry-agnostic
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CdtTriangulation<B> {
     geometry: B,
     /// CDT metadata (time slices, dimension, history)

@@ -32,7 +32,7 @@ use crate::errors::{CdtError, CdtResult};
 /// # Examples
 ///
 /// ```
-/// use causal_triangulations::cdt::action::compute_regge_action;
+/// use causal_triangulations::prelude::action::compute_regge_action;
 ///
 /// let action = compute_regge_action(10, 20, 15, 1.0, 1.0, 0.1);
 /// assert!((action + 23.0).abs() < 1e-12);
@@ -81,7 +81,7 @@ impl ActionConfig {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::ActionConfig;
+    /// use causal_triangulations::prelude::action::ActionConfig;
     ///
     /// let config = ActionConfig::new(2.0, 1.5, 0.2);
     /// assert!((config.coupling_0 - 2.0).abs() < f64::EPSILON);
@@ -105,7 +105,7 @@ impl ActionConfig {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::ActionConfig;
+    /// use causal_triangulations::prelude::action::ActionConfig;
     ///
     /// assert!(ActionConfig::default().validate().is_ok());
     /// assert!(ActionConfig::new(f64::NAN, 1.0, 0.1).validate().is_err());
@@ -121,7 +121,7 @@ impl ActionConfig {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::ActionConfig;
+    /// use causal_triangulations::prelude::action::ActionConfig;
     ///
     /// let config = ActionConfig::new(2.0, 1.5, 0.2);
     /// let action = config.calculate_action(5, 10, 8);

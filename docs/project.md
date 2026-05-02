@@ -18,7 +18,7 @@ src/
     ├── triangulation.rs # CdtTriangulation core type, factory constructors, foliation queries
     ├── foliation.rs     # Foliation struct, EdgeType enum, per-vertex time labels
     ├── action.rs        # Regge action calculation
-    ├── metropolis.rs    # Metropolis-Hastings algorithm (uses markov-chain-monte-carlo crate)
+    ├── metropolis.rs    # Metropolis-Hastings algorithm (proposal-before-mutation loop)
     └── ergodic_moves.rs # Ergodic moves (2,2), (1,3), (3,1)
 ```
 
@@ -60,6 +60,10 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 - `Toroidal` — periodic in space and time, S¹×S¹, χ = 0
 - Wired through `CdtConfig.topology`, `CdtConfigOverrides.topology`, the CLI `--topology` flag, and `CdtMetadata.topology`
 - `run_simulation()` dispatches on topology: `Toroidal` → `from_toroidal_cdt`, `OpenBoundary` → `from_seeded_points` / `from_random_points`
+
+### `cdt/metropolis.rs` — Metropolis move ordering
+
+`MetropolisAlgorithm::run()` proposes a move type, computes `ΔS` from the move's simplex-count delta, accepts or rejects the proposal, and only mutates the triangulation after acceptance. Accepted applications that fail are rolled back from a triangulation snapshot and retried at another random local site. See `docs/metropolis.md` for the detailed ordering.
 
 ### `geometry/generators.rs` — Delaunay triangulation generators
 

@@ -6,6 +6,7 @@
 //! CDT algorithms from specific geometry implementations.
 
 use crate::util::saturating_usize_to_i32;
+use num_traits::Float;
 use std::error::Error as StdError;
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -13,9 +14,9 @@ use std::hash::Hash;
 /// Core numeric trait for coordinates in geometric calculations.
 ///
 /// `num_traits::Float` already implies `Copy`, `Clone`, `PartialEq`, and `PartialOrd`.
-pub trait CoordinateScalar: Debug + num_traits::Float {}
+pub trait CoordinateScalar: Debug + Float {}
 
-impl<T: Debug + num_traits::Float> CoordinateScalar for T {}
+impl<T: Debug + Float> CoordinateScalar for T {}
 
 /// Handle types for geometry entities - completely opaque to prevent coupling
 pub trait GeometryHandle: Clone + Eq + Hash + Debug {}

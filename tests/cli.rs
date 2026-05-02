@@ -106,7 +106,7 @@ fn cdt_cli_invalid_measurement_frequency_too_large() {
 }
 
 #[test]
-fn cdt_cli_rejects_simulate_until_real_moves_land() {
+fn cdt_cli_runs_simulation_with_real_moves() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
 
     cmd.arg("--vertices").arg("10");
@@ -118,9 +118,7 @@ fn cdt_cli_rejects_simulate_until_real_moves_land() {
     cmd.arg("--simulate");
     cmd.env("RUST_LOG", "error");
 
-    cmd.assert().failure().stderr(predicate::str::contains(
-        "Unsupported operation [MetropolisAlgorithm::run]",
-    ));
+    cmd.assert().success();
 }
 
 #[test]

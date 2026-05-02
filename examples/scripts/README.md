@@ -2,13 +2,13 @@
 
 This directory contains shell scripts that demonstrate how to use the `cdt` command-line binary for simulation-oriented scenarios.
 
-> **Current simulation status:** scripts that pass `--simulate` currently reach the `MetropolisAlgorithm::run()` `UnsupportedOperation` guardrail until the real CDT move kernels in #55/#56 land. Remove `--simulate` for successful triangulation-only runs, or keep it when you explicitly want to observe the guardrail behavior.
+> **Current simulation status:** scripts that pass `--simulate` run the Metropolis-Hastings loop over the 2D CDT move kernels. Remove `--simulate` only when you want triangulation construction without Monte Carlo steps.
 
 ## Available Scripts
 
 ### 1. `basic_simulation.sh`
 
-**Purpose**: Demonstrates a simple CDT simulation command and, while moves are pending, the current unsupported-operation guardrail. **Usage**:
+**Purpose**: Demonstrates a simple CDT simulation command. **Usage**:
 
 ```bash
 ./examples/scripts/basic_simulation.sh
@@ -18,13 +18,13 @@ This directory contains shell scripts that demonstrate how to use the `cdt` comm
 
 - Builds the cdt binary in release mode
 - Builds a 10-vertex, 5-timeslice command with 1000 requested MC steps
-- Shows logging output until the current `--simulate` guardrail exits non-zero
+- Shows logging output for a short `--simulate` run
 
 **Use this for**: First-time testing, verifying installation
 
 ### 2. `parameter_sweep.sh`
 
-**Purpose**: Runs a systematic temperature-sweep command set. Full phase-transition studies require real CDT moves from #55/#56. **Usage**:
+**Purpose**: Runs a systematic temperature-sweep command set. **Usage**:
 
 ```bash
 ./examples/scripts/parameter_sweep.sh
@@ -35,9 +35,9 @@ This directory contains shell scripts that demonstrate how to use the `cdt` comm
 - Tests temperatures from 0.5 to 3.0
 - Requests 2000 MC steps for each temperature
 - Saves individual logs to `sweep_results/`
-- Encounters the current `--simulate` guardrail until the move kernels land
+- Runs each sweep point with `--simulate`
 
-**Use this for**: Parameter exploration setup now; physics studies and phase-transition analysis after real moves land
+**Use this for**: Parameter exploration setup and early phase-transition analysis
 
 ### 3. `performance_test.sh`
 
@@ -54,7 +54,7 @@ This directory contains shell scripts that demonstrate how to use the `cdt` comm
 - Generates performance summary report
 - Saves results to `performance_results.txt`
 
-**Use this for**: Construction/guardrail timing now; full simulation scaling studies after real moves land
+**Use this for**: Construction and simulation scaling studies
 
 ## Prerequisites
 
@@ -161,8 +161,8 @@ Scripts that pass `--simulate` currently show:
 - Build confirmation
 - Progress messages
 - Simulation logs (with `RUST_LOG=info`)
-- `UnsupportedOperation` from `MetropolisAlgorithm::run()`
-- A non-zero exit from the `cdt` command unless `--simulate` is removed
+- Completed Metropolis-Hastings measurements when the sampled move applications remain valid
+- A non-zero exit from the `cdt` command if configuration validation fails or an accepted move cannot be applied after bounded retries
 
 ### Error Handling
 
@@ -266,4 +266,4 @@ Triangulation-only logs contain:
 - [`examples/basic_cdt.rs`](../basic_cdt.rs): Library usage examples
 - [`benches/README.md`](../../benches/README.md): Benchmarking documentation
 
-These scripts provide a practical starting point for configuring CDT runs with the `cdt` binary while full simulation remains blocked on #55/#56.
+These scripts provide a practical starting point for configuring CDT runs with the `cdt` binary.

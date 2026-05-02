@@ -16,14 +16,10 @@ This document tracks all the pending improvements, features, and technical debt 
 
 ### Metropolis Algorithm Improvements
 
-- [ ] **Implement move reversal mechanism** (`src/cdt/metropolis.rs:296`)
-  - Add capability to undo rejected moves
-  - Implement proper state rollback for failed Metropolis steps
-  - Consider implementing moves that only apply after acceptance
-
-- [ ] **Integrate Tds-based ergodic moves** (`src/cdt/metropolis.rs:264`)
-  - Use the implemented `ErgodicsSystem` move kernels from the proposal path
-  - Remove placeholder "not yet implemented" rejections
+- [ ] **Weight accepted move-site retries** (`src/cdt/metropolis.rs`)
+  - The Metropolis loop now accepts/rejects move types before mutation
+  - Accepted applications currently retry a bounded number of random local sites
+  - Prefer weighting or enumerating available sites so accepted moves do not depend on retry luck
   - Ensure proper triangulation state management
 
 ## Medium Priority - Code Quality

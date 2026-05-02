@@ -61,6 +61,20 @@ pub enum CdtError {
         /// Expected constraint for the setting.
         expected: String,
     },
+    /// Metropolis accepted a move, but no bounded retry could apply it safely.
+    #[error(
+        "Metropolis accepted {move_type} at step {step}, but applying it failed after {attempts} attempts; last failure: {last_failure}"
+    )]
+    MetropolisMoveApplicationFailed {
+        /// Monte Carlo step whose accepted move could not be applied.
+        step: u32,
+        /// Accepted move type being applied.
+        move_type: String,
+        /// Number of application attempts made before failing.
+        attempts: usize,
+        /// Most specific lower-level rejection or failure observed.
+        last_failure: String,
+    },
     /// Constructed triangulation metadata is internally inconsistent.
     #[error(
         "Invalid triangulation metadata: {field} for {topology} (got: {provided_value}, expected: {expected})"
@@ -374,6 +388,21 @@ mod tests {
         assert_eq!(
             display,
             "Unsupported operation [MetropolisAlgorithm::run]: real CDT ergodic moves are not implemented yet"
+        );
+    }
+
+    #[test]
+    fn test_metropolis_move_application_failed_error() {
+        let error = CdtError::MetropolisMoveApplicationFailed {
+            step: 17,
+            move_type: "Move31Remove".to_string(),
+            attempts: 8,
+            last_failure: "no geometrically valid candidate site found".to_string(),
+        };
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Metropolis accepted Move31Remove at step 17, but applying it failed after 8 attempts; last failure: no geometrically valid candidate site found"
         );
     }
 

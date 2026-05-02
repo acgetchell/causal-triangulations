@@ -14,8 +14,7 @@ use crate::geometry::CdtTriangulation2D;
 use crate::geometry::backends::delaunay::{DelaunayFaceHandle, DelaunayVertexHandle};
 use crate::geometry::traits::{EdgeAdjacentFaces, TriangulationMut, TriangulationQuery};
 use num_traits::cast::NumCast;
-use rand::RngExt;
-use rand::rngs::ThreadRng;
+use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 /// Types of ergodic moves available in 2D CDT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -46,7 +45,7 @@ pub enum MoveResult {
 }
 
 /// Statistics tracking for ergodic moves.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct MoveStatistics {
     /// Number of (2,2) moves attempted
     pub moves_22_attempted: u64,
@@ -146,8 +145,8 @@ impl MoveStatistics {
         if attempted == 0 {
             0.0
         } else {
-            let accepted = <f64 as NumCast>::from(accepted).unwrap_or(0.0);
-            let attempted = <f64 as NumCast>::from(attempted).unwrap_or(f64::INFINITY);
+            let accepted: f64 = NumCast::from(accepted).unwrap_or(0.0);
+            let attempted: f64 = NumCast::from(attempted).unwrap_or(f64::INFINITY);
             accepted / attempted
         }
     }
@@ -178,8 +177,8 @@ impl MoveStatistics {
         if total_attempted == 0 {
             0.0
         } else {
-            let total_accepted = <f64 as NumCast>::from(total_accepted).unwrap_or(0.0);
-            let total_attempted = <f64 as NumCast>::from(total_attempted).unwrap_or(f64::INFINITY);
+            let total_accepted: f64 = NumCast::from(total_accepted).unwrap_or(0.0);
+            let total_attempted: f64 = NumCast::from(total_attempted).unwrap_or(f64::INFINITY);
             total_accepted / total_attempted
         }
     }
@@ -190,7 +189,7 @@ pub struct ErgodicsSystem {
     /// Move statistics
     pub stats: MoveStatistics,
     /// Random number generator
-    rng: ThreadRng,
+    rng: StdRng,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -214,7 +213,26 @@ impl ErgodicsSystem {
     pub fn new() -> Self {
         Self {
             stats: MoveStatistics::new(),
-            rng: rand::rng(),
+            rng: rand::make_rng(),
+        }
+    }
+
+    /// Creates a new ergodics system with a deterministic random seed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::ErgodicsSystem;
+    ///
+    /// let mut a = ErgodicsSystem::with_seed(7);
+    /// let mut b = ErgodicsSystem::with_seed(7);
+    /// assert_eq!(a.select_random_move(), b.select_random_move());
+    /// ```
+    #[must_use]
+    pub fn with_seed(seed: u64) -> Self {
+        Self {
+            stats: MoveStatistics::new(),
+            rng: StdRng::seed_from_u64(seed),
         }
     }
 
@@ -576,7 +594,7 @@ impl Default for ErgodicsSystem {
 }
 
 /// Selects a random candidate index without borrowing the candidate list.
-fn pick(rng: &mut ThreadRng, len: usize) -> Option<usize> {
+fn pick(rng: &mut StdRng, len: usize) -> Option<usize> {
     if len == 0 {
         return None;
     }
@@ -921,7 +939,7 @@ mod tests {
     }
 
     #[test]
-    fn test_move_statistics_all_variants_and_zero_rates() {
+    fn move_stats_variants() {
         let mut stats = MoveStatistics::new();
 
         for move_type in [
@@ -948,7 +966,7 @@ mod tests {
     }
 
     #[test]
-    fn test_22_move_uses_real_triangulation() {
+    fn move_22_uses_real_tri() {
         let mut system = ErgodicsSystem::new();
         let mut triangulation = square_two_triangles();
 
@@ -969,7 +987,7 @@ mod tests {
     }
 
     #[test]
-    fn test_22_move_without_interior_edge_reports_geometric_violation() {
+    fn move_22_rejects_boundary_edge() {
         let mut system = ErgodicsSystem::new();
         let mut triangulation = single_triangle();
         let counts_before = (
@@ -994,7 +1012,7 @@ mod tests {
     }
 
     #[test]
-    fn test_13_move_inserts_labeled_vertex_when_accepted() {
+    fn move_13_inserts_labeled_vertex() {
         let mut system = ErgodicsSystem::new();
         let mut triangulation = single_triangle();
         let before_vertices = triangulation.vertex_count();
@@ -1017,7 +1035,7 @@ mod tests {
     }
 
     #[test]
-    fn test_centroid_unwraps_toroidal_face_across_periodic_boundary() {
+    fn unwraps_toroidal_centroid() {
         let triangulation =
             CdtTriangulation2D::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
         let face = triangulation
@@ -1061,7 +1079,7 @@ mod tests {
     }
 
     #[test]
-    fn test_31_move_removes_degree_three_vertex_after_13_move() {
+    fn move_31_removes_degree_three() {
         let mut system = ErgodicsSystem::new();
         let mut triangulation = single_triangle();
         let result = system.attempt_13_move(&mut triangulation);
@@ -1085,7 +1103,7 @@ mod tests {
     }
 
     #[test]
-    fn test_31_move_without_degree_three_vertex_reports_geometric_violation() {
+    fn move_31_requires_degree_three() {
         let mut system = ErgodicsSystem::new();
         let mut triangulation = single_triangle();
         let counts_before = (
@@ -1110,7 +1128,7 @@ mod tests {
     }
 
     #[test]
-    fn test_edge_flip_is_k2_alias_with_separate_statistics() {
+    fn edge_flip_uses_own_stats() {
         let mut system = ErgodicsSystem::new();
         let mut triangulation = square_two_triangles();
 
@@ -1147,7 +1165,7 @@ mod tests {
     }
 
     #[test]
-    fn test_total_acceptance_rate_without_attempts() {
+    fn total_acceptance_no_attempts() {
         let stats = MoveStatistics::new();
 
         assert_relative_eq!(stats.total_acceptance_rate(), 0.0);

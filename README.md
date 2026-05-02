@@ -104,30 +104,23 @@ just run-example     # Basic simulation
 See [`examples/basic_cdt.rs`](examples/basic_cdt.rs) for a complete working example:
 
 ```rust
-use causal_triangulations::prelude::simulation::{
-    ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
-};
+use causal_triangulations::prelude::action::ActionConfig;
+use causal_triangulations::prelude::errors::CdtResult;
+use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
+use causal_triangulations::prelude::triangulation::CdtTriangulation;
 
 fn main() -> CdtResult<()> {
     // Create triangulation from random points
     let triangulation = CdtTriangulation::from_random_points(20, 1, 2)?;
 
-    // Configure Monte Carlo simulation. Full Metropolis execution currently
-    // returns UnsupportedOperation until the real CDT move kernels land.
+    // Configure and run the Monte Carlo simulation.
     let metropolis_config = MetropolisConfig::new(1.0, 1000, 100, 10);
     let action_config = ActionConfig::default();
     let algorithm = MetropolisAlgorithm::new(metropolis_config, action_config);
 
-    match algorithm.run(triangulation) {
-        Ok(results) => {
-            println!("Acceptance rate: {:.3}", results.acceptance_rate());
-            println!("Average action: {:.3}", results.average_action());
-        }
-        Err(causal_triangulations::CdtError::UnsupportedOperation { reason, .. }) => {
-            println!("Simulation unavailable: {reason}");
-        }
-        Err(err) => return Err(err),
-    }
+    let results = algorithm.run(triangulation)?;
+    println!("Acceptance rate: {:.3}", results.acceptance_rate());
+    println!("Average action: {:.3}", results.average_action());
     Ok(())
 }
 ```
@@ -141,20 +134,20 @@ cargo build --release
 # Build a triangulation and record the initial measurement
 ./target/release/cdt --vertices 20 --timeslices 10 --steps 2000
 
-# Configure a parameter sweep. Add --simulate after #55/#56 provide real moves.
+# Configure a parameter sweep with simulation enabled
 ./target/release/cdt \
   --vertices 50 --timeslices 12 \
   --temperature 1.5 --coupling-0 0.8 \
-  --steps 5000
+  --steps 5000 --simulate
 ```
 
 ### Ready-to-Use Scripts
 
 The `examples/scripts/` directory contains research workflows:
 
-- **`basic_simulation.sh`** - Simple simulation command and current guardrail check
-- **`parameter_sweep.sh`** - Temperature sweep setup; full analysis waits on real moves
-- **`performance_test.sh`** - Construction/guardrail timing across system sizes
+- **`basic_simulation.sh`** - Simple simulation command
+- **`parameter_sweep.sh`** - Temperature sweep setup
+- **`performance_test.sh`** - Construction and simulation timing across system sizes
 
 For detailed documentation, sample output, and usage instructions for each script, see [examples/scripts/README.md](examples/scripts/README.md).
 
@@ -170,7 +163,7 @@ cargo bench
 
 # Specific benchmark categories
 cargo bench triangulation_creation
-cargo bench metropolis_errors
+cargo bench metropolis_simulation
 cargo bench action_calculations
 
 # Performance regression testing

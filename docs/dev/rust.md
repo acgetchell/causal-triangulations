@@ -199,6 +199,7 @@ Focused preludes under `prelude::` must remain small, orthogonal, and purpose-sp
 - `prelude::geometry` for backend construction, geometry generators, and geometry traits
 - `prelude::triangulation` for CDT wrappers, foliation classification, topology metadata, and triangulation queries
 - `prelude::moves` for local ergodic move kernels, move results, move types, and move statistics
+- `prelude::action` for standalone action configuration and Regge action calculations
 - `prelude::simulation` for Metropolis/action simulation workflows and simulation result types
 
 ---
