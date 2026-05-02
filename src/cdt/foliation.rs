@@ -145,6 +145,7 @@ pub fn classify_cell(t0: Option<u32>, t1: Option<u32>, t2: Option<u32>) -> Optio
 
 /// Error type for foliation construction and validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FoliationError {
     /// `slice_sizes` length does not match `num_slices`.
     SliceSizeMismatch {

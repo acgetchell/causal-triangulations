@@ -6,6 +6,7 @@ use crate::cdt::foliation::FoliationError;
 
 /// Main error type for CDT operations.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[non_exhaustive]
 pub enum CdtError {
     /// Invalid dimension specified
     #[error("Unsupported dimension: {0}. Only 2D is currently supported")]

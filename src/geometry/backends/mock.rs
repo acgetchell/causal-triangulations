@@ -6,7 +6,8 @@
 //! CDT algorithms without requiring actual triangulation computations.
 
 use crate::geometry::traits::{
-    FlipResult, GeometryBackend, SubdivisionResult, TriangulationMut, TriangulationQuery,
+    EdgeAdjacentFaces, EdgeAdjacentFacesResult, FlipResult, GeometryBackend, SubdivisionResult,
+    TriangulationMut, TriangulationQuery,
 };
 use std::collections::HashMap;
 
@@ -36,6 +37,7 @@ pub struct MockFaceHandle(usize);
 
 /// Mock backend errors
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum MockError {
     /// Invalid vertex handle provided
     #[error("Invalid vertex handle: {0}")]
@@ -331,6 +333,28 @@ impl TriangulationQuery for MockBackend {
         self.edges
             .get(&edge.0)
             .map(|&(v1, v2)| (MockVertexHandle(v1), MockVertexHandle(v2)))
+    }
+
+    fn edge_adjacent_faces(
+        &self,
+        edge: &Self::EdgeHandle,
+    ) -> EdgeAdjacentFacesResult<Self::VertexHandle, Self::FaceHandle, Self::Error> {
+        let (v0, v1) = *self.edges.get(&edge.0).ok_or(MockError::Edge(edge.0))?;
+        let adjacent_faces = self.adjacent_face_ids_for_edge(v0, v1);
+        let Ok((opposite_0, opposite_1)) =
+            self.edge_flip_opposites(edge.0, v0, v1, &adjacent_faces)
+        else {
+            return Ok(None);
+        };
+        let [face_0, face_1] = adjacent_faces.as_slice() else {
+            return Ok(None);
+        };
+
+        Ok(Some(EdgeAdjacentFaces::new(
+            (MockVertexHandle(v0), MockVertexHandle(v1)),
+            (MockFaceHandle(*face_0), MockFaceHandle(*face_1)),
+            (MockVertexHandle(opposite_0), MockVertexHandle(opposite_1)),
+        )))
     }
 
     fn adjacent_faces(

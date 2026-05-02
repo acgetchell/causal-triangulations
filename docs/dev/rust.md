@@ -128,13 +128,27 @@ Errors should be defined **within the module where they are used**.
 
 Avoid large centralized error enums.
 
+Error variants must be narrow, orthogonal, and purpose-specific. Do not collapse distinct failure modes into one catch-all variant when callers, tests, or debugging would need to distinguish them. Prefer a new variant over stringly typed detail when the distinction is part of the recovery or diagnostic path.
+
+Each variant should carry the structured context needed to debug the failure without parsing the `Display` string:
+
+- the operation being attempted, when the same error can occur from multiple operations
+- the relevant handle, key, index, coordinate, or configuration field
+- the expected invariant and the actual value when reporting validation failures
+- the source error as a typed source when possible, or as a string only at crate/backend boundaries where the upstream type is not part of this crate's public contract
+
+Keep error layers orthogonal. Invalid input or handles, unsupported operations, topology/causality violations, backend mutation failures, and internal postcondition failures should use different variants. Wrapping is appropriate only when crossing abstraction layers, and wrappers must preserve the lower-level detail.
+
+Public error enums must be `#[non_exhaustive]` so new variants remain additive.
+
 Example:
 
 ```rust
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum InsertError {
-    #[error("duplicate vertex")]
-    DuplicateVertex,
+    #[error("duplicate vertex at index {index}")]
+    DuplicateVertex { index: usize },
 }
 ```
 
@@ -179,6 +193,13 @@ just doc-check
 Types that are part of the crate's **stable public API** (documented, intended for external consumption) should be re-exported from the crate root (`src/lib.rs`). Internal-use public types (e.g., backend-specific handles) should not be re-exported to avoid API bloat.
 
 When adding a new public API type, add a corresponding `pub use` line in the re-export block at the top of `lib.rs`.
+
+Focused preludes under `prelude::` must remain small, orthogonal, and purpose-specific. Use them in doctests, integration tests, examples, and benchmarks instead of deep module paths when demonstrating public workflows:
+
+- `prelude::geometry` for backend construction, geometry generators, and geometry traits
+- `prelude::triangulation` for CDT wrappers, foliation classification, topology metadata, and triangulation queries
+- `prelude::moves` for local ergodic move kernels, move results, move types, and move statistics
+- `prelude::simulation` for Metropolis/action simulation workflows and simulation result types
 
 ---
 

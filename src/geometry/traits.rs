@@ -101,6 +101,19 @@ pub trait TriangulationQuery: GeometryBackend {
         edge: &Self::EdgeHandle,
     ) -> Option<(Self::VertexHandle, Self::VertexHandle)>;
 
+    /// Get the two faces adjacent to an edge and their opposite vertices.
+    ///
+    /// Returns `Ok(Some(_))` for an interior edge shared by exactly two
+    /// triangular faces, `Ok(None)` for boundary or otherwise non-flippable
+    /// local topology, and `Err` when the edge handle itself is invalid.
+    ///
+    /// # Errors
+    /// Returns error if the edge handle is invalid.
+    fn edge_adjacent_faces(
+        &self,
+        edge: &Self::EdgeHandle,
+    ) -> EdgeAdjacentFacesResult<Self::VertexHandle, Self::FaceHandle, Self::Error>;
+
     /// Get all faces adjacent to a vertex
     ///
     /// # Errors
@@ -163,6 +176,40 @@ impl<E, F> FlipResult<E, F> {
         Self {
             new_edge,
             affected_faces,
+        }
+    }
+}
+
+/// Local topology adjacent to one edge in a 2D triangulation.
+#[derive(Debug, Clone)]
+pub struct EdgeAdjacentFaces<V, F> {
+    /// The two endpoints of the queried edge.
+    pub endpoints: (V, V),
+    /// The two faces sharing the edge.
+    pub faces: (F, F),
+    /// The vertex opposite the edge in each adjacent face.
+    pub opposite_vertices: (V, V),
+}
+
+/// Result type for querying the local faces adjacent to an edge.
+pub type EdgeAdjacentFacesResult<V, F, E> = Result<Option<EdgeAdjacentFaces<V, F>>, E>;
+
+impl<V, F> EdgeAdjacentFaces<V, F> {
+    /// Create a local edge-adjacency record.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::traits::EdgeAdjacentFaces;
+    ///
+    /// let adjacency = EdgeAdjacentFaces::new(("a", "b"), ("left", "right"), ("c", "d"));
+    /// assert_eq!(adjacency.endpoints, ("a", "b"));
+    /// ```
+    pub const fn new(endpoints: (V, V), faces: (F, F), opposite_vertices: (V, V)) -> Self {
+        Self {
+            endpoints,
+            faces,
+            opposite_vertices,
         }
     }
 }

@@ -9,9 +9,11 @@
 //! - Action calculations
 //! - Ergodic move operations
 
+use causal_triangulations::prelude::geometry::{DelaunayBackend2D, build_delaunay2_from_cells};
+use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveType};
 use causal_triangulations::prelude::simulation::{
-    ActionConfig, ErgodicsSystem, Measurement, MetropolisAlgorithm, MetropolisConfig,
-    MonteCarloStep, MoveType, SimulationResultsBackend,
+    ActionConfig, Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
+    SimulationResultsBackend,
 };
 use causal_triangulations::prelude::triangulation::{CdtTriangulation2D, TriangulationQuery};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -186,7 +188,22 @@ fn bench_action_calculations(c: &mut Criterion) {
 fn bench_ergodic_moves(c: &mut Criterion) {
     let mut group = c.benchmark_group("ergodic_moves");
 
-    let seed_triangulation = vec![vec![0, 1, 2], vec![1, 2, 3]]; // Simple test data
+    let seed_triangulation = || {
+        let dt = build_delaunay2_from_cells(
+            &[
+                ([0.0, 0.0], 0),
+                ([1.0, 0.0], 0),
+                ([0.0, 1.0], 1),
+                ([1.0, 1.0], 1),
+                ([1.0 / 3.0, 1.0 / 3.0], 1),
+            ],
+            &[vec![4, 0, 1], vec![4, 1, 2], vec![4, 2, 0], vec![1, 3, 2]],
+        )
+        .expect("build subdivided square CDT benchmark fixture");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+        CdtTriangulation2D::from_labeled_delaunay(backend, 2, 2)
+            .expect("wrap subdivided square CDT benchmark fixture")
+    };
 
     // Benchmark different move types
     let move_types = [
@@ -202,7 +219,7 @@ fn bench_ergodic_moves(c: &mut Criterion) {
             &move_type,
             |b, &move_type| {
                 b.iter_batched(
-                    || (ErgodicsSystem::new(), seed_triangulation.clone()),
+                    || (ErgodicsSystem::new(), seed_triangulation()),
                     |(mut ergodics, mut triangulation)| {
                         let result = match move_type {
                             MoveType::Move22 => ergodics.attempt_22_move(&mut triangulation),
@@ -233,7 +250,7 @@ fn bench_ergodic_moves(c: &mut Criterion) {
     // Benchmark random move attempt (needs fresh triangulation each time)
     group.bench_function("random_move_attempt", |b| {
         b.iter_batched(
-            || (ErgodicsSystem::new(), seed_triangulation.clone()),
+            || (ErgodicsSystem::new(), seed_triangulation()),
             |(mut ergodics, mut triangulation)| {
                 let result = ergodics.attempt_random_move(&mut triangulation);
                 black_box(result)

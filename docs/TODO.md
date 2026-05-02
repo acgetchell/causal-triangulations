@@ -4,27 +4,15 @@ This document tracks all the pending improvements, features, and technical debt 
 
 ## High Priority - Core Functionality
 
-### Ergodic Moves Implementation
+### Ergodic Moves Follow-up
 
-- [ ] **Complete (2,2) move implementation** (`src/cdt/ergodic_moves.rs:160`)
-  - Implement actual edge flip logic with Delaunay integration
-  - Replace placeholder random acceptance with proper geometric validation
-  - Add causality constraint checking
+- [ ] **Weight move selection by available sites** (`src/cdt/ergodic_moves.rs`)
+  - Avoid uniform move-type sampling bias when different moves have different numbers of valid application sites
+  - Track rejected site searches separately from geometric flip failures
 
-- [ ] **Complete (1,3) move implementation** (`src/cdt/ergodic_moves.rs:177`)
-  - Implement vertex addition by triangle subdivision
-  - Integrate with Delaunay triangulation maintenance
-  - Validate geometric and causal constraints
-
-- [ ] **Complete (3,1) move implementation** (`src/cdt/ergodic_moves.rs:193`)
-  - Implement vertex removal by triangle merging
-  - Ensure proper Delaunay property maintenance
-  - Add causality checks for vertex removal
-
-- [ ] **Complete edge flip implementation** (`src/cdt/ergodic_moves.rs:209`)
-  - Implement standard Delaunay edge flip operations
-  - Maintain causal structure during flips
-  - Add geometric validity checks
+- [ ] **Broaden toroidal move tests** (`src/cdt/ergodic_moves.rs`)
+  - Exercise periodic boundary cells where Euclidean centroids are not enough
+  - Add regression fixtures for wrap-around k=2 candidates
 
 ### Metropolis Algorithm Improvements
 
@@ -34,7 +22,7 @@ This document tracks all the pending improvements, features, and technical debt 
   - Consider implementing moves that only apply after acceptance
 
 - [ ] **Integrate Tds-based ergodic moves** (`src/cdt/metropolis.rs:264`)
-  - Adapt ergodic move system to work directly with Tds structures
+  - Use the implemented `ErgodicsSystem` move kernels from the proposal path
   - Remove placeholder "not yet implemented" rejections
   - Ensure proper triangulation state management
 

@@ -2250,6 +2250,36 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(Some(count))
     }
 
+    /// Rebuilds foliation bookkeeping from live backend vertex labels after a topology edit.
+    ///
+    /// Ergodic moves preserve labels on existing vertices and assign labels to
+    /// inserted vertices before calling this helper. The backend topology has
+    /// already been mutated, so this method only refreshes CDT-side aggregate
+    /// bookkeeping and cell payload classifications.
+    pub(crate) fn synchronize_foliation_from_live_labels(&mut self) -> CdtResult<()> {
+        if self.foliation.is_none() {
+            return Ok(());
+        }
+
+        let slice_sizes =
+            Self::live_slice_sizes_from_vertex_labels(&self.geometry, self.metadata.time_slices)?;
+        let foliation = Foliation::from_slice_sizes(slice_sizes, self.metadata.time_slices)
+            .map_err(CdtError::from)?;
+
+        self.foliation = Some(foliation);
+        match self.classify_all_cells() {
+            Ok(_) => {
+                self.mark_foliation_synchronized();
+                Ok(())
+            }
+            Err(err) => {
+                self.foliation = None;
+                self.foliation_synced_at_modification = None;
+                Err(err)
+            }
+        }
+    }
+
     /// Validate CDT properties (geometry, Delaunay, topology, causality, foliation).
     ///
     /// # Errors

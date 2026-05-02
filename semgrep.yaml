@@ -24,7 +24,7 @@ rules:
       - pattern-either:
           - pattern: println!(...)
           - pattern: eprintln!(...)
-      - pattern-not-inside: |
+      - pattern-not: |
           mod tests {
               ...
           }
@@ -200,6 +200,54 @@ rules:
           impl $TYPE {
               ...
           }
+
+  - id: causal-triangulations.rust.public-error-enums-non-exhaustive
+    languages:
+      - rust
+    severity: WARNING
+    message: "Public error enums must be #[non_exhaustive] so adding variants remains API-safe."
+    metadata:
+      category: maintainability
+      rationale: >-
+        Error enums grow as diagnostics become more precise; non-exhaustive
+        public enums keep that growth additive for downstream callers.
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+    patterns:
+      - pattern: |
+          pub enum $X {
+              $Y
+          }
+      - metavariable-regex:
+          metavariable: $X
+          regex: ".*Error$"
+      - pattern-not: |
+          #[non_exhaustive]
+          pub enum $X {
+              $Y
+          }
+
+  - id: causal-triangulations.rust.prefer-focused-prelude-imports-in-public-usage
+    languages:
+      - rust
+    severity: WARNING
+    message: >-
+      Use causal_triangulations::prelude focused imports in examples,
+      benchmarks, and integration tests instead of deep crate module paths.
+    metadata:
+      category: maintainability
+      rationale: >-
+        Public-facing usage should model the small, orthogonal prelude import
+        surfaces users can copy into their own code.
+    paths:
+      include:
+        - "/examples/**/*.rs"
+        - "/benches/**/*.rs"
+        - "/tests/**/*.rs"
+    pattern-regex: >-
+      ^\s*use\s+causal_triangulations::(?:cdt|geometry)::
 
   - id: causal-triangulations.rust.no-stringly-domain-validation-errors
     languages:

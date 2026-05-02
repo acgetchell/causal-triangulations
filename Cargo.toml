@@ -42,7 +42,7 @@ log = "0.4.29"
 num-traits = "0.2.19"
 rand = "0.10.1"
 serde = { version = "1.0.228", features = [ "derive" ] }
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 
 [dev-dependencies]
 approx = "0.5.1"
