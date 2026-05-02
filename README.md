@@ -112,16 +112,22 @@ fn main() -> CdtResult<()> {
     // Create triangulation from random points
     let triangulation = CdtTriangulation::from_random_points(20, 1, 2)?;
 
-    // Configure Monte Carlo simulation
+    // Configure Monte Carlo simulation. Full Metropolis execution currently
+    // returns UnsupportedOperation until the real CDT move kernels land.
     let metropolis_config = MetropolisConfig::new(1.0, 1000, 100, 10);
     let action_config = ActionConfig::default();
     let algorithm = MetropolisAlgorithm::new(metropolis_config, action_config);
 
-    // Run simulation
-    let results = algorithm.run(triangulation)?;
-
-    println!("Acceptance rate: {:.3}", results.acceptance_rate());
-    println!("Average action: {:.3}", results.average_action());
+    match algorithm.run(triangulation) {
+        Ok(results) => {
+            println!("Acceptance rate: {:.3}", results.acceptance_rate());
+            println!("Average action: {:.3}", results.average_action());
+        }
+        Err(causal_triangulations::CdtError::UnsupportedOperation { reason, .. }) => {
+            println!("Simulation unavailable: {reason}");
+        }
+        Err(err) => return Err(err),
+    }
     Ok(())
 }
 ```
@@ -132,23 +138,23 @@ fn main() -> CdtResult<()> {
 # Build the binary
 cargo build --release
 
-# Run a basic simulation
-./target/release/cdt --vertices 20 --timeslices 10 --steps 2000 --simulate
+# Build a triangulation and record the initial measurement
+./target/release/cdt --vertices 20 --timeslices 10 --steps 2000
 
-# Parameter sweep for phase transition studies
+# Configure a parameter sweep. Add --simulate after #55/#56 provide real moves.
 ./target/release/cdt \
   --vertices 50 --timeslices 12 \
   --temperature 1.5 --coupling-0 0.8 \
-  --steps 5000 --simulate
+  --steps 5000
 ```
 
 ### Ready-to-Use Scripts
 
 The `examples/scripts/` directory contains research workflows:
 
-- **`basic_simulation.sh`** - Simple test run and validation
-- **`parameter_sweep.sh`** - Temperature sweep for phase transition analysis
-- **`performance_test.sh`** - Performance benchmarking across system sizes
+- **`basic_simulation.sh`** - Simple simulation command and current guardrail check
+- **`parameter_sweep.sh`** - Temperature sweep setup; full analysis waits on real moves
+- **`performance_test.sh`** - Construction/guardrail timing across system sizes
 
 For detailed documentation, sample output, and usage instructions for each script, see [examples/scripts/README.md](examples/scripts/README.md).
 
@@ -164,7 +170,7 @@ cargo bench
 
 # Specific benchmark categories
 cargo bench triangulation_creation
-cargo bench metropolis_simulation
+cargo bench metropolis_errors
 cargo bench action_calculations
 
 # Performance regression testing

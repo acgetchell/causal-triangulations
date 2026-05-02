@@ -5,16 +5,18 @@
 //! This benchmark suite measures the performance of key CDT operations including:
 //! - Triangulation creation and initialization
 //! - Geometry operations (edge counting, queries)
-//! - Metropolis-Hastings simulation steps
+//! - Metropolis-Hastings guardrail errors while real moves are pending
 //! - Action calculations
 //! - Ergodic move operations
 
 use causal_triangulations::prelude::simulation::{
-    ActionConfig, ErgodicsSystem, MetropolisAlgorithm, MetropolisConfig, MoveType,
+    ActionConfig, ErgodicsSystem, Measurement, MetropolisAlgorithm, MetropolisConfig,
+    MonteCarloStep, MoveType, SimulationResultsBackend,
 };
 use causal_triangulations::prelude::triangulation::{CdtTriangulation2D, TriangulationQuery};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::hint::black_box;
+use std::time::Duration;
 
 /// Benchmark triangulation creation with different vertex counts
 fn bench_triangulation_creation(c: &mut Criterion) {
@@ -243,15 +245,14 @@ fn bench_ergodic_moves(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark Metropolis-Hastings simulation steps
+/// Benchmark Metropolis-Hastings guardrail errors while real moves are pending.
 fn bench_metropolis_simulation(c: &mut Criterion) {
-    let mut group = c.benchmark_group("metropolis_simulation");
+    let mut group = c.benchmark_group("metropolis_errors");
 
-    // Test different step counts
+    // Keep this path measured without presenting it as simulation throughput.
     for steps in [10, 50, 100] {
-        group.throughput(Throughput::Elements(u64::from(steps)));
         group.bench_with_input(
-            BenchmarkId::new("simulation_steps", steps),
+            BenchmarkId::new("metropolis_shortcircuit", steps),
             &steps,
             |b, &steps| {
                 b.iter(|| {
@@ -262,10 +263,10 @@ fn bench_metropolis_simulation(c: &mut Criterion) {
                     let action_config = ActionConfig::default();
                     let algorithm = MetropolisAlgorithm::new(config, action_config);
 
-                    let results = algorithm
+                    let error = algorithm
                         .run(black_box(triangulation))
-                        .expect("Simulation should succeed");
-                    black_box(results)
+                        .expect_err("zero-move simulation should be rejected");
+                    black_box(error)
                 });
             },
         );
@@ -284,11 +285,61 @@ fn bench_simulation_analysis(c: &mut Criterion) {
 
     let config = MetropolisConfig::new(1.0, 100, 10, 5);
     let action_config = ActionConfig::default();
-    let algorithm = MetropolisAlgorithm::new(config, action_config);
-
-    let results = algorithm
-        .run(triangulation)
-        .expect("Simulation should succeed");
+    let results = SimulationResultsBackend {
+        config,
+        action_config,
+        steps: vec![
+            MonteCarloStep {
+                step: 1,
+                move_type: MoveType::Move22,
+                accepted: true,
+                action_before: 12.5,
+                action_after: Some(11.8),
+                delta_action: Some(-0.7),
+            },
+            MonteCarloStep {
+                step: 2,
+                move_type: MoveType::Move13Add,
+                accepted: false,
+                action_before: 11.8,
+                action_after: None,
+                delta_action: Some(1.4),
+            },
+            MonteCarloStep {
+                step: 3,
+                move_type: MoveType::Move31Remove,
+                accepted: true,
+                action_before: 11.8,
+                action_after: Some(12.1),
+                delta_action: Some(0.3),
+            },
+        ],
+        measurements: vec![
+            Measurement {
+                step: 0,
+                action: 12.5,
+                vertices: 15,
+                edges: 32,
+                triangles: 18,
+            },
+            Measurement {
+                step: 10,
+                action: 11.8,
+                vertices: 16,
+                edges: 34,
+                triangles: 19,
+            },
+            Measurement {
+                step: 20,
+                action: 12.1,
+                vertices: 15,
+                edges: 31,
+                triangles: 17,
+            },
+        ],
+        elapsed_time: Duration::from_millis(37),
+        triangulation,
+    };
 
     group.bench_function("acceptance_rate", |b| {
         b.iter(|| {

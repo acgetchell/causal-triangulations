@@ -1,12 +1,14 @@
 # CDT-RS CLI Example Scripts
 
-This directory contains shell scripts that demonstrate how to use the `cdt` command-line binary for various simulation scenarios.
+This directory contains shell scripts that demonstrate how to use the `cdt` command-line binary for simulation-oriented scenarios.
+
+> **Current simulation status:** scripts that pass `--simulate` currently reach the `MetropolisAlgorithm::run()` `UnsupportedOperation` guardrail until the real CDT move kernels in #55/#56 land. Remove `--simulate` for successful triangulation-only runs, or keep it when you explicitly want to observe the guardrail behavior.
 
 ## Available Scripts
 
 ### 1. `basic_simulation.sh`
 
-**Purpose**: Demonstrates a simple CDT simulation run **Usage**:
+**Purpose**: Demonstrates a simple CDT simulation command and, while moves are pending, the current unsupported-operation guardrail. **Usage**:
 
 ```bash
 ./examples/scripts/basic_simulation.sh
@@ -15,14 +17,14 @@ This directory contains shell scripts that demonstrate how to use the `cdt` comm
 **What it does**:
 
 - Builds the cdt binary in release mode
-- Runs a basic simulation (10 vertices, 5 timeslices, 1000 MC steps)
-- Shows logging output and success confirmation
+- Builds a 10-vertex, 5-timeslice command with 1000 requested MC steps
+- Shows logging output until the current `--simulate` guardrail exits non-zero
 
 **Use this for**: First-time testing, verifying installation
 
 ### 2. `parameter_sweep.sh`
 
-**Purpose**: Runs systematic temperature sweep for phase transition studies **Usage**:
+**Purpose**: Runs a systematic temperature-sweep command set. Full phase-transition studies require real CDT moves from #55/#56. **Usage**:
 
 ```bash
 ./examples/scripts/parameter_sweep.sh
@@ -31,11 +33,11 @@ This directory contains shell scripts that demonstrate how to use the `cdt` comm
 **What it does**:
 
 - Tests temperatures from 0.5 to 3.0
-- Runs 2000 MC steps for each temperature
+- Requests 2000 MC steps for each temperature
 - Saves individual logs to `sweep_results/`
-- Provides summary of successful runs
+- Encounters the current `--simulate` guardrail until the move kernels land
 
-**Use this for**: Physics studies, phase transition analysis, parameter exploration
+**Use this for**: Parameter exploration setup now; physics studies and phase-transition analysis after real moves land
 
 ### 3. `performance_test.sh`
 
@@ -48,11 +50,11 @@ This directory contains shell scripts that demonstrate how to use the `cdt` comm
 **What it does**:
 
 - Tests small to extra-large system configurations
-- Measures runtime and calculates throughput
+- Measures current command runtime and setup overhead
 - Generates performance summary report
 - Saves results to `performance_results.txt`
 
-**Use this for**: Performance analysis, scaling studies, optimization validation
+**Use this for**: Construction/guardrail timing now; full simulation scaling studies after real moves land
 
 ## Prerequisites
 
@@ -60,7 +62,7 @@ This directory contains shell scripts that demonstrate how to use the `cdt` comm
 
 - Bash shell (zsh also works)
 - `bc` calculator (for performance script)
-- Sufficient memory for large simulations
+- Sufficient memory for large triangulation runs
 
 ### Build Requirements
 
@@ -139,7 +141,7 @@ echo "=== Custom CDT Script ==="
 # Build the binary
 cargo build --release
 
-# Run simulation with custom parameters
+# Run with custom parameters. Remove --simulate for a successful triangulation-only run.
 RUST_LOG=info ./target/release/cdt \
     --vertices 25 \
     --timeslices 10 \
@@ -147,20 +149,20 @@ RUST_LOG=info ./target/release/cdt \
     --steps 3000 \
     --simulate
 
-echo "Custom simulation completed!"
+echo "Custom command completed!"
 ```
 
 ## Expected Output
 
-### Successful Runs
+### Current `--simulate` Runs
 
-Scripts will show:
+Scripts that pass `--simulate` currently show:
 
 - Build confirmation
 - Progress messages
-- Simulation logs (with RUST_LOG=info)
-- Success confirmation
-- Results summary (for sweep/performance scripts)
+- Simulation logs (with `RUST_LOG=info`)
+- `UnsupportedOperation` from `MetropolisAlgorithm::run()`
+- A non-zero exit from the `cdt` command unless `--simulate` is removed
 
 ### Error Handling
 
@@ -215,17 +217,15 @@ run-performance:
 
 ### Log Format
 
-Simulation logs contain:
+Triangulation-only logs contain:
 
 ```text
 [INFO] Dimensionality: 2
 [INFO] Number of vertices: 20
-[INFO] Time slices: 8
-[INFO] Starting CDT simulation with backend...
-[INFO] Temperature: 1.0
-[INFO] Total steps: 2000
-[INFO] Thermalization steps: 200
-[INFO] Simulation completed in 45.23ms
+[INFO] Number of timeslices: 8
+[INFO] Topology: OpenBoundary
+[INFO] Using trait-based backend system
+[INFO] Triangulation created with 20 vertices, <edge-count> edges, <face-count> faces
 [INFO] CDT simulation completed successfully
 ```
 
@@ -266,4 +266,4 @@ Simulation logs contain:
 - [`examples/basic_cdt.rs`](../basic_cdt.rs): Library usage examples
 - [`benches/README.md`](../../benches/README.md): Benchmarking documentation
 
-These scripts provide a practical starting point for exploring CDT physics and conducting computational studies with the cdt binary.
+These scripts provide a practical starting point for configuring CDT runs with the `cdt` binary while full simulation remains blocked on #55/#56.

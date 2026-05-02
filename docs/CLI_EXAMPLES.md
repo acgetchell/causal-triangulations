@@ -2,6 +2,8 @@
 
 This document provides examples for using the `cdt` binary, the command-line interface for Causal Dynamical Triangulations simulations.
 
+> **Current simulation status:** examples that pass `--simulate` are unsupported until the real CDT move kernels in PRs #55/#56 are merged. Today those commands validate configuration and initial triangulation construction, then fail with `UnsupportedOperation` from `MetropolisAlgorithm::run`. Run the examples without `--simulate` for triangulation generation and initial measurement output.
+
 ## Basic Usage
 
 The `cdt` binary accepts various command-line arguments to configure and run CDT simulations.
@@ -9,10 +11,10 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 ### Quick Start
 
 ```bash
-# Basic 2D CDT simulation with default parameters
+# Basic 2D CDT triangulation with default parameters
 ./target/release/cdt --vertices 10 --timeslices 5
 
-# Run with custom temperature and steps
+# Build with custom simulation settings; omit --simulate while moves are pending
 ./target/release/cdt --vertices 20 --timeslices 10 --temperature 1.5 --steps 2000
 ```
 
@@ -39,27 +41,29 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 ### Additional Options
 
-- `--simulate`: Run full Monte Carlo simulation (default: true; pass `--simulate false` to only generate the triangulation without running Monte Carlo steps)
+- `--simulate`: Request full Monte Carlo simulation (default: false). **Unsupported today:** until real CDT move kernels land in PRs #55/#56, this raises `UnsupportedOperation` from `MetropolisAlgorithm::run` instead of returning a zero-move simulation. Omit `--simulate` for triangulation generation and initial measurements.
 
 ## Example Usage Scenarios
 
 ### 1. Small Test Simulation
 
 ```bash
-# Quick test with minimal parameters
-./target/release/cdt --vertices 5 --timeslices 2 --simulate
+# Quick triangulation-generation test with minimal parameters
+./target/release/cdt --vertices 5 --timeslices 2
 ```
 
 **Expected Output:**
 
 - Creates a 5-vertex, 2-timeslice triangulation
-- Runs default 1000 Monte Carlo steps
-- Reports simulation statistics
+- Does not run Monte Carlo steps unless `--simulate` is passed
+- Reports the initial triangulation measurement
 
 ### 2. Medium-Scale Physics Study
 
+> **Unsupported with `--simulate`:** the physics-study examples in this section currently raise `UnsupportedOperation` until the CDT move kernels in PRs #55/#56 are merged. Omit `--simulate` to generate the initial triangulation, or wait for those PRs before treating these as Monte Carlo studies.
+
 ```bash
-# Medium triangulation for physics exploration  
+# Currently unsupported as a simulation; remove --simulate to build only
 ./target/release/cdt \
   --vertices 50 \
   --timeslices 10 \
@@ -74,8 +78,10 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 ### 3. High-Temperature Simulation
 
+> **Unsupported with `--simulate`:** this currently reaches the `MetropolisAlgorithm::run` guardrail. Remove `--simulate` for triangulation generation until PRs #55/#56 land.
+
 ```bash
-# High temperature (classical limit)
+# High temperature configuration; --simulate is currently unsupported
 ./target/release/cdt \
   --vertices 30 \
   --timeslices 8 \
@@ -88,8 +94,10 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 ### 4. Low-Temperature Simulation
 
+> **Unsupported with `--simulate`:** this currently raises `UnsupportedOperation` instead of running a Monte Carlo chain. Remove `--simulate` or wait for PRs #55/#56.
+
 ```bash
-# Low temperature (quantum regime)
+# Low temperature configuration; --simulate is currently unsupported
 ./target/release/cdt \
   --vertices 25 \
   --timeslices 12 \
@@ -103,8 +111,10 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 ### 5. Custom Physics Parameters
 
+> **Unsupported with `--simulate`:** custom couplings are validated, but full simulation still stops at the unsupported-operation guardrail until PRs #55/#56 provide real moves.
+
 ```bash
-# Modified coupling constants
+# Modified coupling constants; --simulate is currently unsupported
 ./target/release/cdt \
   --vertices 40 \
   --timeslices 8 \
@@ -120,7 +130,7 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 ```bash
 # Generate triangulation without running Monte Carlo simulation
-./target/release/cdt --vertices 100 --timeslices 20 --simulate false
+./target/release/cdt --vertices 100 --timeslices 20
 ```
 
 **Use Case:** Generate initial configurations for other analysis tools
@@ -129,6 +139,8 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 ### Batch Processing with Shell Scripts
 
+> **Unsupported with `--simulate`:** batch sweeps that include `--simulate` currently collect the same `UnsupportedOperation` error for each run. Remove `--simulate` to batch-generate initial triangulations, or wait for PRs #55/#56 before using this for simulation sweeps.
+
 Create a script to run parameter sweeps:
 
 ```bash
@@ -136,35 +148,40 @@ Create a script to run parameter sweeps:
 # parameter_sweep.sh
 
 for temp in 0.5 1.0 1.5 2.0 2.5; do
-    echo "Running simulation at temperature $temp"
+    echo "Building triangulation at temperature $temp"
     ./target/release/cdt \
         --vertices 30 \
         --timeslices 10 \
         --temperature $temp \
         --steps 2000 \
-        --simulate \
         > "results_T${temp}.log" 2>&1
 done
 ```
 
 ### Performance Testing
 
+> **Unsupported with `--simulate`:** full simulation performance testing is blocked on PRs #55/#56. Run without `--simulate` for construction/validation timing, or use the benchmark suite's `metropolis_errors` group to measure the current guardrail.
+
 ```bash
-# Large simulation for performance testing
+# Large triangulation construction for performance testing
 ./target/release/cdt \
   --vertices 200 \
   --timeslices 25 \
   --steps 10000 \
-  --measurement-frequency 100 \
-  --simulate
+  --measurement-frequency 100
 ```
 
 ### Logging and Output
 
+> **Unsupported with `--simulate`:** logging examples that include `--simulate` currently log the `UnsupportedOperation` guardrail after configuration and triangulation setup. Remove `--simulate` for successful triangulation-only runs.
+
 Enable detailed logging:
 
 ```bash
-# Set log level for detailed output
+# Set log level for detailed triangulation output
+RUST_LOG=debug ./target/release/cdt --vertices 10 --timeslices 5
+
+# Show the current unsupported-operation guardrail explicitly
 RUST_LOG=debug ./target/release/cdt --vertices 10 --timeslices 5 --simulate
 
 # Log only errors and warnings
@@ -178,16 +195,22 @@ RUST_LOG=warn ./target/release/cdt --vertices 50 --timeslices 10 --simulate
 
 ### Successful Run
 
+> **Successful runs currently omit `--simulate`:** commands with `--simulate` raise `UnsupportedOperation` until PRs #55/#56 merge.
+
 ```text
 [INFO] Dimensionality: 2
 [INFO] Number of vertices: 10
-[INFO] Time slices: 5
-[INFO] Starting CDT simulation with backend...
-[INFO] Temperature: 1.0
-[INFO] Total steps: 1000
-[INFO] Thermalization steps: 100
-[INFO] Simulation completed in 45.23ms
+[INFO] Number of timeslices: 5
+[INFO] Topology: OpenBoundary
+[INFO] Using trait-based backend system
+[INFO] Triangulation created with 10 vertices, <edge-count> edges, <face-count> faces
 [INFO] CDT simulation completed successfully
+```
+
+### Unsupported `--simulate` Run
+
+```text
+[ERROR] CDT simulation failed: Unsupported operation [MetropolisAlgorithm::run]: real CDT ergodic moves are not implemented yet (#55); refusing to return a zero-move simulation result
 ```
 
 ### Error Cases
@@ -212,9 +235,9 @@ RUST_LOG=warn ./target/release/cdt --vertices 50 --timeslices 10 --simulate
 
 ### Runtime
 
-- Test simulations (1000 steps): seconds
-- Physics studies (10000+ steps): minutes
-- Large systems: hours
+- Triangulation construction and validation: seconds for small examples
+- Full simulation timing with `--simulate`: unsupported until PRs #55/#56 merge
+- Physics studies and large simulation runs: wait for the real CDT move kernels
 
 ### Optimization Tips
 
@@ -252,8 +275,8 @@ RUST_LOG=warn ./target/release/cdt --vertices 50 --timeslices 10 --simulate
 ### Data Analysis
 
 ```bash
-# Pipe output to analysis tools
-./target/release/cdt --vertices 50 --timeslices 10 --simulate | \
+# Pipe triangulation-only output to analysis tools
+./target/release/cdt --vertices 50 --timeslices 10 | \
   python analysis_script.py
 ```
 
@@ -262,7 +285,7 @@ RUST_LOG=warn ./target/release/cdt --vertices 50 --timeslices 10 --simulate
 ```bash
 # Use in makefiles or CI/CD
 make run-simulation: 
- ./target/release/cdt --vertices $(VERTICES) --timeslices $(SLICES) --simulate
+ ./target/release/cdt --vertices $(VERTICES) --timeslices $(SLICES)
 ```
 
 ## Help and Documentation
@@ -275,4 +298,4 @@ make run-simulation:
 ./target/release/cdt --version
 ```
 
-This CLI interface provides a powerful way to explore CDT physics and test different simulation parameters efficiently from the command line.
+This CLI interface provides a way to explore CDT triangulation construction and validate simulation parameters from the command line while full Monte Carlo simulation remains blocked on PRs #55/#56.

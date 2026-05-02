@@ -6,6 +6,7 @@
 //! and runs causal dynamical triangulations simulations.
 
 use causal_triangulations::{CdtConfig, run_simulation};
+use std::process::exit;
 
 fn main() {
     // Initialize logging
@@ -18,7 +19,7 @@ fn main() {
         }
         Err(e) => {
             log::error!("CDT simulation failed: {e}");
-            std::process::exit(1);
+            exit(1);
         }
     }
 }

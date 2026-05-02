@@ -12,6 +12,7 @@ use crate::cdt::metropolis::MetropolisConfig;
 use crate::errors::{CdtError, CdtResult};
 use clap::{Parser, ValueEnum};
 use dirs::home_dir;
+use std::fmt::Display;
 use std::path::{Component, Path, PathBuf};
 
 /// Topology of the spatial slices in the CDT triangulation.
@@ -83,8 +84,8 @@ pub struct CdtConfig {
     #[arg(long, default_value = "0.1")]
     pub cosmological_constant: f64,
 
-    /// Run full CDT simulation (default: true; disable to only generate triangulation)
-    #[arg(long, default_value_t = true)]
+    /// Run full CDT simulation (currently requires real move kernels from #55)
+    #[arg(long, default_value_t = false)]
     pub simulate: bool,
 
     /// Optional RNG seed for reproducible simulations
@@ -286,10 +287,14 @@ fn normalize_components(path: &Path) -> PathBuf {
             Component::ParentDir => {
                 // Don't pop if the path is empty or we're at the root
                 let mut components = normalized.components();
-                let at_root = components.next().is_some_and(|first| {
-                    components.next().is_none()
-                        && matches!(first, Component::RootDir | Component::Prefix(_))
-                });
+                let at_root = match components.next() {
+                    Some(Component::RootDir) => components.next().is_none(),
+                    Some(Component::Prefix(_)) => {
+                        matches!(components.next(), Some(Component::RootDir))
+                            && components.next().is_none()
+                    }
+                    _ => false,
+                };
                 let ends_with_parent = normalized
                     .components()
                     .next_back()
@@ -322,20 +327,16 @@ fn normalize_components(path: &Path) -> PathBuf {
 }
 
 /// Builds a typed configuration error from displayable values without duplicating field names.
-fn invalid_configuration(
+fn invalid_config(
     setting: &str,
-    provided_value: &impl std::fmt::Display,
-    expected: &impl std::fmt::Display,
+    provided_value: &impl Display,
+    expected: &impl Display,
 ) -> CdtError {
-    invalid_configuration_from_parts(setting, provided_value.to_string(), expected.to_string())
+    invalid_config_parts(setting, provided_value.to_string(), expected.to_string())
 }
 
 /// Preserves already-formatted validation values when shared validators produce owned strings.
-fn invalid_configuration_from_parts(
-    setting: &str,
-    provided_value: String,
-    expected: String,
-) -> CdtError {
+fn invalid_config_parts(setting: &str, provided_value: String, expected: String) -> CdtError {
     CdtError::InvalidConfiguration {
         setting: setting.to_string(),
         provided_value,
@@ -343,8 +344,17 @@ fn invalid_configuration_from_parts(
     }
 }
 
-/// Shares simulation schedule validation between top-level config and Metropolis config.
-pub(crate) fn validate_simulation_settings(
+/// Rejects non-finite action couplings before they can poison action/log-probability math.
+fn validate_coupling(setting: &str, value: f64) -> CdtResult<()> {
+    if value.is_finite() {
+        Ok(())
+    } else {
+        Err(invalid_config(setting, &value, &"finite"))
+    }
+}
+
+/// Shares schedule validation between top-level config and Metropolis config.
+pub(crate) fn validate_schedule(
     temperature: f64,
     steps: u32,
     thermalization_steps: u32,
@@ -410,6 +420,14 @@ pub(crate) fn validate_simulation_settings(
 
 impl CdtConfig {
     /// Builds a new instance of `CdtConfig` from command line arguments.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use causal_triangulations::CdtConfig;
+    ///
+    /// let _config = CdtConfig::from_args();
+    /// ```
     #[must_use]
     pub fn from_args() -> Self {
         Self::parse()
@@ -440,7 +458,7 @@ impl CdtConfig {
             coupling_0: 1.0,
             coupling_2: 1.0,
             cosmological_constant: 0.1,
-            simulate: true,
+            simulate: false,
             seed: None,
             topology: CdtTopology::OpenBoundary,
         }
@@ -530,22 +548,22 @@ impl CdtConfig {
     /// ```
     pub fn validate(&self) -> CdtResult<()> {
         if self.vertices < 3 {
-            return Err(invalid_configuration("vertices", &self.vertices, &"≥ 3"));
+            return Err(invalid_config("vertices", &self.vertices, &"≥ 3"));
         }
 
         if self.timeslices == 0 {
-            return Err(invalid_configuration(
-                "timeslices",
-                &self.timeslices,
-                &"≥ 1",
-            ));
+            return Err(invalid_config("timeslices", &self.timeslices, &"≥ 1"));
         }
 
         if let Some(dim) = self.dimension
             && !(2..=3).contains(&dim)
         {
-            return Err(invalid_configuration("dimension", &dim, &"2 or 3"));
+            return Err(invalid_config("dimension", &dim, &"2 or 3"));
         }
+
+        validate_coupling("coupling_0", self.coupling_0)?;
+        validate_coupling("coupling_2", self.coupling_2)?;
+        validate_coupling("cosmological_constant", self.cosmological_constant)?;
 
         if matches!(self.topology, CdtTopology::Toroidal) {
             // Toroidal topology requires T ≥ 3 (T = 2 makes adjacent slices
@@ -554,14 +572,14 @@ impl CdtConfig {
             // slices with at least 3 per slice (any fewer and the spatial
             // ring degenerates).
             if self.timeslices < 3 {
-                return Err(invalid_configuration(
+                return Err(invalid_config(
                     "timeslices",
                     &self.timeslices,
                     &"≥ 3 for toroidal topology",
                 ));
             }
             if !self.vertices.is_multiple_of(self.timeslices) {
-                return Err(invalid_configuration_from_parts(
+                return Err(invalid_config_parts(
                     "vertices",
                     self.vertices.to_string(),
                     format!(
@@ -571,14 +589,14 @@ impl CdtConfig {
                 ));
             }
             let min_total = self.timeslices.checked_mul(3).ok_or_else(|| {
-                invalid_configuration_from_parts(
+                invalid_config_parts(
                     "timeslices",
                     self.timeslices.to_string(),
                     "3 · timeslices must fit in u32 for toroidal topology".to_string(),
                 )
             })?;
             if self.vertices < min_total {
-                return Err(invalid_configuration_from_parts(
+                return Err(invalid_config_parts(
                     "vertices",
                     self.vertices.to_string(),
                     format!("≥ 3 · timeslices ({min_total}) for toroidal topology"),
@@ -586,13 +604,13 @@ impl CdtConfig {
             }
         }
 
-        validate_simulation_settings(
+        validate_schedule(
             self.temperature,
             self.steps,
             self.thermalization_steps,
             self.measurement_frequency,
             |setting, provided_value, expected| {
-                invalid_configuration_from_parts(setting, provided_value, expected)
+                invalid_config_parts(setting, provided_value, expected)
             },
         )
     }
@@ -626,7 +644,7 @@ impl TestConfig {
             coupling_0: 1.0,
             coupling_2: 1.0,
             cosmological_constant: 0.1,
-            simulate: true,
+            simulate: false,
             seed: None,
             topology: CdtTopology::OpenBoundary,
         }
@@ -655,7 +673,7 @@ impl TestConfig {
             coupling_0: 1.0,
             coupling_2: 1.0,
             cosmological_constant: 0.1,
-            simulate: true,
+            simulate: false,
             seed: None,
             topology: CdtTopology::OpenBoundary,
         }
@@ -684,7 +702,7 @@ impl TestConfig {
             coupling_0: 1.0,
             coupling_2: 1.0,
             cosmological_constant: 0.1,
-            simulate: true,
+            simulate: false,
             seed: None,
             topology: CdtTopology::OpenBoundary,
         }
@@ -704,7 +722,7 @@ mod tests {
         assert_eq!(config.vertices, 32);
         assert_eq!(config.timeslices, 3);
         assert_eq!(config.dimension(), 2);
-        assert!(config.simulate);
+        assert!(!config.simulate);
     }
 
     #[test]
@@ -811,6 +829,39 @@ mod tests {
                 expected,
             }) if setting == "dimension" && provided_value == "4" && expected == "2 or 3"
         ));
+
+        for (setting, value) in [
+            ("coupling_0", f64::NAN),
+            ("coupling_2", f64::INFINITY),
+            ("cosmological_constant", f64::NEG_INFINITY),
+        ] {
+            let mut invalid_action_coupling = CdtConfig::new(32, 3);
+            match setting {
+                "coupling_0" => invalid_action_coupling.coupling_0 = value,
+                "coupling_2" => invalid_action_coupling.coupling_2 = value,
+                "cosmological_constant" => invalid_action_coupling.cosmological_constant = value,
+                _ => unreachable!("test case should name a known action coupling"),
+            }
+            assert!(matches!(
+                invalid_action_coupling.validate(),
+                Err(CdtError::InvalidConfiguration {
+                    setting: invalid_setting,
+                    expected,
+                    ..
+                }) if invalid_setting == setting && expected == "finite"
+            ));
+        }
+
+        let finite_action_couplings = CdtConfig {
+            coupling_0: -1.5,
+            coupling_2: 0.0,
+            cosmological_constant: 2.25,
+            ..CdtConfig::new(32, 3)
+        };
+        assert!(
+            finite_action_couplings.validate().is_ok(),
+            "finite signed action couplings should be accepted"
+        );
 
         let measurement_frequency_exceeds_steps = CdtConfig {
             measurement_frequency: 2_000,

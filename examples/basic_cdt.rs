@@ -5,11 +5,11 @@
 //! This example shows how to:
 //! - Create a CDT triangulation programmatically
 //! - Configure simulation parameters
-//! - Run a basic CDT simulation
-//! - Extract and display results
+//! - Attempt a basic CDT simulation
+//! - Report the current unsupported-operation guardrail until real moves land
 
 use causal_triangulations::prelude::simulation::{
-    CdtConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm,
+    CdtConfig, CdtError, CdtResult, CdtTriangulation, MetropolisAlgorithm,
 };
 use log::{LevelFilter, info};
 
@@ -51,10 +51,19 @@ fn main() -> CdtResult<()> {
     let metropolis_config = config.to_metropolis_config();
     let action_config = config.to_action_config();
 
-    // Run the simulation
-    info!("Running CDT simulation...");
+    // Attempt the simulation. This currently reports the explicit guardrail
+    // until the real CDT move kernels land.
+    info!("Attempting CDT simulation...");
     let algorithm = MetropolisAlgorithm::new(metropolis_config, action_config);
-    let results = algorithm.run(triangulation)?;
+    let results = match algorithm.run(triangulation) {
+        Ok(results) => results,
+        Err(CdtError::UnsupportedOperation { reason, .. }) => {
+            info!("Simulation unavailable: {reason}");
+            info!("Example completed after triangulation construction.");
+            return Ok(());
+        }
+        Err(err) => return Err(err),
+    };
 
     // Display results
     info!("Simulation completed!");
