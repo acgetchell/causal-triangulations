@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Core geometry traits for CDT abstraction.
 //!
 //! This module defines the trait-based interface that completely isolates

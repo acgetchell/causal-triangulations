@@ -290,8 +290,18 @@ fn normalize_components(path: &Path) -> PathBuf {
                     components.next().is_none()
                         && matches!(first, Component::RootDir | Component::Prefix(_))
                 });
+                let ends_with_parent = normalized
+                    .components()
+                    .next_back()
+                    .is_some_and(|last| matches!(last, Component::ParentDir));
 
-                if !normalized.as_os_str().is_empty() && !at_root {
+                if at_root {
+                    continue;
+                }
+
+                if normalized.as_os_str().is_empty() || ends_with_parent {
+                    normalized.push(Component::ParentDir.as_os_str());
+                } else {
                     normalized.pop();
                 }
             }
@@ -1171,6 +1181,12 @@ mod tests {
         let candidate = PathBuf::from("configs/../settings.toml");
         let resolved = CdtConfig::resolve_path(&base, candidate);
         assert_eq!(resolved, PathBuf::from("/tmp/base/settings.toml"));
+    }
+
+    #[test]
+    fn test_resolve_path_preserves_relative_parent_prefix() {
+        let resolved = CdtConfig::resolve_path(".", PathBuf::from("../../settings.toml"));
+        assert_eq!(resolved, PathBuf::from("../../settings.toml"));
     }
 
     #[test]

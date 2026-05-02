@@ -195,9 +195,9 @@ def _extract_section_summaries(
     """
     Extract summary lines for merged pull requests and breaking changes from a version section.
 
-    Processes only top-level list items in the provided `section` (lines starting with "- "),
-    detects PR-linked entries and entries containing "[**breaking**]". Each matching line is
-    compacted (trailing commit-hash links removed; the "[**breaking**]" prefix is stripped when
+    Processes only top-level list items in the provided `section` (lines starting with "- " or
+    "* "), detects PR-linked entries and entries containing "[**breaking**]". Each matching line
+    is compacted (trailing commit-hash links removed; the "[**breaking**]" prefix is stripped when
     requested) before inclusion.
 
     Parameters:
@@ -212,7 +212,7 @@ def _extract_section_summaries(
 
     for sline in section:
         # Only top-level list items (no leading whitespace).
-        if not sline.startswith("- "):
+        if not sline.startswith(("- ", "* ")):
             continue
 
         is_breaking = "[**breaking**]" in sline

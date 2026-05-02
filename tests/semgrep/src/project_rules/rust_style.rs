@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 #![allow(dead_code, unused_imports)]
 
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
@@ -17,6 +18,12 @@ pub(crate) use delaunay::prelude::Tds;
 
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 pub(super) use delaunay::{core::cell::CellKey, core::facet::Facet};
+
+// ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+use delaunay::{
+    core::triangulation::TopologyGuarantee,
+    topology::traits::topological_space::GlobalTopology,
+};
 
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 use delaunay as dt;

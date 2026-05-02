@@ -100,7 +100,7 @@ def load_report(report_path: Path) -> ET.Element:
     try:
         return ET.parse(report_path).getroot()  # noqa: S314 - local cargo-llvm-cov report.
     except ET.ParseError as exc:
-        raise SystemExit(f"Coverage report must be valid XML: {report_path}") from exc
+        raise SystemExit(f"Coverage report must be valid XML: {report_path}: {exc}") from exc
 
 
 def coverage_entries(root: ET.Element) -> Iterable[CoverageEntry]:

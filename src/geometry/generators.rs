@@ -14,8 +14,7 @@ use delaunay::geometry::point::Point;
 use delaunay::geometry::traits::coordinate::Coordinate;
 use delaunay::geometry::util::{generate_random_points, generate_random_points_seeded};
 use delaunay::prelude::VertexBuilder;
-pub use delaunay::topology::traits::topological_space::GlobalTopology;
-use delaunay::topology::traits::topological_space::ToroidalConstructionMode;
+pub use delaunay::topology::traits::topological_space::{GlobalTopology, ToroidalConstructionMode};
 use delaunay::triangulation::{DelaunayTriangulation, DelaunayTriangulationBuilder};
 
 /// Type alias for the 2D Delaunay triangulation returned by this crate's generators.

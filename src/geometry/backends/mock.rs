@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Mock geometry backend for testing.
 //!
 //! This backend provides a simple, controllable implementation for unit testing
@@ -333,26 +335,70 @@ impl TriangulationQuery for MockBackend {
 
     fn adjacent_faces(
         &self,
-        _vertex: &Self::VertexHandle,
+        vertex: &Self::VertexHandle,
     ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
-        // Simplified implementation
-        Ok(Vec::new())
+        if !self.vertices.contains_key(&vertex.0) {
+            return Err(MockError::Vertex(vertex.0));
+        }
+
+        let mut faces: Vec<_> = self
+            .faces
+            .iter()
+            .filter_map(|(&face_id, vertices)| {
+                vertices
+                    .contains(&vertex.0)
+                    .then_some(MockFaceHandle(face_id))
+            })
+            .collect();
+        faces.sort_unstable_by_key(|face| face.0);
+        Ok(faces)
     }
 
     fn incident_edges(
         &self,
-        _vertex: &Self::VertexHandle,
+        vertex: &Self::VertexHandle,
     ) -> Result<Vec<Self::EdgeHandle>, Self::Error> {
-        // Simplified implementation
-        Ok(Vec::new())
+        if !self.vertices.contains_key(&vertex.0) {
+            return Err(MockError::Vertex(vertex.0));
+        }
+
+        let mut edges: Vec<_> = self
+            .edges
+            .iter()
+            .filter_map(|(&edge_id, &(v0, v1))| {
+                (v0 == vertex.0 || v1 == vertex.0).then_some(MockEdgeHandle(edge_id))
+            })
+            .collect();
+        edges.sort_unstable_by_key(|edge| edge.0);
+        Ok(edges)
     }
 
     fn face_neighbors(
         &self,
-        _face: &Self::FaceHandle,
+        face: &Self::FaceHandle,
     ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
-        // Simplified implementation
-        Ok(Vec::new())
+        if !self.faces.contains_key(&face.0) {
+            return Err(MockError::Face(face.0));
+        }
+
+        let face_vertices = &self.faces[&face.0];
+        let mut neighbors: Vec<_> = self
+            .faces
+            .iter()
+            .filter_map(|(&neighbor_id, neighbor_vertices)| {
+                if neighbor_id == face.0 {
+                    return None;
+                }
+
+                let shared_vertices = face_vertices
+                    .iter()
+                    .filter(|vertex| neighbor_vertices.contains(vertex))
+                    .count();
+                (shared_vertices >= 2).then_some(MockFaceHandle(neighbor_id))
+            })
+            .collect();
+        neighbors.sort_unstable_by_key(|neighbor| neighbor.0);
+        Ok(neighbors)
     }
 
     fn is_valid(&self) -> bool {
@@ -511,18 +557,9 @@ mod tests {
     #[test]
     fn test_mock_triangle_queries_return_expected_entities() {
         let backend = MockBackend::create_triangle();
-        let vertex = backend
-            .vertices()
-            .next()
-            .expect("triangle should contain vertices");
-        let edge = backend
-            .edges()
-            .next()
-            .expect("triangle should contain edges");
-        let face = backend
-            .faces()
-            .next()
-            .expect("triangle should contain a face");
+        let vertex = MockVertexHandle(0);
+        let edge = MockEdgeHandle(0);
+        let face = MockFaceHandle(0);
 
         assert_eq!(
             backend
@@ -533,17 +570,17 @@ mod tests {
         );
         assert_eq!(backend.face_vertices(&face).expect("valid face").len(), 3);
         assert!(backend.edge_endpoints(&edge).is_some());
-        assert!(
+        assert_eq!(
             backend
                 .adjacent_faces(&vertex)
-                .expect("valid vertex adjacency")
-                .is_empty()
+                .expect("valid vertex adjacency"),
+            vec![face.clone()]
         );
-        assert!(
+        assert_eq!(
             backend
                 .incident_edges(&vertex)
-                .expect("valid vertex incidence")
-                .is_empty()
+                .expect("valid vertex incidence"),
+            vec![MockEdgeHandle(0), MockEdgeHandle(2)]
         );
         assert!(
             backend
@@ -570,6 +607,18 @@ mod tests {
             Err(MockError::Face(99))
         ));
         assert!(backend.edge_endpoints(&missing_edge).is_none());
+        assert!(matches!(
+            backend.adjacent_faces(&missing_vertex),
+            Err(MockError::Vertex(99))
+        ));
+        assert!(matches!(
+            backend.incident_edges(&missing_vertex),
+            Err(MockError::Vertex(99))
+        ));
+        assert!(matches!(
+            backend.face_neighbors(&missing_face),
+            Err(MockError::Face(99))
+        ));
         assert!(matches!(
             backend.remove_vertex(missing_vertex.clone()),
             Err(MockError::Vertex(99))
@@ -741,6 +790,32 @@ mod tests {
                 MockVertexHandle(1),
                 MockVertexHandle(2),
             ]
+        );
+    }
+
+    #[test]
+    fn test_mock_backend_face_neighbors_return_shared_edge_faces() {
+        let mut backend = MockBackend::new(2);
+        backend.vertices.insert(0, vec![0.0, 0.0]);
+        backend.vertices.insert(1, vec![1.0, 0.0]);
+        backend.vertices.insert(2, vec![1.0, 1.0]);
+        backend.vertices.insert(3, vec![0.0, 1.0]);
+        backend.next_vertex_id = 4;
+        backend.faces.insert(0, vec![0, 1, 2]);
+        backend.faces.insert(1, vec![0, 2, 3]);
+        backend.next_face_id = 2;
+
+        assert_eq!(
+            backend
+                .face_neighbors(&MockFaceHandle(0))
+                .expect("face 0 should be valid"),
+            vec![MockFaceHandle(1)]
+        );
+        assert_eq!(
+            backend
+                .face_neighbors(&MockFaceHandle(1))
+                .expect("face 1 should be valid"),
+            vec![MockFaceHandle(0)]
         );
     }
 

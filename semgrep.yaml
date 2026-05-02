@@ -112,7 +112,16 @@ rules:
         - "/src/**/*.rs"
       exclude:
         - "/src/geometry/**/*.rs"
-    pattern-regex: '^\s*(?:pub(?:\([^)]*\))?\s+)?use\s+delaunay(?:\s+as\s+[A-Za-z_][A-Za-z0-9_]*|::(?:[^;\n]*\{[^;\n]*\}|[^;\n]+)|\s*)\s*;'
+    pattern-regex: >-
+      (?mx)^\s*
+      (?:pub(?:\([^)]*\))?\s+)?
+      use\s+delaunay
+      (?:
+        \s+as\s+[A-Za-z_][A-Za-z0-9_]*
+        |::(?:[^;\n]*\{[\s\S]*?\}|[^;\n]+)
+        |\s*
+      )
+      \s*;
 
   - id: causal-triangulations.rust.expect-requires-reason
     languages:

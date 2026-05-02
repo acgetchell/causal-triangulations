@@ -257,6 +257,14 @@ class TestSummarySections:
         # Breaking section appears before Merged PRs.
         assert result.index("### ⚠️ Breaking Changes") < result.index("### Merged Pull Requests")
 
+    def test_injects_summary_from_star_bullets(self) -> None:
+        content = self._changelog(f"* [**breaking**] Star change {_pr(7)} {_commit()}")
+        result = _inject_summary_sections(content)
+
+        assert "### ⚠️ Breaking Changes" in result
+        assert "### Merged Pull Requests" in result
+        assert f"* Star change {_pr(7)}" in result
+
     def test_pr_sorted_descending(self) -> None:
         """
         Verifies that PRs in the injected "Merged Pull Requests" summary are sorted in descending order by PR number.

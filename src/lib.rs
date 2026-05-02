@@ -70,7 +70,7 @@ pub mod geometry {
     /// Convenient alias for CDT triangulations using the default backend
     pub type CdtTriangulation2D = crate::cdt::triangulation::CdtTriangulation<DefaultBackend>;
 
-    pub use generators::{GlobalTopology, TopologyGuarantee};
+    pub use generators::{GlobalTopology, TopologyGuarantee, ToroidalConstructionMode};
 }
 
 /// Causal Dynamical Triangulations implementation modules.
@@ -201,6 +201,12 @@ pub mod prelude {
     ///
     /// let backend = DelaunayBackend2D::from_triangulation(dt);
     /// assert!(backend.is_valid());
+    ///
+    /// let topology: GlobalTopology<2> = GlobalTopology::Toroidal {
+    ///     domain: [1.0, 1.0],
+    ///     mode: ToroidalConstructionMode::Explicit,
+    /// };
+    /// assert!(matches!(topology, GlobalTopology::Toroidal { .. }));
     /// ```
     pub mod geometry {
         pub use crate::geometry::DelaunayBackend2D;
@@ -209,9 +215,9 @@ pub mod prelude {
         };
         pub use crate::geometry::backends::mock::MockBackend;
         pub use crate::geometry::generators::{
-            GlobalTopology, TopologyGuarantee, build_delaunay2_from_cells,
-            build_delaunay2_with_data, build_delaunay2_with_topology, build_toroidal_delaunay2,
-            generate_delaunay2,
+            GlobalTopology, TopologyGuarantee, ToroidalConstructionMode,
+            build_delaunay2_from_cells, build_delaunay2_with_data, build_delaunay2_with_topology,
+            build_toroidal_delaunay2, generate_delaunay2,
         };
         pub use crate::geometry::operations::TriangulationOps;
         pub use crate::geometry::traits::{TriangulationMut, TriangulationQuery};

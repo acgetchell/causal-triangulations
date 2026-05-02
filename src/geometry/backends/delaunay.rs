@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Delaunay backend - wraps the delaunay crate.
 //!
 //! Together with `src/geometry/generators.rs`, this module is one of only
