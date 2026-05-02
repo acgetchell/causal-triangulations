@@ -15,8 +15,9 @@
 //! - Integration with delaunay crate for proper Delaunay triangulations
 //! - 2D Regge Action calculation for CDT
 //! - Foliated 2D triangulation construction and validation
-//! - Planned ergodic moves and Metropolis-Hastings sampling once real CDT
-//!   move kernels are implemented
+//! - Foliation-aware 2D ergodic moves backed by bistellar flips
+//! - Planned Metropolis-Hastings sampling integration once rejected-move
+//!   rollback is implemented
 //!
 //! # Example
 //!
@@ -89,7 +90,7 @@ pub mod cdt {
 
 // Re-exports for convenience
 pub use cdt::action::{ActionConfig, compute_regge_action};
-pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
+pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
 pub use cdt::foliation::{CellType, EdgeType, Foliation};
 pub use cdt::metropolis::{
     CdtProposal, CdtTarget, Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
@@ -130,7 +131,7 @@ pub mod prelude {
     pub use crate::cdt::action::{ActionConfig, compute_regge_action};
 
     // Ergodic moves
-    pub use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
+    pub use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
 
     // Metropolis simulation
     pub use crate::cdt::metropolis::{
@@ -173,11 +174,28 @@ pub mod prelude {
         pub use crate::geometry::traits::TriangulationQuery;
     }
 
+    /// Focused exports for local CDT move kernels and move statistics.
+    ///
+    /// This prelude intentionally contains only the move API. Combine it with
+    /// `prelude::triangulation::*` and, for explicit Delaunay fixtures,
+    /// `prelude::geometry::*`.
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::*;
+    ///
+    /// let mut stats = MoveStatistics::new();
+    /// stats.record_attempt(MoveType::Move22);
+    /// assert_eq!(stats.moves_22_attempted, 1);
+    /// ```
+    pub mod moves {
+        pub use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
+    }
+
     /// Focused exports for running CDT simulations.
     pub mod simulation {
         pub use crate::CdtTriangulation;
         pub use crate::cdt::action::{ActionConfig, compute_regge_action};
-        pub use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
+        pub use crate::cdt::ergodic_moves::MoveType;
         pub use crate::cdt::metropolis::{
             CdtProposal, CdtTarget, Measurement, MetropolisAlgorithm, MetropolisConfig,
             MonteCarloStep, SimulationResultsBackend,

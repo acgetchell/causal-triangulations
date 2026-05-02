@@ -14,8 +14,15 @@ use crate::geometry::traits::{
 };
 use delaunay::core::DataType;
 use delaunay::core::edge::EdgeKey;
+use delaunay::core::facet::FacetHandle;
 use delaunay::core::tds::{CellKey, VertexKey};
+use delaunay::core::vertex::Vertex;
 use delaunay::geometry::kernel::AdaptiveKernel;
+use delaunay::geometry::point::Point;
+use delaunay::geometry::traits::coordinate::Coordinate;
+use delaunay::prelude::VertexBuilder;
+use delaunay::prelude::triangulation::flips::BistellarFlips;
+use delaunay::topology::traits::TopologyKind;
 use delaunay::triangulation::DelaunayTriangulation;
 
 /// Delaunay backend wrapping the delaunay crate's triangulation (f64 coordinates).
@@ -23,7 +30,8 @@ use delaunay::triangulation::DelaunayTriangulation;
 /// # Mutation support
 ///
 /// The [`TriangulationMut`] methods (`insert_vertex`, `remove_vertex`, `flip_edge`, etc.)
-/// are not yet implemented and return [`DelaunayError::NotImplemented`]. The `clear()` and
+/// are backed by the upstream Delaunay edit API where possible. `move_vertex()` is not yet
+/// implemented and returns [`DelaunayError::NotImplemented`]. The `clear()` and
 /// `reserve_capacity()` methods are currently no-ops that emit a `log::warn!` diagnostic.
 #[derive(Debug)]
 pub struct DelaunayBackend<VertexData: DataType, CellData: DataType, const D: usize> {
@@ -74,6 +82,7 @@ impl DelaunayFaceHandle {
 
 /// Error type for Delaunay backend operations
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum DelaunayError {
     /// Operation is not yet implemented
     #[error("not implemented: {operation}")]
@@ -89,13 +98,24 @@ pub enum DelaunayError {
         key: VertexKey,
     },
 
-    /// Invalid edge handle (one or both endpoint vertices not found)
-    #[error("invalid edge handle: endpoint vertices {v0:?}, {v1:?} not found in triangulation")]
+    /// Invalid edge handle (the keyed edge is not present in the triangulation).
+    #[error("invalid edge handle: edge {v0:?} -- {v1:?} not found in triangulation")]
     InvalidEdge {
         /// First endpoint vertex key
         v0: VertexKey,
         /// Second endpoint vertex key
         v1: VertexKey,
+    },
+
+    /// The edge exists but is not a valid bistellar k=2 flip target.
+    #[error("non-flippable edge {v0:?} -- {v1:?}: {reason}")]
+    NonFlippableEdge {
+        /// First endpoint vertex key.
+        v0: VertexKey,
+        /// Second endpoint vertex key.
+        v1: VertexKey,
+        /// Why the live edge cannot be flipped.
+        reason: &'static str,
     },
 
     /// Invalid face/cell handle (key not found in triangulation)
@@ -104,11 +124,137 @@ pub enum DelaunayError {
         /// The cell key that was looked up
         key: CellKey,
     },
+
+    /// Coordinate slice length does not match the backend dimension.
+    #[error("coordinate dimension mismatch: got {actual}, expected {expected}")]
+    CoordinateDimensionMismatch {
+        /// Actual number of coordinates supplied.
+        actual: usize,
+        /// Expected coordinate count.
+        expected: usize,
+    },
+
+    /// Vertex construction failed before a backend mutation could be attempted.
+    #[error("failed to build vertex for {operation}: {detail}")]
+    VertexBuildFailed {
+        /// Backend operation that needed a new vertex.
+        operation: &'static str,
+        /// Underlying builder diagnostic.
+        detail: String,
+    },
+
+    /// A Delaunay insertion failed after the vertex was built.
+    #[error("{operation} insertion failed at {coordinates:?}: {detail}")]
+    InsertionFailed {
+        /// Backend operation performing the insertion.
+        operation: &'static str,
+        /// Coordinates of the vertex passed to the insertion routine.
+        coordinates: Vec<f64>,
+        /// Underlying insertion diagnostic.
+        detail: String,
+    },
+
+    /// A bistellar flip failed.
+    #[error("{operation} failed on {target}: {detail}")]
+    FlipFailed {
+        /// Flip operation that failed.
+        operation: &'static str,
+        /// Human-readable target passed to the flip operation.
+        target: String,
+        /// Underlying flip diagnostic.
+        detail: String,
+    },
+
+    /// A successful upstream flip returned data that violates this backend's contract.
+    #[error(
+        "{operation} returned unexpected output for {target}: expected {expected}, got {actual}"
+    )]
+    UnexpectedFlipOutput {
+        /// Flip operation that returned malformed output.
+        operation: &'static str,
+        /// Human-readable target passed to the flip operation.
+        target: String,
+        /// Contract expected by the backend wrapper.
+        expected: &'static str,
+        /// Output shape or detail observed from the upstream result.
+        actual: String,
+    },
 }
 
 impl<VertexData: DataType, CellData: DataType, const D: usize>
     DelaunayBackend<VertexData, CellData, D>
 {
+    /// Builds a backend vertex from a coordinate slice and optional payload.
+    fn build_vertex(
+        coords: &[f64],
+        data: Option<VertexData>,
+        operation: &'static str,
+    ) -> Result<Vertex<f64, VertexData, D>, DelaunayError> {
+        let coords: [f64; D] =
+            coords
+                .try_into()
+                .map_err(|_| DelaunayError::CoordinateDimensionMismatch {
+                    actual: coords.len(),
+                    expected: D,
+                })?;
+        let mut builder = VertexBuilder::<f64, VertexData, D>::default().point(Point::new(coords));
+        if let Some(data) = data {
+            builder = builder.data(data);
+        }
+        builder
+            .build()
+            .map_err(|err| DelaunayError::VertexBuildFailed {
+                operation,
+                detail: err.to_string(),
+            })
+    }
+
+    /// Finds the 2D facet handle corresponding to a live interior edge.
+    fn interior_facet_for_edge(&self, edge: EdgeKey) -> Option<FacetHandle> {
+        if D != 2 {
+            return None;
+        }
+
+        for (cell_key, cell) in self.dt.cells() {
+            let vertices = cell.vertices();
+            let Some(neighbors) = cell.neighbors() else {
+                continue;
+            };
+
+            for (facet_index, neighbor) in neighbors.iter().enumerate() {
+                if neighbor.is_none() {
+                    continue;
+                }
+
+                let facet_vertices: Vec<_> = vertices
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(idx, &key)| (idx != facet_index).then_some(key))
+                    .collect();
+                if facet_vertices.len() == 2
+                    && EdgeKey::new(facet_vertices[0], facet_vertices[1]) == edge
+                {
+                    let facet_index = u8::try_from(facet_index).ok()?;
+                    return Some(FacetHandle::new(cell_key, facet_index));
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Returns whether the keyed edge is present in the triangulation.
+    fn edge_exists(&self, edge: EdgeKey) -> bool {
+        let v0 = edge.v0();
+        let v1 = edge.v1();
+        self.dt.tds().contains_vertex_key(v0)
+            && self.dt.tds().contains_vertex_key(v1)
+            && self
+                .dt
+                .incident_edges(v0)
+                .any(|candidate| candidate == edge)
+    }
+
     /// Create a new Delaunay backend from an existing Delaunay triangulation
     ///
     /// # Examples
@@ -202,7 +348,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// let _kind = backend.topology_kind();
     /// ```
     #[must_use]
-    pub const fn topology_kind(&self) -> delaunay::topology::traits::TopologyKind {
+    pub const fn topology_kind(&self) -> TopologyKind {
         self.dt.topology_kind()
     }
 
@@ -505,22 +651,42 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
 {
     fn insert_vertex(
         &mut self,
-        _coords: &[Self::Coordinate],
+        coords: &[Self::Coordinate],
     ) -> Result<Self::VertexHandle, Self::Error> {
-        // TODO: Implement vertex insertion.
-        Err(DelaunayError::NotImplemented {
-            operation: "insert_vertex",
-        })
+        let vertex = Self::build_vertex(coords, None, "insert_vertex")?;
+        let key = self
+            .dt
+            .insert(vertex)
+            .map_err(|err| DelaunayError::InsertionFailed {
+                operation: "insert_vertex",
+                coordinates: coords.to_vec(),
+                detail: err.to_string(),
+            })?;
+        Ok(DelaunayVertexHandle { key })
     }
 
     fn remove_vertex(
         &mut self,
-        _vertex: Self::VertexHandle,
+        vertex: Self::VertexHandle,
     ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
-        // TODO: Implement vertex removal.
-        Err(DelaunayError::NotImplemented {
-            operation: "remove_vertex",
-        })
+        if !self.dt.tds().contains_vertex_key(vertex.key) {
+            return Err(DelaunayError::InvalidVertex { key: vertex.key });
+        }
+
+        let info = self
+            .dt
+            .flip_k1_remove(vertex.key)
+            .map_err(|err| DelaunayError::FlipFailed {
+                operation: "flip_k1_remove",
+                target: format!("vertex {:?}", vertex.key),
+                detail: err.to_string(),
+            })?;
+        Ok(info
+            .new_cells
+            .iter()
+            .copied()
+            .map(|key| DelaunayFaceHandle { key })
+            .collect())
     }
 
     fn move_vertex(
@@ -536,28 +702,97 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
 
     fn flip_edge(
         &mut self,
-        _edge: Self::EdgeHandle,
+        edge: Self::EdgeHandle,
     ) -> Result<FlipResult<Self::EdgeHandle, Self::FaceHandle>, Self::Error> {
-        // TODO: Implement edge flip.
-        Err(DelaunayError::NotImplemented {
-            operation: "flip_edge",
-        })
+        let facet = if self.edge_exists(edge.key) {
+            self.interior_facet_for_edge(edge.key).ok_or_else(|| {
+                DelaunayError::NonFlippableEdge {
+                    v0: edge.key.v0(),
+                    v1: edge.key.v1(),
+                    reason: "edge is not an interior 2D facet shared by two cells",
+                }
+            })?
+        } else {
+            return Err(DelaunayError::InvalidEdge {
+                v0: edge.key.v0(),
+                v1: edge.key.v1(),
+            });
+        };
+        let info = self
+            .dt
+            .flip_k2(facet)
+            .map_err(|err| DelaunayError::FlipFailed {
+                operation: "flip_k2",
+                target: format!(
+                    "edge {:?} -- {:?} via facet {:?}",
+                    edge.key.v0(),
+                    edge.key.v1(),
+                    facet
+                ),
+                detail: err.to_string(),
+            })?;
+        let inserted: Vec<_> = info.inserted_face_vertices.iter().copied().collect();
+        let [v0, v1] = inserted.as_slice() else {
+            return Err(DelaunayError::UnexpectedFlipOutput {
+                operation: "flip_k2",
+                target: format!("edge {:?} -- {:?}", edge.key.v0(), edge.key.v1()),
+                expected: "exactly two inserted-face vertices for the replacement edge",
+                actual: format!("{} inserted-face vertices", inserted.len()),
+            });
+        };
+        let affected_faces = info
+            .new_cells
+            .iter()
+            .copied()
+            .map(|key| DelaunayFaceHandle { key })
+            .collect();
+        Ok(FlipResult::new(
+            DelaunayEdgeHandle {
+                key: EdgeKey::new(*v0, *v1),
+            },
+            affected_faces,
+        ))
     }
 
-    fn can_flip_edge(&self, _edge: &Self::EdgeHandle) -> bool {
-        // TODO: Implement flip feasibility check.
-        false
+    fn can_flip_edge(&self, edge: &Self::EdgeHandle) -> bool {
+        self.interior_facet_for_edge(edge.key).is_some()
     }
 
     fn subdivide_face(
         &mut self,
-        _face: Self::FaceHandle,
-        _point: &[Self::Coordinate],
+        face: Self::FaceHandle,
+        point: &[Self::Coordinate],
     ) -> Result<SubdivisionResult<Self::VertexHandle, Self::FaceHandle>, Self::Error> {
-        // TODO: Implement face subdivision.
-        Err(DelaunayError::NotImplemented {
-            operation: "subdivide_face",
-        })
+        if !self.dt.tds().contains_cell_key(face.key) {
+            return Err(DelaunayError::InvalidFace { key: face.key });
+        }
+
+        let vertex = Self::build_vertex(point, None, "subdivide_face")?;
+        let info =
+            self.dt
+                .flip_k1_insert(face.key, vertex)
+                .map_err(|err| DelaunayError::FlipFailed {
+                    operation: "flip_k1_insert",
+                    target: format!("face {:?} at point {:?}", face.key, point),
+                    detail: err.to_string(),
+                })?;
+        let Some(&new_vertex) = info.inserted_face_vertices.first() else {
+            return Err(DelaunayError::UnexpectedFlipOutput {
+                operation: "flip_k1_insert",
+                target: format!("face {:?} at point {:?}", face.key, point),
+                expected: "at least one inserted-face vertex for the inserted point",
+                actual: "no inserted-face vertices".to_string(),
+            });
+        };
+        Ok(SubdivisionResult::new(
+            DelaunayVertexHandle { key: new_vertex },
+            info.new_cells
+                .iter()
+                .copied()
+                .map(|key| DelaunayFaceHandle { key })
+                .collect(),
+            face,
+        ))
     }
 
     fn clear(&mut self) {
@@ -578,9 +813,11 @@ mod tests {
     use std::collections::HashSet;
 
     use crate::geometry::generators::{
-        build_delaunay2_with_data, generate_delaunay2, random_delaunay2, seeded_delaunay2,
+        build_delaunay2_from_cells, build_delaunay2_with_data, generate_delaunay2,
+        random_delaunay2, seeded_delaunay2,
     };
     use crate::util::saturating_usize_to_i32;
+    use slotmap::KeyData;
 
     use super::*;
 
@@ -722,7 +959,7 @@ mod tests {
         let backend = DelaunayBackend::from_triangulation(dt);
 
         // Use a high-generation key that cannot exist in the triangulation's slotmap
-        let bogus_key = VertexKey::from(slotmap::KeyData::from_ffi(u64::MAX));
+        let bogus_key = VertexKey::from(KeyData::from_ffi(u64::MAX));
         let invalid_handle = DelaunayVertexHandle { key: bogus_key };
         let err = backend.vertex_coordinates(&invalid_handle).unwrap_err();
         assert!(
@@ -760,7 +997,7 @@ mod tests {
         let dt = random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
-        let bogus_key = CellKey::from(slotmap::KeyData::from_ffi(u64::MAX));
+        let bogus_key = CellKey::from(KeyData::from_ffi(u64::MAX));
         let invalid_handle = DelaunayFaceHandle { key: bogus_key };
         let err = backend.face_vertices(&invalid_handle).unwrap_err();
         assert!(
@@ -827,8 +1064,8 @@ mod tests {
         let dt = random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
-        let k1 = VertexKey::from(slotmap::KeyData::from_ffi(u64::MAX - 1));
-        let k2 = VertexKey::from(slotmap::KeyData::from_ffi(u64::MAX));
+        let k1 = VertexKey::from(KeyData::from_ffi(u64::MAX - 1));
+        let k2 = VertexKey::from(KeyData::from_ffi(u64::MAX));
         let invalid_handle = DelaunayEdgeHandle {
             key: EdgeKey::new(k1, k2),
         };
@@ -979,7 +1216,7 @@ mod tests {
         let dt = random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
-        let bogus_key = CellKey::from(slotmap::KeyData::from_ffi(u64::MAX));
+        let bogus_key = CellKey::from(KeyData::from_ffi(u64::MAX));
         let invalid_handle = DelaunayFaceHandle { key: bogus_key };
         let err = backend.face_neighbors(&invalid_handle).unwrap_err();
         assert!(
@@ -993,7 +1230,7 @@ mod tests {
         let dt = random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
-        let bogus_key = VertexKey::from(slotmap::KeyData::from_ffi(u64::MAX));
+        let bogus_key = VertexKey::from(KeyData::from_ffi(u64::MAX));
         let invalid_handle = DelaunayVertexHandle { key: bogus_key };
         let err = backend.adjacent_faces(&invalid_handle).unwrap_err();
         assert!(
@@ -1007,7 +1244,7 @@ mod tests {
         let dt = random_delaunay2(3, (0.0, 10.0));
         let backend = DelaunayBackend::from_triangulation(dt);
 
-        let bogus_key = VertexKey::from(slotmap::KeyData::from_ffi(u64::MAX));
+        let bogus_key = VertexKey::from(KeyData::from_ffi(u64::MAX));
         let invalid_handle = DelaunayVertexHandle { key: bogus_key };
         let err = backend.incident_edges(&invalid_handle).unwrap_err();
         assert!(
@@ -1126,7 +1363,7 @@ mod tests {
 
         assert_eq!(
             backend.topology_kind(),
-            delaunay::topology::traits::TopologyKind::Euclidean,
+            TopologyKind::Euclidean,
             "Default builder construction should produce Euclidean topology"
         );
     }
@@ -1152,30 +1389,58 @@ mod tests {
     }
 
     #[test]
-    fn test_mutation_methods_report_not_implemented_contract() {
-        let dt = generate_delaunay2(4, (0.0, 10.0), Some(17)).expect("Builder should succeed");
+    fn test_mutation_methods_use_delaunay_edit_api() {
+        let dt = build_delaunay2_from_cells(
+            &[
+                ([0.0, 0.0], 0),
+                ([1.0, 0.0], 0),
+                ([0.0, 1.0], 1),
+                ([1.0, 1.0], 1),
+            ],
+            &[vec![0, 1, 2], vec![1, 3, 2]],
+        )
+        .expect("explicit square should build");
         let mut backend = DelaunayBackend::from_triangulation(dt);
-        let original_counts = (
-            backend.vertex_count(),
-            backend.edge_count(),
-            backend.face_count(),
-        );
-        let vertex = backend.vertices().next().expect("valid vertex handle");
-        let edge = backend.edges().next().expect("valid edge handle");
-        let face = backend.faces().next().expect("valid face handle");
+        let original_vertex_count = backend.vertex_count();
+        let original_face_count = backend.face_count();
 
-        assert!(matches!(
-            backend.insert_vertex(&[0.0, 0.0]),
-            Err(DelaunayError::NotImplemented {
-                operation: "insert_vertex",
-            })
-        ));
-        assert!(matches!(
-            backend.remove_vertex(vertex.clone()),
-            Err(DelaunayError::NotImplemented {
-                operation: "remove_vertex",
-            })
-        ));
+        let edge = backend
+            .edges()
+            .find(|edge| backend.can_flip_edge(edge))
+            .expect("square has an interior edge");
+        let flip = backend.flip_edge(edge);
+        assert!(flip.is_ok());
+        assert_eq!(backend.vertex_count(), original_vertex_count);
+        assert_eq!(backend.face_count(), original_face_count);
+        assert!(backend.is_valid());
+
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("labeled triangle should build");
+        let mut backend = DelaunayBackend::from_triangulation(dt);
+        let original_vertex_count = backend.vertex_count();
+        let original_face_count = backend.face_count();
+        let face = backend.faces().next().expect("valid face handle");
+        let subdivide = backend
+            .subdivide_face(face, &[0.5, 1.0 / 3.0])
+            .expect("face subdivision should use k=1 flip");
+        assert_eq!(backend.vertex_count(), original_vertex_count + 1);
+        assert_eq!(backend.face_count(), original_face_count + 2);
+        assert!(backend.is_valid());
+
+        backend
+            .remove_vertex(subdivide.new_vertex)
+            .expect("degree-3 inserted vertex should be removable");
+        assert_eq!(backend.vertex_count(), original_vertex_count);
+        assert_eq!(backend.face_count(), original_face_count);
+        assert!(backend.is_valid());
+
+        let inserted = backend.insert_vertex(&[0.25, 0.75]);
+        assert!(inserted.is_ok());
+        assert_eq!(backend.vertex_count(), original_vertex_count + 1);
+        assert!(backend.is_valid());
+
+        let vertex = backend.vertices().next().expect("valid vertex handle");
+
         assert!(matches!(
             backend.move_vertex(vertex, &[1.0, 1.0]),
             Err(DelaunayError::NotImplemented {
@@ -1183,19 +1448,43 @@ mod tests {
             })
         ));
         assert!(matches!(
-            backend.flip_edge(edge.clone()),
-            Err(DelaunayError::NotImplemented {
-                operation: "flip_edge",
-            })
-        ));
-        assert!(!backend.can_flip_edge(&edge));
-        assert!(matches!(
-            backend.subdivide_face(face, &[0.5, 0.5]),
-            Err(DelaunayError::NotImplemented {
-                operation: "subdivide_face",
+            backend.insert_vertex(&[0.0]),
+            Err(DelaunayError::CoordinateDimensionMismatch {
+                actual: 1,
+                expected: 2,
             })
         ));
 
+        let bogus_vertex = VertexKey::from(KeyData::from_ffi(u64::MAX));
+        assert!(matches!(
+            backend.remove_vertex(DelaunayVertexHandle { key: bogus_vertex }),
+            Err(DelaunayError::InvalidVertex { key }) if key == bogus_vertex,
+        ));
+
+        let bogus_face = CellKey::from(KeyData::from_ffi(u64::MAX));
+        assert!(matches!(
+            backend.subdivide_face(DelaunayFaceHandle { key: bogus_face }, &[0.25, 0.25]),
+            Err(DelaunayError::InvalidFace { key }) if key == bogus_face,
+        ));
+
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("labeled triangle should build");
+        let mut boundary_backend = DelaunayBackend::from_triangulation(dt);
+        let boundary_edge = boundary_backend
+            .edges()
+            .next()
+            .expect("single triangle has boundary edges");
+        assert!(matches!(
+            boundary_backend.flip_edge(boundary_edge),
+            Err(DelaunayError::NonFlippableEdge { reason, .. })
+                if reason.contains("interior 2D facet"),
+        ));
+
+        let counts_before_noops = (
+            backend.vertex_count(),
+            backend.edge_count(),
+            backend.face_count(),
+        );
         backend.clear();
         backend.reserve_capacity(32, 64);
         assert_eq!(
@@ -1204,7 +1493,7 @@ mod tests {
                 backend.edge_count(),
                 backend.face_count(),
             ),
-            original_counts
+            counts_before_noops
         );
     }
 

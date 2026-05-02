@@ -36,6 +36,7 @@ pub struct MockFaceHandle(usize);
 
 /// Mock backend errors
 #[derive(Debug, thiserror::Error)]
+#[non_exhaustive]
 pub enum MockError {
     /// Invalid vertex handle provided
     #[error("Invalid vertex handle: {0}")]

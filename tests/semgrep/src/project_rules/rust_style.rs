@@ -73,6 +73,23 @@ enum CdtError {
     UnsupportedOperation,
 }
 
+// ruleid: causal-triangulations.rust.public-error-enums-non-exhaustive
+pub enum MissingNonExhaustiveError {
+    InvalidInput,
+}
+
+// ok: causal-triangulations.rust.public-error-enums-non-exhaustive
+#[non_exhaustive]
+pub enum ExtensibleError {
+    InvalidInput,
+}
+
+// ruleid: causal-triangulations.rust.prefer-focused-prelude-imports-in-public-usage
+use causal_triangulations::geometry::DelaunayBackend2D;
+
+// ok: causal-triangulations.rust.prefer-focused-prelude-imports-in-public-usage
+use causal_triangulations::prelude::geometry::DelaunayBackend2D as PreludeDelaunayBackend2D;
+
 fn stringly_domain_validation_errors() {
     // ruleid: causal-triangulations.rust.no-stringly-domain-validation-errors
     let _ = CdtError::ValidationFailed {

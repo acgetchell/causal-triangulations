@@ -2,6 +2,8 @@
 
 Ergodic moves are the local Monte Carlo updates that allow the triangulation to explore the space of geometries. This module implements the standard ergodic moves for 2D Causal Dynamical Triangulations (see `src/cdt/ergodic_moves.rs`).
 
+For public examples, doctests, benchmarks, and integration tests, import the focused move API with `use causal_triangulations::prelude::moves::*;`. Combine it with `prelude::triangulation::*` for CDT wrappers and `prelude::geometry::*` when constructing explicit Delaunay fixtures.
+
 ## Types
 
 ### `MoveType`
@@ -9,9 +11,9 @@ Ergodic moves are the local Monte Carlo updates that allow the triangulation to 
 Enumerates the available move types:
 
 - `Move22` — (2,2) move: flip the shared edge between two triangles, preserving vertex count; causality-aware — the CDT layer validates and rejects moves that break causal layering
-- `Move13Add` — (1,3) move: insert a new vertex by subdividing one triangle into three
-- `Move31Remove` — (3,1) move: remove a vertex by merging three triangles into one
-- `EdgeFlip` — raw Delaunay edge flip maintaining the Delaunay property; no causal-layer enforcement (operates at the geometry level)
+- `Move13Add` — (1,3) move: insert a new vertex by subdividing one triangle into three; when the triangulation is foliated, the inserted vertex receives the time label that keeps all replacement triangles causal
+- `Move31Remove` — (3,1) move: remove a degree-3 vertex by merging three triangles into one when the replacement triangle is causal and the removal does not empty a time slice
+- `EdgeFlip` — API-compatible alias for the 2D k=2 edge flip used by `Move22`; it records separate statistics but uses the same causal prechecks
 
 ### `MoveResult`
 
@@ -19,8 +21,8 @@ Returned by each `attempt_*` method:
 
 - `Success` — move was applied
 - `CausalityViolation` — rejected because the move would break causal layering
-- `GeometricViolation` — rejected because the resulting triangulation would be geometrically invalid
-- `Rejected(CdtError)` — rejected for another reason, with details
+- `GeometricViolation` — rejected because no geometrically valid candidate move exists
+- `Rejected(CdtError)` — rejected for another reason, with details; backend mutation failures are reported as `CdtError::BackendMutationFailed` rather than collapsed into `GeometricViolation`
 
 ### `MoveStatistics`
 
@@ -39,27 +41,26 @@ Owns a `MoveStatistics` instance and a thread-local RNG. Public API:
 
 - `new()` / `Default::default()` — construct
 - `select_random_move() -> MoveType` — samples uniformly from all four move types
-- `attempt_22_move(triangulation) -> MoveResult`
-- `attempt_13_move(triangulation) -> MoveResult`
-- `attempt_31_move(triangulation) -> MoveResult`
-- `attempt_edge_flip(triangulation) -> MoveResult`
-- `attempt_random_move(triangulation) -> MoveResult` — delegates to one of the above
+- `attempt_22_move(&mut CdtTriangulation2D) -> MoveResult`
+- `attempt_13_move(&mut CdtTriangulation2D) -> MoveResult`
+- `attempt_31_move(&mut CdtTriangulation2D) -> MoveResult`
+- `attempt_edge_flip(&mut CdtTriangulation2D) -> MoveResult`
+- `attempt_random_move(&mut CdtTriangulation2D) -> MoveResult` — delegates to one of the above
 
-> **Note**: All `attempt_*` methods are currently placeholder implementations that simulate realistic acceptance rates. Full integration with the `delaunay` crate's `Tds` type is planned for a future release.
+Accepted moves mutate the triangulation through the geometry backend, then rebuild CDT foliation bookkeeping from live vertex labels and refresh cell classifications.
 
 ## Architecture
 
 Move validation follows a two-layer design:
 
-- **`delaunay` crate** — pure geometric operations (bistellar flips, edge flips) with no physics constraints
-- **CDT crate** — wraps geometric operations with causality and time-slice validation
+- **`delaunay` crate** — pure geometric operations (`flip_k2`, `flip_k1_insert`, `flip_k1_remove`) with no physics constraints
+- **Geometry backend** — exposes the edit operations through `TriangulationMut` while preserving the CDT ↔ geometry boundary
+- **CDT crate** — chooses candidate sites, checks causality and time-slice integrity, and resynchronizes foliation metadata after accepted moves
 
-When the `delaunay` crate exposes `try_edge_flip` / `try_bistellar_flip`, the placeholder bodies will be replaced with calls to those methods guarded by CDT-specific pre-checks.
+The Metropolis proposal path still needs a rollback token before these mutating moves can be used for rejected Monte Carlo proposals.
 
 ## Planned Work
 
-- [ ] Implement `try_edge_flip()` in `delaunay` for (2,2) moves (used by `Move22` / `attempt_22_move()` and by `EdgeFlip` / `attempt_edge_flip()`)
-- [ ] Implement `try_bistellar_flip()` in `delaunay` for (1,3)/(3,1) moves (used by `attempt_13_move()` / `attempt_31_move()`)
-- [ ] Replace placeholder bodies with real geometric operations
-- [ ] Add causality and time-slice constraint validation
 - [ ] Weight `select_random_move()` by available application sites per move type to remove uniform-sampling chain bias
+- [ ] Add reversible move tokens so `CdtProposal` can undo rejected Metropolis-Hastings proposals
+- [ ] Broaden toroidal move-site tests around periodic boundary cells
