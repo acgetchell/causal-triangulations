@@ -7,6 +7,7 @@ throughout the benchmark infrastructure.
 """
 
 import re
+import sys
 from dataclasses import dataclass
 
 
@@ -217,7 +218,10 @@ def _append_complete_benchmark(benchmarks: list[BenchmarkData], benchmark: Bench
         benchmarks.append(benchmark)
         return
 
-    print(f"Warning: skipping incomplete benchmark section for {benchmark.points} Points ({benchmark.dimension}): missing valid Time line")
+    print(
+        f"Warning: skipping incomplete benchmark section for {benchmark.points} Points ({benchmark.dimension}): missing valid Time line",
+        file=sys.stderr,
+    )
 
 
 def extract_benchmark_data(baseline_content: str) -> list[BenchmarkData]:

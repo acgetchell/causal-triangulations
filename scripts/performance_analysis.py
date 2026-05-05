@@ -215,7 +215,7 @@ class PerformanceAnalyzer:
         except subprocess.TimeoutExpired:
             print("❌ Benchmark execution timed out")
             return False
-        except Exception as exc:
+        except OSError as exc:
             print(f"❌ Error running benchmarks: {exc}")
             return False
 

@@ -10,8 +10,10 @@ use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
 };
+#[cfg(test)]
+use crate::geometry::generators::build_delaunay2_with_data;
 use crate::geometry::generators::{
-    build_delaunay2_with_data, build_toroidal_delaunay2, generate_delaunay2,
+    build_delaunay2_from_cells, build_toroidal_delaunay2, generate_delaunay2,
 };
 use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
 use crate::util::f64_band_to_u32;
@@ -91,6 +93,84 @@ fn remap_toroidal_generation_error(error: CdtError, total_vertices: u32) -> CdtE
         },
         other => other,
     }
+}
+
+/// Rewrites explicit strip builder failures with CDT-level generation context.
+fn remap_strip_generation_error(
+    error: CdtError,
+    total_vertices: u32,
+    coordinate_max: f64,
+) -> CdtError {
+    match error {
+        CdtError::DelaunayGenerationFailed {
+            underlying_error, ..
+        } => CdtError::DelaunayGenerationFailed {
+            vertex_count: total_vertices,
+            coordinate_range: (0.0, coordinate_max),
+            attempt: 1,
+            underlying_error,
+        },
+        other => other,
+    }
+}
+
+/// Builds a CDT-level generation error for explicit strip construction failures.
+const fn strip_generation_error(
+    total_vertices: u32,
+    coordinate_max: f64,
+    underlying_error: String,
+) -> CdtError {
+    CdtError::DelaunayGenerationFailed {
+        vertex_count: total_vertices,
+        coordinate_range: (0.0, coordinate_max),
+        attempt: 1,
+        underlying_error,
+    }
+}
+
+/// Verifies that the explicit strip builder returned the requested mesh size.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "count mismatch diagnostics preserve both requested CDT parameters and expected builder counts"
+)]
+fn validate_strip_counts(
+    backend: &DelaunayBackend2D,
+    total_vertices: u32,
+    total_cells: u32,
+    expected_vertices: usize,
+    expected_faces: usize,
+    vertices_per_slice: u32,
+    num_slices: u32,
+    coordinate_max: f64,
+) -> CdtResult<()> {
+    if backend.vertex_count() != expected_vertices {
+        return Err(strip_generation_error(
+            total_vertices,
+            coordinate_max,
+            format!(
+                "build_delaunay2_from_cells()/from_cdt_strip() produced {} vertices, expected {} for vertices_per_slice={} and num_slices={}",
+                backend.vertex_count(),
+                total_vertices,
+                vertices_per_slice,
+                num_slices,
+            ),
+        ));
+    }
+    if backend.face_count() != expected_faces {
+        return Err(strip_generation_error(
+            total_vertices,
+            coordinate_max,
+            format!(
+                "build_delaunay2_from_cells()/from_cdt_strip() produced {} faces, expected {} for vertices_per_slice={} and num_slices={}",
+                backend.face_count(),
+                total_cells,
+                vertices_per_slice,
+                num_slices,
+            ),
+        ));
+    }
+
+    Ok(())
 }
 
 /// Events in simulation history
@@ -1009,6 +1089,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     // -------------------------------------------------------------------------
 
     /// Normalizes provisional cylinder-construction failures into the public generation error.
+    #[cfg(test)]
     fn foliated_cylinder_generation_error(
         total_vertices: u32,
         num_slices: u32,
@@ -1023,6 +1104,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     }
 
     /// Reconstructs generated foliation counts while reporting missing labels with examples.
+    #[cfg(test)]
     fn slice_sizes_from_vertex_labels(
         backend: &DelaunayBackend2D,
         total_vertices: u32,
@@ -1244,36 +1326,27 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
     /// Construct a foliated 1+1 CDT triangulation on a finite strip.
     ///
-    /// Places `vertices_per_slice` vertices per time slice on a regular grid at
-    /// coordinates `(x_i, t)` where `x_i` is evenly spaced in `[0, 1]` and
-    /// `t` is an integer time coordinate.  Time labels are assigned by
-    /// y-coordinate bucket: slice `t` owns vertices with `y ∈ [t − 0.5, t + 0.5)`.
+    /// Places `vertices_per_slice` vertices per time slice on a regular grid
+    /// and connects adjacent slices combinatorially. Time labels are stored
+    /// directly in vertex data.
     ///
     /// **Note:** Despite the name, this builds an open strip `[0,1] × [0,T]`
     /// without spatial periodic identification.  True cylinder topology
     /// (S¹ × \[0,T\]) is planned for a future release.
     ///
-    /// The spatial extent is kept to 1.0 (well below the √3 ≈ 1.73 threshold
-    /// that prevents Delaunay edges from skipping a time slice), but generic
-    /// Delaunay triangulation can still introduce same-slice triangles. This
-    /// constructor therefore validates the result and returns an error unless
-    /// the output is a genuine 1+1 CDT strip.
-    ///
-    /// This constructor is provisional and crate-internal until the explicit
-    /// strip builder path is implemented in [`from_cdt_strip`](Self::from_cdt_strip).
+    /// This crate-internal compatibility constructor now delegates to the
+    /// explicit strip builder in [`from_cdt_strip`](Self::from_cdt_strip).
     ///
     /// # Arguments
     ///
     /// * `vertices_per_slice` — Number of vertices in each spatial slice (≥ 4).
     /// * `num_slices` — Number of time slices (≥ 2).
-    /// * `seed` — Optional seed for deterministic vertex perturbation.
+    /// * `seed` — Ignored; retained for compatibility with older diagnostics.
     ///
     /// # Errors
     ///
-    /// Returns error if parameters are invalid, vertex construction fails,
-    /// triangulation construction fails, or the builder output does not retain
-    /// valid per-vertex time labels. Builder-label failures are surfaced as
-    /// [`CdtError::DelaunayGenerationFailed`] with detailed context.
+    /// Returns error if parameters are invalid, explicit mesh construction
+    /// fails, or the output violates CDT strip invariants.
     ///
     /// # Internal
     ///
@@ -1282,7 +1355,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         not(test),
         expect(
             dead_code,
-            reason = "provisional internal strip constructor remains intentionally crate-internal until explicit strip construction lands"
+            reason = "compatibility constructor is crate-internal; public callers should use from_cdt_strip"
         )
     )]
     pub(crate) fn from_foliated_cylinder(
@@ -1290,170 +1363,43 @@ impl CdtTriangulation<DelaunayBackend2D> {
         num_slices: u32,
         seed: Option<u64>,
     ) -> CdtResult<Self> {
-        // TODO(#57): Remove this provisional point-set constructor once the
-        // explicit combinatorial strip builder is available.
-        if vertices_per_slice < 4 {
-            return Err(CdtError::InvalidGenerationParameters {
-                issue: "Insufficient vertices per slice".to_string(),
-                provided_value: vertices_per_slice.to_string(),
-                expected_range: "≥ 4".to_string(),
-            });
-        }
-        if num_slices < 2 {
-            return Err(CdtError::InvalidGenerationParameters {
-                issue: "Insufficient number of time slices".to_string(),
-                provided_value: num_slices.to_string(),
-                expected_range: "≥ 2".to_string(),
-            });
-        }
-
-        // Spatial extent is fixed at 1.0 so that the maximum within-strip
-        // circumradius stays below 1.0 (the temporal gap between slices).
-        // This guarantees the Delaunay property cannot create edges that
-        // skip a time slice.
-        //
-        // Small deterministic perturbation is applied to break co-circular
-        // degeneracy in the grid.  Boundary vertices (i=0 and i=last) keep
-        // their exact x so they remain collinear on the convex hull,
-        // preventing hull edges from skipping intermediate time slices.
-        let spatial_extent = 1.0_f64;
-        let spacing = spatial_extent / f64::from(vertices_per_slice - 1);
-        let perturbation_seed = seed.unwrap_or(0);
-        let perturbation_scale = spacing * 0.02;
-
-        let total_vertices = vertices_per_slice.checked_mul(num_slices).ok_or_else(|| {
-            CdtError::InvalidGenerationParameters {
-                issue: "Vertex count overflow".to_string(),
-                provided_value: format!("{vertices_per_slice} × {num_slices}"),
-                expected_range: "product ≤ u32::MAX".to_string(),
-            }
-        })?;
-        let mut vertex_specs = Vec::with_capacity(total_vertices as usize);
-        let last_i = vertices_per_slice - 1;
-
-        for t in 0..num_slices {
-            for i in 0..vertices_per_slice {
-                let x_base = f64::from(i) * spacing;
-                let y_base = f64::from(t); // integer time coordinate
-
-                // Deterministic perturbation keyed on vertex index + seed
-                let hash = (u64::from(t) * u64::from(vertices_per_slice) + u64::from(i))
-                    .wrapping_mul(6_364_136_223_846_793_005)
-                    .wrapping_add(perturbation_seed)
-                    .wrapping_mul(1_442_695_040_888_963_407);
-
-                // Perturbation strategy:
-                // - Interior vertices: hash-based perturbation in x only
-                //   to break co-circular grid degeneracy while preserving
-                //   exact per-slice collinearity in y.
-                // - Boundary vertices (i=0, i=last): deterministic concave
-                //   x-offset via √(t+1) pushes each row further outward.
-                //   The concave (sub-linear) progression ensures every
-                //   intermediate boundary vertex bulges past the line
-                //   connecting its neighbors, so the convex hull includes
-                //   every row's extremes and no hull edge skips a time slice.
-                let hash_frac = f64::from((hash & 0xFFFF) as u16) / 65535.0;
-                let hull_offset = f64::from(t + 1).sqrt();
-                let px = if i == 0 {
-                    // Push left — concave √(t+1) ensures hull membership
-                    -hull_offset * perturbation_scale
-                } else if i == last_i {
-                    // Push right — mirror of left
-                    hull_offset * perturbation_scale
-                } else {
-                    (hash_frac - 0.5) * perturbation_scale
-                };
-
-                // Keep y exactly on integer slices so same-slice triangles
-                // are geometrically impossible (three same-slice points are
-                // collinear), enforcing one-spacelike-two-timelike structure.
-                vertex_specs.push(([x_base + px, y_base], t));
-            }
-        }
-
-        // Delegate low-level Delaunay construction to the utility layer.
-        let dt = build_delaunay2_with_data(&vertex_specs).map_err(|e| match e {
-            CdtError::DelaunayGenerationFailed {
-                underlying_error, ..
-            } => Self::foliated_cylinder_generation_error(
-                total_vertices,
-                num_slices,
-                underlying_error,
-            ),
-            other => other,
-        })?;
-
-        let backend = DelaunayBackend2D::from_triangulation(dt);
-
-        // Verify the builder inserted all vertices.
-        if backend.vertex_count() != total_vertices as usize {
-            return Err(Self::foliated_cylinder_generation_error(
-                total_vertices,
-                num_slices,
-                format!(
-                    "builder inserted only {} of {} vertices (possible degeneracy)",
-                    backend.vertex_count(),
-                    total_vertices,
-                ),
-            ));
-        }
-
-        // Compute per-slice vertex counts from vertex data stored in the backend.
-        let slice_sizes =
-            Self::slice_sizes_from_vertex_labels(&backend, total_vertices, num_slices)?;
-
-        let foliation =
-            Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
-        let mut tri = Self::try_new(backend, num_slices, 2)?;
-        tri.foliation = Some(foliation);
-        tri.mark_foliation_synchronized();
-
-        tri.validate_foliation().map_err(|err| {
-            Self::foliated_cylinder_generation_error(
-                total_vertices,
-                num_slices,
-                format!("constructed strip has invalid foliation: {err}"),
-            )
-        })?;
-
-        tri.validate_causality_delaunay().map_err(|err| {
-            Self::foliated_cylinder_generation_error(
-                total_vertices,
-                num_slices,
-                format!(
-                    "point-set Delaunay produced a non-CDT triangulation; explicit CDT strip construction is required: {err}"
-                ),
-            )
-        })?;
-
-        Ok(tri)
+        let _ = seed;
+        Self::from_cdt_strip(vertices_per_slice, num_slices)
     }
 
     /// Construct a true 1+1 CDT strip by explicit layered connectivity.
     ///
-    /// Unlike `from_foliated_cylinder`, this does NOT rely on Delaunay triangulation.
-    /// Instead it constructs the CDT combinatorially so every triangle is guaranteed
-    /// to satisfy the CDT invariant (1 spacelike edge, 2 timelike edges).
-    ///
-    /// NOTE: This requires backend support for explicit face construction.
-    /// Currently this is a placeholder until such support is implemented.
+    /// Places `vertices_per_slice` vertices on each open spatial slice and
+    /// connects adjacent time slices into quads. Each quad is split into one
+    /// Up `(2,1)` triangle and one Down `(1,2)` triangle, so every finite face
+    /// is classifiable by construction.
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::InvalidGenerationParameters`] if `vertices_per_slice < 4` or
-    /// `num_slices < 2`.
-    /// Returns [`CdtError::UnsupportedOperation`] because explicit CDT mesh construction is
-    /// not yet implemented.
+    /// Returns [`CdtError::InvalidGenerationParameters`] if `vertices_per_slice < 4`,
+    /// `num_slices < 2`, or the derived vertex or cell count overflows `u32`.
+    /// Returns [`CdtError::DelaunayGenerationFailed`] if constructor storage cannot
+    /// be reserved, if the underlying explicit builder rejects the mesh, or if
+    /// `build_delaunay2_from_cells()` returns a vertex or face count that does not
+    /// match the requested strip. Returns [`CdtError::Foliation`],
+    /// [`CdtError::CausalityViolation`], or [`CdtError::ValidationFailed`] if the
+    /// constructed strip fails CDT validation.
     ///
     /// # Examples
     ///
     /// ```
     /// use causal_triangulations::prelude::triangulation::*;
     ///
-    /// // Placeholder API: currently validates inputs, then returns a construction error.
-    /// let result = CdtTriangulation::from_cdt_strip(4, 2);
-    /// assert!(result.is_err());
+    /// let tri = CdtTriangulation::from_cdt_strip(4, 2)
+    ///     .expect("build explicit CDT strip");
+    /// assert_eq!(tri.vertex_count(), 8);
+    /// assert_eq!(tri.face_count(), 6);
+    /// assert!(tri.validate_cell_classification().is_ok());
     /// ```
+    #[expect(
+        clippy::too_many_lines,
+        reason = "explicit strip construction includes fallible allocation handling and post-build validation"
+    )]
     pub fn from_cdt_strip(vertices_per_slice: u32, num_slices: u32) -> CdtResult<Self> {
         if vertices_per_slice < 4 {
             return Err(CdtError::InvalidGenerationParameters {
@@ -1470,17 +1416,126 @@ impl CdtTriangulation<DelaunayBackend2D> {
             });
         }
 
-        // TODO: Implement explicit CDT mesh construction.
-        // This requires:
-        // 1. Creating vertices per slice
-        // 2. Connecting adjacent slices into quads
-        // 3. Splitting quads into valid CDT triangles
-        // 4. Building backend without relying on Delaunay
+        let total_vertices = vertices_per_slice.checked_mul(num_slices).ok_or_else(|| {
+            CdtError::InvalidGenerationParameters {
+                issue: "Vertex count overflow".to_string(),
+                provided_value: format!("{vertices_per_slice} × {num_slices}"),
+                expected_range: "product ≤ u32::MAX".to_string(),
+            }
+        })?;
 
-        Err(CdtError::UnsupportedOperation {
-            operation: "CdtTriangulation::from_cdt_strip".to_string(),
-            reason: "explicit CDT strip construction is not yet implemented; requires explicit mesh backend".to_string(),
-        })
+        let spatial_quads = vertices_per_slice - 1;
+        let temporal_quads = num_slices - 1;
+        let total_quads = spatial_quads.checked_mul(temporal_quads).ok_or_else(|| {
+            CdtError::InvalidGenerationParameters {
+                issue: "Cell count overflow".to_string(),
+                provided_value: format!("{spatial_quads} × {temporal_quads}"),
+                expected_range: "product ≤ u32::MAX".to_string(),
+            }
+        })?;
+        let total_cells =
+            total_quads
+                .checked_mul(2)
+                .ok_or_else(|| CdtError::InvalidGenerationParameters {
+                    issue: "Cell count overflow".to_string(),
+                    provided_value: format!("2 × {total_quads}"),
+                    expected_range: "product ≤ u32::MAX".to_string(),
+                })?;
+
+        let coordinate_max = f64::from(num_slices - 1).max(1.0);
+        let generation_failed = |underlying_error: String| {
+            strip_generation_error(total_vertices, coordinate_max, underlying_error)
+        };
+
+        let expected_vertices =
+            usize::try_from(total_vertices).map_err(|err| generation_failed(err.to_string()))?;
+        let expected_faces =
+            usize::try_from(total_cells).map_err(|err| generation_failed(err.to_string()))?;
+
+        let n = usize::try_from(vertices_per_slice)
+            .map_err(|err| generation_failed(err.to_string()))?;
+        let t_count =
+            usize::try_from(num_slices).map_err(|err| generation_failed(err.to_string()))?;
+        let index = |i: usize, t: usize| -> usize { t * n + i };
+
+        let spacing = 1.0_f64 / f64::from(vertices_per_slice - 1);
+        let mut vertex_specs: Vec<([f64; 2], u32)> = Vec::new();
+        vertex_specs
+            .try_reserve_exact(expected_vertices)
+            .map_err(|err| {
+                generation_failed(format!(
+                    "from_cdt_strip() failed to reserve {expected_vertices} vertex specs for vertices_per_slice={vertices_per_slice}, num_slices={num_slices}: {err}"
+                ))
+            })?;
+        for t in 0..num_slices {
+            for i in 0..vertices_per_slice {
+                vertex_specs.push(([f64::from(i) * spacing, f64::from(t)], t));
+            }
+        }
+
+        let mut cells: Vec<[usize; 3]> = Vec::new();
+        cells.try_reserve_exact(expected_faces).map_err(|err| {
+            generation_failed(format!(
+                "from_cdt_strip() failed to reserve {expected_faces} triangle cells for vertices_per_slice={vertices_per_slice}, num_slices={num_slices}: {err}"
+            ))
+        })?;
+        for t in 0..(t_count - 1) {
+            let t_next = t + 1;
+            for i in 0..(n - 1) {
+                let i_next = i + 1;
+                cells.push([index(i, t), index(i_next, t), index(i, t_next)]);
+                cells.push([index(i_next, t), index(i_next, t_next), index(i, t_next)]);
+            }
+        }
+
+        // delaunay 0.7.6 accepts explicit cells as Vec-backed index lists.
+        // Keep the strip working set compact, then adapt fallibly at the API boundary.
+        let mut cell_specs: Vec<Vec<usize>> = Vec::new();
+        cell_specs.try_reserve_exact(expected_faces).map_err(|err| {
+            generation_failed(format!(
+                "from_cdt_strip() failed to reserve {expected_faces} builder cell specs for build_delaunay2_from_cells(): {err}"
+            ))
+        })?;
+        for cell in &cells {
+            let mut cell_spec = Vec::new();
+            cell_spec.try_reserve_exact(3).map_err(|err| {
+                generation_failed(format!(
+                    "from_cdt_strip() failed to reserve a build_delaunay2_from_cells() triangle cell spec: {err}"
+                ))
+            })?;
+            cell_spec.extend_from_slice(cell);
+            cell_specs.push(cell_spec);
+        }
+
+        let dt = build_delaunay2_from_cells(&vertex_specs, &cell_specs)
+            .map_err(|err| remap_strip_generation_error(err, total_vertices, coordinate_max))?;
+
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+        validate_strip_counts(
+            &backend,
+            total_vertices,
+            total_cells,
+            expected_vertices,
+            expected_faces,
+            vertices_per_slice,
+            num_slices,
+            coordinate_max,
+        )?;
+
+        let slice_sizes = vec![n; t_count];
+        let foliation =
+            Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
+
+        let mut tri = Self::try_new(backend, num_slices, 2)?;
+        tri.foliation = Some(foliation);
+        tri.mark_foliation_synchronized();
+
+        tri.validate_foliation()?;
+        tri.validate_causality_delaunay()?;
+        tri.validate_topology()?;
+        tri.classify_all_cells()?;
+
+        Ok(tri)
     }
 
     /// Construct a foliated 1+1 CDT on a torus (S¹×S¹).
@@ -1629,6 +1684,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         tri.validate_foliation()?;
         tri.validate_causality_delaunay()?;
         tri.validate_topology()?;
+        tri.classify_all_cells()?;
 
         Ok(tri)
     }
@@ -1650,7 +1706,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// # Errors
     ///
     /// Returns error if `num_slices` is zero, if vertex coordinates cannot be
-    /// read, or if y-bucket assignment would leave any time slice empty.
+    /// read, if y-bucket assignment would leave any time slice empty, if the
+    /// requested slice count violates the triangulation topology, or if writing
+    /// vertex labels or clearing stale cell labels in the backend fails.
     ///
     /// # Examples
     ///
@@ -1884,7 +1942,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn time_label(&self, vertex: &DelaunayVertexHandle) -> Option<u32> {
-        self.foliation()?;
+        self.foliation.as_ref()?;
         self.geometry.vertex_data_by_key(vertex.vertex_key())
     }
 
@@ -1901,7 +1959,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn vertices_at_time(&self, t: u32) -> Vec<DelaunayVertexHandle> {
-        if !self.has_foliation() {
+        if self.foliation.is_none() {
             return vec![];
         }
         self.geometry
@@ -2032,7 +2090,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn edge_type(&self, edge: &DelaunayEdgeHandle) -> Option<EdgeType> {
-        self.foliation()?;
+        self.foliation.as_ref()?;
 
         let (v0, v1) = self.geometry.edge_endpoints(edge)?;
         let t0 = self.geometry.vertex_data_by_key(v0.vertex_key())?;
@@ -2068,7 +2126,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn cell_type(&self, face: &DelaunayFaceHandle) -> Option<CellType> {
-        self.foliation()?;
+        self.foliation.as_ref()?;
         let verts = self.geometry.face_vertices(face).ok()?;
         if verts.len() != 3 {
             return None;
@@ -2093,8 +2151,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::CdtTriangulation;
     ///
-    /// let mut tri = CdtTriangulation::from_seeded_points(12, 3, 2, 42).unwrap();
-    /// tri.assign_foliation_by_y(3).unwrap();
+    /// let mut tri = CdtTriangulation::from_cdt_strip(4, 2).unwrap();
     /// tri.classify_all_cells().unwrap();
     /// let face = tri.geometry().faces().next().unwrap();
     /// let _stored = tri.cell_type_from_data(&face);
@@ -2146,7 +2203,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn face_edge_types(&self, face: &DelaunayFaceHandle) -> Option<[EdgeType; 3]> {
-        self.foliation()?;
+        self.foliation.as_ref()?;
 
         let verts = self.geometry.face_vertices(face).ok()?;
         if verts.len() != 3 {
@@ -2174,28 +2231,68 @@ impl CdtTriangulation<DelaunayBackend2D> {
         ])
     }
 
-    /// Classifies every triangle and stores the result as cell data.
+    /// Validates that every finite face has a strict CDT cell classification.
     ///
-    /// Each classifiable cell receives `Some(CellType::to_i32())` via
-    /// `set_cell_data`.  Boundary cells that do not span exactly one
-    /// time slice are skipped.
-    ///
-    /// Requires a foliation to be present; returns `Ok(None)` if there is none.
+    /// If no foliation is present, succeeds vacuously. Otherwise every face
+    /// must classify as [`CellType::Up`] or [`CellType::Down`].
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::BackendMutationFailed`] if writing cell payloads
-    /// to the backend fails.
+    /// Returns [`CdtError::ValidationFailed`] if any face is unclassifiable.
     ///
     /// # Examples
     ///
     /// ```
     /// use causal_triangulations::prelude::triangulation::*;
     ///
-    /// let mut tri = CdtTriangulation::from_seeded_points(12, 3, 2, 42)
-    ///     .expect("create seeded triangulation");
-    /// tri.assign_foliation_by_y(3)
-    ///     .expect("assign foliation from y-coordinates");
+    /// let tri = CdtTriangulation::from_cdt_strip(4, 2)
+    ///     .expect("build explicit CDT strip");
+    /// tri.validate_cell_classification()
+    ///     .expect("all strip cells classify");
+    /// ```
+    pub fn validate_cell_classification(&self) -> CdtResult<()> {
+        if self.foliation.is_none() {
+            return Ok(());
+        }
+
+        for face in self.geometry.faces() {
+            if self.cell_type(&face).is_none() {
+                return Err(CdtError::ValidationFailed {
+                    check: "cell_classification".to_string(),
+                    detail: format!(
+                        "face {:?} is not a strict CDT cell (expected Up or Down)",
+                        face.cell_key()
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Classifies every triangle and stores the result as cell data.
+    ///
+    /// Each classifiable cell receives `Some(CellType::to_i32())` via
+    /// `set_cell_data`.  On a foliated triangulation, all finite faces must be
+    /// classifiable; unclassifiable same-slice or multi-slice triangles are
+    /// reported as validation failures.
+    ///
+    /// Requires a foliation to be present; returns `Ok(None)` if there is none.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::ValidationFailed`] if any foliated face is not an
+    /// Up or Down CDT triangle. Returns [`CdtError::BackendMutationFailed`] if
+    /// writing cell payloads to the backend fails, or
+    /// [`CdtError::BackendRollbackFailed`] if restoring previous payloads also fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// let mut tri = CdtTriangulation::from_cdt_strip(4, 2)
+    ///     .expect("create explicit strip");
     /// let classified = tri
     ///     .classify_all_cells()
     ///     .expect("classify cells")
@@ -2203,49 +2300,94 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// assert!(classified > 0);
     /// ```
     pub fn classify_all_cells(&mut self) -> CdtResult<Option<usize>> {
-        if !self.has_foliation() {
+        if self.foliation.is_none() {
             return Ok(None);
         }
 
-        // Collect (CellKey, CellType) pairs first to avoid borrow conflict.
-        let classifications: Vec<_> = self
-            .geometry
-            .faces()
-            .filter_map(|face| {
-                let ct = self.cell_type(&face)?;
-                Some((face, ct))
-            })
-            .collect();
-
-        // Also collect all face keys to clear stale data from unclassifiable faces.
-        let all_face_keys: Vec<_> = self.geometry.faces().map(|f| f.cell_key()).collect();
+        let faces: Vec<_> = self.geometry.faces().collect();
+        let mut classifications = Vec::with_capacity(faces.len());
+        for face in &faces {
+            let Some(ct) = self.cell_type(face) else {
+                return Err(CdtError::ValidationFailed {
+                    check: "cell_classification".to_string(),
+                    detail: format!(
+                        "face {:?} is not a strict CDT cell (expected Up or Down)",
+                        face.cell_key()
+                    ),
+                });
+            };
+            classifications.push((face.cell_key(), ct));
+        }
 
         let count = classifications.len();
+        let previous_cell_data: Vec<_> = faces
+            .iter()
+            .map(|face| {
+                let key = face.cell_key();
+                (key, self.geometry.cell_data_by_key(key))
+            })
+            .collect();
+        let rollback_cell_payloads = |geometry: &mut DelaunayBackend2D| -> Vec<String> {
+            let mut rollback_errors = Vec::new();
+
+            for &(key, data) in &previous_cell_data {
+                if let Err(err) = geometry.set_cell_data_by_key(key, data) {
+                    rollback_errors.push(format!("face {key:?}: {err}"));
+                }
+            }
+
+            rollback_errors
+        };
 
         // Clear all cell data first, then write fresh classifications.
-        for &key in &all_face_keys {
-            self.geometry
-                .set_cell_data_by_key(key, None)
-                .map_err(|err| CdtError::BackendMutationFailed {
-                    operation: "set_cell_data_by_key".to_string(),
-                    target: format!("face {key:?}"),
-                    detail: format!(
-                        "failed to clear existing cell payload before classification: {err}"
-                    ),
-                })?;
-        }
-        for (face, ct) in classifications {
+        for face in &faces {
             let key = face.cell_key();
-            self.geometry
-                .set_cell_data_by_key(key, Some(ct.to_i32()))
-                .map_err(|err| CdtError::BackendMutationFailed {
-                    operation: "set_cell_data_by_key".to_string(),
-                    target: format!("face {key:?}"),
-                    detail: format!(
-                        "failed to store classified cell payload {}: {err}",
-                        ct.to_i32()
-                    ),
-                })?;
+            if let Err(err) = self.geometry.set_cell_data_by_key(key, None) {
+                let operation = "set_cell_data_by_key".to_string();
+                let target = format!("face {key:?}");
+                let detail =
+                    format!("failed to clear existing cell payload before classification: {err}");
+                let rollback_errors = rollback_cell_payloads(&mut self.geometry);
+                return if rollback_errors.is_empty() {
+                    Err(CdtError::BackendMutationFailed {
+                        operation,
+                        target,
+                        detail,
+                    })
+                } else {
+                    Err(CdtError::BackendRollbackFailed {
+                        operation,
+                        target,
+                        detail,
+                        rollback_errors: rollback_errors.join("; "),
+                    })
+                };
+            }
+        }
+        for (key, ct) in classifications {
+            if let Err(err) = self.geometry.set_cell_data_by_key(key, Some(ct.to_i32())) {
+                let operation = "set_cell_data_by_key".to_string();
+                let target = format!("face {key:?}");
+                let detail = format!(
+                    "failed to store classified cell payload {}: {err}",
+                    ct.to_i32()
+                );
+                let rollback_errors = rollback_cell_payloads(&mut self.geometry);
+                return if rollback_errors.is_empty() {
+                    Err(CdtError::BackendMutationFailed {
+                        operation,
+                        target,
+                        detail,
+                    })
+                } else {
+                    Err(CdtError::BackendRollbackFailed {
+                        operation,
+                        target,
+                        detail,
+                        rollback_errors: rollback_errors.join("; "),
+                    })
+                };
+            }
         }
         Ok(Some(count))
     }
@@ -2321,6 +2463,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         self.validate_topology()?;
         self.validate_foliation()?;
         self.validate_causality()?;
+        self.validate_cell_classification()?;
 
         Ok(())
     }
@@ -3379,52 +3522,68 @@ mod tests {
     // Foliation tests
     // =========================================================================
 
-    /// Accepts the current point-set cylinder limitations while explicit strip construction is pending.
-    fn assert_foliated_cylinder_known_failure(
+    /// Verifies the crate-internal strip compatibility constructor returns a strict CDT mesh.
+    fn assert_valid_foliated_cylinder(
         result: CdtResult<CdtTriangulation<DelaunayBackend2D>>,
-    ) {
-        match result {
-            Err(CdtError::DelaunayGenerationFailed {
-                underlying_error, ..
-            }) => {
-                let rejected_as_non_cdt = underlying_error.contains("non-CDT triangulation")
-                    || underlying_error.contains("invalid CDT triangle");
-                let rejected_for_vertex_drop = underlying_error.contains("builder inserted only");
-                assert!(
-                    rejected_as_non_cdt || rejected_for_vertex_drop,
-                    "Expected non-CDT or vertex-drop rejection, got: {underlying_error}"
-                );
-            }
-            Ok(_) => panic!("Expected point-set strip construction rejection"),
-            Err(other) => panic!("Expected DelaunayGenerationFailed, got {other:?}"),
+        vertices_per_slice: u32,
+        num_slices: u32,
+    ) -> CdtTriangulation<DelaunayBackend2D> {
+        let tri = result.expect("explicit strip construction should succeed");
+        assert_eq!(
+            tri.vertex_count(),
+            vertices_per_slice as usize * num_slices as usize
+        );
+        assert_eq!(
+            tri.face_count(),
+            2 * (vertices_per_slice as usize - 1) * (num_slices as usize - 1)
+        );
+        assert_eq!(
+            tri.slice_sizes(),
+            vec![vertices_per_slice as usize; num_slices as usize].as_slice()
+        );
+        tri.validate_foliation()
+            .expect("explicit strip foliation should validate");
+        tri.validate_causality_delaunay()
+            .expect("explicit strip causality should validate");
+        tri.validate_topology()
+            .expect("explicit strip topology should validate");
+        tri.validate_cell_classification()
+            .expect("all explicit strip cells should classify");
+        for face in tri.geometry().faces() {
+            assert!(tri.cell_type(&face).is_some());
+            assert!(tri.cell_type_from_data(&face).is_some());
         }
+        tri
     }
 
     #[test]
     fn test_from_foliated_cylinder_basic() {
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(5, 3, Some(42)),
             5,
             3,
-            Some(42),
-        ));
+        );
     }
 
     #[test]
     fn test_from_foliated_cylinder_vertex_counts_per_slice() {
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(4, 3, Some(1)),
             4,
             3,
-            Some(1),
-        ));
+        );
     }
 
     #[test]
     fn test_from_foliated_cylinder_all_vertices_labeled() {
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        let tri = assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(5, 3, Some(99)),
             5,
             3,
-            Some(99),
-        ));
+        );
+        for vertex in tri.geometry().vertices() {
+            assert!(tri.time_label(&vertex).is_some());
+        }
     }
 
     #[test]
@@ -3713,43 +3872,53 @@ mod tests {
 
     #[test]
     fn test_from_foliated_cylinder_edge_classification() {
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        let tri = assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(5, 3, Some(42)),
             5,
             3,
-            Some(42),
-        ));
+        );
+        for edge in tri.geometry().edges() {
+            assert!(matches!(
+                tri.edge_type(&edge),
+                Some(EdgeType::Spacelike | EdgeType::Timelike)
+            ));
+        }
     }
 
     #[test]
     fn test_from_foliated_cylinder_validate_foliation() {
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(5, 3, Some(42)),
             5,
             3,
-            Some(42),
-        ));
+        );
     }
 
     #[test]
     fn test_from_foliated_cylinder_validate_causality() {
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(5, 3, Some(42)),
             5,
             3,
-            Some(42),
-        ));
+        );
     }
 
     #[test]
     fn test_from_foliated_cylinder_seed_determinism() {
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        let left = assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(5, 3, Some(42)),
             5,
             3,
-            Some(42),
-        ));
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        );
+        let right = assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(5, 3, Some(42)),
             5,
             3,
-            Some(42),
-        ));
+        );
+        assert_eq!(left.vertex_count(), right.vertex_count());
+        assert_eq!(left.edge_count(), right.edge_count());
+        assert_eq!(left.face_count(), right.face_count());
+        assert_eq!(left.slice_sizes(), right.slice_sizes());
     }
 
     #[test]
@@ -3777,7 +3946,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_cdt_strip_rejects_invalid_params_before_placeholder_error() {
+    fn test_from_cdt_strip_rejects_invalid_params() {
         let few_vertices = CdtTriangulation::from_cdt_strip(3, 3);
         assert!(matches!(
             few_vertices,
@@ -3804,24 +3973,61 @@ mod tests {
     }
 
     #[test]
-    fn test_from_cdt_strip_reports_placeholder_for_valid_params() {
-        let result = CdtTriangulation::from_cdt_strip(4, 2);
+    fn test_from_cdt_strip_rejects_cell_count_overflow() {
+        let result = CdtTriangulation::from_cdt_strip(65_535, 65_537);
 
         assert!(matches!(
             result,
-            Err(CdtError::UnsupportedOperation { ref operation, ref reason })
-                if operation == "CdtTriangulation::from_cdt_strip"
-                    && reason.contains("not yet implemented")
+            Err(CdtError::InvalidGenerationParameters {
+                ref issue,
+                ref provided_value,
+                ref expected_range,
+            }) if issue == "Cell count overflow"
+                && provided_value == "2 × 4294836224"
+                && expected_range == "product ≤ u32::MAX"
+        ));
+    }
+
+    #[test]
+    fn test_from_cdt_strip_builds_valid_mesh() {
+        let tri = CdtTriangulation::from_cdt_strip(4, 2).expect("explicit strip should build");
+        assert_eq!(tri.vertex_count(), 8);
+        assert_eq!(tri.face_count(), 6);
+        assert!(tri.validate_topology().is_ok());
+        assert!(tri.validate_foliation().is_ok());
+        assert!(tri.validate_causality_delaunay().is_ok());
+        assert!(tri.validate_cell_classification().is_ok());
+    }
+
+    #[test]
+    fn test_explicit_strip_count_validation_rejects_face_mismatch() {
+        let tri = CdtTriangulation::from_cdt_strip(4, 2).expect("explicit strip should build");
+        let result = validate_strip_counts(tri.geometry(), 8, 7, 8, 7, 4, 2, 1.0);
+
+        assert!(matches!(
+            result,
+            Err(CdtError::DelaunayGenerationFailed {
+                vertex_count: 8,
+                coordinate_range: (0.0, 1.0),
+                attempt: 1,
+                ref underlying_error,
+            }) if underlying_error.contains("build_delaunay2_from_cells()/from_cdt_strip()")
+                && underlying_error.contains("produced 6 faces, expected 7")
+                && underlying_error.contains("vertices_per_slice=4")
+                && underlying_error.contains("num_slices=2")
         ));
     }
 
     #[test]
     fn test_vertices_at_time() {
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        let tri = assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(4, 3, Some(1)),
             4,
             3,
-            Some(1),
-        ));
+        );
+        for t in 0..3 {
+            assert_eq!(tri.vertices_at_time(t).len(), 4);
+        }
     }
 
     #[test]
@@ -3945,36 +4151,50 @@ mod tests {
 
     #[test]
     fn test_from_foliated_cylinder_minimum_size() {
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(4, 2, Some(1)),
             4,
             2,
-            Some(1),
-        ));
+        );
     }
 
     #[test]
     fn test_from_foliated_cylinder_full_validate() {
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        let tri = assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(5, 3, Some(42)),
             5,
             3,
-            Some(42),
-        ));
+        );
+        assert!(tri.geometry().is_valid());
     }
 
     #[test]
     fn test_from_foliated_cylinder_no_seed() {
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
-            5, 3, None,
-        ));
+        assert_valid_foliated_cylinder(CdtTriangulation::from_foliated_cylinder(5, 3, None), 5, 3);
     }
 
     #[test]
     fn test_all_faces_are_valid_cdt_triangles() {
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        let tri = assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(5, 3, Some(42)),
             5,
             3,
-            Some(42),
-        ));
+        );
+        for face in tri.geometry().faces() {
+            let edge_types = tri
+                .face_edge_types(&face)
+                .expect("explicit strip face should expose edge types");
+            let spacelike = edge_types
+                .iter()
+                .filter(|edge_type| matches!(edge_type, EdgeType::Spacelike))
+                .count();
+            let timelike = edge_types
+                .iter()
+                .filter(|edge_type| matches!(edge_type, EdgeType::Timelike))
+                .count();
+            assert_eq!(spacelike, 1);
+            assert_eq!(timelike, 2);
+        }
     }
 
     #[test]
@@ -3995,19 +4215,11 @@ mod tests {
 
     #[test]
     fn test_from_foliated_cylinder_larger_grid() {
-        let result = CdtTriangulation::from_foliated_cylinder(10, 8, Some(7));
-        match result {
-            Err(CdtError::DelaunayGenerationFailed {
-                underlying_error, ..
-            }) => {
-                assert!(
-                    underlying_error.contains("Delaunay repair postcondition failed"),
-                    "Expected explicit Delaunay repair failure, got: {underlying_error}"
-                );
-            }
-            Ok(_) => panic!("Expected larger grid generation to fail"),
-            Err(other) => panic!("Expected DelaunayGenerationFailed, got {other:?}"),
-        }
+        assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(10, 8, Some(7)),
+            10,
+            8,
+        );
     }
 
     #[test]
@@ -4033,11 +4245,17 @@ mod tests {
 
     #[test]
     fn test_cell_type_returns_up_or_down() {
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        let tri = assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(5, 3, Some(42)),
             5,
             3,
-            Some(42),
-        ));
+        );
+        for face in tri.geometry().faces() {
+            assert!(matches!(
+                tri.cell_type(&face),
+                Some(CellType::Up | CellType::Down)
+            ));
+        }
     }
 
     #[test]
@@ -4052,11 +4270,16 @@ mod tests {
 
     #[test]
     fn test_classify_all_cells_stores_data() {
-        assert_foliated_cylinder_known_failure(CdtTriangulation::from_foliated_cylinder(
+        let mut tri = assert_valid_foliated_cylinder(
+            CdtTriangulation::from_foliated_cylinder(5, 3, Some(42)),
             5,
             3,
-            Some(42),
-        ));
+        );
+        let classified = tri
+            .classify_all_cells()
+            .expect("strict strip cells should classify")
+            .expect("foliation is present");
+        assert_eq!(classified, tri.face_count());
     }
 
     #[test]
@@ -4067,6 +4290,49 @@ mod tests {
                 .expect("No foliation should classify as a no-op"),
             None
         );
+    }
+
+    #[test]
+    fn test_validate_cell_classification_no_foliation_succeeds() {
+        let tri = CdtTriangulation::from_random_points(5, 2, 2).unwrap();
+
+        tri.validate_cell_classification()
+            .expect("missing foliation should validate vacuously");
+    }
+
+    #[test]
+    fn test_validate_and_classify_use_stored_foliation_after_mutable_access() {
+        let mut tri = CdtTriangulation::from_cdt_strip(4, 2).expect("Should build CDT strip");
+        let vertex = tri
+            .geometry()
+            .vertices()
+            .next()
+            .expect("CDT strip should contain vertices")
+            .vertex_key();
+        let label = tri
+            .geometry()
+            .vertex_data_by_key(vertex)
+            .expect("CDT strip vertices should be labeled");
+
+        {
+            let mut geometry_mut = tri.geometry_mut();
+            let _previous = geometry_mut
+                .set_vertex_data_by_key(vertex, Some(label))
+                .expect("Expected valid vertex key while preserving label");
+        }
+
+        assert!(
+            !tri.has_foliation(),
+            "mutable backend access should invalidate synchronized foliation bookkeeping"
+        );
+        tri.validate_cell_classification()
+            .expect("stored foliation should still drive live cell validation");
+
+        let classified = tri
+            .classify_all_cells()
+            .expect("stored foliation should still drive live cell classification")
+            .expect("foliation is still present");
+        assert_eq!(classified, tri.face_count());
     }
 
     #[test]
@@ -4161,6 +4427,28 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_cell_classification_rejects_same_slice_triangle() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 0)])
+            .expect("Should build same-slice triangle");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 1, 2)
+            .expect("single-slice labels should build foliation");
+
+        let validation = tri.validate_cell_classification();
+        assert!(matches!(
+            validation,
+            Err(CdtError::ValidationFailed { ref check, .. })
+                if check == "cell_classification"
+        ));
+        let classification = tri.classify_all_cells();
+        assert!(matches!(
+            classification,
+            Err(CdtError::ValidationFailed { ref check, .. })
+                if check == "cell_classification"
+        ));
+    }
+
+    #[test]
     fn test_vertices_at_time_with_foliation() {
         let mut tri = CdtTriangulation::from_seeded_points(15, 3, 2, 42)
             .expect("Failed to create deterministic triangulation");
@@ -4199,8 +4487,8 @@ mod tests {
 
     #[test]
     fn test_assign_foliation_by_y_reassignment() {
-        let mut tri = CdtTriangulation::from_seeded_points(15, 3, 2, 42)
-            .expect("Failed to create deterministic triangulation");
+        let mut tri =
+            CdtTriangulation::from_cdt_strip(5, 3).expect("Failed to create deterministic strip");
 
         // First assignment: 3 slices
         tri.assign_foliation_by_y(3)

@@ -231,7 +231,9 @@ Time: [500.0, 550.0, 600.0] µs
 
         assert len(benchmarks) == 1
         assert benchmarks[0].points == 5000
-        assert "skipping incomplete benchmark section for 1000 Points (2D)" in capsys.readouterr().out
+        captured = capsys.readouterr()
+        assert "skipping incomplete benchmark section for 1000 Points (2D)" in captured.err
+        assert captured.out == ""
 
     def test_parse_benchmark_header(self):
         """Test parsing benchmark header lines."""

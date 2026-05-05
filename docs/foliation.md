@@ -6,14 +6,14 @@ Per-vertex time labels, edge classification, and causal validation for 1+1 CDT.
 
 In Causal Dynamical Triangulations (Ambjørn, Jurkiewicz, Loll 2001), spacetime is built from simplices arranged in a **foliation** — a layered structure where each time slice is a spatial manifold and adjacent slices are connected by timelike edges.
 
-For 1+1 CDT:
+For the periodic 1+1 CDT cases:
 
 - **Spatial topology**: S¹ (circle) — each time slice is a ring of spacelike edges
 - **Time direction**: [0, T] (cylinder) or S¹ (torus, periodic time)
 - **Edge classification**: spacelike (both endpoints at same t) or timelike (endpoints at t and t±1)
 - **Causality constraint**: no edge may span more than one time slice (|Δt| ≤ 1)
 
-This implementation uses **cylinder topology** (S¹ × [0,T]) — spatial slices are open chains within the Delaunay triangulation, time runs from 0 to T−1. Toroidal topology (periodic time, full S¹ spatial slices) requires upstream support for periodic Delaunay triangulation (see issue #61).
+This implementation also supports open-boundary strip variants. `from_toroidal_cdt()` builds the periodic S¹ × S¹ toroidal case, while `from_cdt_strip()` builds open spatial-interval strip geometries over discrete time. Both constructor families use the same edge classification and causality constraint, but their topology metadata and boundary expectations differ.
 
 ## Architecture
 
@@ -33,23 +33,17 @@ Vertex data is set at construction time via `VertexBuilder::data(t)`. For post-c
 
 ## Time Label Assignment
 
-For `from_foliated_cylinder()`, time labels are assigned by **y-coordinate bucketing**: each vertex's y-coordinate is rounded to the nearest integer, giving the time slice index. The label is embedded directly as vertex data at construction.
-
-- Bucket for slice t: y ∈ [t − 0.5, t + 0.5)
-- Conversion uses `y_to_time_bucket()` from `src/util.rs` via `ToPrimitive::to_u32`
-- Values are clamped to [0, num_slices − 1]
+For `from_cdt_strip()` and `from_toroidal_cdt()`, time labels are assigned directly while building vertices. Vertex `(i, t)` receives label `t`, so each slice starts with exactly `vertices_per_slice` vertices and every constructed triangle spans adjacent slices.
 
 `assign_foliation_by_y()` uses band-based bucketing and writes labels directly to vertex data via `set_vertex_data`.
 
-## Grid Construction (`from_foliated_cylinder`)
+## Grid Construction (`from_cdt_strip`)
 
-The constructor places vertices on a grid with:
+The open-boundary strip constructor places vertices on a grid with:
 
-- **Spatial extent**: 1.0 (fixed, below the √3 ≈ 1.73 threshold that guarantees no Delaunay edge skips a time slice)
-- **Temporal gap**: 1.0 (integer y-coordinates: y = 0, 1, 2, ...)
-- **Perturbation**: small deterministic perturbation breaks co-circular degeneracy
-  - Interior vertices: hash-based random perturbation in x and y
-  - Boundary vertices (i=0, i=last): concave √(t+1) x-offset pushed outward, ensuring every row's extreme vertices are on the convex hull (no hull edge skips a time slice)
+- **Spatial extent**: 1.0, with `vertices_per_slice` evenly spaced vertices per slice
+- **Temporal gap**: 1.0, with integer y-coordinates `0, 1, 2, ...`
+- **Connectivity**: each quad between adjacent slices is split into one Up `(2,1)` and one Down `(1,2)` triangle
 
 Parameters: `vertices_per_slice ≥ 4`, `num_slices ≥ 2`.
 
@@ -71,7 +65,7 @@ Classification is done by `classify_edge(t0, t1)`, which reads time labels from 
 
 Classification is done by `classify_cell(t0, t1, t2)`. Triangles that don’t span exactly one time slice (e.g., all vertices at the same time, or spanning >1 slice) return `None`.
 
-Cell types are encoded as `i32` cell data (`Up = 1`, `Down = -1`) and can be bulk-written via `classify_all_cells()` using `set_cell_data`.
+Cell types are encoded as `i32` cell data (`Up = 1`, `Down = -1`) and can be bulk-written via `classify_all_cells()` using `set_cell_data`. For foliated triangulations this bulk path is strict: every face must classify as `Up` or `Down`, otherwise `classify_all_cells()` and `validate_cell_classification()` return a validation error.
 
 ## Validation
 
@@ -87,19 +81,27 @@ Structural checks:
 
 ### `validate_causality_delaunay()`
 
-Edge-level check reading time labels directly from vertex data:
+Face-level check reading time labels directly from vertex data:
 
-- Every edge must connect vertices within the same slice or adjacent slices
-- Returns `CdtError::CausalityViolation { time_0, time_1 }` if any edge spans >1 slice
+- Every triangle must contain exactly one spacelike edge and two timelike edges
+- Returns `CdtError::CausalityViolation { time_0, time_1 }` if any triangle spans >1 slice
+- Returns `CdtError::ValidationFailed { check: "causality", .. }` if a triangle is not a strict CDT cell
+
+### `validate_cell_classification()`
+
+Strict cell-classification check:
+
+- Succeeds vacuously when no foliation is present
+- Requires every foliated face to classify as `Up` or `Down`
+- Returns `CdtError::ValidationFailed { check: "cell_classification", .. }` for same-slice or otherwise unclassifiable triangles
 
 ## Error Handling
 
-- `CdtError::CausalityViolation { time_0, time_1 }` — structured error for edges violating causality
-- `CdtError::DelaunayGenerationFailed` — from `from_foliated_cylinder()` when builder output is inconsistent (for example missing or out-of-range per-vertex time labels), with detailed construction context
+- `CdtError::CausalityViolation { time_0, time_1 }` — structured error for time labels spanning more than one slice step
+- `CdtError::DelaunayGenerationFailed` — from explicit CDT constructors when builder output is inconsistent, with detailed construction context
 - `CdtError::ValidationFailed { check, detail }` — for structural foliation issues and foliation-assignment failures (for example unreadable vertex coordinates)
 - `CdtError::InvalidGenerationParameters` — for invalid constructor parameters
 
 ## Future Work
 
-- **Toroidal topology** (S¹ × S¹): requires periodic Delaunay construction (issue #61)
-- **Foliation-aware ergodic moves**: moves that preserve or update the foliation during MCMC steps (#55)
+- **Foliation-aware ergodic moves**: continue broadening topology-preservation tests for accepted move sequences

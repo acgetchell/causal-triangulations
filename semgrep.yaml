@@ -121,6 +121,9 @@ rules:
       - pattern: $VALUE.unwrap_or_else(|| f64::NAN)
       - pattern: $VALUE.unwrap_or_else(|| f64::INFINITY)
       - pattern: $VALUE.unwrap_or_else(|| f64::NEG_INFINITY)
+      - pattern: $VALUE.unwrap_or_else(|| std::f64::NAN)
+      - pattern: $VALUE.unwrap_or_else(|| std::f64::INFINITY)
+      - pattern: $VALUE.unwrap_or_else(|| std::f64::NEG_INFINITY)
 
   - id: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
     languages:
@@ -318,13 +321,8 @@ rules:
         of swallowing unrelated errors.
     paths:
       include:
-        - "/scripts/archive_changelog.py"
-        - "/scripts/benchmark_models.py"
-        - "/scripts/coverage_report.py"
-        - "/scripts/postprocess_changelog.py"
-        - "/scripts/subprocess_utils.py"
-        - "/scripts/tag_release.py"
-        - "/scripts/tests/**/*.py"
+        - "/scripts/**/*.py"
+        - "/tests/semgrep/scripts/tests/**/*.py"
     pattern-regex: '^\s*except\s+Exception(?:\s+as\s+\w+)?\s*:'
 
   - id: causal-triangulations.python.no-adhoc-completedprocess-mock

@@ -21,9 +21,9 @@ CDT's Python tooling is broader than MCMC's. MCMC currently has changelog and ta
 - secure subprocess wrappers in `scripts/subprocess_utils.py`;
 - typed `subprocess.CompletedProcess[str]` helpers in tests;
 - Ruff, Ty, pytest, and uv-managed development dependencies in `pyproject.toml`;
-- Python Semgrep rules and fixtures for broad exception catches, raw `Exception` in tests, ad hoc subprocess mocks, and missing return annotations.
+- Python Semgrep rules and fixtures for broad exception catches across all `scripts/**/*.py`, raw `Exception` in tests, ad hoc subprocess mocks, and missing return annotations.
 
-The broad-exception Semgrep rule is intentionally scoped to the smaller changelog, coverage, tag, subprocess, and model helper scripts in this pass. `scripts/benchmark_utils.py`, `scripts/hardware_utils.py`, and `scripts/performance_analysis.py` still contain broad recovery paths that need a separate cleanup before the rule can cover every script without creating noisy findings.
+The broad-exception Semgrep rule now covers the full Python support-script tree. `scripts/benchmark_utils.py`, `scripts/hardware_utils.py`, and `scripts/performance_analysis.py` use typed recoverable exception boundaries, so new broad `except Exception` recovery paths are treated as tooling regressions rather than accepted legacy cleanup.
 
 ## Intentional Differences
 
@@ -53,4 +53,3 @@ These were evaluated but not ported in this pass:
 - `codacy.yml`: defer until the repository has an intentional Codacy project token and a decision about whether Codacy should upload repository-owned OpenGrep/Semgrep findings in addition to `.github/workflows/semgrep-sarif.yml`.
 - `validate-examples`: defer until example outputs have stable, documented success markers. For now, `just examples` validates compilation and successful execution of all discovered examples.
 - broad no-`unwrap`/`panic` Semgrep rules: defer because current production and doctest code intentionally uses many invariant checks and examples. These need a separate cleanup plan before becoming blocking policy.
-- broad Python exception coverage for all scripts: defer until the benchmark, hardware, and performance-analysis scripts have typed recoverable exception boundaries.

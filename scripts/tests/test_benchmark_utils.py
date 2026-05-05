@@ -568,7 +568,7 @@ Time: [1.0, 1.0, 1.0] µs
     @patch("benchmark_utils.get_git_commit_hash")
     def test_prepare_comparison_metadata_git_failure(self, mock_git, comparator, sample_baseline_content):
         """Test metadata preparation when git command fails."""
-        mock_git.side_effect = Exception("Git not available")
+        mock_git.side_effect = subprocess.CalledProcessError(1, ["git", "rev-parse"], stderr="Git not available")
 
         metadata = comparator._prepare_comparison_metadata(sample_baseline_content)
 
@@ -1883,7 +1883,7 @@ class TestPerformanceSummaryGenerator:
     @patch("benchmark_utils.run_git_command")
     def test_get_current_version_no_tags(self, mock_git_command):
         """Test version detection when no tags are found."""
-        mock_git_command.side_effect = Exception("No tags found")
+        mock_git_command.side_effect = subprocess.CalledProcessError(1, ["git", "describe"], stderr="No tags found")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
@@ -1911,7 +1911,7 @@ class TestPerformanceSummaryGenerator:
     @patch("benchmark_utils.datetime")
     def test_get_version_date_fallback(self, mock_datetime, mock_git_command):
         """Test version date fallback to current date."""
-        mock_git_command.side_effect = Exception("Git command failed")
+        mock_git_command.side_effect = subprocess.CalledProcessError(1, ["git", "log"], stderr="Git command failed")
         mock_now = Mock()
         mock_now.strftime.return_value = "2024-01-15"
         mock_datetime.now.return_value = mock_now
@@ -2025,7 +2025,7 @@ Throughput: [8333.3, 9090.9, 10000.0] Kelem/s
     def test_generate_markdown_content(self, mock_datetime, mock_run_git, mock_git_commit):
         """Test generating complete markdown content."""
         # Avoid calling actual git in __init__ helpers
-        mock_run_git.side_effect = Exception("git unavailable in test")
+        mock_run_git.side_effect = subprocess.CalledProcessError(1, ["git"], stderr="git unavailable in test")
         mock_git_commit.return_value = "abc123def456"
         mock_now = Mock()
         mock_now.strftime.return_value = "2024-01-15 10:30:00 UTC"
@@ -2182,7 +2182,7 @@ Benchmark completed.""",
     @patch("benchmark_utils.run_cargo_command")
     def test_run_circumsphere_benchmarks_failure(self, mock_cargo, capsys):
         """Test handling circumsphere benchmark failures."""
-        mock_cargo.side_effect = Exception("Benchmark failed")
+        mock_cargo.side_effect = subprocess.CalledProcessError(1, ["cargo", "bench"], stderr="Benchmark failed")
 
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
@@ -2200,7 +2200,7 @@ Benchmark completed.""",
     @patch("benchmark_utils.run_git_command")
     def test_generate_summary_success(self, mock_git, capsys):
         """Test successful generation of performance summary."""
-        mock_git.side_effect = Exception("git unavailable in test")
+        mock_git.side_effect = subprocess.CalledProcessError(1, ["git"], stderr="git unavailable in test")
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
             generator = PerformanceSummaryGenerator(project_root)
@@ -2325,8 +2325,8 @@ Benchmark completed.""",
                 patch("benchmark_utils.run_git_command") as mock_git,
                 patch("benchmark_utils.get_git_commit_hash") as mock_commit,
             ):
-                mock_git.side_effect = Exception("Git not available")
-                mock_commit.side_effect = Exception("Git not available")
+                mock_git.side_effect = subprocess.CalledProcessError(1, ["git"], stderr="Git not available")
+                mock_commit.side_effect = subprocess.CalledProcessError(1, ["git", "rev-parse"], stderr="Git not available")
 
                 generator = PerformanceSummaryGenerator(project_root)
                 success = generator.generate_summary(output_file)

@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, TextIO
 from urllib.parse import urlparse
 from uuid import uuid4
 
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 logger = logging.getLogger(__name__)
 
@@ -182,7 +182,7 @@ class PerformanceSummaryGenerator:
             print(f"📊 Generated performance summary: {output_path}")
             return True
 
-        except Exception as e:
+        except OSError as e:
             print(f"❌ Failed to generate performance summary: {e}", file=sys.stderr)
             return False
 
@@ -215,7 +215,7 @@ class PerformanceSummaryGenerator:
             commit_hash = get_git_commit_hash(cwd=self.project_root)
             if commit_hash and commit_hash != "unknown":
                 lines.append(f"**Git Commit**: {commit_hash}")
-        except Exception as e:
+        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
             logging.debug("Could not get git commit hash: %s", e)
 
         # Add hardware information
@@ -230,7 +230,7 @@ class PerformanceSummaryGenerator:
                     f"**Rust**: {hw_info['RUST']}",
                 ],
             )
-        except Exception as e:
+        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, KeyError, OSError, ValueError) as e:
             logging.debug("Could not get hardware info: %s", e)
             lines.append("**Hardware**: Unknown")
 
@@ -281,7 +281,7 @@ class PerformanceSummaryGenerator:
             if result.startswith("v"):
                 return result[1:]  # Remove 'v' prefix
             return "unknown"
-        except Exception:
+        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
             # Fallback: try to get any recent tag
             try:
                 cp = run_git_command(["tag", "-l", "--sort=-version:refname"], cwd=self.project_root)
@@ -292,7 +292,7 @@ class PerformanceSummaryGenerator:
                         if tag.startswith("v") and len(tag) > 1:
                             return tag[1:]
                 return "unknown"
-            except Exception:
+            except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
                 return "unknown"
 
     def _get_version_date(self) -> str:
@@ -313,7 +313,7 @@ class PerformanceSummaryGenerator:
 
             # Fallback to current date
             return datetime.now(UTC).strftime("%Y-%m-%d")
-        except Exception:
+        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
             return datetime.now(UTC).strftime("%Y-%m-%d")
 
     def _run_circumsphere_benchmarks(self) -> tuple[bool, dict[str, str] | None]:
@@ -340,7 +340,7 @@ class PerformanceSummaryGenerator:
             print("✅ Circumsphere benchmarks completed successfully")
             return True, numerical_accuracy_data
 
-        except Exception as e:
+        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
             print(f"❌ Error running circumsphere benchmarks: {e}")
             return False, None
 
@@ -382,7 +382,7 @@ class PerformanceSummaryGenerator:
 
             return accuracy_data if accuracy_data else None
 
-        except Exception:
+        except ValueError:
             return None
 
     def _get_numerical_accuracy_analysis(self) -> list[str]:
@@ -594,7 +594,7 @@ class PerformanceSummaryGenerator:
                 mean_ns = estimates["mean"]["point_estimate"]
                 return CircumspherePerformanceData(method=method_name, time_ns=mean_ns)
 
-            except Exception as e:
+            except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
                 print(f"⚠️ Could not parse {estimates_file}: {e}")
 
         return None
@@ -853,7 +853,7 @@ class PerformanceSummaryGenerator:
             if benchmarks:
                 lines.extend(format_benchmark_tables(benchmarks))
 
-        except Exception as e:
+        except (OSError, TypeError, ValueError) as e:
             lines.extend(
                 [
                     "### Baseline Results",
@@ -902,7 +902,7 @@ class PerformanceSummaryGenerator:
                     ],
                 )
 
-        except Exception:
+        except OSError:
             lines.extend(
                 [
                     "### Comparison Results",
@@ -1461,7 +1461,7 @@ class BaselineGenerator:
                 print("=== end stdout ===\n", file=sys.stderr)
             logging.exception("Error in generate_baseline")
             return False
-        except Exception:
+        except (ExecutableNotFoundError, OSError, ValueError):
             logging.exception("Error in generate_baseline")
             return False
 
@@ -1475,7 +1475,7 @@ class BaselineGenerator:
         try:
             # Use secure subprocess wrapper for git command
             git_commit = get_git_commit_hash(cwd=self.project_root)
-        except Exception:
+        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
             git_commit = "unknown"
 
         hardware_info = self.hardware.format_hardware_info(cwd=self.project_root)
@@ -1586,7 +1586,7 @@ class PerformanceComparator:
             self._write_error_file(output_file, "Benchmark execution error", str(e))
             logging.exception("Error in compare_with_baseline")
             return False, False
-        except Exception as e:
+        except (ExecutableNotFoundError, OSError, ValueError) as e:
             self._write_error_file(output_file, "Benchmark execution error", str(e))
             logging.exception("Error in compare_with_baseline")
             return False, False
@@ -1699,7 +1699,7 @@ class PerformanceComparator:
 
         try:
             git_commit = get_git_commit_hash(cwd=self.project_root)
-        except Exception:
+        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
             git_commit = "unknown"
 
         # Parse baseline metadata
@@ -1937,7 +1937,7 @@ class PerformanceComparator:
                 f.write(f"Details: {error_detail}\n\n")
                 f.write("This error prevented the benchmark comparison from completing successfully.\n")
                 f.write("Please check the CI logs for more information.\n")
-        except Exception:
+        except OSError:
             logging.exception("Failed to write error file")
 
 
@@ -2016,7 +2016,7 @@ class WorkflowHelper:
             print(f"📦 Created metadata file: {metadata_file}")
             return True
 
-        except Exception as e:
+        except (OSError, TypeError, ValueError) as e:
             print(f"❌ Failed to create metadata: {e}", file=sys.stderr)
             return False
 
@@ -2052,7 +2052,7 @@ class WorkflowHelper:
 
             return True
 
-        except Exception as e:
+        except (OSError, UnicodeError) as e:
             print(f"❌ Failed to display baseline summary: {e}", file=sys.stderr)
             return False
 
@@ -2222,7 +2222,7 @@ class BenchmarkRegressionHelper:
                     version = Version(version_str)
                     # Valid version: priority 1 (sorts first when reversed)
                     return (1, version, p.name)
-                except Exception as e:
+                except InvalidVersion as e:
                     # Invalid version format, treat as non-semver
                     logging.debug("Invalid version format in %s: %s", p.name, e)
             # Fallback: put non-matching names last (priority 0, sorts after valid versions when reversed)
@@ -2358,7 +2358,7 @@ class BenchmarkRegressionHelper:
 
         except subprocess.CalledProcessError:
             return False, "baseline_commit_not_found"
-        except Exception:
+        except (ExecutableNotFoundError, subprocess.TimeoutExpired, OSError, ValueError):
             return False, "error_checking_changes"
 
     @staticmethod
@@ -2425,7 +2425,7 @@ class BenchmarkRegressionHelper:
             print("✅ No significant performance regressions detected")
             return True
 
-        except Exception as e:
+        except (ProjectRootNotFoundError, OSError, ValueError) as e:
             print(f"❌ Error running regression test: {e}", file=sys.stderr)
             return False
 

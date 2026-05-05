@@ -13,7 +13,6 @@ use crate::errors::CdtError;
 use crate::geometry::CdtTriangulation2D;
 use crate::geometry::backends::delaunay::{DelaunayFaceHandle, DelaunayVertexHandle};
 use crate::geometry::traits::{EdgeAdjacentFaces, TriangulationMut, TriangulationQuery};
-use num_traits::ToPrimitive;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 /// Types of ergodic moves available in 2D CDT.
@@ -187,8 +186,12 @@ impl MoveStatistics {
 }
 
 /// Converts an accumulated move counter to a finite value for rate reporting.
-fn count_to_f64(count: u64) -> f64 {
-    count.to_f64().map_or(f64::MAX, |value| value)
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "move counters are converted only for aggregate acceptance-rate reporting"
+)]
+const fn count_to_f64(count: u64) -> f64 {
+    count as f64
 }
 
 /// Ergodic move system for CDT triangulations.
