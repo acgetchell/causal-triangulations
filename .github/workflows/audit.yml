@@ -46,7 +46,7 @@ jobs:
           restore-keys: advisory-db-${{ runner.os }}-v1-
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@1f2425cdb59f8fffb99ee16a5968edf6f57a2b93 # v2.75.24
+        uses: taiki-e/install-action@cca35edeb1d01366c2843b68fc3ca441446d73d3 # v2.77.1
         with:
           tool: cargo-audit@0.22.1
 
