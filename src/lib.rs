@@ -16,8 +16,7 @@
 //! - 2D Regge Action calculation for CDT
 //! - Foliated 2D triangulation construction and validation
 //! - Foliation-aware 2D ergodic moves backed by bistellar flips
-//! - Planned Metropolis-Hastings sampling integration once rejected-move
-//!   rollback is implemented
+//! - Metropolis-Hastings sampling over foliation-aware 2D ergodic moves
 //!
 //! # Example
 //!
@@ -93,8 +92,8 @@ pub use cdt::action::{ActionConfig, compute_regge_action};
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
 pub use cdt::foliation::{CellType, EdgeType, Foliation};
 pub use cdt::metropolis::{
-    CdtProposal, CdtTarget, Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
-    SimulationResultsBackend,
+    CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget, Measurement,
+    MetropolisAlgorithm, MetropolisConfig, MonteCarloStep, SimulationResultsBackend,
 };
 pub use config::{CdtConfig, CdtTopology, TestConfig};
 pub use errors::{CdtError, CdtResult};
@@ -149,8 +148,34 @@ pub mod prelude {
     }
 
     /// Focused exports for crate error handling.
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::errors::CdtError;
+    ///
+    /// let err = CdtError::MetropolisMoveApplicationFailed {
+    ///     step: 3,
+    ///     move_type: "Move31Remove".to_string(),
+    ///     attempts: 8,
+    ///     last_failure: "no geometrically valid candidate site found".to_string(),
+    /// };
+    /// assert!(format!("{err}").contains("Metropolis accepted Move31Remove"));
+    /// ```
     pub mod errors {
         pub use crate::errors::{CdtError, CdtResult};
+    }
+
+    /// Focused exports for CDT action calculations.
+    ///
+    /// ```
+    /// use approx::assert_relative_eq;
+    /// use causal_triangulations::prelude::action::*;
+    ///
+    /// let config = ActionConfig::new(2.0, 1.5, 0.2);
+    /// let action = config.calculate_action(5, 10, 8);
+    /// assert_relative_eq!(action, -20.0, epsilon = 1e-12);
+    /// ```
+    pub mod action {
+        pub use crate::cdt::action::{ActionConfig, compute_regge_action};
     }
 
     /// Focused exports for CDT triangulation construction and queries.
@@ -192,13 +217,17 @@ pub mod prelude {
     }
 
     /// Focused exports for running CDT simulations.
+    ///
+    /// This prelude includes the Metropolis runner, delayed proposal adapter,
+    /// telemetry structs, and typed proposal errors needed by MCMC workflows.
     pub mod simulation {
         pub use crate::CdtTriangulation;
         pub use crate::cdt::action::{ActionConfig, compute_regge_action};
         pub use crate::cdt::ergodic_moves::MoveType;
         pub use crate::cdt::metropolis::{
-            CdtProposal, CdtTarget, Measurement, MetropolisAlgorithm, MetropolisConfig,
-            MonteCarloStep, SimulationResultsBackend,
+            CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget,
+            Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
+            SimulationResultsBackend,
         };
         pub use crate::config::{CdtConfig, CdtTopology};
         pub use crate::errors::{CdtError, CdtResult};
@@ -357,6 +386,7 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
         Ok(SimulationResultsBackend {
             config: config.to_metropolis_config(),
             action_config: config.to_action_config(),
+            move_stats: MoveStatistics::new(),
             steps: vec![],
             measurements: vec![Measurement {
                 step: 0,
@@ -504,19 +534,13 @@ mod lib_tests {
     }
 
     #[test]
-    fn test_run_simulation_rejects_simulate_until_real_moves_land() {
+    fn test_run_simulation_with_real_moves() {
         let mut config = create_test_config();
         config.simulate = true;
 
-        let result = run_simulation(&config);
-        assert!(matches!(
-            result,
-            Err(CdtError::UnsupportedOperation {
-                ref operation,
-                ref reason,
-            }) if operation == "MetropolisAlgorithm::run"
-                && reason.contains("real CDT ergodic moves are not implemented yet")
-        ));
+        let results = run_simulation(&config).expect("simulation should run with real moves");
+        assert_eq!(results.steps.len(), usize::try_from(config.steps).unwrap());
+        assert!(!results.measurements.is_empty());
     }
 
     #[test]

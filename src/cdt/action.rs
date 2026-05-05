@@ -32,10 +32,11 @@ use crate::errors::{CdtError, CdtResult};
 /// # Examples
 ///
 /// ```
-/// use causal_triangulations::cdt::action::compute_regge_action;
+/// use approx::assert_relative_eq;
+/// use causal_triangulations::prelude::action::compute_regge_action;
 ///
 /// let action = compute_regge_action(10, 20, 15, 1.0, 1.0, 0.1);
-/// assert!((action + 23.0).abs() < 1e-12);
+/// assert_relative_eq!(action, -23.0, epsilon = 1e-12);
 /// ```
 #[must_use]
 pub fn compute_regge_action(
@@ -81,10 +82,11 @@ impl ActionConfig {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::ActionConfig;
+    /// use approx::assert_relative_eq;
+    /// use causal_triangulations::prelude::action::ActionConfig;
     ///
     /// let config = ActionConfig::new(2.0, 1.5, 0.2);
-    /// assert!((config.coupling_0 - 2.0).abs() < f64::EPSILON);
+    /// assert_relative_eq!(config.coupling_0, 2.0);
     /// ```
     #[must_use]
     pub const fn new(coupling_0: f64, coupling_2: f64, cosmological_constant: f64) -> Self {
@@ -105,7 +107,7 @@ impl ActionConfig {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::ActionConfig;
+    /// use causal_triangulations::prelude::action::ActionConfig;
     ///
     /// assert!(ActionConfig::default().validate().is_ok());
     /// assert!(ActionConfig::new(f64::NAN, 1.0, 0.1).validate().is_err());
@@ -121,11 +123,12 @@ impl ActionConfig {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::ActionConfig;
+    /// use approx::assert_relative_eq;
+    /// use causal_triangulations::prelude::action::ActionConfig;
     ///
     /// let config = ActionConfig::new(2.0, 1.5, 0.2);
     /// let action = config.calculate_action(5, 10, 8);
-    /// assert!((action + 20.0).abs() < 1e-12);
+    /// assert_relative_eq!(action, -20.0, epsilon = 1e-12);
     /// ```
     #[must_use]
     pub fn calculate_action(&self, vertices: u32, edges: u32, triangles: u32) -> f64 {
@@ -203,6 +206,7 @@ mod tests {
 #[cfg(test)]
 mod prop_tests {
     use super::*;
+    use approx::relative_eq;
     use proptest::prelude::*;
 
     proptest! {
@@ -236,9 +240,21 @@ mod prop_tests {
             let config = ActionConfig::new(coupling_0, coupling_2, cosmological_constant);
 
             // Config should preserve values
-            prop_assert!((config.coupling_0 - coupling_0).abs() < f64::EPSILON);
-            prop_assert!((config.coupling_2 - coupling_2).abs() < f64::EPSILON);
-            prop_assert!((config.cosmological_constant - cosmological_constant).abs() < f64::EPSILON);
+            prop_assert!(relative_eq!(
+                config.coupling_0,
+                coupling_0,
+                epsilon = f64::EPSILON
+            ));
+            prop_assert!(relative_eq!(
+                config.coupling_2,
+                coupling_2,
+                epsilon = f64::EPSILON
+            ));
+            prop_assert!(relative_eq!(
+                config.cosmological_constant,
+                cosmological_constant,
+                epsilon = f64::EPSILON
+            ));
 
             // Config-based calculation should match direct function call
             let action_config = config.calculate_action(vertices, edges, triangles);
@@ -248,7 +264,7 @@ mod prop_tests {
             );
 
             prop_assert!(
-                (action_config - action_direct).abs() < f64::EPSILON,
+                relative_eq!(action_config, action_direct, epsilon = f64::EPSILON),
                 "Config-based and direct calculations should match: {} vs {}",
                 action_config, action_direct
             );

@@ -27,6 +27,11 @@ use delaunay::topology::traits::{GlobalTopology, TopologyKind};
 use delaunay::triangulation::DelaunayTriangulation;
 use std::collections::HashMap;
 
+type DelaunayKernel = AdaptiveKernel<f64>;
+type RawTriangulation<VertexData, CellData, const D: usize> =
+    DelaunayTriangulation<DelaunayKernel, VertexData, CellData, D>;
+type RawVertex<VertexData, const D: usize> = Vertex<f64, VertexData, D>;
+
 /// Delaunay backend wrapping the delaunay crate's triangulation (f64 coordinates).
 ///
 /// # Mutation support
@@ -35,10 +40,10 @@ use std::collections::HashMap;
 /// are backed by the upstream Delaunay edit API where possible. `move_vertex()` is not yet
 /// implemented and returns [`DelaunayError::NotImplemented`]. The `clear()` and
 /// `reserve_capacity()` methods are currently no-ops that emit a `log::warn!` diagnostic.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DelaunayBackend<VertexData: DataType, CellData: DataType, const D: usize> {
     /// The underlying Delaunay triangulation from the delaunay crate
-    dt: DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D>,
+    dt: RawTriangulation<VertexData, CellData, D>,
     /// Interior 2D edge to one incident facet suitable for k=2 local queries.
     interior_facets_by_edge: HashMap<EdgeKey, FacetHandle>,
 }
@@ -193,7 +198,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
         coords: &[f64],
         data: Option<VertexData>,
         operation: &'static str,
-    ) -> Result<Vertex<f64, VertexData, D>, DelaunayError> {
+    ) -> Result<RawVertex<VertexData, D>, DelaunayError> {
         let coords: [f64; D] =
             coords
                 .try_into()
@@ -220,7 +225,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
 
     /// Builds the 2D interior edge-facet lookup from current cell adjacency.
     fn build_interior_facets_by_edge(
-        dt: &DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D>,
+        dt: &RawTriangulation<VertexData, CellData, D>,
     ) -> HashMap<EdgeKey, FacetHandle> {
         let mut facets_by_edge = HashMap::new();
         if D != 2 {

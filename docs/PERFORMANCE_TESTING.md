@@ -217,7 +217,7 @@ The CI will:
 
 ### Variable Benchmarks (Relaxed Thresholds)
 
-- **Metropolis Guardrails**: Current `MetropolisAlgorithm::run()` unsupported-operation path while real CDT move kernels are pending
+- **Metropolis Simulation**: Short `MetropolisAlgorithm::run()` paths over real CDT move kernels
 - **File I/O Operations**: System-dependent operations
 
 ## Performance Optimization Workflow

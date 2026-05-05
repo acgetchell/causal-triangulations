@@ -335,7 +335,7 @@ impl Error for FoliationError {}
 /// Time labels are stored on vertices directly (as vertex data in the
 /// Delaunay triangulation). This struct tracks only the per-slice vertex
 /// counts and the total number of slices.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Foliation {
     /// Number of vertices per time slice (`slice_sizes[t]`).
     slice_sizes: Vec<usize>,

@@ -18,7 +18,7 @@ src/
     ├── triangulation.rs # CdtTriangulation core type, factory constructors, foliation queries
     ├── foliation.rs     # Foliation struct, EdgeType enum, per-vertex time labels
     ├── action.rs        # Regge action calculation
-    ├── metropolis.rs    # Metropolis-Hastings algorithm (uses markov-chain-monte-carlo crate)
+    ├── metropolis.rs    # Metropolis-Hastings algorithm (proposal-before-mutation loop)
     └── ergodic_moves.rs # Ergodic moves (2,2), (1,3), (3,1)
 ```
 
@@ -61,6 +61,10 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 - Wired through `CdtConfig.topology`, `CdtConfigOverrides.topology`, the CLI `--topology` flag, and `CdtMetadata.topology`
 - `run_simulation()` dispatches on topology: `Toroidal` → `from_toroidal_cdt`, `OpenBoundary` → `from_seeded_points` / `from_random_points`
 
+### `cdt/metropolis.rs` — Metropolis move ordering
+
+`MetropolisAlgorithm::run()` proposes a move type, computes `ΔS` from the move's simplex-count delta, accepts or rejects the proposal, and only mutates the triangulation after acceptance. Accepted applications that fail are rolled back from a triangulation snapshot and retried at another random local site; retry exhaustion is recorded as a rejection, while hard backend failures remain structured errors. See `docs/metropolis.md` for the detailed ordering.
+
 ### `geometry/generators.rs` — Delaunay triangulation generators
 
 - `generate_delaunay2` — builds a 2D Delaunay triangulation with optional seed
@@ -81,5 +85,5 @@ Together with `backends/delaunay.rs`, this module is the only place that directl
 ## Key Dependencies
 
 - `delaunay` (v0.7.6) — geometry backend (Delaunay triangulations, vertex data for time labels, `set_vertex_data_by_key` for O(1) label mutation)
-- `markov-chain-monte-carlo` — MCMC framework (`Chain::step_mut`, `ProposalMut`, `Target`)
+- `markov-chain-monte-carlo` (v0.3) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, `Target`)
 - `num-traits` — `ToPrimitive` for safe float→integer conversion
