@@ -4,7 +4,7 @@ This directory contains Python and shell tooling used by the CDT repository. Whe
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.12+
 - `uv`
 
 Install dev dependencies:
@@ -21,13 +21,14 @@ These are exposed via `pyproject.toml` so you can run them with `uv run ...`. Al
 
 ```bash
 just changelog
+just changelog-unreleased v0.1.0
 uv run postprocess-changelog --help
 uv run archive-changelog --help
 uv run tag-release v0.1.0 --help
-just changelog-tag v0.1.0
+just tag v0.1.0
 ```
 
-`just changelog` runs `git-cliff`, applies markdown hygiene, and archives completed minor release series under `docs/archive/changelog/`.
+`just changelog` runs `git-cliff`, applies markdown hygiene, and archives completed minor release series under `docs/archive/changelog/`. Use `just changelog-unreleased vX.Y.Z` while preparing a release PR before the final tag exists.
 
 ### Benchmark utilities
 

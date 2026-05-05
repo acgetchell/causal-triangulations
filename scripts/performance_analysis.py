@@ -3,7 +3,7 @@
 
 Provides detailed statistics, trend analysis, and regression detection.
 
-Requires Python 3.11+ for PEP 604 union types and datetime.UTC.
+Requires Python 3.12+.
 """
 
 import argparse
@@ -265,30 +265,24 @@ class PerformanceAnalyzer:
 
                 data_dict = cast("dict[str, object]", data)
 
-                def _point_estimate(
-                    section_name: str,
-                    *,
-                    _data: dict[str, object] = data_dict,
-                ) -> float:
-                    section = _data.get(section_name)
-                    if not isinstance(section, dict):
-                        return 0.0
-
-                    section_dict = cast("dict[str, object]", section)
-                    point_estimate = section_dict.get("point_estimate")
-                    return float(point_estimate) if isinstance(point_estimate, (int, float)) else 0.0
-
                 # Build benchmark name from path structure
                 # e.g., action_calculations/calculate_action/50/base/estimates.json
                 # becomes "action_calculations/calculate_action/50"
                 path_parts = estimates_file.relative_to(self.results_dir).parts[:-2]  # Remove '<run_type>/estimates.json'
                 benchmark_name: str = "/".join(path_parts)
 
+                mean_ns = self._point_estimate(data_dict, "mean", estimates_file, benchmark_name)
+                std_dev_ns = self._point_estimate(data_dict, "std_dev", estimates_file, benchmark_name)
+                median_ns = self._point_estimate(data_dict, "median", estimates_file, benchmark_name)
+                mad_ns = self._point_estimate(data_dict, "median_abs_dev", estimates_file, benchmark_name)
+                if mean_ns is None or std_dev_ns is None or median_ns is None or mad_ns is None:
+                    continue
+
                 estimate: CriterionEstimate = {
-                    "mean_ns": _point_estimate("mean"),
-                    "std_dev_ns": _point_estimate("std_dev"),
-                    "median_ns": _point_estimate("median"),
-                    "mad_ns": _point_estimate("median_abs_dev"),
+                    "mean_ns": mean_ns,
+                    "std_dev_ns": std_dev_ns,
+                    "median_ns": median_ns,
+                    "mad_ns": mad_ns,
                     "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
                 }
 
@@ -301,6 +295,22 @@ class PerformanceAnalyzer:
                 print(f"Warning: Could not parse {estimates_file}: {e}")
 
         return results
+
+    @staticmethod
+    def _point_estimate(data: dict[str, object], section_name: str, estimates_file: Path, benchmark_name: str) -> float | None:
+        """Extract a required Criterion point_estimate, warning on malformed input."""
+        section = data.get(section_name)
+        if not isinstance(section, dict):
+            print(f"Warning: Missing '{section_name}' section for '{benchmark_name}' in {estimates_file}")
+            return None
+
+        section_dict = cast("dict[str, object]", section)
+        point_estimate = section_dict.get("point_estimate")
+        if not isinstance(point_estimate, (int, float)):
+            print(f"Warning: Missing numeric '{section_name}.point_estimate' for '{benchmark_name}' in {estimates_file}")
+            return None
+
+        return float(point_estimate)
 
     def save_baseline(self, results: dict[str, CriterionEstimate], tag: str | None = None) -> Path:
         """Save current results as a baseline."""

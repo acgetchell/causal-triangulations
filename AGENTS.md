@@ -137,6 +137,8 @@ just ci
 
 Refer to `docs/dev/commands.md` for full details.
 
+For tooling-alignment work, update `docs/dev/tooling-alignment.md` with the comparison and rationale before adding or changing config, workflow, or repository-rule files.
+
 ---
 
 ## Testing Rules

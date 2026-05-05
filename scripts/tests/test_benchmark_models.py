@@ -216,6 +216,23 @@ Throughput: [8333.3, 9090.9, 10000.0] Kelem/s
         assert second.dimension == "3D"
         assert second.time_mean == 550.0
 
+    def test_extract_benchmark_data_skips_incomplete_sections(self, capsys) -> None:
+        """Test that missing or malformed timing rows do not create zero-valued benchmarks."""
+        baseline_content = """Date: 2024-01-15 10:30:00 UTC
+
+=== 1000 Points (2D) ===
+Throughput: [8000.0, 9090.9, 10000.0] Kelem/s
+
+=== 5000 Points (3D) ===
+Time: [500.0, 550.0, 600.0] µs
+"""
+
+        benchmarks = extract_benchmark_data(baseline_content)
+
+        assert len(benchmarks) == 1
+        assert benchmarks[0].points == 5000
+        assert "skipping incomplete benchmark section for 1000 Points (2D)" in capsys.readouterr().out
+
     def test_parse_benchmark_header(self):
         """Test parsing benchmark header lines."""
         # Valid header

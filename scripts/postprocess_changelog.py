@@ -189,6 +189,12 @@ def _compact_entry(line: str, *, strip_breaking: bool = False) -> str:
     return result
 
 
+def _append_unique(entries: list[str], entry: str) -> None:
+    """Append *entry* to *entries* only once, preserving first-seen order."""
+    if entry not in entries:
+        entries.append(entry)
+
+
 def _extract_section_summaries(
     section: list[str],
 ) -> tuple[list[str], list[str]]:
@@ -219,9 +225,9 @@ def _extract_section_summaries(
         has_pr = bool(_PR_LINK_RE.search(sline))
 
         if is_breaking:
-            breaking_entries.append(_compact_entry(sline, strip_breaking=True))
+            _append_unique(breaking_entries, _compact_entry(sline, strip_breaking=True))
         if has_pr:
-            pr_entries.append(_compact_entry(sline, strip_breaking=True))
+            _append_unique(pr_entries, _compact_entry(sline, strip_breaking=True))
 
     return pr_entries, breaking_entries
 

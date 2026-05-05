@@ -123,10 +123,20 @@ def coverage_entries(root: ET.Element) -> Iterable[CoverageEntry]:
         if not coverable:
             continue
 
-        covered = sum(1 for line in lines if int(line.get("hits", "0")) > 0)
+        covered = sum(1 for line in lines if _line_hits(line, raw_path) > 0)
         path = Path(raw_path)
         coverage = (covered / coverable) * 100
         yield CoverageEntry(coverage=coverage, coverable=coverable, covered=covered, path=path)
+
+
+def _line_hits(line: ET.Element, raw_path: str) -> int:
+    """Return a Cobertura line hit count or fail with file and line context."""
+    raw_hits = line.get("hits", "0")
+    try:
+        return int(raw_hits)
+    except ValueError as exc:
+        line_number = line.get("number", "unknown")
+        raise SystemExit(f"Coverage report has non-integer hits value for {raw_path}:{line_number}: {raw_hits!r}") from exc
 
 
 def filter_entries(

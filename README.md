@@ -94,7 +94,8 @@ just run-example     # Basic simulation
 **Repository tooling (via `just`):**
 
 - `just changelog` - Regenerate `CHANGELOG.md`
-- `just changelog-tag v0.1.0` - Create an annotated git tag from changelog content
+- `just changelog-unreleased v0.1.0` - Generate a release changelog before the final tag exists
+- `just tag v0.1.0` - Create an annotated git tag from changelog content
 - `just perf-help` - Show performance analysis commands (`perf-baseline`, `perf-check`, etc.)
 
 ## 📋 Examples

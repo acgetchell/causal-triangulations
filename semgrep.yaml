@@ -96,6 +96,32 @@ rules:
               ...
           }
 
+  - id: causal-triangulations.rust.no-nonfinite-unwrap-defaults
+    languages:
+      - rust
+    severity: WARNING
+    message: "Do not hide failed floating-point conversion with NaN or infinity defaults."
+    metadata:
+      category: correctness
+      rationale: >-
+        CDT acceptance rates and probability-like calculations should reject or
+        handle failed numeric conversion explicitly instead of substituting
+        non-finite values.
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+    pattern-either:
+      - pattern: $VALUE.unwrap_or(f64::NAN)
+      - pattern: $VALUE.unwrap_or(f64::INFINITY)
+      - pattern: $VALUE.unwrap_or(f64::NEG_INFINITY)
+      - pattern: $VALUE.unwrap_or(std::f64::NAN)
+      - pattern: $VALUE.unwrap_or(std::f64::INFINITY)
+      - pattern: $VALUE.unwrap_or(std::f64::NEG_INFINITY)
+      - pattern: $VALUE.unwrap_or_else(|| f64::NAN)
+      - pattern: $VALUE.unwrap_or_else(|| f64::INFINITY)
+      - pattern: $VALUE.unwrap_or_else(|| f64::NEG_INFINITY)
+
   - id: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
     languages:
       - rust

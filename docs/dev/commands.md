@@ -111,6 +111,8 @@ This runs:
 
 Repository-owned Semgrep rules live in `semgrep.yaml`. They encode focused project invariants that are not already covered by Rust, Clippy, Ruff, or ShellCheck.
 
+When adding or changing a Semgrep rule, add a matching fixture under `tests/semgrep/` and keep `just semgrep-test` passing. Rules ported from `markov-chain-monte-carlo` must be adapted to CDT naming, paths, and architecture constraints rather than copied mechanically.
+
 Commands:
 
 ```bash
@@ -250,6 +252,8 @@ jq empty file.json
 
 Workflows must pass `actionlint`.
 
+The repository has separate workflows for full CI, dependency audit, Codecov coverage, repository-rule SARIF upload, Clippy SARIF, performance checks, and CodeQL analysis. Do not add another external analysis workflow unless it has a distinct signal and required secrets are configured for this repository.
+
 Run with:
 
 ```bash
@@ -329,8 +333,14 @@ just changelog
 
 This runs `git-cliff`, applies the Python postprocessor, and archives completed minor release series under `docs/archive/changelog/`.
 
-Create annotated release tags from the generated changelog with:
+For release PRs, generate the changelog for a version before the final tag exists with:
 
 ```bash
-just changelog-tag v0.1.0
+just changelog-unreleased v0.1.0
+```
+
+Create annotated release tags from the generated changelog after the release PR is merged with:
+
+```bash
+just tag v0.1.0
 ```

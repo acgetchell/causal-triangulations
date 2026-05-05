@@ -44,6 +44,17 @@ pub fn env_gated_stdio() {
     }
 }
 
+fn nonfinite_conversion_default_fixture(value: Option<f64>) {
+    // ruleid: causal-triangulations.rust.no-nonfinite-unwrap-defaults
+    let _ = value.unwrap_or(f64::INFINITY);
+
+    // ruleid: causal-triangulations.rust.no-nonfinite-unwrap-defaults
+    let _ = value.unwrap_or_else(|| f64::NAN);
+
+    // ok: causal-triangulations.rust.no-nonfinite-unwrap-defaults
+    let _ = value.unwrap_or(f64::MAX);
+}
+
 // ruleid: causal-triangulations.rust.expect-requires-reason
 #[expect(clippy::too_many_lines)]
 fn expect_without_reason_fixture() {}
