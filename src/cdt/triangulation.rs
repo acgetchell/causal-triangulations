@@ -1840,7 +1840,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn time_label(&self, vertex: &DelaunayVertexHandle) -> Option<u32> {
-        self.foliation()?;
+        self.foliation.as_ref()?;
         self.geometry.vertex_data_by_key(vertex.vertex_key())
     }
 
@@ -1857,7 +1857,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn vertices_at_time(&self, t: u32) -> Vec<DelaunayVertexHandle> {
-        if !self.has_foliation() {
+        if self.foliation.is_none() {
             return vec![];
         }
         self.geometry
@@ -1988,7 +1988,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn edge_type(&self, edge: &DelaunayEdgeHandle) -> Option<EdgeType> {
-        self.foliation()?;
+        self.foliation.as_ref()?;
 
         let (v0, v1) = self.geometry.edge_endpoints(edge)?;
         let t0 = self.geometry.vertex_data_by_key(v0.vertex_key())?;
@@ -2024,7 +2024,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn cell_type(&self, face: &DelaunayFaceHandle) -> Option<CellType> {
-        self.foliation()?;
+        self.foliation.as_ref()?;
         let verts = self.geometry.face_vertices(face).ok()?;
         if verts.len() != 3 {
             return None;
@@ -2101,7 +2101,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn face_edge_types(&self, face: &DelaunayFaceHandle) -> Option<[EdgeType; 3]> {
-        self.foliation()?;
+        self.foliation.as_ref()?;
 
         let verts = self.geometry.face_vertices(face).ok()?;
         if verts.len() != 3 {
@@ -2149,7 +2149,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///     .expect("all strip cells classify");
     /// ```
     pub fn validate_cell_classification(&self) -> CdtResult<()> {
-        if !self.has_foliation() {
+        if self.foliation.is_none() {
             return Ok(());
         }
 
@@ -2198,7 +2198,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// assert!(classified > 0);
     /// ```
     pub fn classify_all_cells(&mut self) -> CdtResult<Option<usize>> {
-        if !self.has_foliation() {
+        if self.foliation.is_none() {
             return Ok(None);
         }
 
@@ -4177,6 +4177,41 @@ mod tests {
 
         tri.validate_cell_classification()
             .expect("missing foliation should validate vacuously");
+    }
+
+    #[test]
+    fn test_validate_and_classify_use_stored_foliation_after_mutable_access() {
+        let mut tri = CdtTriangulation::from_cdt_strip(4, 2).expect("Should build CDT strip");
+        let vertex = tri
+            .geometry()
+            .vertices()
+            .next()
+            .expect("CDT strip should contain vertices")
+            .vertex_key();
+        let label = tri
+            .geometry()
+            .vertex_data_by_key(vertex)
+            .expect("CDT strip vertices should be labeled");
+
+        {
+            let mut geometry_mut = tri.geometry_mut();
+            let _previous = geometry_mut
+                .set_vertex_data_by_key(vertex, Some(label))
+                .expect("Expected valid vertex key while preserving label");
+        }
+
+        assert!(
+            !tri.has_foliation(),
+            "mutable backend access should invalidate synchronized foliation bookkeeping"
+        );
+        tri.validate_cell_classification()
+            .expect("stored foliation should still drive live cell validation");
+
+        let classified = tri
+            .classify_all_cells()
+            .expect("stored foliation should still drive live cell classification")
+            .expect("foliation is still present");
+        assert_eq!(classified, tri.face_count());
     }
 
     #[test]

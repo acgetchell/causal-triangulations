@@ -6,14 +6,14 @@ Per-vertex time labels, edge classification, and causal validation for 1+1 CDT.
 
 In Causal Dynamical Triangulations (Ambjørn, Jurkiewicz, Loll 2001), spacetime is built from simplices arranged in a **foliation** — a layered structure where each time slice is a spatial manifold and adjacent slices are connected by timelike edges.
 
-For 1+1 CDT:
+For the periodic 1+1 CDT cases:
 
 - **Spatial topology**: S¹ (circle) — each time slice is a ring of spacelike edges
 - **Time direction**: [0, T] (cylinder) or S¹ (torus, periodic time)
 - **Edge classification**: spacelike (both endpoints at same t) or timelike (endpoints at t and t±1)
 - **Causality constraint**: no edge may span more than one time slice (|Δt| ≤ 1)
 
-This implementation supports explicit open-boundary strips and explicit toroidal meshes. `from_cdt_strip()` builds an open spatial interval over discrete time, while `from_toroidal_cdt()` builds S¹ × S¹ with periodic space and time.
+This implementation also supports open-boundary strip variants. `from_toroidal_cdt()` builds the periodic S¹ × S¹ toroidal case, while `from_cdt_strip()` builds open spatial-interval strip geometries over discrete time. Both constructor families use the same edge classification and causality constraint, but their topology metadata and boundary expectations differ.
 
 ## Architecture
 

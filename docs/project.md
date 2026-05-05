@@ -57,7 +57,7 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 - `from_toroidal_cdt(vertices_per_slice, num_slices)` — explicit S¹×S¹ toroidal CDT (χ = 0); requires `vertices_per_slice ≥ 3` and `num_slices ≥ 3`
 - `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`
-- Validation: `validate_topology()` (χ expectation depends on `CdtTopology`), `validate_foliation()` (structural; closed S¹ spacelike rings on toroidal), `validate_causality()` (no edge spans >1 slice)
+- Validation: `validate_topology()` (χ expectation depends on `CdtTopology`), `validate_foliation()` (structural; closed S¹ spacelike rings on toroidal), `validate_causality()` (no edge spans >1 slice), `validate_cell_classification()` (strict Up/Down cell classification and validation pass)
 
 ### `config.rs` — `CdtTopology` enum
 
