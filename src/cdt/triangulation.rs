@@ -114,6 +114,65 @@ fn remap_strip_generation_error(
     }
 }
 
+/// Builds a CDT-level generation error for explicit strip construction failures.
+const fn strip_generation_error(
+    total_vertices: u32,
+    coordinate_max: f64,
+    underlying_error: String,
+) -> CdtError {
+    CdtError::DelaunayGenerationFailed {
+        vertex_count: total_vertices,
+        coordinate_range: (0.0, coordinate_max),
+        attempt: 1,
+        underlying_error,
+    }
+}
+
+/// Verifies that the explicit strip builder returned the requested mesh size.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "count mismatch diagnostics preserve both requested CDT parameters and expected builder counts"
+)]
+fn validate_strip_counts(
+    backend: &DelaunayBackend2D,
+    total_vertices: u32,
+    total_cells: u32,
+    expected_vertices: usize,
+    expected_faces: usize,
+    vertices_per_slice: u32,
+    num_slices: u32,
+    coordinate_max: f64,
+) -> CdtResult<()> {
+    if backend.vertex_count() != expected_vertices {
+        return Err(strip_generation_error(
+            total_vertices,
+            coordinate_max,
+            format!(
+                "build_delaunay2_from_cells()/from_cdt_strip() produced {} vertices, expected {} for vertices_per_slice={} and num_slices={}",
+                backend.vertex_count(),
+                total_vertices,
+                vertices_per_slice,
+                num_slices,
+            ),
+        ));
+    }
+    if backend.face_count() != expected_faces {
+        return Err(strip_generation_error(
+            total_vertices,
+            coordinate_max,
+            format!(
+                "build_delaunay2_from_cells()/from_cdt_strip() produced {} faces, expected {} for vertices_per_slice={} and num_slices={}",
+                backend.face_count(),
+                total_cells,
+                vertices_per_slice,
+                num_slices,
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
 /// Events in simulation history
 #[derive(Debug, Clone)]
 pub enum SimulationEvent {
@@ -1319,9 +1378,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// Returns [`CdtError::InvalidGenerationParameters`] if `vertices_per_slice < 4`,
     /// `num_slices < 2`, or the derived vertex or cell count overflows `u32`.
-    /// Returns [`CdtError::DelaunayGenerationFailed`] if the underlying
-    /// explicit builder rejects the mesh, and [`CdtError::ValidationFailed`] if
-    /// the constructed strip fails CDT validation.
+    /// Returns [`CdtError::DelaunayGenerationFailed`] if constructor storage cannot
+    /// be reserved, if the underlying explicit builder rejects the mesh, or if
+    /// `build_delaunay2_from_cells()` returns a vertex or face count that does not
+    /// match the requested strip. Returns [`CdtError::Foliation`],
+    /// [`CdtError::CausalityViolation`], or [`CdtError::ValidationFailed`] if the
+    /// constructed strip fails CDT validation.
     ///
     /// # Examples
     ///
@@ -1334,6 +1396,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// assert_eq!(tri.face_count(), 6);
     /// assert!(tri.validate_cell_classification().is_ok());
     /// ```
+    #[expect(
+        clippy::too_many_lines,
+        reason = "explicit strip construction includes fallible allocation handling and post-build validation"
+    )]
     pub fn from_cdt_strip(vertices_per_slice: u32, num_slices: u32) -> CdtResult<Self> {
         if vertices_per_slice < 4 {
             return Err(CdtError::InvalidGenerationParameters {
@@ -1376,49 +1442,85 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     expected_range: "product ≤ u32::MAX".to_string(),
                 })?;
 
-        let n = vertices_per_slice as usize;
-        let t_count = num_slices as usize;
+        let coordinate_max = f64::from(num_slices - 1).max(1.0);
+        let generation_failed = |underlying_error: String| {
+            strip_generation_error(total_vertices, coordinate_max, underlying_error)
+        };
+
+        let expected_vertices =
+            usize::try_from(total_vertices).map_err(|err| generation_failed(err.to_string()))?;
+        let expected_faces =
+            usize::try_from(total_cells).map_err(|err| generation_failed(err.to_string()))?;
+
+        let n = usize::try_from(vertices_per_slice)
+            .map_err(|err| generation_failed(err.to_string()))?;
+        let t_count =
+            usize::try_from(num_slices).map_err(|err| generation_failed(err.to_string()))?;
         let index = |i: usize, t: usize| -> usize { t * n + i };
 
         let spacing = 1.0_f64 / f64::from(vertices_per_slice - 1);
-        let mut vertex_specs: Vec<([f64; 2], u32)> = Vec::with_capacity(total_vertices as usize);
+        let mut vertex_specs: Vec<([f64; 2], u32)> = Vec::new();
+        vertex_specs
+            .try_reserve_exact(expected_vertices)
+            .map_err(|err| {
+                generation_failed(format!(
+                    "from_cdt_strip() failed to reserve {expected_vertices} vertex specs for vertices_per_slice={vertices_per_slice}, num_slices={num_slices}: {err}"
+                ))
+            })?;
         for t in 0..num_slices {
             for i in 0..vertices_per_slice {
                 vertex_specs.push(([f64::from(i) * spacing, f64::from(t)], t));
             }
         }
 
-        let mut cells: Vec<Vec<usize>> = Vec::with_capacity(total_cells as usize);
+        let mut cells: Vec<[usize; 3]> = Vec::new();
+        cells.try_reserve_exact(expected_faces).map_err(|err| {
+            generation_failed(format!(
+                "from_cdt_strip() failed to reserve {expected_faces} triangle cells for vertices_per_slice={vertices_per_slice}, num_slices={num_slices}: {err}"
+            ))
+        })?;
         for t in 0..(t_count - 1) {
             let t_next = t + 1;
             for i in 0..(n - 1) {
                 let i_next = i + 1;
-                cells.push(vec![index(i, t), index(i_next, t), index(i, t_next)]);
-                cells.push(vec![
-                    index(i_next, t),
-                    index(i_next, t_next),
-                    index(i, t_next),
-                ]);
+                cells.push([index(i, t), index(i_next, t), index(i, t_next)]);
+                cells.push([index(i_next, t), index(i_next, t_next), index(i, t_next)]);
             }
         }
 
-        let coordinate_max = f64::from(num_slices - 1).max(1.0);
-        let dt = build_delaunay2_from_cells(&vertex_specs, &cells)
+        // delaunay 0.7.6 accepts explicit cells as Vec-backed index lists.
+        // Keep the strip working set compact, then adapt fallibly at the API boundary.
+        let mut cell_specs: Vec<Vec<usize>> = Vec::new();
+        cell_specs.try_reserve_exact(expected_faces).map_err(|err| {
+            generation_failed(format!(
+                "from_cdt_strip() failed to reserve {expected_faces} builder cell specs for build_delaunay2_from_cells(): {err}"
+            ))
+        })?;
+        for cell in &cells {
+            let mut cell_spec = Vec::new();
+            cell_spec.try_reserve_exact(3).map_err(|err| {
+                generation_failed(format!(
+                    "from_cdt_strip() failed to reserve a build_delaunay2_from_cells() triangle cell spec: {err}"
+                ))
+            })?;
+            cell_spec.extend_from_slice(cell);
+            cell_specs.push(cell_spec);
+        }
+
+        let dt = build_delaunay2_from_cells(&vertex_specs, &cell_specs)
             .map_err(|err| remap_strip_generation_error(err, total_vertices, coordinate_max))?;
 
         let backend = DelaunayBackend2D::from_triangulation(dt);
-        if backend.vertex_count() != total_vertices as usize {
-            return Err(CdtError::DelaunayGenerationFailed {
-                vertex_count: total_vertices,
-                coordinate_range: (0.0, coordinate_max),
-                attempt: 1,
-                underlying_error: format!(
-                    "explicit strip builder produced {} vertices, expected {}",
-                    backend.vertex_count(),
-                    total_vertices,
-                ),
-            });
-        }
+        validate_strip_counts(
+            &backend,
+            total_vertices,
+            total_cells,
+            expected_vertices,
+            expected_faces,
+            vertices_per_slice,
+            num_slices,
+            coordinate_max,
+        )?;
 
         let slice_sizes = vec![n; t_count];
         let foliation =
@@ -3895,6 +3997,25 @@ mod tests {
         assert!(tri.validate_foliation().is_ok());
         assert!(tri.validate_causality_delaunay().is_ok());
         assert!(tri.validate_cell_classification().is_ok());
+    }
+
+    #[test]
+    fn test_explicit_strip_count_validation_rejects_face_mismatch() {
+        let tri = CdtTriangulation::from_cdt_strip(4, 2).expect("explicit strip should build");
+        let result = validate_strip_counts(tri.geometry(), 8, 7, 8, 7, 4, 2, 1.0);
+
+        assert!(matches!(
+            result,
+            Err(CdtError::DelaunayGenerationFailed {
+                vertex_count: 8,
+                coordinate_range: (0.0, 1.0),
+                attempt: 1,
+                ref underlying_error,
+            }) if underlying_error.contains("build_delaunay2_from_cells()/from_cdt_strip()")
+                && underlying_error.contains("produced 6 faces, expected 7")
+                && underlying_error.contains("vertices_per_slice=4")
+                && underlying_error.contains("num_slices=2")
+        ));
     }
 
     #[test]
