@@ -42,6 +42,7 @@ from benchmark_utils import (
     find_project_root,
     main,
 )
+from performance_analysis import PerformanceAnalyzer
 
 THRESHOLD_PERCENT = f"{DEFAULT_REGRESSION_THRESHOLD:.1f}%"
 
@@ -171,6 +172,28 @@ class TestCriterionParser:
         """Test parsing non-existent estimates.json file."""
         result = CriterionParser.parse_estimates_json(Path("nonexistent.json"), 1000, "2D")
         assert result is None
+
+    def test_performance_analyzer_skips_missing_point_estimate(self, tmp_path, capsys) -> None:
+        """Test that malformed Criterion estimates do not become zero-valued baselines."""
+        estimates_file = tmp_path / "target" / "criterion" / "bench_group" / "new" / "estimates.json"
+        estimates_file.parent.mkdir(parents=True)
+        estimates_file.write_text(
+            json.dumps(
+                {
+                    "mean": {},
+                    "std_dev": {"point_estimate": 1.0},
+                    "median": {"point_estimate": 1.0},
+                    "median_abs_dev": {"point_estimate": 1.0},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        analyzer = PerformanceAnalyzer(tmp_path)
+        results = analyzer.extract_criterion_results()
+
+        assert results == {}
+        assert "Missing numeric 'mean.point_estimate'" in capsys.readouterr().out
 
     def test_parse_estimates_json_malformed_json(self):
         """Test parsing malformed JSON file."""

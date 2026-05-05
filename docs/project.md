@@ -25,9 +25,13 @@ src/
 Repository tooling:
 
 ```text
+.github/workflows/codeql.yml # CodeQL analysis for Actions and Rust
 .github/workflows/semgrep-sarif.yml # Repository Semgrep rule SARIF upload
+rustfmt.toml           # Stable Rust formatting settings
+cliff.toml             # git-cliff changelog template and commit grouping
 semgrep.yaml           # Repository-owned Semgrep rules
 docs/dev/python.md     # Python script style and validation guidance
+docs/dev/tooling-alignment.md # Tooling comparison and issue #112 decisions
 tests/semgrep/         # Semgrep rule fixtures run by `just semgrep-test`
 scripts/archive_changelog.py # Split completed changelog minor series into archive files
 scripts/coverage_report.py # Cobertura coverage summary helper

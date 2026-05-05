@@ -211,6 +211,15 @@ def parse_throughput_data(benchmark: BenchmarkData, line: str) -> bool:
     return False
 
 
+def _append_complete_benchmark(benchmarks: list[BenchmarkData], benchmark: BenchmarkData) -> None:
+    """Append parsed benchmark data only after the required timing row is present."""
+    if benchmark.time_unit:
+        benchmarks.append(benchmark)
+        return
+
+    print(f"Warning: skipping incomplete benchmark section for {benchmark.points} Points ({benchmark.dimension}): missing valid Time line")
+
+
 def extract_benchmark_data(baseline_content: str) -> list[BenchmarkData]:
     """
     Extract benchmark data from baseline file content.
@@ -230,7 +239,7 @@ def extract_benchmark_data(baseline_content: str) -> list[BenchmarkData]:
         if benchmark:
             # Save previous benchmark if it exists
             if current_benchmark:
-                benchmarks.append(current_benchmark)
+                _append_complete_benchmark(benchmarks, current_benchmark)
             current_benchmark = benchmark
             continue
 
@@ -245,7 +254,7 @@ def extract_benchmark_data(baseline_content: str) -> list[BenchmarkData]:
 
     # Don't forget the last benchmark
     if current_benchmark:
-        benchmarks.append(current_benchmark)
+        _append_complete_benchmark(benchmarks, current_benchmark)
 
     return benchmarks
 

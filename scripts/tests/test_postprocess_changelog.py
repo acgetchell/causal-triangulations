@@ -316,6 +316,13 @@ class TestSummarySections:
         summary_block = _merged_pr_summary_block(result)
         assert f"- Feature {_pr(10)} {_pr(20)}" in summary_block
 
+    def test_duplicate_summary_entries_are_collapsed(self) -> None:
+        entry = f"- Feature A {_pr(10)} {_commit()}"
+        content = self._changelog(f"{entry}\n{entry}")
+        result = _inject_summary_sections(content)
+        summary_block = _merged_pr_summary_block(result)
+        assert summary_block.count(f"- Feature A {_pr(10)}") == 1
+
 
 class TestListMarkerNormalization:
     """MD004: consistent ``-`` list markers."""

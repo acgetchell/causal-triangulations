@@ -13,7 +13,7 @@ use crate::errors::CdtError;
 use crate::geometry::CdtTriangulation2D;
 use crate::geometry::backends::delaunay::{DelaunayFaceHandle, DelaunayVertexHandle};
 use crate::geometry::traits::{EdgeAdjacentFaces, TriangulationMut, TriangulationQuery};
-use num_traits::cast::NumCast;
+use num_traits::ToPrimitive;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 /// Types of ergodic moves available in 2D CDT.
@@ -146,8 +146,8 @@ impl MoveStatistics {
         if attempted == 0 {
             0.0
         } else {
-            let accepted: f64 = NumCast::from(accepted).unwrap_or(0.0);
-            let attempted: f64 = NumCast::from(attempted).unwrap_or(f64::INFINITY);
+            let accepted = count_to_f64(accepted);
+            let attempted = count_to_f64(attempted);
             accepted / attempted
         }
     }
@@ -179,11 +179,16 @@ impl MoveStatistics {
         if total_attempted == 0 {
             0.0
         } else {
-            let total_accepted: f64 = NumCast::from(total_accepted).unwrap_or(0.0);
-            let total_attempted: f64 = NumCast::from(total_attempted).unwrap_or(f64::INFINITY);
+            let total_accepted = count_to_f64(total_accepted);
+            let total_attempted = count_to_f64(total_attempted);
             total_accepted / total_attempted
         }
     }
+}
+
+/// Converts an accumulated move counter to a finite value for rate reporting.
+fn count_to_f64(count: u64) -> f64 {
+    count.to_f64().map_or(f64::MAX, |value| value)
 }
 
 /// Ergodic move system for CDT triangulations.

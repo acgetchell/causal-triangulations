@@ -8,7 +8,7 @@ include = [ "scripts" ]
 
 [environment]
 # Match the project's minimum supported Python version.
-python-version = "3.11"
+python-version = "3.12"
 
 [terminal]
 # Keep output concise by default.

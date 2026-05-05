@@ -117,17 +117,30 @@ build-release:
 changelog: _ensure-git-cliff python-sync
     #!/usr/bin/env bash
     set -euo pipefail
-    git-cliff -o CHANGELOG.md
+    GIT_CLIFF_OFFLINE=true git-cliff -o CHANGELOG.md
     uv run postprocess-changelog
     uv run archive-changelog
 
-changelog-tag version: python-sync
+changelog-unreleased version: _ensure-git-cliff python-sync
+    #!/usr/bin/env bash
+    set -euo pipefail
+    GIT_CLIFF_OFFLINE=true git-cliff --tag {{version}} -o CHANGELOG.md
+    uv run postprocess-changelog
+    uv run archive-changelog
+
+tag version: python-sync
     uv run tag-release {{version}}
+
+tag-force version: python-sync
+    uv run tag-release {{version}} --force
+
+changelog-tag version:
+    just tag {{version}}
 
 changelog-update: changelog
     @echo "📝 Changelog updated successfully!"
     @echo "To create a git tag with changelog content for a specific version, run:"
-    @echo "  just changelog-tag <version>  # e.g., just changelog-tag v0.4.2"
+    @echo "  just tag <version>  # e.g., just tag v0.4.2"
 
 # Check (non-mutating): run all linters/validators
 check: lint
@@ -235,8 +248,9 @@ help-workflows:
     @echo "  just perf-baseline # Save current performance as baseline"
     @echo ""
     @echo "Changelog:"
-    @echo "  just changelog            # Generate/update CHANGELOG.md"
-    @echo "  just changelog-tag <ver>  # Create git tag with changelog content"
+    @echo "  just changelog                   # Generate/update CHANGELOG.md"
+    @echo "  just changelog-unreleased <ver>  # Generate release changelog without a local tag"
+    @echo "  just tag <ver>                   # Create git tag with changelog content"
     @echo ""
     @echo "Static Analysis:"
     @echo "  just semgrep             # Run repository-owned Semgrep rules"
