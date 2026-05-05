@@ -12,7 +12,7 @@ use crate::config::CdtTopology;
 use crate::errors::CdtError;
 use crate::geometry::CdtTriangulation2D;
 use crate::geometry::backends::delaunay::{DelaunayFaceHandle, DelaunayVertexHandle};
-use crate::geometry::traits::{EdgeAdjacentFaces, TriangulationMut, TriangulationQuery};
+use crate::geometry::traits::{EdgeAdjacentFaces, TriangulationQuery};
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 
 /// Types of ergodic moves available in 2D CDT.
@@ -300,6 +300,7 @@ impl ErgodicsSystem {
     /// assert_eq!(system.stats.moves_22_attempted, 1);
     /// ```
     pub fn attempt_22_move(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
+        self.stats.record_attempt(MoveType::Move22);
         self.attempt_causal_edge_flip(triangulation, MoveType::Move22)
     }
 
@@ -332,7 +333,10 @@ impl ErgodicsSystem {
     /// ```
     pub fn attempt_13_move(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         self.stats.record_attempt(MoveType::Move13Add);
+        self.attempt_13_move_mutating(triangulation)
+    }
 
+    fn attempt_13_move_mutating(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         let geometric_candidates: Vec<_> = triangulation
             .geometry()
             .faces()
@@ -368,33 +372,31 @@ impl ErgodicsSystem {
         let label = insertion_label(triangulation, &face);
 
         let subdivision_target = format!("face {:?}", face.cell_key());
-        let subdivision = {
-            let mut geometry = triangulation.geometry_mut();
-            geometry.subdivide_face(face, &point)
-        };
+        let snapshot = triangulation.clone();
+        let subdivision = triangulation.subdivide_face(face, &point);
 
         let subdivision = match subdivision {
             Ok(subdivision) => subdivision,
             Err(err) => {
-                return reject_backend("subdivide_face", subdivision_target, &err);
+                let result = reject_backend("subdivide_face", subdivision_target, &err);
+                return rollback_if_failed(triangulation, snapshot, result);
             }
         };
 
         if let Some(InsertionLabel::Label(label)) = label {
-            let set_label = {
-                let mut geometry = triangulation.geometry_mut();
-                geometry.set_vertex_data_by_key(subdivision.new_vertex.vertex_key(), Some(label))
-            };
+            let set_label = triangulation.set_vertex_data(&subdivision.new_vertex, Some(label));
             if let Err(err) = set_label {
-                return MoveResult::HardFailure(CdtError::BackendMutationFailed {
+                let result = MoveResult::HardFailure(CdtError::BackendMutationFailed {
                     operation: "set_vertex_data_by_key".to_string(),
                     target: format!("vertex {:?}", subdivision.new_vertex.vertex_key()),
                     detail: err.to_string(),
                 });
+                return rollback_if_failed(triangulation, snapshot, result);
             }
         }
 
-        self.finish_mutated_move(triangulation, MoveType::Move13Add)
+        let result = self.finish_mutated_move(triangulation, MoveType::Move13Add);
+        rollback_if_failed(triangulation, snapshot, result)
     }
 
     /// Attempts a (3,1) move on the triangulation.
@@ -430,7 +432,10 @@ impl ErgodicsSystem {
     /// ```
     pub fn attempt_31_move(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         self.stats.record_attempt(MoveType::Move31Remove);
+        self.attempt_31_move_mutating(triangulation)
+    }
 
+    fn attempt_31_move_mutating(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         let geometric_candidates: Vec<_> = triangulation
             .geometry()
             .vertices()
@@ -455,15 +460,14 @@ impl ErgodicsSystem {
         };
 
         let removal_target = format!("vertex {:?}", vertex.vertex_key());
-        let removal = {
-            let mut geometry = triangulation.geometry_mut();
-            geometry.remove_vertex(vertex)
-        };
+        let snapshot = triangulation.clone();
+        let removal = triangulation.remove_vertex(vertex);
 
-        match removal {
+        let result = match removal {
             Ok(_) => self.finish_mutated_move(triangulation, MoveType::Move31Remove),
             Err(err) => reject_backend("remove_vertex", removal_target, &err),
-        }
+        };
+        rollback_if_failed(triangulation, snapshot, result)
     }
 
     /// Attempts an edge flip move on the triangulation.
@@ -496,6 +500,7 @@ impl ErgodicsSystem {
     /// assert_eq!(system.stats.edge_flips_attempted, 1);
     /// ```
     pub fn attempt_edge_flip(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
+        self.stats.record_attempt(MoveType::EdgeFlip);
         self.attempt_causal_edge_flip(triangulation, MoveType::EdgeFlip)
     }
 
@@ -540,8 +545,6 @@ impl ErgodicsSystem {
         triangulation: &mut CdtTriangulation2D,
         move_type: MoveType,
     ) -> MoveResult {
-        self.stats.record_attempt(move_type);
-
         let mut geometric_candidate_seen = false;
         let mut causal_candidate_count = 0;
         let mut selected_edge = None;
@@ -570,15 +573,14 @@ impl ErgodicsSystem {
         };
 
         let flip_target = format!("{edge:?}");
-        let flip_result = {
-            let mut geometry = triangulation.geometry_mut();
-            geometry.flip_edge(edge)
-        };
+        let snapshot = triangulation.clone();
+        let flip_result = triangulation.flip_edge(edge);
 
-        match flip_result {
+        let result = match flip_result {
             Ok(_) => self.finish_mutated_move(triangulation, move_type),
             Err(err) => reject_backend("flip_edge", flip_target, &err),
-        }
+        };
+        rollback_if_failed(triangulation, snapshot, result)
     }
 
     /// Completes a move after the backend mutation has already succeeded.
@@ -609,6 +611,20 @@ fn pick(rng: &mut StdRng, len: usize) -> Option<usize> {
         return None;
     }
     Some(rng.random_range(0..len))
+}
+
+/// Restores the triangulation when a public move attempt does not complete successfully.
+fn rollback_if_failed(
+    triangulation: &mut CdtTriangulation2D,
+    snapshot: CdtTriangulation2D,
+    result: MoveResult,
+) -> MoveResult {
+    if matches!(result, MoveResult::Success) {
+        return result;
+    }
+
+    *triangulation = snapshot;
+    result
 }
 
 /// Converts an unexpected backend edit error into the move-level rejection shape.
@@ -1042,6 +1058,50 @@ mod tests {
         );
         assert!(triangulation.validate_causality().is_ok());
         assert!(triangulation.has_foliation());
+    }
+
+    #[test]
+    fn rollback_restores_snapshot_on_hard_failure() {
+        let mut triangulation = single_triangle();
+        let snapshot = triangulation.clone();
+        let counts_before = (
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+            triangulation.metadata().modification_count,
+        );
+
+        let face = triangulation
+            .geometry()
+            .faces()
+            .next()
+            .expect("triangle face");
+        let point = centroid(&triangulation, &face).expect("triangle centroid");
+        triangulation
+            .subdivide_face(face, &point)
+            .expect("subdivide fixture face");
+        assert_ne!(triangulation.vertex_count(), counts_before.0);
+
+        let result = rollback_if_failed(
+            &mut triangulation,
+            snapshot,
+            MoveResult::HardFailure(CdtError::ValidationFailed {
+                check: "test rollback".to_string(),
+                detail: "simulated post-mutation failure".to_string(),
+            }),
+        );
+
+        assert!(matches!(result, MoveResult::HardFailure(_)));
+        assert_eq!(
+            (
+                triangulation.vertex_count(),
+                triangulation.edge_count(),
+                triangulation.face_count(),
+                triangulation.metadata().modification_count,
+            ),
+            counts_before
+        );
+        assert!(triangulation.validate().is_ok());
     }
 
     #[test]

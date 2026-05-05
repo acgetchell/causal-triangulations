@@ -395,12 +395,13 @@ fn bench_cache_operations(c: &mut Criterion) {
         });
     });
 
-    group.bench_function("cache_invalidation", |b| {
+    group.bench_function("metadata_cache_invalidation", |b| {
         b.iter(|| {
             let mut triangulation = CdtTriangulation2D::from_random_points(50, 1, 2)
                 .expect("Failed to create triangulation");
-            // Invalidate cache by getting mutable reference
-            let _geometry_mut = triangulation.geometry_mut();
+            triangulation
+                .set_time_slices(2)
+                .expect("metadata update should remain valid");
             black_box(triangulation)
         });
     });

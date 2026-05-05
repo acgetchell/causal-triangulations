@@ -53,11 +53,11 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 ### `cdt/triangulation.rs` — Foliation integration
 
 - `from_cdt_strip(vertices_per_slice, num_slices)` — explicit open-boundary 1+1 CDT strip with strict Up/Down cell classification
-- `from_foliated_cylinder(vertices_per_slice, num_slices, seed)` _(crate-internal)_ — compatibility wrapper around `from_cdt_strip`; the seed is ignored because explicit construction is deterministic
 - `from_toroidal_cdt(vertices_per_slice, num_slices)` — explicit S¹×S¹ toroidal CDT (χ = 0); requires `vertices_per_slice ≥ 3` and `num_slices ≥ 3`
 - `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`
 - Validation: `validate_topology()` (χ expectation depends on `CdtTopology`), `validate_foliation()` (structural; closed S¹ spacelike rings on toroidal), `validate_causality()` (no edge spans >1 slice), `validate_cell_classification()` (strict Up/Down cell classification and validation pass)
+- Mutable backend access is not exposed. CDT code mutates Delaunay state only through narrow crate-internal operations (`flip_edge`, `subdivide_face`, `remove_vertex`, `set_vertex_data`) that invalidate cached counts and foliation synchronization bookkeeping on success.
 
 ### `config.rs` — `CdtTopology` enum
 
@@ -80,6 +80,8 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 - `DelaunayTriangulation2D` — type alias for the concrete 2D triangulation type
 
 Together with `backends/delaunay.rs`, this module is the only place that directly imports from the `delaunay` crate.
+
+The CDT strip and toroidal constructors keep their internal cell working sets as fixed triangles (`[usize; 3]`) and reserve storage up front. They currently adapt those triangles to `Vec<Vec<usize>>` at the generator boundary because the explicit-cell generator API still accepts Vec-backed cell index lists; a future generator cleanup should accept fixed triangle cells directly to remove that per-triangle allocation.
 
 ### `util.rs` — Numeric helpers
 

@@ -60,13 +60,6 @@ impl DelaunayVertexHandle {
     pub(crate) const fn vertex_key(&self) -> VertexKey {
         self.key
     }
-
-    /// Creates a handle from a raw vertex key (crate-internal).
-    #[must_use]
-    #[expect(dead_code, reason = "needed by ergodic moves (#55)")]
-    pub(crate) const fn from_key(key: VertexKey) -> Self {
-        Self { key }
-    }
 }
 
 /// Opaque handle for edges in Delaunay backend

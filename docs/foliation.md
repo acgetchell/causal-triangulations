@@ -29,7 +29,7 @@ CdtTriangulation<B>
     └── num_slices: u32
 ```
 
-Vertex data is set at construction time via `VertexBuilder::data(t)`. For post-construction labeling (e.g., `assign_foliation_by_y`), labels are written in-place via `DelaunayTriangulation::set_vertex_data(key, Some(t))` — an O(1) operation per vertex that does not affect geometry or topology.
+Vertex data is set at construction time via `VertexBuilder::data(t)`. For post-construction labeling (e.g., `assign_foliation_by_y`), labels are written in-place through CDT-owned helper paths that call `DelaunayTriangulation::set_vertex_data(key, Some(t))` — an O(1) operation per vertex that does not affect geometry or topology. Public callers do not receive mutable backend access; CDT mutation paths are narrow so cache and foliation synchronization state are invalidated consistently.
 
 ## Time Label Assignment
 

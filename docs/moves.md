@@ -48,7 +48,7 @@ Owns a `MoveStatistics` instance and a thread-local RNG. Public API:
 - `attempt_edge_flip(&mut CdtTriangulation2D) -> MoveResult`
 - `attempt_random_move(&mut CdtTriangulation2D) -> MoveResult` — delegates to one of the above
 
-Accepted moves mutate the triangulation through the geometry backend, then rebuild CDT foliation bookkeeping from live vertex labels and refresh cell classifications.
+Accepted moves mutate the triangulation through narrow CDT-owned edit operations, then rebuild CDT foliation bookkeeping from live vertex labels and refresh cell classifications. The raw mutable backend is not exposed as part of the CDT API.
 
 ## Architecture
 
@@ -58,7 +58,9 @@ Move validation follows a two-layer design:
 - **Geometry backend** — exposes the edit operations through `TriangulationMut` while preserving the CDT ↔ geometry boundary
 - **CDT crate** — chooses candidate sites, checks causality and time-slice integrity, and resynchronizes foliation metadata after accepted moves
 
-The Metropolis loop accepts or rejects a move type before calling these mutating kernels. If an accepted application fails at its selected site, the simulation restores the pre-application triangulation snapshot and retries at another random site. Exhausting those retries is recorded as a rejected proposal; hard backend mutation failures still return `CdtError::MetropolisMoveApplicationFailed`. See `docs/metropolis.md`.
+Public `attempt_*` methods snapshot only after a valid local site has been selected and mutation is about to begin; ordinary geometric or causal rejections do not clone the triangulation. If a selected mutation or required post-mutation synchronization fails, the method restores that snapshot before returning the non-success `MoveResult`.
+
+The Metropolis loop accepts or rejects a move type before calling these mutating kernels. If an accepted application fails at its selected site, the simulation retries at another random site from the restored triangulation. Exhausting those retries is recorded as a rejected proposal; hard backend mutation failures still return `CdtError::MetropolisMoveApplicationFailed`. See `docs/metropolis.md`.
 
 ## Planned Work
 
