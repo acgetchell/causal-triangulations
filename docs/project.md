@@ -52,7 +52,8 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 
 ### `cdt/triangulation.rs` — Foliation integration
 
-- `from_foliated_cylinder(vertices_per_slice, num_slices, seed)` _(crate-internal, provisional)_ — point-set strip constructor used for internal diagnostics while explicit strip construction lands
+- `from_cdt_strip(vertices_per_slice, num_slices)` — explicit open-boundary 1+1 CDT strip with strict Up/Down cell classification
+- `from_foliated_cylinder(vertices_per_slice, num_slices, seed)` _(crate-internal)_ — compatibility wrapper around `from_cdt_strip`; the seed is ignored because explicit construction is deterministic
 - `from_toroidal_cdt(vertices_per_slice, num_slices)` — explicit S¹×S¹ toroidal CDT (χ = 0); requires `vertices_per_slice ≥ 3` and `num_slices ≥ 3`
 - `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`
