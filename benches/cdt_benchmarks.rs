@@ -272,10 +272,10 @@ fn bench_metropolis_simulation(c: &mut Criterion) {
             &steps,
             |b, &steps| {
                 b.iter(|| {
-                    let triangulation = CdtTriangulation2D::from_random_points(20, 1, 2)
+                    let triangulation = CdtTriangulation2D::from_seeded_points(20, 1, 2, 42)
                         .expect("Failed to create triangulation");
 
-                    let config = MetropolisConfig::new(1.0, steps, 5, 5);
+                    let config = MetropolisConfig::new(1.0, steps, 5, 5).with_seed(42);
                     let action_config = ActionConfig::default();
                     let algorithm = MetropolisAlgorithm::new(config, action_config);
 

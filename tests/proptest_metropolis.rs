@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 //! Property-based tests for CDT Metropolis integration.
 
+use approx::relative_eq;
 use causal_triangulations::prelude::action::ActionConfig;
 use causal_triangulations::prelude::simulation::CdtTarget;
 use causal_triangulations::prelude::triangulation::{CdtTriangulation, CdtTriangulation2D};
@@ -44,7 +45,7 @@ proptest! {
         let expected = -action / temperature;
 
         prop_assert!(
-            (log_prob - expected).abs() < 1e-12,
+            relative_eq!(log_prob, expected, epsilon = 1e-12),
             "log_prob {:.15} != -action/T {:.15}",
             log_prob, expected,
         );

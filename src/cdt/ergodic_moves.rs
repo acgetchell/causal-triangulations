@@ -126,12 +126,13 @@ impl MoveStatistics {
     /// # Examples
     ///
     /// ```
+    /// use approx::assert_relative_eq;
     /// use causal_triangulations::prelude::moves::{MoveStatistics, MoveType};
     ///
     /// let mut stats = MoveStatistics::new();
     /// stats.record_attempt(MoveType::Move22);
     /// stats.record_success(MoveType::Move22);
-    /// assert!((stats.acceptance_rate(MoveType::Move22) - 1.0).abs() < f64::EPSILON);
+    /// assert_relative_eq!(stats.acceptance_rate(MoveType::Move22), 1.0);
     /// ```
     #[must_use]
     pub fn acceptance_rate(&self, move_type: MoveType) -> f64 {
@@ -156,12 +157,13 @@ impl MoveStatistics {
     /// # Examples
     ///
     /// ```
+    /// use approx::assert_relative_eq;
     /// use causal_triangulations::prelude::moves::{MoveStatistics, MoveType};
     ///
     /// let mut stats = MoveStatistics::new();
     /// stats.record_attempt(MoveType::Move22);
     /// stats.record_success(MoveType::Move22);
-    /// assert!((stats.total_acceptance_rate() - 1.0).abs() < f64::EPSILON);
+    /// assert_relative_eq!(stats.total_acceptance_rate(), 1.0);
     /// ```
     #[must_use]
     pub fn total_acceptance_rate(&self) -> f64 {
@@ -898,7 +900,7 @@ mod tests {
     use super::*;
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{build_delaunay2_from_cells, build_delaunay2_with_data};
-    use approx::assert_relative_eq;
+    use approx::{abs_diff_eq, assert_relative_eq};
     use std::collections::HashSet;
 
     /// Builds the minimal foliated triangle fixture used by `(1,3)` tests.
@@ -1055,16 +1057,16 @@ mod tests {
                         .geometry()
                         .vertex_coordinates(&vertex)
                         .expect("vertex coordinates");
-                    if (coords[0] - 0.0).abs() < 1e-12 {
+                    if abs_diff_eq!(coords[0], 0.0, epsilon = 1e-12) {
                         zero_x += 1;
                     }
-                    if (coords[0] - 0.75).abs() < 1e-12 {
+                    if abs_diff_eq!(coords[0], 0.75, epsilon = 1e-12) {
                         boundary_x += 1;
                     }
-                    if (coords[1] - 0.0).abs() < 1e-12 {
+                    if abs_diff_eq!(coords[1], 0.0, epsilon = 1e-12) {
                         zero_y += 1;
                     }
-                    if (coords[1] - (1.0 / 3.0)).abs() < 1e-12 {
+                    if abs_diff_eq!(coords[1], 1.0 / 3.0, epsilon = 1e-12) {
                         next_y += 1;
                     }
                 }

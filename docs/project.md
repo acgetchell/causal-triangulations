@@ -63,7 +63,7 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 
 ### `cdt/metropolis.rs` — Metropolis move ordering
 
-`MetropolisAlgorithm::run()` proposes a move type, computes `ΔS` from the move's simplex-count delta, accepts or rejects the proposal, and only mutates the triangulation after acceptance. Accepted applications that fail are rolled back from a triangulation snapshot and retried at another random local site. See `docs/metropolis.md` for the detailed ordering.
+`MetropolisAlgorithm::run()` proposes a move type, computes `ΔS` from the move's simplex-count delta, accepts or rejects the proposal, and only mutates the triangulation after acceptance. Accepted applications that fail are rolled back from a triangulation snapshot and retried at another random local site; retry exhaustion is recorded as a rejection, while hard backend failures remain structured errors. See `docs/metropolis.md` for the detailed ordering.
 
 ### `geometry/generators.rs` — Delaunay triangulation generators
 
@@ -85,5 +85,5 @@ Together with `backends/delaunay.rs`, this module is the only place that directl
 ## Key Dependencies
 
 - `delaunay` (v0.7.6) — geometry backend (Delaunay triangulations, vertex data for time labels, `set_vertex_data_by_key` for O(1) label mutation)
-- `markov-chain-monte-carlo` — MCMC framework (`Chain::step_mut`, `ProposalMut`, `Target`)
+- `markov-chain-monte-carlo` (v0.3) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, `Target`)
 - `num-traits` — `ToPrimitive` for safe float→integer conversion

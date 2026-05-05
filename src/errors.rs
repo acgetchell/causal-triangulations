@@ -61,7 +61,7 @@ pub enum CdtError {
         /// Expected constraint for the setting.
         expected: String,
     },
-    /// Metropolis accepted a move, but no bounded retry could apply it safely.
+    /// Metropolis accepted a move, but a hard backend or invariant failure stopped application.
     #[error(
         "Metropolis accepted {move_type} at step {step}, but applying it failed after {attempts} attempts; last failure: {last_failure}"
     )]

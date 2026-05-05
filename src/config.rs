@@ -498,10 +498,11 @@ impl CdtConfig {
     /// # Examples
     ///
     /// ```
+    /// use approx::assert_relative_eq;
     /// use causal_triangulations::CdtConfig;
     ///
     /// let action = CdtConfig::new(16, 4).to_action_config();
-    /// assert!((action.coupling_0 - 1.0).abs() < f64::EPSILON);
+    /// assert_relative_eq!(action.coupling_0, 1.0);
     /// ```
     #[must_use]
     pub const fn to_action_config(&self) -> ActionConfig {

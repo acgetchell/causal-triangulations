@@ -15,9 +15,12 @@ use crate::config::validate_schedule;
 use crate::errors::{CdtError, CdtResult};
 use crate::geometry::CdtTriangulation2D;
 use crate::geometry::traits::TriangulationQuery;
-use markov_chain_monte_carlo::{ProposalMut, Target};
+use markov_chain_monte_carlo::{DelayedProposal, Target};
 use num_traits::cast::NumCast;
 use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
+use std::error::Error;
+use std::fmt;
+use std::hint::cold_path;
 use std::time::{Duration, Instant};
 
 // Test utilities are now handled through backend-agnostic CdtTriangulation::new
@@ -108,10 +111,11 @@ impl MetropolisConfig {
     /// # Examples
     ///
     /// ```
+    /// use approx::assert_relative_eq;
     /// use causal_triangulations::MetropolisConfig;
     ///
     /// let config = MetropolisConfig::new(2.0, 100, 10, 5);
-    /// assert!((config.beta() - 0.5).abs() < f64::EPSILON);
+    /// assert_relative_eq!(config.beta(), 0.5);
     /// ```
     #[must_use]
     pub fn beta(&self) -> f64 {
@@ -231,28 +235,397 @@ impl Target<CdtTriangulation2D> for CdtTarget {
     }
 }
 
-/// Legacy CDT proposal distribution adapter.
+/// Delayed CDT move proposal selected before mutating a triangulation.
 ///
-/// The production simulation loop currently uses an accept-before-mutation CDT
-/// ordering that the `markov-chain-monte-carlo` crate does not model yet. The
-/// type remains available for callers that depend on the older mutation-first
-/// `ProposalMut` integration point; issue acgetchell/markov-chain-monte-carlo#34
-/// tracks the upstream delayed-commit API needed to replace the local loop.
-pub struct CdtProposal;
+/// A plan records the selected [`MoveType`] and its count-level action delta
+/// before any triangulation mutation occurs. The delayed proposal API scores
+/// this plan first, then applies it only if the Metropolis step accepts it.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::action::ActionConfig;
+/// use causal_triangulations::prelude::simulation::{
+///     CdtProposal, CdtProposalError, CdtTriangulation,
+/// };
+/// use markov_chain_monte_carlo::DelayedProposal;
+/// use rand::{SeedableRng, rngs::StdRng};
+///
+/// # fn main() -> Result<(), CdtProposalError> {
+/// let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
+///     .expect("fixed seeded triangulation should build");
+/// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+/// let mut rng = StdRng::seed_from_u64(11);
+///
+/// let plan = proposal
+///     .propose_plan(&tri, &mut rng)?
+///     .expect("CDT proposals always select a move type");
+/// assert!(matches!(
+///     plan.move_type(),
+///     causal_triangulations::prelude::moves::MoveType::Move22
+///         | causal_triangulations::prelude::moves::MoveType::Move13Add
+///         | causal_triangulations::prelude::moves::MoveType::Move31Remove
+///         | causal_triangulations::prelude::moves::MoveType::EdgeFlip
+/// ));
+/// assert!(plan.action_before().is_finite());
+/// if let (Some(delta), Some(action_after)) = (plan.delta_action(), plan.action_after()) {
+///     approx::assert_relative_eq!(
+///         action_after,
+///         plan.action_before() + delta,
+///         epsilon = 1e-12
+///     );
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone)]
+pub struct CdtProposalPlan {
+    move_type: MoveType,
+    action_before: f64,
+    action_after: Option<f64>,
+    delta_action: Option<f64>,
+    proposed_state: CdtTriangulation2D,
+}
 
-impl ProposalMut<CdtTriangulation2D> for CdtProposal {
-    type Undo = ();
-
-    fn propose_mut<R: Rng + ?Sized>(
-        &self,
-        _state: &mut CdtTriangulation2D,
-        _rng: &mut R,
-    ) -> Option<()> {
-        None
+impl CdtProposalPlan {
+    /// Returns the proposed move type.
+    #[must_use]
+    pub const fn move_type(&self) -> MoveType {
+        self.move_type
     }
 
-    fn undo(&self, _state: &mut CdtTriangulation2D, _token: ()) {
-        // No-op: propose_mut currently never succeeds.
+    /// Returns the current action used to score this proposal.
+    #[must_use]
+    pub const fn action_before(&self) -> f64 {
+        self.action_before
+    }
+
+    /// Returns the proposed action if the move's simplex-count delta is valid.
+    ///
+    /// A value of `None` means the selected move cannot be scored from the
+    /// current simplex counts, so [`DelayedProposal::proposed_log_prob`] treats
+    /// the plan as impossible.
+    #[must_use]
+    pub const fn action_after(&self) -> Option<f64> {
+        self.action_after
+    }
+
+    /// Returns the proposal action change, if it can be evaluated.
+    #[must_use]
+    pub const fn delta_action(&self) -> Option<f64> {
+        self.delta_action
+    }
+}
+
+/// Telemetry returned by delayed CDT proposal steps.
+///
+/// The sampler receives this compact record after a plan has been scored. It is
+/// intended for diagnostics and measurement backends that need to report which
+/// move family was proposed without exposing the private plan fields.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::action::ActionConfig;
+/// use causal_triangulations::prelude::simulation::{
+///     CdtProposal, CdtProposalError, CdtTriangulation,
+/// };
+/// use markov_chain_monte_carlo::DelayedProposal;
+/// use rand::{SeedableRng, rngs::StdRng};
+///
+/// # fn main() -> Result<(), CdtProposalError> {
+/// let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
+///     .expect("fixed seeded triangulation should build");
+/// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+/// let mut rng = StdRng::seed_from_u64(11);
+/// let plan = proposal
+///     .propose_plan(&tri, &mut rng)?
+///     .expect("CDT proposals always select a move type");
+///
+/// let info = proposal.info(&plan);
+/// assert_eq!(info.move_type, plan.move_type());
+/// match (info.delta_action, plan.delta_action()) {
+///     (Some(info_delta), Some(plan_delta)) => {
+///         approx::assert_relative_eq!(info_delta, plan_delta, epsilon = 1e-12);
+///     }
+///     (None, None) => {}
+///     other => panic!("delta-action mismatch: {other:?}"),
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CdtProposalInfo {
+    /// Move type selected for the proposal.
+    pub move_type: MoveType,
+    /// Action before the proposal.
+    pub action_before: f64,
+    /// Action after the proposal if the count-level delta is valid.
+    pub action_after: Option<f64>,
+    /// Proposed action change.
+    pub delta_action: Option<f64>,
+}
+
+/// Local-site rejection observed while trying to realize an accepted CDT proposal.
+///
+/// These rejections mean the move type was selected and accepted at the
+/// count-action level, but the bounded random local-site search did not find a
+/// concrete site where the move could be applied.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+enum CdtProposalSiteRejection {
+    /// The selected local site would violate CDT causality.
+    CausalityViolation,
+    /// The selected local site was geometrically invalid.
+    GeometricViolation,
+    /// A move kernel rejected the selected local site with a typed CDT error.
+    Kernel(CdtError),
+}
+
+impl fmt::Display for CdtProposalSiteRejection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CausalityViolation => {
+                f.write_str("causality violation at selected application site")
+            }
+            Self::GeometricViolation => {
+                f.write_str("geometric violation at selected application site")
+            }
+            Self::Kernel(err) => err.fmt(f),
+        }
+    }
+}
+
+impl Error for CdtProposalSiteRejection {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::Kernel(err) => Some(err),
+            Self::CausalityViolation | Self::GeometricViolation => None,
+        }
+    }
+}
+
+/// Error reported by delayed CDT proposal planning or commit.
+///
+/// No-site outcomes are ordinary proposal absence and are reported from
+/// [`DelayedProposal::propose_plan`] as `Ok(None)`, matching the upstream
+/// delayed-commit contract. `ApplicationFailed` represents a hard backend or
+/// invariant failure while constructing or committing a concrete proposal, and
+/// preserves the typed [`CdtError`] that caused the failed application.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::moves::MoveType;
+/// use causal_triangulations::prelude::simulation::CdtProposalError;
+/// use causal_triangulations::CdtError;
+///
+/// let err = CdtProposalError::ApplicationFailed {
+///     move_type: MoveType::Move13Add,
+///     attempt: 2,
+///     source: CdtError::BackendMutationFailed {
+///         operation: "insert_vertex".to_string(),
+///         target: "face FaceKey(3)".to_string(),
+///         detail: "backend rejected mutation".to_string(),
+///     },
+/// };
+/// assert!(err.to_string().contains("Move13Add"));
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum CdtProposalError {
+    /// Constructing or applying a concrete proposal hit a hard backend or invariant failure.
+    ApplicationFailed {
+        /// Accepted move type.
+        move_type: MoveType,
+        /// Local-site attempt that hit the hard failure.
+        attempt: usize,
+        /// Typed lower-level failure observed while committing the accepted move.
+        source: CdtError,
+    },
+}
+
+impl fmt::Display for CdtProposalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ApplicationFailed {
+                move_type,
+                attempt,
+                source,
+            } => write!(
+                f,
+                "failed to apply {move_type:?} on attempt {attempt}: {source}"
+            ),
+        }
+    }
+}
+
+impl Error for CdtProposalError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match self {
+            Self::ApplicationFailed { source, .. } => Some(source),
+        }
+    }
+}
+
+/// Delayed-commit CDT proposal distribution.
+///
+/// This adapter exposes CDT's accept-before-mutation move ordering through the
+/// [`DelayedProposal`] API. Use the same [`ActionConfig`] as the matching
+/// [`CdtTarget`] or [`MetropolisAlgorithm`] so that proposal planning and target
+/// scoring agree.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::action::ActionConfig;
+/// use causal_triangulations::prelude::simulation::{
+///     CdtProposal, CdtProposalError, CdtTriangulation,
+/// };
+/// use markov_chain_monte_carlo::DelayedProposal;
+/// use rand::{SeedableRng, rngs::StdRng};
+///
+/// # fn main() -> Result<(), CdtProposalError> {
+/// let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
+///     .expect("fixed seeded triangulation should build");
+/// let mut proposal = CdtProposal::new(ActionConfig::default());
+/// let mut rng = StdRng::seed_from_u64(7);
+///
+/// let plan = proposal.propose_plan(&tri, &mut rng)?;
+/// if let Some(plan) = plan {
+///     assert!(plan.action_before().is_finite());
+/// }
+/// # Ok(())
+/// # }
+/// ```
+pub struct CdtProposal {
+    action_config: ActionConfig,
+    moves: ErgodicsSystem,
+}
+
+impl CdtProposal {
+    /// Creates a new unseeded delayed CDT proposal distribution.
+    ///
+    /// Delayed scoring is delegated to the target passed to
+    /// [`DelayedProposal::proposed_log_prob`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::action::ActionConfig;
+    /// use causal_triangulations::prelude::simulation::CdtProposal;
+    ///
+    /// let _proposal = CdtProposal::new(ActionConfig::default());
+    /// ```
+    #[must_use]
+    pub fn new(action_config: ActionConfig) -> Self {
+        Self {
+            action_config,
+            moves: ErgodicsSystem::new(),
+        }
+    }
+
+    /// Creates a seeded delayed CDT proposal distribution.
+    ///
+    /// The seed controls the internal move-family selector. The `rng` passed to
+    /// [`DelayedProposal::propose_plan`] is still accepted for compatibility
+    /// with generic MCMC drivers.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::action::ActionConfig;
+    /// use causal_triangulations::prelude::simulation::CdtProposal;
+    ///
+    /// let _proposal = CdtProposal::with_seed(ActionConfig::default(), 42);
+    /// ```
+    #[must_use]
+    pub fn with_seed(action_config: ActionConfig, seed: u64) -> Self {
+        Self {
+            action_config,
+            moves: ErgodicsSystem::with_seed(seed),
+        }
+    }
+}
+
+impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
+    type Plan = CdtProposalPlan;
+    type Info = CdtProposalInfo;
+    type Error = CdtProposalError;
+
+    fn propose_plan<R: Rng + ?Sized>(
+        &mut self,
+        state: &CdtTriangulation2D,
+        _rng: &mut R,
+    ) -> Result<Option<Self::Plan>, Self::Error> {
+        let move_type = self.moves.select_random_move();
+        let action_before = action_for(&self.action_config, state);
+        if proposed_delta_action(&self.action_config, simplex_counts(state), move_type).is_none() {
+            cold_path();
+            return Ok(None);
+        }
+
+        let mut proposed_state = state.clone();
+        let action_after = match apply_accepted_move(
+            &mut proposed_state,
+            &mut self.moves,
+            &self.action_config,
+            move_type,
+            action_before,
+        ) {
+            Ok(AcceptedMoveResult::Applied { action_after }) => action_after,
+            Ok(AcceptedMoveResult::NoApplicableSite { .. }) => {
+                cold_path();
+                return Ok(None);
+            }
+            Err(err) => {
+                cold_path();
+                return Err(CdtProposalError::ApplicationFailed {
+                    move_type,
+                    attempt: err.attempt,
+                    source: err.source,
+                });
+            }
+        };
+        let delta_action = action_after - action_before;
+
+        Ok(Some(CdtProposalPlan {
+            move_type,
+            action_before,
+            action_after: Some(action_after),
+            delta_action: Some(delta_action),
+            proposed_state,
+        }))
+    }
+
+    fn proposed_log_prob<T: Target<CdtTriangulation2D>>(
+        &self,
+        _state: &CdtTriangulation2D,
+        plan: &Self::Plan,
+        target: &T,
+    ) -> Result<f64, Self::Error> {
+        Ok(plan
+            .action_after
+            .map_or(f64::NEG_INFINITY, |_| target.log_prob(&plan.proposed_state)))
+    }
+
+    fn info(&self, plan: &Self::Plan) -> Self::Info {
+        CdtProposalInfo {
+            move_type: plan.move_type,
+            action_before: plan.action_before,
+            action_after: plan.action_after,
+            delta_action: plan.delta_action,
+        }
+    }
+
+    fn commit<R: Rng + ?Sized>(
+        &mut self,
+        state: &mut CdtTriangulation2D,
+        plan: Self::Plan,
+        _rng: &mut R,
+    ) -> Result<(), Self::Error> {
+        *state = plan.proposed_state;
+        Ok(())
     }
 }
 
@@ -304,7 +677,9 @@ impl MetropolisAlgorithm {
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
     /// configuration is invalid, [`CdtError::MetropolisMoveApplicationFailed`]
     /// if an accepted move causes a hard backend mutation failure, or a
-    /// validation error for unrecoverable triangulation failures.
+    /// validation error for unrecoverable triangulation failures. Accepted move
+    /// types that cannot find a realizable local site after bounded retries are
+    /// recorded as rejected proposals.
     ///
     /// # Examples
     ///
@@ -368,25 +743,42 @@ impl MetropolisAlgorithm {
             if let Some(delta) = delta_action
                 && metropolis_accept(delta, self.config.temperature, &mut rng)
             {
-                let applied_action = apply_accepted_move(
+                match apply_accepted_move(
                     &mut triangulation,
                     &mut moves,
                     &self.action_config,
                     move_type,
-                    step,
                     action_before,
-                )?;
-                accepted = true;
-                action_after = Some(applied_action);
-                current_action = applied_action;
-                move_stats.record_success(move_type);
-                triangulation
-                    .geometry_mut()
-                    .record_event(SimulationEvent::MoveAccepted {
-                        move_type: format!("{move_type:?}"),
-                        step: step.into(),
-                        action_change: applied_action - action_before,
-                    });
+                ) {
+                    Ok(AcceptedMoveResult::Applied {
+                        action_after: applied_action,
+                    }) => {
+                        accepted = true;
+                        action_after = Some(applied_action);
+                        current_action = applied_action;
+                        move_stats.record_success(move_type);
+                        triangulation
+                            .geometry_mut()
+                            .record_event(SimulationEvent::MoveAccepted {
+                                move_type: format!("{move_type:?}"),
+                                step: step.into(),
+                                action_change: applied_action - action_before,
+                            });
+                    }
+                    Ok(AcceptedMoveResult::NoApplicableSite { .. }) => {
+                        // A move type can be Metropolis-accepted even when bounded
+                        // random local-site selection finds no realizable site. That
+                        // is an ordinary proposal rejection, not a fatal simulation error.
+                    }
+                    Err(err) => {
+                        return Err(accepted_move_error(
+                            step,
+                            move_type,
+                            err.attempt,
+                            err.source.to_string(),
+                        ));
+                    }
+                }
             }
 
             steps.push(MonteCarloStep {
@@ -505,60 +897,61 @@ fn metropolis_accept(delta_action: f64, temperature: f64, rng: &mut StdRng) -> b
 
 /// Applies an already-accepted move, rolling back and retrying failed sites.
 ///
-/// Once the Metropolis rule accepts a move type, failure to find an applicable
-/// local site is a simulation-level failure after bounded retries. Returning a
-/// structured error keeps that distinct from ordinary Metropolis rejection.
+/// Retry exhaustion means the move type did not bind to a realizable local site
+/// in the bounded random search, so callers record a normal rejection. Hard
+/// backend failures still return a structured error.
+#[derive(Debug, Clone, PartialEq)]
+enum AcceptedMoveResult {
+    Applied {
+        action_after: f64,
+    },
+    NoApplicableSite {
+        last_rejection: Option<CdtProposalSiteRejection>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct MoveApplicationError {
+    attempt: usize,
+    source: CdtError,
+}
+
 fn apply_accepted_move(
     triangulation: &mut CdtTriangulation2D,
     moves: &mut ErgodicsSystem,
     action_config: &ActionConfig,
     move_type: MoveType,
-    step: u32,
     action_before: f64,
-) -> CdtResult<f64> {
-    let mut last_failure = "no application attempt was made".to_string();
+) -> Result<AcceptedMoveResult, MoveApplicationError> {
+    let mut last_rejection = None;
     for attempt in 1..=ACCEPTED_MOVE_RETRIES {
         let snapshot = triangulation.clone();
         let result = attempt_move(moves, move_type, triangulation);
-        match result {
+        let rejection = match result {
             MoveResult::Success => {
                 let action_after = action_for(action_config, triangulation);
-                return Ok(action_after);
+                return Ok(AcceptedMoveResult::Applied { action_after });
             }
             MoveResult::HardFailure(err) => {
                 *triangulation = snapshot;
-                return Err(accepted_move_error(
-                    step,
-                    move_type,
+                return Err(MoveApplicationError {
                     attempt,
-                    format!("hard failure after accepted mutation: {err}"),
-                ));
+                    source: err,
+                });
             }
-            MoveResult::CausalityViolation => {
-                *triangulation = snapshot;
-                last_failure = "causality violation at selected application site".to_string();
-            }
-            MoveResult::GeometricViolation => {
-                *triangulation = snapshot;
-                last_failure = "geometric violation at selected application site".to_string();
-            }
-            MoveResult::Rejected(err) => {
-                *triangulation = snapshot;
-                last_failure = err.to_string();
-            }
-        }
+            MoveResult::CausalityViolation => CdtProposalSiteRejection::CausalityViolation,
+            MoveResult::GeometricViolation => CdtProposalSiteRejection::GeometricViolation,
+            MoveResult::Rejected(err) => CdtProposalSiteRejection::Kernel(err),
+        };
+        *triangulation = snapshot;
+        last_rejection = Some(rejection);
     }
 
     debug_assert!(
         (action_for(action_config, triangulation) - action_before).abs() < f64::EPSILON,
         "failed accepted move retries must leave the triangulation rolled back"
     );
-    Err(accepted_move_error(
-        step,
-        move_type,
-        ACCEPTED_MOVE_RETRIES,
-        last_failure,
-    ))
+    Ok(AcceptedMoveResult::NoApplicableSite { last_rejection })
 }
 
 /// Builds the simulation-level error for an accepted move that could not be applied.
@@ -622,6 +1015,7 @@ impl SimulationResultsBackend {
     /// # Examples
     ///
     /// ```
+    /// use approx::assert_relative_eq;
     /// use causal_triangulations::prelude::simulation::{
     ///     ActionConfig, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
     /// };
@@ -638,7 +1032,7 @@ impl SimulationResultsBackend {
     ///     elapsed_time: Duration::from_millis(0),
     ///     triangulation: tri,
     /// };
-    /// assert_eq!(results.acceptance_rate(), 0.0);
+    /// assert_relative_eq!(results.acceptance_rate(), 0.0);
     /// ```
     #[must_use]
     pub fn acceptance_rate(&self) -> f64 {
@@ -660,6 +1054,7 @@ impl SimulationResultsBackend {
     /// # Examples
     ///
     /// ```
+    /// use approx::assert_relative_eq;
     /// use causal_triangulations::prelude::simulation::{
     ///     ActionConfig, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
     /// };
@@ -676,7 +1071,7 @@ impl SimulationResultsBackend {
     ///     elapsed_time: Duration::from_millis(0),
     ///     triangulation: tri,
     /// };
-    /// assert_eq!(results.average_action(), 0.0);
+    /// assert_relative_eq!(results.average_action(), 0.0);
     /// ```
     #[must_use]
     pub fn average_action(&self) -> f64 {
@@ -735,6 +1130,15 @@ mod tests {
     use super::*;
     use crate::cdt::triangulation::CdtTriangulation;
     use approx::assert_relative_eq;
+    use markov_chain_monte_carlo::Chain;
+
+    fn assert_optional_relative_eq(left: Option<f64>, right: Option<f64>) {
+        match (left, right) {
+            (Some(left), Some(right)) => assert_relative_eq!(left, right, epsilon = 1e-12),
+            (None, None) => {}
+            other => panic!("expected matching optional floats, got {other:?}"),
+        }
+    }
 
     #[test]
     fn test_metropolis_config() {
@@ -857,7 +1261,7 @@ mod tests {
             assert_eq!(first.move_type, second.move_type);
             assert_eq!(first.accepted, second.accepted);
             assert_relative_eq!(first.action_before, second.action_before);
-            assert_eq!(first.delta_action, second.delta_action);
+            assert_optional_relative_eq(first.delta_action, second.delta_action);
         }
     }
 
@@ -932,7 +1336,7 @@ mod tests {
     }
 
     #[test]
-    fn accepted_move_retry_exhaustion_reports_error_and_rolls_back() {
+    fn accepted_move_retry_exhaustion_is_rejection_result_and_rolls_back() {
         let mut triangulation =
             CdtTriangulation::from_seeded_points(3, 1, 2, 53).expect("Failed to create");
         let action_config = ActionConfig::default();
@@ -940,34 +1344,24 @@ mod tests {
         let action_before = action_for(&action_config, &triangulation);
         let mut moves = ErgodicsSystem::with_seed(7);
 
-        let err = apply_accepted_move(
+        let result = apply_accepted_move(
             &mut triangulation,
             &mut moves,
             &action_config,
             MoveType::Move31Remove,
-            17,
             action_before,
         )
-        .expect_err("accepted retry exhaustion should be reported");
+        .expect("site retry exhaustion is an ordinary rejection result");
 
-        match err {
-            CdtError::MetropolisMoveApplicationFailed {
-                step,
-                move_type,
-                attempts,
-                last_failure,
-            } => {
-                assert_eq!(step, 17);
-                assert_eq!(move_type, "Move31Remove");
-                assert_eq!(attempts, ACCEPTED_MOVE_RETRIES);
-                assert!(
-                    last_failure.contains("geometric violation")
-                        || last_failure.contains("Validation failed"),
-                    "unexpected last failure: {last_failure}"
-                );
-            }
-            other => panic!("Expected MetropolisMoveApplicationFailed, got {other:?}"),
-        }
+        let AcceptedMoveResult::NoApplicableSite { last_rejection } = result else {
+            panic!("Expected NoApplicableSite");
+        };
+        assert!(matches!(
+            last_rejection,
+            Some(
+                CdtProposalSiteRejection::GeometricViolation | CdtProposalSiteRejection::Kernel(_)
+            )
+        ));
         assert_eq!(simplex_counts(&triangulation), counts_before);
         assert_relative_eq!(action_for(&action_config, &triangulation), action_before);
     }
@@ -1195,12 +1589,122 @@ mod tests {
     }
 
     #[test]
-    fn cdt_proposal_returns_none() {
-        let proposal = CdtProposal;
-        let mut triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
+    fn cdt_proposal_scores_delayed_plan() {
+        let action_config = ActionConfig::default();
+        let target = CdtTarget::new(action_config.clone(), 1.0);
+        let mut proposal = CdtProposal::with_seed(action_config, 7);
+        let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
         let mut rng = StdRng::seed_from_u64(7);
 
-        assert!(proposal.propose_mut(&mut triangulation, &mut rng).is_none());
-        proposal.undo(&mut triangulation, ());
+        let plan = proposal
+            .propose_plan(&triangulation, &mut rng)
+            .expect("planning should not fail")
+            .expect("CDT proposals always select a move type");
+        let info = proposal.info(&plan);
+        let proposed_log_prob = proposal
+            .proposed_log_prob(&triangulation, &plan, &target)
+            .expect("scoring should not fail");
+
+        assert_eq!(info.move_type, plan.move_type());
+        assert_optional_relative_eq(info.delta_action, plan.delta_action());
+        if let Some(action_after) = plan.action_after() {
+            assert_relative_eq!(proposed_log_prob, -action_after, epsilon = 1e-12);
+        } else {
+            assert!(proposed_log_prob.is_infinite() && proposed_log_prob.is_sign_negative());
+        }
+    }
+
+    #[test]
+    fn cdt_proposal_scores_impossible_plan_as_negative_infinity() {
+        let action_config = ActionConfig::default();
+        let target = CdtTarget::new(action_config.clone(), 1.0);
+        let proposal = CdtProposal::with_seed(action_config, 7);
+        let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
+        let plan = CdtProposalPlan {
+            move_type: MoveType::Move31Remove,
+            action_before: 1.0,
+            action_after: None,
+            delta_action: None,
+            proposed_state: triangulation.clone(),
+        };
+
+        let proposed_log_prob = proposal
+            .proposed_log_prob(&triangulation, &plan, &target)
+            .expect("scoring an impossible count delta should not fail");
+
+        assert!(proposed_log_prob.is_infinite() && proposed_log_prob.is_sign_negative());
+    }
+
+    #[test]
+    fn cdt_proposal_uses_delayed_chain() {
+        let action_config = ActionConfig::default();
+        let target = CdtTarget::new(action_config.clone(), 1.0);
+        let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
+        let mut chain = Chain::new(triangulation, &target)
+            .expect("initial state should have finite log probability");
+        let mut proposal = CdtProposal::with_seed(action_config, 7);
+        let mut rng = StdRng::seed_from_u64(11);
+
+        let step = chain
+            .step_delayed(&target, &mut proposal, &mut rng)
+            .expect("ordinary no-site outcomes must be delayed-step rejections, not errors");
+
+        assert_eq!(step.proposed, step.info.is_some());
+        assert!(!step.accepted || step.log_prob_after.is_some());
+    }
+
+    #[test]
+    fn cdt_proposal_commit_applies_concrete_planned_state() {
+        let action_config = ActionConfig::default();
+        let mut proposal = CdtProposal::with_seed(action_config.clone(), 11);
+        let mut triangulation =
+            CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed to create");
+        let proposed_state =
+            CdtTriangulation::from_seeded_points(6, 1, 2, 59).expect("Failed to create proposal");
+        let proposed_counts = simplex_counts(&proposed_state);
+        let action_before = action_for(&action_config, &triangulation);
+        let action_after = action_for(&action_config, &proposed_state);
+        let plan = CdtProposalPlan {
+            move_type: MoveType::Move13Add,
+            action_before,
+            action_after: Some(action_after),
+            delta_action: Some(action_after - action_before),
+            proposed_state,
+        };
+        let mut rng = StdRng::seed_from_u64(11);
+
+        proposal
+            .commit(&mut triangulation, plan, &mut rng)
+            .expect("committing a concrete plan should swap in the planned state");
+
+        assert_eq!(simplex_counts(&triangulation), proposed_counts);
+        assert_relative_eq!(action_for(&action_config, &triangulation), action_after);
+    }
+
+    #[test]
+    fn cdt_proposal_error_preserves_typed_sources() {
+        let source = CdtError::BackendMutationFailed {
+            operation: "set_vertex_data_by_key".to_string(),
+            target: "vertex VertexKey(7)".to_string(),
+            detail: "missing vertex".to_string(),
+        };
+        let err = CdtProposalError::ApplicationFailed {
+            move_type: MoveType::Move13Add,
+            attempt: 2,
+            source: source.clone(),
+        };
+
+        assert_eq!(
+            Error::source(&err).map(ToString::to_string),
+            Some(source.to_string())
+        );
+        assert!(err.to_string().contains("Move13Add"));
+        assert!(err.to_string().contains("attempt 2"));
+
+        let site_rejection = CdtProposalSiteRejection::Kernel(source.clone());
+        assert_eq!(
+            Error::source(&site_rejection).map(ToString::to_string),
+            Some(source.to_string())
+        );
     }
 }

@@ -5,6 +5,7 @@
 //! This module contains integration tests that verify the complete CDT simulation
 //! workflows, topology preservation, error handling, and consistency between components.
 
+use approx::{abs_diff_eq, assert_relative_eq};
 use causal_triangulations::prelude::action::ActionConfig;
 use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
 use causal_triangulations::prelude::triangulation::CdtTriangulation;
@@ -37,7 +38,7 @@ mod integration_tests {
         assert!(
             results.steps.iter().any(|step| {
                 step.action_after.is_some_and(|action_after| {
-                    (action_after - step.action_before).abs() > f64::EPSILON
+                    !abs_diff_eq!(action_after, step.action_before, epsilon = f64::EPSILON)
                 })
             }),
             "accepted moves should change the action over time"
@@ -165,10 +166,7 @@ mod integration_tests {
 
         // For default config (κ₀=1.0, κ₂=1.0, λ=0.1): S = -V - F + 0.1*E
         let expected = 0.1f64.mul_add(f64::from(edges), -f64::from(vertices) - f64::from(faces));
-        assert!(
-            (action - expected).abs() < f64::EPSILON,
-            "Action formula should match expected calculation"
-        );
+        assert_relative_eq!(action, expected, epsilon = f64::EPSILON);
     }
 
     #[test]

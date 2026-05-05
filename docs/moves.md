@@ -58,7 +58,7 @@ Move validation follows a two-layer design:
 - **Geometry backend** — exposes the edit operations through `TriangulationMut` while preserving the CDT ↔ geometry boundary
 - **CDT crate** — chooses candidate sites, checks causality and time-slice integrity, and resynchronizes foliation metadata after accepted moves
 
-The Metropolis loop accepts or rejects a move type before calling these mutating kernels. If an accepted application fails at its selected site, the simulation restores the pre-application triangulation snapshot and retries at another random site. Exhausting those retries, or encountering a hard backend mutation failure, returns `CdtError::MetropolisMoveApplicationFailed`. See `docs/metropolis.md`.
+The Metropolis loop accepts or rejects a move type before calling these mutating kernels. If an accepted application fails at its selected site, the simulation restores the pre-application triangulation snapshot and retries at another random site. Exhausting those retries is recorded as a rejected proposal; hard backend mutation failures still return `CdtError::MetropolisMoveApplicationFailed`. See `docs/metropolis.md`.
 
 ## Planned Work
 

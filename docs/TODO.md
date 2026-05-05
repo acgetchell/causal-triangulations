@@ -18,8 +18,8 @@ This document tracks all the pending improvements, features, and technical debt 
 
 - [ ] **Weight accepted move-site retries** (`src/cdt/metropolis.rs`)
   - The Metropolis loop now accepts/rejects move types before mutation
-  - Accepted applications currently retry a bounded number of random local sites
-  - Prefer weighting or enumerating available sites so accepted moves do not depend on retry luck
+  - Accepted applications currently retry a bounded number of random local sites and become ordinary rejections when no site is found
+  - Prefer weighting or enumerating available sites so proposals bind to concrete moves before acceptance
   - Ensure proper triangulation state management
 
 ## Medium Priority - Code Quality

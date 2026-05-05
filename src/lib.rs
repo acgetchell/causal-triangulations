@@ -92,8 +92,8 @@ pub use cdt::action::{ActionConfig, compute_regge_action};
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
 pub use cdt::foliation::{CellType, EdgeType, Foliation};
 pub use cdt::metropolis::{
-    CdtProposal, CdtTarget, Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
-    SimulationResultsBackend,
+    CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget, Measurement,
+    MetropolisAlgorithm, MetropolisConfig, MonteCarloStep, SimulationResultsBackend,
 };
 pub use config::{CdtConfig, CdtTopology, TestConfig};
 pub use errors::{CdtError, CdtResult};
@@ -167,11 +167,12 @@ pub mod prelude {
     /// Focused exports for CDT action calculations.
     ///
     /// ```
+    /// use approx::assert_relative_eq;
     /// use causal_triangulations::prelude::action::*;
     ///
     /// let config = ActionConfig::new(2.0, 1.5, 0.2);
     /// let action = config.calculate_action(5, 10, 8);
-    /// assert!((action + 20.0).abs() < 1e-12);
+    /// assert_relative_eq!(action, -20.0, epsilon = 1e-12);
     /// ```
     pub mod action {
         pub use crate::cdt::action::{ActionConfig, compute_regge_action};
@@ -216,13 +217,17 @@ pub mod prelude {
     }
 
     /// Focused exports for running CDT simulations.
+    ///
+    /// This prelude includes the Metropolis runner, delayed proposal adapter,
+    /// telemetry structs, and typed proposal errors needed by MCMC workflows.
     pub mod simulation {
         pub use crate::CdtTriangulation;
         pub use crate::cdt::action::{ActionConfig, compute_regge_action};
         pub use crate::cdt::ergodic_moves::MoveType;
         pub use crate::cdt::metropolis::{
-            CdtProposal, CdtTarget, Measurement, MetropolisAlgorithm, MetropolisConfig,
-            MonteCarloStep, SimulationResultsBackend,
+            CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget,
+            Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
+            SimulationResultsBackend,
         };
         pub use crate::config::{CdtConfig, CdtTopology};
         pub use crate::errors::{CdtError, CdtResult};

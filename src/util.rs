@@ -83,6 +83,7 @@ pub fn generate_random_float() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use approx::abs_diff_eq;
 
     #[test]
     fn test_generate_random_float() {
@@ -105,7 +106,9 @@ mod tests {
 
         // Values should not all be identical (extremely unlikely with proper randomness)
         let first = results[0];
-        let all_same = results.iter().all(|&x| (x - first).abs() < f64::EPSILON);
+        let all_same = results
+            .iter()
+            .all(|&x| abs_diff_eq!(x, first, epsilon = f64::EPSILON));
         assert!(!all_same, "All random values should not be identical");
     }
 

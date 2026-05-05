@@ -46,7 +46,7 @@ This crate is part of a broader Rust ecosystem for computational geometry and si
 
 - [`delaunay`](https://crates.io/crates/delaunay) — geometric primitives and triangulations
 - `la-stack` — linear algebra utilities
-- `markov-chain-monte-carlo` (planned) — a composable MCMC engine to which the current Metropolis–Hastings implementation will migrate
+- [`markov-chain-monte-carlo`](https://crates.io/crates/markov-chain-monte-carlo) — composable MCMC traits, including delayed-commit proposals for CDT move ordering
 
 The long-term design separates:
 
@@ -181,7 +181,7 @@ See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/PE
 - [x] 2D Delaunay triangulation scaffold
 - [ ] 1+1 foliation (causal time‑slicing)
 - [ ] 2D ergodic moves (Alexander/Pachner moves with causal constraints, fully validated)
-- [ ] 2D Metropolis–Hastings (stabilized and moved to `markov-chain-monte-carlo`)
+- [ ] 2D Metropolis–Hastings (stabilized on `markov-chain-monte-carlo` delayed proposals)
 - [ ] Diffusion‑accelerated MCMC (exploration)
 - [ ] Basic visualization hooks (export to common mesh formats)
 - [ ] 3D Delaunay + 2+1 foliation + moves + M–H
