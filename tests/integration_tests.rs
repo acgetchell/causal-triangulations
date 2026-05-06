@@ -113,6 +113,7 @@ mod integration_tests {
             CdtTriangulation::from_random_points(5, 1, 2).expect("Failed to create triangulation");
 
         // Test cache population
+        triangulation.refresh_cache();
         let initial_count = triangulation.edge_count();
         let cached_count = triangulation.edge_count(); // Should use cache
         assert_eq!(initial_count, cached_count);

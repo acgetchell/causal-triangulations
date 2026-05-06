@@ -708,6 +708,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// Records a simulation event without marking the geometry as mutated.
     pub(crate) fn record_event(&mut self, event: SimulationEvent) {
         self.metadata.simulation_history.push(event);
+        self.metadata.last_modified = Instant::now();
     }
 
     /// Clears derived geometry counts so later queries recompute from the backend.
@@ -3035,6 +3036,8 @@ mod tests {
             CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
 
         let initial_history_len = triangulation.metadata().simulation_history.len();
+        let initial_last_modified = triangulation.metadata().last_modified;
+        thread::sleep(Duration::from_millis(5));
 
         triangulation.record_event(SimulationEvent::MoveAttempted {
             move_type: "test_move".to_string(),
@@ -3057,6 +3060,7 @@ mod tests {
             triangulation.metadata().simulation_history.len(),
             initial_history_len + 3
         );
+        assert!(triangulation.metadata().last_modified > initial_last_modified);
 
         // Check the recorded events
         let history = &triangulation.metadata().simulation_history;
