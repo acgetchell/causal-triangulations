@@ -70,6 +70,8 @@ Avoid unnecessary allocations and cloning in public APIs. Prefer returning refer
 
 Only return owned values (`Vec`, `String`, etc.) when necessary.
 
+Do not expose broad mutable access to invariant-heavy CDT wrappers. Prefer narrow mutation methods that perform one operation, invalidate derived caches/bookkeeping, and return a typed `Result`. Tests that need invalid legacy states should use local helpers inside the test module rather than test-only constructors or methods on production impl blocks.
+
 ---
 
 ## Error Handling

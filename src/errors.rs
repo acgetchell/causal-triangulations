@@ -338,13 +338,13 @@ mod tests {
     #[test]
     fn test_vertex_build_failed_error() {
         let error = CdtError::VertexBuildFailed {
-            context: "from_foliated_cylinder vertex 7".to_string(),
+            context: "explicit CDT vertex 7".to_string(),
             underlying_error: "Missing required field: `point`".to_string(),
         };
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Vertex construction failed [from_foliated_cylinder vertex 7]: Missing required field: `point`"
+            "Vertex construction failed [explicit CDT vertex 7]: Missing required field: `point`"
         );
     }
 

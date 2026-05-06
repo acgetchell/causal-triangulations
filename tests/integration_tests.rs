@@ -113,14 +113,15 @@ mod integration_tests {
             CdtTriangulation::from_random_points(5, 1, 2).expect("Failed to create triangulation");
 
         // Test cache population
+        triangulation.refresh_cache();
         let initial_count = triangulation.edge_count();
         let cached_count = triangulation.edge_count(); // Should use cache
         assert_eq!(initial_count, cached_count);
 
-        // Test that cache is invalidated on mutation
-        {
-            let _mut_ref = triangulation.geometry_mut();
-        }
+        // Test that cache is invalidated by a safe metadata mutation.
+        triangulation
+            .set_time_slices(2)
+            .expect("open-boundary time-slice metadata can be widened");
 
         let recalculated_count = triangulation.edge_count();
         assert_eq!(

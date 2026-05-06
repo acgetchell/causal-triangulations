@@ -23,8 +23,6 @@ use std::fmt;
 use std::hint::cold_path;
 use std::time::{Duration, Instant};
 
-// Test utilities are now handled through backend-agnostic CdtTriangulation::new
-
 const ACCEPTED_MOVE_RETRIES: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -714,22 +712,18 @@ impl MetropolisAlgorithm {
 
         let mut current_action = action_for(&self.action_config, &triangulation);
         measurements.push(measurement_for(0, current_action, &triangulation));
-        triangulation
-            .geometry_mut()
-            .record_event(SimulationEvent::MeasurementTaken {
-                step: 0,
-                action: current_action,
-            });
+        triangulation.record_event(SimulationEvent::MeasurementTaken {
+            step: 0,
+            action: current_action,
+        });
 
         for step in 1..=self.config.steps {
             let move_type = moves.select_random_move();
             move_stats.record_attempt(move_type);
-            triangulation
-                .geometry_mut()
-                .record_event(SimulationEvent::MoveAttempted {
-                    move_type: format!("{move_type:?}"),
-                    step: step.into(),
-                });
+            triangulation.record_event(SimulationEvent::MoveAttempted {
+                move_type: format!("{move_type:?}"),
+                step: step.into(),
+            });
 
             let action_before = current_action;
             let delta_action = proposed_delta_action(
@@ -757,13 +751,11 @@ impl MetropolisAlgorithm {
                         action_after = Some(applied_action);
                         current_action = applied_action;
                         move_stats.record_success(move_type);
-                        triangulation
-                            .geometry_mut()
-                            .record_event(SimulationEvent::MoveAccepted {
-                                move_type: format!("{move_type:?}"),
-                                step: step.into(),
-                                action_change: applied_action - action_before,
-                            });
+                        triangulation.record_event(SimulationEvent::MoveAccepted {
+                            move_type: format!("{move_type:?}"),
+                            step: step.into(),
+                            action_change: applied_action - action_before,
+                        });
                     }
                     Ok(AcceptedMoveResult::NoApplicableSite { .. }) => {
                         // A move type can be Metropolis-accepted even when bounded
@@ -792,12 +784,10 @@ impl MetropolisAlgorithm {
 
             if step.is_multiple_of(self.config.measurement_frequency) {
                 measurements.push(measurement_for(step, current_action, &triangulation));
-                triangulation
-                    .geometry_mut()
-                    .record_event(SimulationEvent::MeasurementTaken {
-                        step: step.into(),
-                        action: current_action,
-                    });
+                triangulation.record_event(SimulationEvent::MeasurementTaken {
+                    step: step.into(),
+                    action: current_action,
+                });
             }
         }
 
