@@ -545,20 +545,18 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuer
         D
     }
 
-    fn vertices(&self) -> Box<dyn Iterator<Item = Self::VertexHandle> + '_> {
-        Box::new(
-            self.dt
-                .vertices()
-                .map(|(key, _)| DelaunayVertexHandle { key }),
-        )
+    fn vertices(&self) -> impl Iterator<Item = Self::VertexHandle> + '_ {
+        self.dt
+            .vertices()
+            .map(|(key, _)| DelaunayVertexHandle { key })
     }
 
-    fn edges(&self) -> Box<dyn Iterator<Item = Self::EdgeHandle> + '_> {
-        Box::new(self.dt.edges().map(|key| DelaunayEdgeHandle { key }))
+    fn edges(&self) -> impl Iterator<Item = Self::EdgeHandle> + '_ {
+        self.dt.edges().map(|key| DelaunayEdgeHandle { key })
     }
 
-    fn faces(&self) -> Box<dyn Iterator<Item = Self::FaceHandle> + '_> {
-        Box::new(self.dt.cells().map(|(key, _)| DelaunayFaceHandle { key }))
+    fn faces(&self) -> impl Iterator<Item = Self::FaceHandle> + '_ {
+        self.dt.cells().map(|(key, _)| DelaunayFaceHandle { key })
     }
 
     fn vertex_coordinates(
@@ -775,14 +773,20 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
         coords: &[Self::Coordinate],
     ) -> Result<Self::VertexHandle, Self::Error> {
         let vertex = Self::build_vertex(coords, None, "insert_vertex")?;
-        let key = self
-            .dt
-            .insert(vertex)
-            .map_err(|err| DelaunayError::InsertionFailed {
-                operation: "insert_vertex",
-                coordinates: coords.to_vec(),
-                detail: err.to_string(),
-            })?;
+        let dt_before = self.dt.clone();
+        let facets_before = self.interior_facets_by_edge.clone();
+        let key = match self.dt.insert(vertex) {
+            Ok(key) => key,
+            Err(err) => {
+                self.dt = dt_before;
+                self.interior_facets_by_edge = facets_before;
+                return Err(DelaunayError::InsertionFailed {
+                    operation: "insert_vertex",
+                    coordinates: coords.to_vec(),
+                    detail: err.to_string(),
+                });
+            }
+        };
         self.rebuild_interior_facet_index();
         Ok(DelaunayVertexHandle { key })
     }
@@ -795,14 +799,20 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
             return Err(DelaunayError::InvalidVertex { key: vertex.key });
         }
 
-        let info = self
-            .dt
-            .flip_k1_remove(vertex.key)
-            .map_err(|err| DelaunayError::FlipFailed {
-                operation: "flip_k1_remove",
-                target: format!("vertex {:?}", vertex.key),
-                detail: err.to_string(),
-            })?;
+        let dt_before = self.dt.clone();
+        let facets_before = self.interior_facets_by_edge.clone();
+        let info = match self.dt.flip_k1_remove(vertex.key) {
+            Ok(info) => info,
+            Err(err) => {
+                self.dt = dt_before;
+                self.interior_facets_by_edge = facets_before;
+                return Err(DelaunayError::FlipFailed {
+                    operation: "flip_k1_remove",
+                    target: format!("vertex {:?}", vertex.key),
+                    detail: err.to_string(),
+                });
+            }
+        };
         self.rebuild_interior_facet_index();
         Ok(info
             .new_cells
@@ -841,29 +851,58 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
                 v1: edge.key.v1(),
             });
         };
-        let info = self
-            .dt
-            .flip_k2(facet)
-            .map_err(|err| DelaunayError::FlipFailed {
-                operation: "flip_k2",
-                target: format!(
-                    "edge {:?} -- {:?} via facet {:?}",
-                    edge.key.v0(),
-                    edge.key.v1(),
-                    facet
-                ),
-                detail: err.to_string(),
-            })?;
-        self.rebuild_interior_facet_index();
-        let inserted: Vec<_> = info.inserted_face_vertices.iter().copied().collect();
-        let [v0, v1] = inserted.as_slice() else {
+        let dt_before = self.dt.clone();
+        let facets_before = self.interior_facets_by_edge.clone();
+        let info = match self.dt.flip_k2(facet) {
+            Ok(info) => info,
+            Err(err) => {
+                self.dt = dt_before;
+                self.interior_facets_by_edge = facets_before;
+                return Err(DelaunayError::FlipFailed {
+                    operation: "flip_k2",
+                    target: format!(
+                        "edge {:?} -- {:?} via facet {:?}",
+                        edge.key.v0(),
+                        edge.key.v1(),
+                        facet
+                    ),
+                    detail: err.to_string(),
+                });
+            }
+        };
+        let mut inserted = info.inserted_face_vertices.iter().copied();
+        let Some(v0) = inserted.next() else {
+            self.dt = dt_before;
+            self.interior_facets_by_edge = facets_before;
             return Err(DelaunayError::UnexpectedFlipOutput {
                 operation: "flip_k2",
                 target: format!("edge {:?} -- {:?}", edge.key.v0(), edge.key.v1()),
                 expected: "exactly two inserted-face vertices for the replacement edge",
-                actual: format!("{} inserted-face vertices", inserted.len()),
+                actual: "0 inserted-face vertices".to_string(),
             });
         };
+        let Some(v1) = inserted.next() else {
+            self.dt = dt_before;
+            self.interior_facets_by_edge = facets_before;
+            return Err(DelaunayError::UnexpectedFlipOutput {
+                operation: "flip_k2",
+                target: format!("edge {:?} -- {:?}", edge.key.v0(), edge.key.v1()),
+                expected: "exactly two inserted-face vertices for the replacement edge",
+                actual: "1 inserted-face vertices".to_string(),
+            });
+        };
+        if let Some(extra) = inserted.next() {
+            self.dt = dt_before;
+            self.interior_facets_by_edge = facets_before;
+            let actual = 3 + inserted.count();
+            return Err(DelaunayError::UnexpectedFlipOutput {
+                operation: "flip_k2",
+                target: format!("edge {:?} -- {:?}", edge.key.v0(), edge.key.v1()),
+                expected: "exactly two inserted-face vertices for the replacement edge",
+                actual: format!("{actual} inserted-face vertices including unexpected {extra:?}"),
+            });
+        }
+        self.rebuild_interior_facet_index();
         let affected_faces = info
             .new_cells
             .iter()
@@ -872,7 +911,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
             .collect();
         Ok(FlipResult::new(
             DelaunayEdgeHandle {
-                key: EdgeKey::new(*v0, *v1),
+                key: EdgeKey::new(v0, v1),
             },
             affected_faces,
         ))
@@ -892,23 +931,43 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
         }
 
         let vertex = Self::build_vertex(point, None, "subdivide_face")?;
-        let info =
-            self.dt
-                .flip_k1_insert(face.key, vertex)
-                .map_err(|err| DelaunayError::FlipFailed {
+        let dt_before = self.dt.clone();
+        let facets_before = self.interior_facets_by_edge.clone();
+        let info = match self.dt.flip_k1_insert(face.key, vertex) {
+            Ok(info) => info,
+            Err(err) => {
+                self.dt = dt_before;
+                self.interior_facets_by_edge = facets_before;
+                return Err(DelaunayError::FlipFailed {
                     operation: "flip_k1_insert",
                     target: format!("face {:?} at point {:?}", face.key, point),
                     detail: err.to_string(),
-                })?;
-        self.rebuild_interior_facet_index();
-        let Some(&new_vertex) = info.inserted_face_vertices.first() else {
+                });
+            }
+        };
+        let mut inserted = info.inserted_face_vertices.iter().copied();
+        let Some(new_vertex) = inserted.next() else {
+            self.dt = dt_before;
+            self.interior_facets_by_edge = facets_before;
             return Err(DelaunayError::UnexpectedFlipOutput {
                 operation: "flip_k1_insert",
                 target: format!("face {:?} at point {:?}", face.key, point),
-                expected: "at least one inserted-face vertex for the inserted point",
-                actual: "no inserted-face vertices".to_string(),
+                expected: "exactly one inserted-face vertex for the inserted point",
+                actual: "0 inserted-face vertices".to_string(),
             });
         };
+        if let Some(extra) = inserted.next() {
+            self.dt = dt_before;
+            self.interior_facets_by_edge = facets_before;
+            let actual = 2 + inserted.count();
+            return Err(DelaunayError::UnexpectedFlipOutput {
+                operation: "flip_k1_insert",
+                target: format!("face {:?} at point {:?}", face.key, point),
+                expected: "exactly one inserted-face vertex for the inserted point",
+                actual: format!("{actual} inserted-face vertices including unexpected {extra:?}"),
+            });
+        }
+        self.rebuild_interior_facet_index();
         Ok(SubdivisionResult::new(
             DelaunayVertexHandle { key: new_vertex },
             info.new_cells
@@ -945,6 +1004,51 @@ mod tests {
     use slotmap::KeyData;
 
     use super::*;
+
+    #[test]
+    fn test_delaunay_mutation_error_messages_preserve_context() {
+        let insertion = DelaunayError::InsertionFailed {
+            operation: "insert_vertex",
+            coordinates: vec![0.25, 0.75],
+            detail: "duplicate point".to_string(),
+        };
+        assert_eq!(
+            insertion.to_string(),
+            "insert_vertex insertion failed at [0.25, 0.75]: duplicate point"
+        );
+
+        let flip = DelaunayError::FlipFailed {
+            operation: "flip_k2",
+            target: "edge VertexKey(1v1) -- VertexKey(2v1)".to_string(),
+            detail: "non-convex cavity".to_string(),
+        };
+        assert_eq!(
+            flip.to_string(),
+            "flip_k2 failed on edge VertexKey(1v1) -- VertexKey(2v1): non-convex cavity"
+        );
+
+        let malformed = DelaunayError::UnexpectedFlipOutput {
+            operation: "flip_k2",
+            target: "edge VertexKey(1v1) -- VertexKey(2v1)".to_string(),
+            expected: "exactly two inserted-face vertices for the replacement edge",
+            actual: "1 inserted-face vertices".to_string(),
+        };
+        assert_eq!(
+            malformed.to_string(),
+            "flip_k2 returned unexpected output for edge VertexKey(1v1) -- VertexKey(2v1): expected exactly two inserted-face vertices for the replacement edge, got 1 inserted-face vertices"
+        );
+
+        let malformed_insert = DelaunayError::UnexpectedFlipOutput {
+            operation: "flip_k1_insert",
+            target: "face CellKey(3v1) at point [0.5, 0.5]".to_string(),
+            expected: "exactly one inserted-face vertex for the inserted point",
+            actual: "2 inserted-face vertices including unexpected VertexKey(4v1)".to_string(),
+        };
+        assert_eq!(
+            malformed_insert.to_string(),
+            "flip_k1_insert returned unexpected output for face CellKey(3v1) at point [0.5, 0.5]: expected exactly one inserted-face vertex for the inserted point, got 2 inserted-face vertices including unexpected VertexKey(4v1)"
+        );
+    }
 
     #[test]
     fn test_is_delaunay_various_sizes() {
@@ -1462,12 +1566,14 @@ mod tests {
         let backend = DelaunayBackend::from_triangulation(dt);
 
         // Test all vertices are accessible
-        let vertices: Vec<_> = backend.vertices().collect();
-        assert_eq!(vertices.len(), 3, "Should have exactly 3 vertices");
+        assert_eq!(
+            backend.vertices().count(),
+            3,
+            "Should have exactly 3 vertices"
+        );
 
         // Test all edges are accessible
-        let edges: Vec<_> = backend.edges().collect();
-        assert_eq!(edges.len(), 3, "Should have exactly 3 edges");
+        assert_eq!(backend.edges().count(), 3, "Should have exactly 3 edges");
 
         // Test face is accessible
         let faces: Vec<_> = backend.faces().collect();

@@ -55,8 +55,10 @@ Accepted moves mutate the triangulation through narrow CDT-owned edit operations
 Move validation follows a two-layer design:
 
 - **`delaunay` crate** — pure geometric operations (`flip_k2`, `flip_k1_insert`, `flip_k1_remove`) with no physics constraints
-- **Geometry backend** — exposes the edit operations through `TriangulationMut` while preserving the CDT ↔ geometry boundary
-- **CDT crate** — chooses candidate sites, checks causality and time-slice integrity, and resynchronizes foliation metadata after accepted moves
+- **Geometry backend interface layer (`src/geometry/`)** — wraps upstream Delaunay operations behind crate-owned traits and handles
+- **CDT domain layer (`src/cdt/`)** — chooses candidate sites, checks causality and time-slice integrity, and resynchronizes foliation metadata after accepted moves
+
+Move code lives in the CDT domain layer. It may call `DelaunayBackend2D` methods and trait-backed mutation hooks, but it must not import upstream `delaunay::` APIs directly.
 
 Public `attempt_*` methods snapshot only after a valid local site has been selected and mutation is about to begin; ordinary geometric or causal rejections do not clone the triangulation. If a selected mutation or required post-mutation synchronization fails, the method restores that snapshot before returning the non-success `MoveResult`. Toroidal post-move topology or closed-ring foliation failures are treated as rollbackable local-site rejections, because the candidate site was geometrically editable but would break the periodic CDT contract.
 

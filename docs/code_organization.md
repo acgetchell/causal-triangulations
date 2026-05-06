@@ -89,7 +89,13 @@ causal-triangulations/
 │   │   ├── foliation.rs
 │   │   ├── metropolis.rs
 │   │   ├── observables.rs
-│   │   └── triangulation.rs
+│   │   ├── results.rs
+│   │   ├── triangulation.rs
+│   │   └── triangulation/
+│   │       ├── builders.rs
+│   │       ├── foliation.rs
+│   │       ├── moves.rs
+│   │       └── validation.rs
 │   ├── geometry/
 │   │   ├── backends/
 │   │   │   ├── delaunay.rs
@@ -143,6 +149,15 @@ causal-triangulations/
 └── uv.lock
 ```
 
+## Architecture Layers
+
+The crate is split into two intentionally different layers:
+
+- `src/geometry/` is the backend interface layer. It is the only layer that talks directly to the `delaunay` crate, wrapping upstream types behind crate-owned traits, opaque handles, generators, and backend adapters.
+- `src/cdt/` is the CDT domain layer. It owns causal triangulation semantics: foliation, topology and causality checks, ergodic moves, Regge action, Metropolis sampling, measurements, and observables.
+
+Code outside `src/geometry/` must not import `delaunay::` directly. CDT modules should depend on `TriangulationQuery` / `TriangulationMut`, crate-owned Delaunay handle wrappers, `DelaunayBackend2D`, and generator functions from `crate::geometry`.
+
 ## Key Modules
 
 ### `cdt/foliation.rs` — Foliation
@@ -156,12 +171,22 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 
 ### `cdt/triangulation.rs` — Foliation integration
 
+This is CDT domain logic layered over the geometry backend interface. It may use `DelaunayBackend2D` and crate-owned Delaunay handles, but it does not reach through to upstream `delaunay::` APIs directly.
+
+- Owns the `CdtTriangulation` wrapper, `CdtMetadata`, `SimulationEvent`, metadata validation, cached simplex-count accessors, and common backend-agnostic wrapper methods
 - `from_cdt_strip(vertices_per_slice, num_slices)` — explicit open-boundary 1+1 CDT strip with strict Up/Down cell classification
 - `from_toroidal_cdt(vertices_per_slice, num_slices)` — explicit S¹×S¹ toroidal CDT (χ = 0); requires `vertices_per_slice ≥ 3` and `num_slices ≥ 3`
 - `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`
 - Validation: `validate_topology()` (χ expectation depends on `CdtTopology`), `validate_foliation()` (structural; closed S¹ spacelike rings on toroidal), `validate_causality()` (no edge spans >1 slice), `validate_cell_classification()` (strict Up/Down cell classification and validation pass)
 - Mutable backend access is not exposed. CDT code mutates Delaunay state only through narrow crate-internal operations (`flip_edge`, `subdivide_face`, `remove_vertex`, `set_vertex_data`) that invalidate cached counts and foliation synchronization bookkeeping on success.
+
+The implementation is split into child modules under `src/cdt/triangulation/`:
+
+- `builders.rs` — Delaunay-backed random/seeded/labeled builders plus explicit strip and toroidal CDT builders
+- `foliation.rs` — foliation assignment, slice and label queries, volume profiles, cell/edge classification, and foliation synchronization
+- `moves.rs` — narrow crate-internal Delaunay mutation hooks used by ergodic moves
+- `validation.rs` — full CDT validation and Delaunay-backed causality checks
 
 ### `config.rs` — `CdtTopology` enum
 
@@ -174,12 +199,32 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 
 `MetropolisAlgorithm::run()` proposes a move type, computes `ΔS` from the move's simplex-count delta, accepts or rejects the proposal, and only mutates the triangulation after acceptance. Accepted applications that fail are rolled back from a triangulation snapshot and retried at another random local site; retry exhaustion is recorded as a rejection, while hard backend failures remain structured errors. Toroidal move finalization rejects and rolls back candidate sites that would violate χ = 0 or the closed-S¹ per-slice foliation invariant. See `docs/metropolis.md` for the detailed ordering.
 
+### `cdt/results.rs` — Simulation outputs
+
+- `Measurement` records per-step action, simplex counts, and optional per-slice volume profiles.
+- `SimulationResultsBackend` owns the final triangulation, Monte Carlo step telemetry, move statistics, and measurement history.
+- Result methods summarize acceptance rate, average action, post-thermalization volume profiles, sample volume fluctuations, and final-state Hausdorff/spectral dimension estimates.
+
 ### `cdt/observables.rs` — User-facing estimators
 
 - `estimate_hausdorff_dimension` — estimates Hausdorff dimension from combinatorial dual-graph geodesic ball growth, returning `None` when the triangulation is too small or live face adjacency cannot be resolved
 - `estimate_spectral_dimension` — estimates spectral dimension from dual-graph diffusion return probability, returning `None` when the graph is too small or lacks enough positive return-probability samples for a fit
 - `CdtTriangulation::volume_profile` measures per-slice triangle counts on a triangulation; `SimulationResultsBackend` provides aggregate volume-profile summaries for simulation outputs
 - Import triangulation-focused analysis APIs through `prelude::observables`; use `prelude::simulation` when constructing or inspecting simulation result containers
+
+### `geometry/traits.rs` — Backend-neutral interface
+
+- `GeometryBackend` defines associated coordinate, handle, and error types for a geometry implementation
+- `TriangulationQuery` is the read-only surface used by CDT logic for counts, handles, adjacency, coordinates, face vertices, and validation
+- `TriangulationMut` is the narrow mutation surface used by CDT-owned move kernels through wrapper methods, not broad mutable backend exposure
+- Result structs such as `FlipResult`, `EdgeAdjacentFaces`, and `SubdivisionResult` keep local topology operations backend-neutral
+
+### `geometry/backends/delaunay.rs` — Delaunay adapter
+
+- Wraps the upstream `delaunay` triangulation in `DelaunayBackend`
+- Defines crate-owned opaque handles (`DelaunayVertexHandle`, `DelaunayEdgeHandle`, `DelaunayFaceHandle`) so CDT code does not depend on upstream key types
+- Translates upstream Delaunay operations and errors into this crate's trait contracts
+- Together with `geometry/generators.rs`, this is the only place that directly imports from the `delaunay` crate
 
 ### `geometry/generators.rs` — Delaunay triangulation generators
 

@@ -332,30 +332,9 @@ fn bench_simulation_analysis(c: &mut Criterion) {
             },
         ],
         measurements: vec![
-            Measurement {
-                step: 0,
-                action: 12.5,
-                vertices: 15,
-                edges: 32,
-                triangles: 18,
-                volume_profile: vec![9, 9, 0],
-            },
-            Measurement {
-                step: 10,
-                action: 11.8,
-                vertices: 16,
-                edges: 34,
-                triangles: 19,
-                volume_profile: vec![9, 10, 0],
-            },
-            Measurement {
-                step: 20,
-                action: 12.1,
-                vertices: 15,
-                edges: 31,
-                triangles: 17,
-                volume_profile: vec![8, 9, 0],
-            },
+            Measurement::new(0, 12.5, 15, 32, 18).with_volume_profile(vec![9, 9, 0]),
+            Measurement::new(10, 11.8, 16, 34, 19).with_volume_profile(vec![9, 10, 0]),
+            Measurement::new(20, 12.1, 15, 31, 17).with_volume_profile(vec![8, 9, 0]),
         ],
         elapsed_time: Duration::from_millis(37),
         triangulation,
@@ -372,6 +351,34 @@ fn bench_simulation_analysis(c: &mut Criterion) {
         b.iter(|| {
             let avg = results.average_action();
             black_box(avg)
+        });
+    });
+
+    group.bench_function("average_volume_profile", |b| {
+        b.iter(|| {
+            let profile = results.average_volume_profile();
+            black_box(profile)
+        });
+    });
+
+    group.bench_function("volume_fluctuations", |b| {
+        b.iter(|| {
+            let fluctuations = results.volume_fluctuations();
+            black_box(fluctuations)
+        });
+    });
+
+    group.bench_function("hausdorff_dimension_estimate", |b| {
+        b.iter(|| {
+            let estimate = results.hausdorff_dimension_estimate();
+            black_box(estimate)
+        });
+    });
+
+    group.bench_function("spectral_dimension_estimate", |b| {
+        b.iter(|| {
+            let estimate = results.spectral_dimension_estimate();
+            black_box(estimate)
         });
     });
 

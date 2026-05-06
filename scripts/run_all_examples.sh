@@ -24,11 +24,15 @@ DESCRIPTION:
     All examples run in release mode (--release).
 
 OPTIONS:
-    -h, --help     Show this help message and exit
+    -h, --help       Show this help message and exit
+    --validate       Require stable output markers for known examples
 
 EXAMPLES:
     # Run all examples
     ./scripts/run_all_examples.sh
+
+    # Run all examples and validate stable output markers
+    ./scripts/run_all_examples.sh --validate
 
     # Show help
     ./scripts/run_all_examples.sh --help
@@ -49,12 +53,17 @@ EOF
 
 # Script to run all examples in the causal-triangulations project
 
+VALIDATE_OUTPUT=false
+
 # Parse command line arguments
 for arg in "$@"; do
 	case $arg in
 	-h | --help)
 		show_help
 		exit 0
+		;;
+	--validate)
+		VALIDATE_OUTPUT=true
 		;;
 	*)
 		error_exit "Unknown option: $arg. Use --help for usage information."
@@ -114,7 +123,6 @@ if [ ${#all_examples[@]} -eq 0 ]; then
 	error_exit "No examples found under ${PROJECT_ROOT}/examples"
 fi
 
-# Run all examples
 TIMEOUT_CMD=""
 if command -v timeout >/dev/null 2>&1; then
 	TIMEOUT_CMD="timeout"
@@ -122,19 +130,77 @@ elif command -v gtimeout >/dev/null 2>&1; then
 	TIMEOUT_CMD="gtimeout"
 fi
 
-for example in "${all_examples[@]}"; do
-	echo "=== Running $example ==="
+run_cargo_example() {
+	local example="$1"
+
 	if [[ -n "$TIMEOUT_CMD" ]]; then
 		DURATION="${EXAMPLE_TIMEOUT:-600s}"
 		# If DURATION has no unit suffix, assume seconds
 		case "$DURATION" in *[a-zA-Z]) ;; *) DURATION="${DURATION}s" ;; esac
 		"$TIMEOUT_CMD" --preserve-status --signal=TERM --kill-after=10s "$DURATION" \
-			cargo run --release --example "$example" || error_exit "Example $example failed!"
+			cargo run --release --example "$example"
 	else
-		cargo run --release --example "$example" || error_exit "Example $example failed!"
+		cargo run --release --example "$example"
+	fi
+}
+
+require_marker() {
+	local example="$1"
+	local output="$2"
+	local marker="$3"
+
+	case "$output" in
+	*"$marker"*) ;;
+	*)
+		error_exit "Example $example output did not contain required marker: $marker"
+		;;
+	esac
+}
+
+validate_example_output() {
+	local example="$1"
+	local output="$2"
+
+	case "$example" in
+	basic_cdt)
+		require_marker "$example" "$output" "Simulation completed!"
+		require_marker "$example" "$output" "Example completed successfully!"
+		;;
+	observables)
+		require_marker "$example" "$output" "Initial volume profile"
+		require_marker "$example" "$output" "Final Hausdorff-dimension estimate"
+		require_marker "$example" "$output" "Final spectral-dimension estimate"
+		;;
+	find_good_seeds)
+		require_marker "$example" "$output" "SEED VALIDATION"
+		require_marker "$example" "$output" "ADDITIONAL SEED TESTING"
+		;;
+	*)
+		echo "No stable output markers configured for $example; success-only validation applied."
+		;;
+	esac
+}
+
+# Run all examples
+for example in "${all_examples[@]}"; do
+	echo "=== Running $example ==="
+	if [[ "$VALIDATE_OUTPUT" == true ]]; then
+		if output=$(run_cargo_example "$example" 2>&1); then
+			printf '%s\n' "$output"
+			validate_example_output "$example" "$output"
+		else
+			printf '%s\n' "$output"
+			error_exit "Example $example failed!"
+		fi
+	else
+		run_cargo_example "$example" || error_exit "Example $example failed!"
 	fi
 done
 
 echo
 echo "=============================================="
-echo "All examples completed successfully!"
+if [[ "$VALIDATE_OUTPUT" == true ]]; then
+	echo "All examples completed successfully with validated output markers!"
+else
+	echo "All examples completed successfully!"
+fi

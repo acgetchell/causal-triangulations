@@ -199,8 +199,10 @@ scripts/tag_release.py # Annotated release tags from root or archived changelog 
 1. **Start working on a feature/fix**:
 
    ```bash
-   git checkout -b feature/your-feature-name
+   git checkout -b fix/307-topology-validation
    ```
+
+   Branch names should follow `{type}/{issue}-descriptor-or-two`, such as `fix/307-topology-validation` or `perf/315-bench-profile`.
 
 2. **Development cycle**:
 

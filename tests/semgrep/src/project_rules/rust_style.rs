@@ -58,6 +58,40 @@ fn nonfinite_conversion_default_fixture(value: Option<f64>) {
     let _ = value.unwrap_or(f64::MAX);
 }
 
+fn production_unwrap_and_panic_fixture(result: Result<u32, &'static str>, value: Option<u32>) {
+    // ruleid: causal-triangulations.rust.no-bare-unwrap-in-src
+    let _ = result.unwrap();
+
+    // ruleid: causal-triangulations.rust.no-bare-unwrap-in-src
+    let _ = value.unwrap();
+
+    // ok: causal-triangulations.rust.no-bare-unwrap-in-src
+    let _ = result.unwrap_or(0);
+
+    // ruleid: causal-triangulations.rust.no-panic-in-src
+    panic!("production code should return a typed error");
+}
+
+#[cfg(test)]
+fn test_only_unwrap_and_panic_fixture(result: Result<u32, &'static str>) {
+    // ok: causal-triangulations.rust.no-bare-unwrap-in-src
+    let _ = result.unwrap();
+
+    // ok: causal-triangulations.rust.no-panic-in-src
+    panic!("tests may fail fast");
+}
+
+#[cfg(test)]
+mod prop_tests {
+    fn helper(result: Result<u32, &'static str>) {
+        // ok: causal-triangulations.rust.no-bare-unwrap-in-src
+        let _ = result.unwrap();
+
+        // ok: causal-triangulations.rust.no-panic-in-src
+        panic!("tests may fail fast");
+    }
+}
+
 // ruleid: causal-triangulations.rust.expect-requires-reason
 #[expect(clippy::too_many_lines)]
 fn expect_without_reason_fixture() {}

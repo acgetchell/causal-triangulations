@@ -144,6 +144,7 @@ mod tests {
 
     #[test]
     fn test_saturating_usize_to_u32_overflow() {
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(saturating_usize_to_u32(u32::MAX as usize + 1), u32::MAX);
         assert_eq!(saturating_usize_to_u32(usize::MAX), u32::MAX);
     }

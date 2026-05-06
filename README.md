@@ -58,7 +58,7 @@ The long-term design separates:
 - **Sampling** (MCMC algorithms)
 - **Physics** (CDT-specific dynamics and observables)
 
-This crate focuses on the CDT (physics + domain) layer.
+Within this crate, `src/geometry/` is the backend interface layer over `delaunay`, while `src/cdt/` is the CDT domain layer.
 
 ## 🤝 How to Contribute
 

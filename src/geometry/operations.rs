@@ -80,7 +80,7 @@ impl<V: Hash> Hash for UnorderedSet<V> {
 ///
 /// For simplices (Delaunay cells), a facet is the set of all cell vertices excluding one vertex.
 /// Any facet that appears in exactly one cell is on the boundary.
-fn boundary_facets<B: TriangulationQuery + ?Sized>(tri: &B) -> Vec<Vec<B::VertexHandle>> {
+fn boundary_facets<B: TriangulationQuery>(tri: &B) -> Vec<Vec<B::VertexHandle>> {
     // Map: facet key -> (occurrence count, representative vertex list)
     type FacetCounts<V> = HashMap<UnorderedSet<V>, (usize, Vec<V>)>;
     let mut facet_counts: FacetCounts<B::VertexHandle> = HashMap::new();
@@ -131,7 +131,7 @@ fn boundary_facets<B: TriangulationQuery + ?Sized>(tri: &B) -> Vec<Vec<B::Vertex
 }
 
 /// Common utility operations for triangulations
-pub trait TriangulationOps: TriangulationQuery {
+pub trait TriangulationOps: TriangulationQuery + Sized {
     /// Check if the triangulation satisfies Delaunay property (if applicable)
     ///
     /// # Examples
@@ -287,16 +287,16 @@ mod tests {
             1
         }
 
-        fn vertices(&self) -> Box<dyn Iterator<Item = Self::VertexHandle> + '_> {
-            Box::new(self.vertices.iter().copied())
+        fn vertices(&self) -> impl Iterator<Item = Self::VertexHandle> + '_ {
+            self.vertices.iter().copied()
         }
 
-        fn edges(&self) -> Box<dyn Iterator<Item = Self::EdgeHandle> + '_> {
-            Box::new(self.edges.iter().map(|(edge, _)| *edge))
+        fn edges(&self) -> impl Iterator<Item = Self::EdgeHandle> + '_ {
+            self.edges.iter().map(|(edge, _)| *edge)
         }
 
-        fn faces(&self) -> Box<dyn Iterator<Item = Self::FaceHandle> + '_> {
-            Box::new(self.faces.iter().map(|(face, _)| *face))
+        fn faces(&self) -> impl Iterator<Item = Self::FaceHandle> + '_ {
+            self.faces.iter().map(|(face, _)| *face)
         }
 
         fn vertex_coordinates(

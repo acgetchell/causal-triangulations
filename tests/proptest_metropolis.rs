@@ -26,7 +26,8 @@ proptest! {
         let tri = test_triangulation();
         let action_config = ActionConfig::new(coupling_0, coupling_2, cosmological_constant);
 
-        let target = CdtTarget::new(action_config.clone(), temperature);
+        let target = CdtTarget::new(action_config.clone(), temperature)
+            .expect("generated action config and temperature are valid");
 
         let log_prob = target.log_prob(&tri);
 

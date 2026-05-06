@@ -145,6 +145,8 @@ just ci
 
 Refer to `docs/dev/commands.md` for full details.
 
+When adding or renaming Cargo examples, update `just validate-examples` markers as needed so CI keeps validating the user-facing example contracts.
+
 For tooling-alignment work, update `docs/dev/tooling-alignment.md` with the comparison and rationale before adding or changing config, workflow, or repository-rule files.
 
 ---
@@ -170,8 +172,8 @@ Key principle:
 - **MSRV**: 1.95.0
 - **Edition**: 2024
 - **Unsafe code**: forbidden (`#![forbid(unsafe_code)]`)
-- **Architecture**: CDT physics layered over a pluggable geometry backend (`delaunay` crate). Direct `use delaunay::` imports are restricted to `src/geometry/` (`backends/delaunay.rs` and `generators.rs`); all other modules use the trait-based abstractions and `DelaunayBackend2D` type alias (see `docs/dev/rust.md § Geometry Backend Isolation`)
-- **Modules**: `src/cdt/` (CDT logic: moves, action, Metropolis, foliation, observables), `src/geometry/` (geometry abstractions and backends), `src/config.rs` (simulation configuration)
+- **Architecture**: `src/geometry/` is the backend interface layer for the `delaunay` crate; `src/cdt/` is the CDT domain layer. Direct `use delaunay::` imports are restricted to `src/geometry/` (`backends/delaunay.rs` and `generators.rs`); CDT modules use the trait-based abstractions, crate-owned Delaunay handles, generator utilities, and `DelaunayBackend2D` type alias (see `docs/dev/rust.md § Geometry Backend Isolation`)
+- **Modules**: `src/cdt/` (CDT logic: moves, action, Metropolis, foliation, observables, results, triangulation child modules), `src/geometry/` (geometry abstractions and backends), `src/config.rs` (simulation configuration)
 - **Foliation**: `src/cdt/foliation.rs` defines foliation bookkeeping and edge/cell classification. Time labels are stored as vertex data; `from_cdt_strip` and `from_toroidal_cdt` construct labeled CDT triangulations; `validate_causality` enforces adjacent-slice edges (with circular distance on toroidal time). Design documented in `docs/foliation.md`
 - **Ergodic moves**: `attempt_22_move`, `attempt_13_move`, `attempt_31_move`, `attempt_edge_flip` are Delaunay-backed, foliation-aware move kernels. They mutate through narrow CDT-owned edit operations, roll back failed finalized mutations, and preserve topology/foliation invariants
 - **Python scripts**: `scripts/` contains benchmark, changelog, and hardware utilities; tests in `scripts/tests/` run via pytest

@@ -80,6 +80,8 @@ Public APIs must **not panic**.
 
 Use explicit error propagation.
 
+Production `src/` code must not use bare `unwrap()` or explicit `panic!`. Use `?`, typed errors, `Option`, or an intentional fallback instead. Tests, doctests, examples, and benchmark setup may fail fast when a broken fixture should stop execution immediately; prefer `expect("reason")` over bare `unwrap()` in user-facing examples so failures remain diagnosable.
+
 ### Fallible public functions
 
 Return `Result`:
@@ -283,6 +285,8 @@ Before adding a dependency, consider:
 ---
 
 ## Geometry Backend Isolation
+
+`src/geometry/` is the backend interface layer. It is responsible for wrapping the upstream `delaunay` crate behind this crate's traits, opaque handles, generators, and backend adapters. `src/cdt/` is the CDT domain layer: it owns foliation, topology, causality, moves, action, simulation, results, and observables.
 
 Direct `use delaunay::` imports are **restricted** to the `src/geometry/` subtree:
 

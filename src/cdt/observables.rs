@@ -13,6 +13,7 @@ use std::mem;
 
 const MIN_SPECTRAL_DIFFUSION_STEP: usize = 2;
 const MAX_SPECTRAL_DIFFUSION_STEP: usize = 16;
+const SPECTRAL_SELF_LOOP_PROBABILITY: f64 = 0.5;
 
 /// Estimates the Hausdorff dimension from dual-graph geodesic ball growth.
 ///
@@ -239,6 +240,7 @@ fn fit_log_log_slope(ball_volumes: &[f64]) -> Option<f64> {
             .enumerate()
             .skip(1)
             .filter_map(|(radius, &volume)| {
+                // Exclude root-only samples: ln(1.0) = 0 biases the slope toward zero.
                 if volume > 1.0 && volume.is_finite() {
                     let radius_f64: f64 = NumCast::from(radius)?;
                     Some((radius_f64.ln(), volume.ln()))
@@ -287,17 +289,22 @@ fn average_return_probabilities(adjacency: &[Vec<usize>], max_step: usize) -> Ve
                     continue;
                 }
 
+                let stay = probability * SPECTRAL_SELF_LOOP_PROBABILITY;
+                let move_probability =
+                    probability.mul_add(-SPECTRAL_SELF_LOOP_PROBABILITY, probability);
+                next[index] += stay;
+
                 let live_neighbor_count = adjacency[index]
                     .iter()
                     .filter(|&&neighbor| neighbor < node_count)
                     .count();
                 if live_neighbor_count == 0 {
-                    next[index] += probability;
+                    next[index] += move_probability;
                     continue;
                 }
 
                 let neighbor_count = NumCast::from(live_neighbor_count).unwrap_or(1.0);
-                let share = probability / neighbor_count;
+                let share = move_probability / neighbor_count;
                 for neighbor in adjacency[index]
                     .iter()
                     .copied()
@@ -472,9 +479,9 @@ mod tests {
         let probabilities = average_return_probabilities(&adjacency, 4);
 
         assert_relative_eq!(probabilities[0], 1.0);
-        assert_relative_eq!(probabilities[1], 0.0);
-        assert_relative_eq!(probabilities[2], 1.0);
-        assert_relative_eq!(probabilities[3], 0.0);
-        assert_relative_eq!(probabilities[4], 1.0);
+        assert_relative_eq!(probabilities[1], 0.5);
+        assert_relative_eq!(probabilities[2], 0.5);
+        assert_relative_eq!(probabilities[3], 0.5);
+        assert_relative_eq!(probabilities[4], 0.5);
     }
 }

@@ -104,7 +104,7 @@ This runs:
 - unit tests
 - integration tests
 - documentation builds
-- example builds
+- validated example runs
 - benchmark compilation
 
 ## Semgrep
@@ -146,6 +146,7 @@ Validate with:
 
 ```bash
 just examples
+just validate-examples
 ```
 
 Examples must:
@@ -153,6 +154,10 @@ Examples must:
 - compile
 - run successfully
 - demonstrate correct API usage
+
+`just validate-examples` additionally checks stable output markers for user-facing Cargo examples. Keep those markers semantic rather than exact numeric values so simulation output can evolve without making the example contract brittle.
+
+When adding or renaming a Cargo example, update `scripts/run_all_examples.sh` `validate_example_output()` with stable semantic output markers, or intentionally document why success-only validation is sufficient for that example.
 
 ---
 
@@ -277,17 +282,18 @@ just test-python       # pytest
 
 ## Recommended Command Matrix
 
-| Task                  | Command                 |
-| --------------------- | ----------------------- |
-| Format code           | `just fix`              |
-| Run lints             | `just check`            |
-| Run unit tests        | `just test`             |
-| Run integration tests | `just test-integration` |
-| Run all tests         | `just test-all`         |
-| Run Python tests      | `just test-python`      |
-| Run examples          | `just examples`         |
-| Run full CI           | `just ci`               |
-| Pre-commit check      | `just commit-check`     |
+| Task                  | Command                  |
+| --------------------- | ------------------------ |
+| Format code           | `just fix`               |
+| Run lints             | `just check`             |
+| Run unit tests        | `just test`              |
+| Run integration tests | `just test-integration`  |
+| Run all tests         | `just test-all`          |
+| Run Python tests      | `just test-python`       |
+| Run examples          | `just examples`          |
+| Validate examples     | `just validate-examples` |
+| Run full CI           | `just ci`                |
+| Pre-commit check      | `just commit-check`      |
 
 ---
 
@@ -296,7 +302,7 @@ just test-python       # pytest
 | Changed files | Command                                |
 | ------------- | -------------------------------------- |
 | `tests/`      | `just test-integration` (or `just ci`) |
-| `examples/`   | `just examples`                        |
+| `examples/`   | `just validate-examples`               |
 | `benches/`    | `just bench-compile`                   |
 | `src/`        | `just test`                            |
 | `scripts/`    | `just test-python`                     |
@@ -312,6 +318,7 @@ CI enforces:
 - clippy lints
 - documentation build
 - tests
+- validated examples
 
 All warnings are treated as errors.
 

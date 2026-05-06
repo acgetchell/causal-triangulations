@@ -34,6 +34,63 @@ fn generate_delaunay2_vertex_build_error(
     }
 }
 
+/// Builds a consistent typed validation error for generator argument checks.
+fn invalid_generation_parameters(
+    issue: &str,
+    provided_value: String,
+    expected_range: &str,
+) -> CdtError {
+    CdtError::InvalidGenerationParameters {
+        issue: issue.to_string(),
+        provided_value,
+        expected_range: expected_range.to_string(),
+    }
+}
+
+/// Rejects coordinate ranges before they reach random point generation.
+fn validate_coordinate_range(coordinate_range: (f64, f64)) -> CdtResult<()> {
+    let (min, max) = coordinate_range;
+    if min.is_finite() && max.is_finite() && min < max {
+        Ok(())
+    } else {
+        Err(invalid_generation_parameters(
+            "Invalid coordinate range",
+            format!("[{min}, {max}]"),
+            "finite min < max",
+        ))
+    }
+}
+
+/// Rejects explicit vertex coordinates that geometric predicates cannot order.
+fn validate_explicit_coordinates(coords_with_data: &[([f64; 2], u32)]) -> CdtResult<()> {
+    for (vertex_index, (coord, _)) in coords_with_data.iter().enumerate() {
+        for (axis, value) in coord.iter().copied().enumerate() {
+            if !value.is_finite() {
+                return Err(invalid_generation_parameters(
+                    "Non-finite vertex coordinate",
+                    format!("vertex {vertex_index} axis {axis} = {value}"),
+                    "finite coordinate values",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Rejects toroidal periods that cannot define a finite positive quotient domain.
+fn validate_toroidal_domain(domain: [f64; 2]) -> CdtResult<()> {
+    for (axis, period) in domain.into_iter().enumerate() {
+        if !period.is_finite() || period <= 0.0 {
+            return Err(invalid_generation_parameters(
+                "Invalid toroidal domain",
+                format!("axis {axis} period {period}"),
+                "finite and positive periods",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Generates a Delaunay triangulation with optional seed for deterministic testing.
 ///
 /// Uses [`DelaunayTriangulationBuilder`] (introduced in delaunay v0.7.2) for
@@ -42,7 +99,11 @@ fn generate_delaunay2_vertex_build_error(
 ///
 /// # Errors
 ///
-/// Returns enhanced error information including vertex count, coordinate range, and underlying error.
+/// Returns [`crate::CdtError::InvalidGenerationParameters`] if
+/// `number_of_vertices < 3` or `coordinate_range` is not finite with `min < max`.
+/// Returns [`crate::CdtError::DelaunayGenerationFailed`] if random point
+/// generation or Delaunay construction fails, and
+/// [`crate::CdtError::VertexBuildFailed`] if an upstream vertex cannot be built.
 ///
 /// # Examples
 ///
@@ -60,20 +121,14 @@ pub fn generate_delaunay2(
 ) -> CdtResult<DelaunayTriangulation2D> {
     // Validate parameters before attempting generation
     if number_of_vertices < 3 {
-        return Err(CdtError::InvalidGenerationParameters {
-            issue: "Insufficient vertex count".to_string(),
-            provided_value: number_of_vertices.to_string(),
-            expected_range: "≥ 3".to_string(),
-        });
+        return Err(invalid_generation_parameters(
+            "Insufficient vertex count",
+            number_of_vertices.to_string(),
+            "≥ 3",
+        ));
     }
 
-    if coordinate_range.0 >= coordinate_range.1 {
-        return Err(CdtError::InvalidGenerationParameters {
-            issue: "Invalid coordinate range".to_string(),
-            provided_value: format!("[{}, {}]", coordinate_range.0, coordinate_range.1),
-            expected_range: "min < max".to_string(),
-        });
-    }
+    validate_coordinate_range(coordinate_range)?;
 
     // Generate random points, then build triangulation via the builder API
     let n = number_of_vertices as usize;
@@ -117,7 +172,10 @@ pub fn generate_delaunay2(
 ///
 /// # Errors
 ///
-/// Returns error if vertex construction or Delaunay triangulation building fails.
+/// Returns [`crate::CdtError::InvalidGenerationParameters`] if any coordinate is
+/// NaN or infinite. Returns [`crate::CdtError::VertexBuildFailed`] if a vertex
+/// cannot be constructed, or [`crate::CdtError::DelaunayGenerationFailed`] if
+/// the Delaunay builder rejects the finite vertex set.
 ///
 /// # Examples
 ///
@@ -135,6 +193,8 @@ pub fn generate_delaunay2(
 pub fn build_delaunay2_with_data(
     coords_with_data: &[([f64; 2], u32)],
 ) -> CdtResult<DelaunayTriangulation2D> {
+    validate_explicit_coordinates(coords_with_data)?;
+
     let vertices: Vec<_> = coords_with_data
         .iter()
         .enumerate()
@@ -185,9 +245,11 @@ pub fn build_delaunay2_with_data(
 ///
 /// # Errors
 ///
-/// Returns error if vertex construction fails or the explicit cell builder
-/// rejects the input (e.g., invalid cell arity, out-of-bounds indices, or
-/// topological validation failure).
+/// Returns [`crate::CdtError::InvalidGenerationParameters`] if any coordinate is
+/// NaN or infinite. Returns [`crate::CdtError::VertexBuildFailed`] if a vertex
+/// cannot be constructed, or [`crate::CdtError::DelaunayGenerationFailed`] if
+/// the explicit cell builder rejects the input (for example invalid cell arity,
+/// out-of-bounds indices, or topological validation failure).
 ///
 /// # Examples
 ///
@@ -226,7 +288,9 @@ pub fn build_delaunay2_from_cells(
 ///
 /// # Errors
 ///
-/// Same as [`build_delaunay2_from_cells`].
+/// Same as [`build_delaunay2_from_cells`]: coordinates must be finite, vertices
+/// must build successfully, and the explicit cells must satisfy the selected
+/// topology guarantee and global topology.
 ///
 /// # Examples
 ///
@@ -255,6 +319,8 @@ pub fn build_delaunay2_with_topology(
     topology_guarantee: TopologyGuarantee,
     global_topology: GlobalTopology<2>,
 ) -> CdtResult<DelaunayTriangulation2D> {
+    validate_explicit_coordinates(coords_with_data)?;
+
     let vertices: Vec<_> = coords_with_data
         .iter()
         .enumerate()
@@ -304,7 +370,9 @@ pub fn build_delaunay2_with_topology(
 ///
 /// # Errors
 ///
-/// Same as [`build_delaunay2_with_topology`].
+/// Returns [`crate::CdtError::InvalidGenerationParameters`] if either toroidal
+/// period in `domain` is NaN, infinite, or non-positive. Otherwise the error
+/// behavior is the same as [`build_delaunay2_with_topology`].
 ///
 /// # Examples
 ///
@@ -348,6 +416,8 @@ pub fn build_toroidal_delaunay2(
     cells: &[Vec<usize>],
     domain: [f64; 2],
 ) -> CdtResult<DelaunayTriangulation2D> {
+    validate_toroidal_domain(domain)?;
+
     build_delaunay2_with_topology(
         coords_with_data,
         cells,
@@ -600,7 +670,7 @@ mod tests {
             } => {
                 assert_eq!(issue, "Invalid coordinate range");
                 assert_eq!(provided_value, "[10, 5]");
-                assert_eq!(expected_range, "min < max");
+                assert_eq!(expected_range, "finite min < max");
             }
             _ => panic!("Expected InvalidGenerationParameters error"),
         }
@@ -617,6 +687,141 @@ mod tests {
             }
             _ => panic!("Expected InvalidGenerationParameters error"),
         }
+    }
+
+    #[test]
+    fn test_generate_delaunay2_rejects_non_finite_range() {
+        for range in [(f64::NAN, 1.0), (0.0, f64::INFINITY)] {
+            let result = generate_delaunay2(4, range, None);
+            assert!(
+                matches!(
+                    result,
+                    Err(CdtError::InvalidGenerationParameters {
+                        ref issue,
+                        ref expected_range,
+                        ..
+                    }) if issue == "Invalid coordinate range"
+                        && expected_range == "finite min < max"
+                ),
+                "non-finite range {range:?} should be rejected, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_delaunay2_with_data_rejects_non_finite_coordinate() {
+        let vertices = [([0.0, 0.0], 0u32), ([1.0, f64::NAN], 0), ([0.5, 1.0], 1)];
+
+        let result = build_delaunay2_with_data(&vertices);
+        assert!(
+            matches!(
+                result,
+                Err(CdtError::InvalidGenerationParameters {
+                    ref issue,
+                    ref provided_value,
+                    ref expected_range,
+                }) if issue == "Non-finite vertex coordinate"
+                    && provided_value == "vertex 1 axis 1 = NaN"
+                    && expected_range == "finite coordinate values"
+            ),
+            "explicit non-finite coordinate should be rejected, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_delaunay2_from_cells_rejects_non_finite_coordinate() {
+        let vertices = [
+            ([0.0, 0.0], 0u32),
+            ([1.0, 0.0], 0),
+            ([0.5, f64::NEG_INFINITY], 1),
+        ];
+        let cells = vec![vec![0, 1, 2]];
+
+        let result = build_delaunay2_from_cells(&vertices, &cells);
+        assert!(
+            matches!(
+                result,
+                Err(CdtError::InvalidGenerationParameters {
+                    ref issue,
+                    ref provided_value,
+                    ref expected_range,
+                }) if issue == "Non-finite vertex coordinate"
+                    && provided_value == "vertex 2 axis 1 = -inf"
+                    && expected_range == "finite coordinate values"
+            ),
+            "delegating explicit-cell builder should reject non-finite coordinates, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_delaunay2_with_topology_rejects_non_finite_coordinate() {
+        let vertices = [
+            ([0.0, 0.0], 0u32),
+            ([f64::INFINITY, 0.0], 0),
+            ([0.5, 1.0], 1),
+        ];
+        let cells = vec![vec![0, 1, 2]];
+
+        let result = build_delaunay2_with_topology(
+            &vertices,
+            &cells,
+            TopologyGuarantee::DEFAULT,
+            GlobalTopology::Euclidean,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(CdtError::InvalidGenerationParameters {
+                    ref issue,
+                    ref provided_value,
+                    ref expected_range,
+                }) if issue == "Non-finite vertex coordinate"
+                    && provided_value == "vertex 1 axis 0 = inf"
+                    && expected_range == "finite coordinate values"
+            ),
+            "explicit non-finite topology coordinate should be rejected, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_build_toroidal_delaunay2_rejects_invalid_domain() {
+        let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
+        let cells = vec![vec![0, 1, 2]];
+
+        for (domain, expected_value) in [
+            ([0.0, 1.0], "axis 0 period 0"),
+            ([-1.0, 1.0], "axis 0 period -1"),
+            ([1.0, f64::NAN], "axis 1 period NaN"),
+            ([f64::INFINITY, 1.0], "axis 0 period inf"),
+        ] {
+            let result = build_toroidal_delaunay2(&vertices, &cells, domain);
+            assert!(
+                matches!(
+                    result,
+                    Err(CdtError::InvalidGenerationParameters {
+                        ref issue,
+                        ref provided_value,
+                        ref expected_range,
+                    }) if issue == "Invalid toroidal domain"
+                        && provided_value == expected_value
+                        && expected_range == "finite and positive periods"
+                ),
+                "invalid domain {domain:?} should be rejected, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_invalid_toroidal_domain_display_is_actionable() {
+        let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
+        let cells = vec![vec![0, 1, 2]];
+
+        let error = build_toroidal_delaunay2(&vertices, &cells, [-1.0, 1.0])
+            .expect_err("negative toroidal period should be rejected");
+        assert_eq!(
+            error.to_string(),
+            "Invalid triangulation parameters: Invalid toroidal domain (got: axis 0 period -1, expected: finite and positive periods)"
+        );
     }
 
     #[test]

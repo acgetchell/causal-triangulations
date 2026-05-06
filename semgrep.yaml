@@ -125,6 +125,128 @@ rules:
       - pattern: $VALUE.unwrap_or_else(|| std::f64::INFINITY)
       - pattern: $VALUE.unwrap_or_else(|| std::f64::NEG_INFINITY)
 
+  - id: causal-triangulations.rust.no-bare-unwrap-in-src
+    languages:
+      - rust
+    severity: WARNING
+    message: "Use typed error handling or an explicit fallback instead of unwrap() in production src/."
+    metadata:
+      category: correctness
+      rationale: >-
+        Production library code should preserve recoverable failures and
+        document intentional fallbacks rather than panicking through bare
+        unwrap().
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+    patterns:
+      - pattern: $VALUE.unwrap()
+      - pattern-not-inside: |
+          mod tests {
+              ...
+          }
+      - pattern-not-inside: |
+          mod prop_tests {
+              ...
+          }
+      - pattern-not-inside: |
+          mod integration_tests {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          fn $FUNC(...) {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          fn $FUNC(...) {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          impl $TYPE {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          impl $TYPE {
+              ...
+          }
+
+  - id: causal-triangulations.rust.no-panic-in-src
+    languages:
+      - rust
+    severity: WARNING
+    message: "Return a typed error or Option instead of panicking in production src/."
+    metadata:
+      category: correctness
+      rationale: >-
+        Public and production CDT APIs should report failures through typed
+        results unless an invariant violation is deliberately confined to tests.
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+    patterns:
+      - pattern-either:
+          - pattern: panic!(...)
+          - pattern: std::panic!(...)
+          - pattern: core::panic!(...)
+      - pattern-not-inside: |
+          mod tests {
+              ...
+          }
+      - pattern-not-inside: |
+          mod prop_tests {
+              ...
+          }
+      - pattern-not-inside: |
+          mod integration_tests {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          fn $FUNC(...) {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          fn $FUNC(...) {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          impl $TYPE {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          impl $TYPE {
+              ...
+          }
+
   - id: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
     languages:
       - rust
