@@ -18,12 +18,20 @@
 //! - Foliation-aware 2D ergodic moves backed by bistellar flips
 //! - Metropolis-Hastings sampling over foliation-aware 2D ergodic moves
 //!
+//! The crate root re-exports the most common construction, simulation, and
+//! error types. Focused preludes under [`prelude`] provide smaller import
+//! surfaces for documentation, examples, integration tests, and benchmarks.
+//!
 //! # Example
 //!
-//! ```rust,no_run
-//! // Example would require command line arguments, so we skip execution
-//! use causal_triangulations::{CdtConfig, run_simulation};
-//! // CdtConfig requires configuration, so this is marked no_run
+//! ```
+//! use causal_triangulations::prelude::triangulation::CdtTriangulation;
+//!
+//! let tri = CdtTriangulation::from_toroidal_cdt(4, 3)
+//!     .expect("build toroidal CDT");
+//! assert_eq!(tri.vertex_count(), 12);
+//! assert!(tri.validate_topology().is_ok());
+//! assert!(tri.validate_foliation().is_ok());
 //! ```
 
 // Module declarations (avoiding mod.rs files)

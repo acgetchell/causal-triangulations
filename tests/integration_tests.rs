@@ -8,7 +8,9 @@
 use approx::{abs_diff_eq, assert_relative_eq};
 use causal_triangulations::prelude::action::ActionConfig;
 use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
-use causal_triangulations::prelude::triangulation::CdtTriangulation;
+use causal_triangulations::prelude::triangulation::{
+    CdtTopology, CdtTriangulation, TriangulationQuery,
+};
 use std::time::Instant;
 
 #[cfg(test)]
@@ -53,6 +55,56 @@ mod integration_tests {
                 .is_ok(),
             "final triangulation should remain structurally valid"
         );
+    }
+
+    #[test]
+    fn test_toroidal_metropolis_preserves_topology_after_many_accepted_moves() {
+        let triangulation = CdtTriangulation::from_toroidal_cdt(8, 6).expect("build toroidal CDT");
+        assert_eq!(triangulation.metadata().topology, CdtTopology::Toroidal);
+        assert_eq!(triangulation.geometry().euler_characteristic(), 0);
+        triangulation
+            .validate_topology()
+            .expect("initial toroidal topology is valid");
+        triangulation
+            .validate_foliation()
+            .expect("initial toroidal foliation is valid");
+
+        let config = MetropolisConfig::new(1.0, 200, 0, 10).with_seed(105);
+        let algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
+        let results = algorithm
+            .run(triangulation)
+            .expect("toroidal simulation should preserve move invariants");
+
+        let accepted_moves = results.steps.iter().filter(|step| step.accepted).count();
+        assert!(
+            accepted_moves >= 100,
+            "expected at least 100 accepted toroidal moves, got {accepted_moves}"
+        );
+        assert!(
+            results.acceptance_rate() > 0.0,
+            "toroidal acceptance rate should be non-zero"
+        );
+        assert_eq!(
+            results.triangulation.metadata().topology,
+            CdtTopology::Toroidal
+        );
+        assert_eq!(results.triangulation.geometry().euler_characteristic(), 0);
+        results
+            .triangulation
+            .validate_topology()
+            .expect("final toroidal topology remains valid");
+        results
+            .triangulation
+            .validate_foliation()
+            .expect("final toroidal foliation remains closed S1 rings");
+        results
+            .triangulation
+            .validate_causality()
+            .expect("final toroidal causality remains valid");
+        results
+            .triangulation
+            .validate_cell_classification()
+            .expect("final toroidal cell classification remains valid");
     }
 
     #[test]

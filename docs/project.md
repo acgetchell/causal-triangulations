@@ -32,6 +32,7 @@ cliff.toml             # git-cliff changelog template and commit grouping
 semgrep.yaml           # Repository-owned Semgrep rules
 docs/dev/python.md     # Python script style and validation guidance
 docs/dev/tooling-alignment.md # Tooling comparison and issue #112 decisions
+docs/roadmap.md        # High-level release direction and non-goals
 tests/semgrep/         # Semgrep rule fixtures run by `just semgrep-test`
 scripts/archive_changelog.py # Split completed changelog minor series into archive files
 scripts/coverage_report.py # Cobertura coverage summary helper
@@ -68,7 +69,7 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 
 ### `cdt/metropolis.rs` — Metropolis move ordering
 
-`MetropolisAlgorithm::run()` proposes a move type, computes `ΔS` from the move's simplex-count delta, accepts or rejects the proposal, and only mutates the triangulation after acceptance. Accepted applications that fail are rolled back from a triangulation snapshot and retried at another random local site; retry exhaustion is recorded as a rejection, while hard backend failures remain structured errors. See `docs/metropolis.md` for the detailed ordering.
+`MetropolisAlgorithm::run()` proposes a move type, computes `ΔS` from the move's simplex-count delta, accepts or rejects the proposal, and only mutates the triangulation after acceptance. Accepted applications that fail are rolled back from a triangulation snapshot and retried at another random local site; retry exhaustion is recorded as a rejection, while hard backend failures remain structured errors. Toroidal move finalization rejects and rolls back candidate sites that would violate χ = 0 or the closed-S¹ per-slice foliation invariant. See `docs/metropolis.md` for the detailed ordering.
 
 ### `geometry/generators.rs` — Delaunay triangulation generators
 
