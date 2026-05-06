@@ -14,6 +14,7 @@ use crate::cdt::metropolis::MetropolisConfig;
 use crate::errors::{CdtError, CdtResult};
 use clap::{Parser, ValueEnum};
 use dirs::home_dir;
+use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 use std::path::{Component, Path, PathBuf};
 
@@ -23,7 +24,12 @@ use std::path::{Component, Path, PathBuf};
 /// - [`OpenBoundary`](Self::OpenBoundary) — open-boundary generation; topology
 ///   validation accepts disk-like χ = 1 and sphere-like χ = 2 configurations
 /// - [`Toroidal`](Self::Toroidal) — periodic in both space and time (S¹×S¹, χ = 0)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+///
+/// Serde uses the same kebab-case vocabulary as the CLI (`open-boundary`,
+/// `toroidal`) so saved JSON configuration can round-trip through command-line
+/// overrides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum CdtTopology {
     /// Finite strip with open boundaries (Euler characteristic χ = 1 for
     /// disk-like or χ = 2 for sphere-like configurations).
@@ -43,7 +49,7 @@ pub enum CdtTopology {
 /// This combines all configuration options for the CDT simulation,
 /// including triangulation generation, action calculation, and
 /// Metropolis algorithm parameters.
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Debug, Clone, Serialize, Deserialize)]
 #[command(author, version, about, long_about = None)]
 pub struct CdtConfig {
     /// Dimensionality of the triangulation
@@ -97,10 +103,28 @@ pub struct CdtConfig {
     /// Topology and boundary conditions for triangulation generation
     #[arg(long, value_enum, default_value_t = CdtTopology::default())]
     pub topology: CdtTopology,
+
+    /// Write per-measurement simulation data to a CSV file.
+    ///
+    /// Relative paths are resolved from the current working directory with
+    /// [`CdtConfig::resolve_path`]. Parent directories are created when output
+    /// is written. [`crate::run_simulation`] rejects configurations where CSV
+    /// and JSON output paths resolve to the same file.
+    #[arg(long, value_name = "PATH")]
+    pub output_csv: Option<PathBuf>,
+
+    /// Write simulation metadata and aggregate summary data to a JSON file.
+    ///
+    /// Relative paths are resolved from the current working directory with
+    /// [`CdtConfig::resolve_path`]. Parent directories are created when output
+    /// is written. [`crate::run_simulation`] rejects configurations where CSV
+    /// and JSON output paths resolve to the same file.
+    #[arg(long, value_name = "PATH")]
+    pub output_json: Option<PathBuf>,
 }
 
 /// Controls how dimension overrides are applied when merging configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DimensionOverride {
     /// Replace the dimension with the supplied value.
     Value(u8),
@@ -112,7 +136,7 @@ pub enum DimensionOverride {
 ///
 /// Each field is optional, allowing callers to override only the configuration entries
 /// that need changing while leaving the rest untouched.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CdtConfigOverrides {
     /// Optional override for the triangulation dimension.
     pub dimension: Option<DimensionOverride>,
@@ -144,6 +168,18 @@ pub struct CdtConfigOverrides {
     pub seed: Option<Option<u64>>,
     /// Optional override for the topology.
     pub topology: Option<CdtTopology>,
+    /// Optional override for CSV output path.
+    #[expect(
+        clippy::option_option,
+        reason = "None=no override, Some(None)=clear output path, Some(Some(v))=set output path"
+    )]
+    pub output_csv: Option<Option<PathBuf>>,
+    /// Optional override for JSON output path.
+    #[expect(
+        clippy::option_option,
+        reason = "None=no override, Some(None)=clear output path, Some(Some(v))=set output path"
+    )]
+    pub output_json: Option<Option<PathBuf>>,
 }
 
 impl CdtConfig {
@@ -229,6 +265,14 @@ impl CdtConfig {
 
         if let Some(topology) = overrides.topology {
             merged.topology = topology;
+        }
+
+        if let Some(output_csv) = &overrides.output_csv {
+            merged.output_csv.clone_from(output_csv);
+        }
+
+        if let Some(output_json) = &overrides.output_json {
+            merged.output_json.clone_from(output_json);
         }
 
         merged
@@ -463,6 +507,8 @@ impl CdtConfig {
             simulate: false,
             seed: None,
             topology: CdtTopology::OpenBoundary,
+            output_csv: None,
+            output_json: None,
         }
     }
 
@@ -657,6 +703,8 @@ impl TestConfig {
             simulate: false,
             seed: None,
             topology: CdtTopology::OpenBoundary,
+            output_csv: None,
+            output_json: None,
         }
     }
 
@@ -686,6 +734,8 @@ impl TestConfig {
             simulate: false,
             seed: None,
             topology: CdtTopology::OpenBoundary,
+            output_csv: None,
+            output_json: None,
         }
     }
 
@@ -715,6 +765,8 @@ impl TestConfig {
             simulate: false,
             seed: None,
             topology: CdtTopology::OpenBoundary,
+            output_csv: None,
+            output_json: None,
         }
     }
 }
@@ -733,6 +785,19 @@ mod tests {
         assert_eq!(config.timeslices, 3);
         assert_eq!(config.dimension(), 2);
         assert!(!config.simulate);
+        assert_eq!(config.output_csv, None);
+        assert_eq!(config.output_json, None);
+    }
+
+    #[test]
+    fn topology_serializes_with_cli_vocabulary() {
+        let json =
+            serde_json::to_string(&CdtTopology::OpenBoundary).expect("topology should serialize");
+        assert_eq!(json, "\"open-boundary\"");
+
+        let topology: CdtTopology =
+            serde_json::from_str("\"toroidal\"").expect("topology should deserialize");
+        assert_eq!(topology, CdtTopology::Toroidal);
     }
 
     #[test]
@@ -1201,6 +1266,8 @@ mod tests {
             cosmological_constant: Some(0.25),
             seed: Some(Some(99)),
             topology: Some(CdtTopology::Toroidal),
+            output_csv: Some(Some(PathBuf::from("measurements.csv"))),
+            output_json: Some(Some(PathBuf::from("summary.json"))),
             ..CdtConfigOverrides::default()
         };
 
@@ -1215,6 +1282,8 @@ mod tests {
         assert_relative_eq!(merged.cosmological_constant, 0.25);
         assert_eq!(merged.seed, Some(99));
         assert_eq!(merged.topology, CdtTopology::Toroidal);
+        assert_eq!(merged.output_csv, Some(PathBuf::from("measurements.csv")));
+        assert_eq!(merged.output_json, Some(PathBuf::from("summary.json")));
     }
 
     #[test]

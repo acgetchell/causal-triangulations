@@ -13,10 +13,11 @@ use crate::errors::CdtError;
 use crate::geometry::CdtTriangulation2D;
 use crate::geometry::backends::delaunay::{DelaunayFaceHandle, DelaunayVertexHandle};
 use crate::geometry::traits::{EdgeAdjacentFaces, TriangulationQuery};
-use rand::{RngExt, SeedableRng, rngs::StdRng};
+use rand::{RngExt, SeedableRng, rngs::Xoshiro256PlusPlus};
+use serde::{Deserialize, Serialize};
 
 /// Types of ergodic moves available in 2D CDT.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MoveType {
     /// (2,2) move: Flip edge between two triangles
     Move22,
@@ -44,7 +45,7 @@ pub enum MoveResult {
 }
 
 /// Statistics tracking for ergodic moves.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MoveStatistics {
     /// Number of (2,2) moves attempted
     pub moves_22_attempted: u64,
@@ -183,6 +184,46 @@ impl MoveStatistics {
             total_accepted / total_attempted
         }
     }
+
+    /// Returns the total number of attempted moves across all move types.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::{MoveStatistics, MoveType};
+    ///
+    /// let mut stats = MoveStatistics::new();
+    /// stats.record_attempt(MoveType::Move22);
+    /// stats.record_attempt(MoveType::Move13Add);
+    /// assert_eq!(stats.total_attempted(), 2);
+    /// ```
+    #[must_use]
+    pub const fn total_attempted(&self) -> u64 {
+        self.moves_22_attempted
+            + self.moves_13_attempted
+            + self.moves_31_attempted
+            + self.edge_flips_attempted
+    }
+
+    /// Returns the total number of accepted moves across all move types.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::{MoveStatistics, MoveType};
+    ///
+    /// let mut stats = MoveStatistics::new();
+    /// stats.record_success(MoveType::Move22);
+    /// stats.record_success(MoveType::EdgeFlip);
+    /// assert_eq!(stats.total_accepted(), 2);
+    /// ```
+    #[must_use]
+    pub const fn total_accepted(&self) -> u64 {
+        self.moves_22_accepted
+            + self.moves_13_accepted
+            + self.moves_31_accepted
+            + self.edge_flips_accepted
+    }
 }
 
 /// Converts an accumulated move counter to a finite value for rate reporting.
@@ -195,11 +236,12 @@ const fn count_to_f64(count: u64) -> f64 {
 }
 
 /// Ergodic move system for CDT triangulations.
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ErgodicsSystem {
     /// Move statistics
     pub stats: MoveStatistics,
     /// Random number generator
-    rng: StdRng,
+    rng: Xoshiro256PlusPlus,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -242,7 +284,7 @@ impl ErgodicsSystem {
     pub fn with_seed(seed: u64) -> Self {
         Self {
             stats: MoveStatistics::new(),
-            rng: StdRng::seed_from_u64(seed),
+            rng: Xoshiro256PlusPlus::seed_from_u64(seed),
         }
     }
 
@@ -620,7 +662,7 @@ impl Default for ErgodicsSystem {
 }
 
 /// Selects a random candidate index without borrowing the candidate list.
-fn pick(rng: &mut StdRng, len: usize) -> Option<usize> {
+fn pick(rng: &mut Xoshiro256PlusPlus, len: usize) -> Option<usize> {
     if len == 0 {
         return None;
     }

@@ -92,6 +92,18 @@ When using the `gh` CLI to view issues, PRs, or other GitHub objects:
 - **ALWAYS** use the patch editing mechanism provided by the agent
 - Shell text tools may be used for **read‑only analysis only**
 
+### Rust Error Handling
+
+- Do not introduce `Box<dyn std::error::Error>`, `Box<dyn Error>`, or `anyhow::Error` as fallible return types in production `src/` code, public doctests, examples, or benchmarks that demonstrate user-facing workflows
+- Prefer `CdtResult<T>` and narrow `CdtError` variants with structured context for distinct I/O, serialization, validation, backend, checkpoint, or output failure modes
+- `&dyn Error` is acceptable for `std::error::Error::source`, tests that verify standard error trait behavior, and lint fixtures that intentionally exercise forbidden generic-error patterns
+- Detailed error-type guidance lives in `docs/dev/rust.md`
+
+### Rust Import Hygiene
+
+- Keep production module preambles free of test-only imports; place `#[cfg(test)]` imports inside the relevant `tests` module instead
+- Detailed import guidance lives in `docs/dev/rust.md`
+
 ### Public API Preludes
 
 - Keep `prelude::*` small and focused on common quick-start workflows.
@@ -145,7 +157,7 @@ just ci
 
 Refer to `docs/dev/commands.md` for full details.
 
-When adding or renaming Cargo examples, update `just validate-examples` markers as needed so CI keeps validating the user-facing example contracts.
+When adding or renaming Cargo examples, update `just examples-validate` markers as needed so CI keeps validating the user-facing example contracts.
 
 For tooling-alignment work, update `docs/dev/tooling-alignment.md` with the comparison and rationale before adding or changing config, workflow, or repository-rule files.
 

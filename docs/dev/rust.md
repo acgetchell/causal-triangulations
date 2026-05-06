@@ -145,6 +145,8 @@ Keep error layers orthogonal. Invalid input or handles, unsupported operations, 
 
 Public error enums must be `#[non_exhaustive]` so new variants remain additive.
 
+Do not use `Box<dyn std::error::Error>`, `Box<dyn Error>`, or `anyhow::Error` as fallible return types in production `src/` code, public doctests, examples, or benchmarks that demonstrate user-facing workflows. Prefer the crate's typed `CdtResult<T>` and add a narrow `CdtError` variant when a distinct I/O, serialization, validation, backend, or checkpoint failure mode is otherwise only representable as a generic error. `&dyn Error` is acceptable for implementing `std::error::Error::source`, for tests that explicitly verify the standard error trait implementation, and for lint fixtures that exercise the forbidden pattern.
+
 Example:
 
 ```rust
@@ -163,6 +165,8 @@ pub enum InsertError {
 Always import types at the top of the module rather than using fully‑qualified paths inline.
 
 Group imports from the same module into a single `use` statement with braces.
+
+Do not put test-only imports in the production module preamble. Move `#[cfg(test)]` imports into the relevant `tests` module so normal builds do not carry test-only style noise at the top of implementation files.
 
 If a test module already has `use super::*;`, do not re‑import items that are already brought into scope by the parent module's imports.
 

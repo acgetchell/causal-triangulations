@@ -55,7 +55,8 @@ causal-triangulations/
 │   │   └── performance_test.sh
 │   ├── basic_cdt.rs
 │   ├── find_good_seeds.rs
-│   └── observables.rs
+│   ├── observables.rs
+│   └── output_and_checkpoint.rs
 ├── proptest-regressions/
 │   └── cdt/
 │       └── triangulation.txt

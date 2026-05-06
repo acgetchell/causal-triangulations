@@ -20,6 +20,8 @@ The library leverages high-performance [Delaunay triangulation] backends and pro
 - [x] Regge action calculation with configurable coupling constants
 - [x] Alexander/Pachner-style local move proposals with causal constraints
 - [x] Volume-profile, Hausdorff-dimension, and spectral-dimension observables for CDT analysis
+- [x] CSV/JSON simulation output for external analysis workflows
+- [x] Resumable serde-backed CDT/MCMC checkpoints for durable chain continuation
 - [x] Focused public preludes for simulation, triangulation, geometry, action, and observables
 - [x] Command-line interface, examples, Criterion benchmarks, and CI-aligned validation tooling
 - [x] Cross-platform compatibility: Linux, macOS, Windows

@@ -7,7 +7,36 @@
 
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
-use std::process::Command;
+use serde_json::{Value, from_str};
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+use std::process::{self, Command};
+use std::thread;
+
+fn temp_output_dir(name: &str) -> PathBuf {
+    let thread_name = safe_thread_name();
+    env::temp_dir().join(format!(
+        "causal-triangulations-cli-{name}-{}-{}",
+        process::id(),
+        thread_name
+    ))
+}
+
+/// Returns the current test thread name with path separators and
+/// reserved characters removed.
+fn safe_thread_name() -> String {
+    thread::current()
+        .name()
+        .unwrap_or("test")
+        .chars()
+        .map(|ch| match ch {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect()
+}
 
 #[test]
 fn exit_success() {
@@ -119,6 +148,36 @@ fn cdt_cli_runs_simulation_with_real_moves() {
     cmd.env("RUST_LOG", "error");
 
     cmd.assert().success();
+}
+
+#[test]
+fn cdt_cli_writes_configured_outputs() {
+    let output_dir = temp_output_dir("outputs");
+    let csv_path = output_dir.join("measurements.csv");
+    let json_path = output_dir.join("summary.json");
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+
+    cmd.arg("--vertices").arg("12");
+    cmd.arg("--timeslices").arg("3");
+    cmd.arg("--steps").arg("4");
+    cmd.arg("--thermalization-steps").arg("0");
+    cmd.arg("--measurement-frequency").arg("1");
+    cmd.arg("--seed").arg("13");
+    cmd.arg("--simulate");
+    cmd.arg("--output-csv").arg(&csv_path);
+    cmd.arg("--output-json").arg(&json_path);
+    cmd.env("RUST_LOG", "error");
+
+    cmd.assert().success();
+
+    let csv = fs::read_to_string(&csv_path).expect("CSV output should be readable");
+    let json = fs::read_to_string(&json_path).expect("JSON output should be readable");
+    let parsed: Value = from_str(&json).expect("summary should parse");
+    fs::remove_dir_all(&output_dir).expect("temporary output directory should be removable");
+
+    assert!(csv.starts_with("step,action,vertices,edges,triangles,accepted,delta_action\n"));
+    assert_eq!(parsed["config"]["vertices"], 12);
+    assert_eq!(parsed["final_triangulation"]["time_slices"], 3);
 }
 
 #[test]

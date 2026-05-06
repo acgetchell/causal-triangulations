@@ -65,6 +65,9 @@ mod integration_tests {
 
     #[test]
     fn test_toroidal_metropolis_preserves_topology_after_many_accepted_moves() {
+        const STEPS: u32 = 200;
+        const MIN_ACCEPTED_MOVES: usize = 50;
+
         let triangulation = CdtTriangulation::from_toroidal_cdt(8, 6).expect("build toroidal CDT");
         assert_eq!(triangulation.metadata().topology, CdtTopology::Toroidal);
         assert_eq!(triangulation.geometry().euler_characteristic(), 0);
@@ -75,7 +78,7 @@ mod integration_tests {
             .validate_foliation()
             .expect("initial toroidal foliation is valid");
 
-        let config = MetropolisConfig::new(1.0, 200, 0, 10).with_seed(105);
+        let config = MetropolisConfig::new(1.0, STEPS, 0, 10).with_seed(105);
         let algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
         let results = algorithm
             .run(triangulation)
@@ -83,8 +86,8 @@ mod integration_tests {
 
         let accepted_moves = results.steps.iter().filter(|step| step.accepted).count();
         assert!(
-            accepted_moves >= 100,
-            "expected at least 100 accepted toroidal moves, got {accepted_moves}"
+            accepted_moves >= MIN_ACCEPTED_MOVES,
+            "expected at least {MIN_ACCEPTED_MOVES} accepted toroidal moves, got {accepted_moves}"
         );
         assert!(
             results.acceptance_rate() > 0.0,

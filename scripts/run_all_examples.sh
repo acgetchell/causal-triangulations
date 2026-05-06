@@ -171,6 +171,12 @@ validate_example_output() {
 		require_marker "$example" "$output" "Final Hausdorff-dimension estimate"
 		require_marker "$example" "$output" "Final spectral-dimension estimate"
 		;;
+	output_and_checkpoint)
+		require_marker "$example" "$output" "CSV output rows"
+		require_marker "$example" "$output" "JSON summary measurements"
+		require_marker "$example" "$output" "Resumed MCMC checkpoint steps"
+		require_marker "$example" "$output" "Output and checkpoint example completed successfully"
+		;;
 	find_good_seeds)
 		require_marker "$example" "$output" "SEED VALIDATION"
 		require_marker "$example" "$output" "ADDITIONAL SEED TESTING"

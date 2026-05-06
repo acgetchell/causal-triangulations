@@ -12,10 +12,12 @@
 //! CGAL's `vertex->info()` used in CDT-plusplus.  The `Foliation` struct
 //! tracks only aggregate bookkeeping (per-slice counts and total slices).
 
+use serde::de::Error as DeError;
+use serde::{Deserialize, Deserializer, Serialize};
 use std::{error::Error, fmt};
 
 /// Classification of an edge
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EdgeType {
     /// Both endpoints share the same time slice.
     Spacelike,
@@ -30,7 +32,7 @@ pub enum EdgeType {
 /// In a valid foliated triangulation every triangle spans exactly two
 /// adjacent time slices.  The type is determined by how many vertices
 /// sit on the lower vs. upper slice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CellType {
     /// **(2,1)** — two vertices at time *t*, one at *t + 1*.
     /// The spacelike base is in the lower slice.
@@ -147,6 +149,8 @@ pub fn classify_cell(t0: Option<u32>, t1: Option<u32>, t2: Option<u32>) -> Optio
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum FoliationError {
+    /// No time slices were supplied for foliation bookkeeping.
+    EmptyFoliation,
     /// `slice_sizes` length does not match `num_slices`.
     SliceSizeMismatch {
         /// Actual length of the `slice_sizes` vector.
@@ -254,6 +258,7 @@ pub enum FoliationError {
 impl fmt::Display for FoliationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::EmptyFoliation => write!(f, "foliation must contain at least one time slice"),
             Self::SliceSizeMismatch {
                 slice_sizes_len,
                 num_slices,
@@ -334,8 +339,10 @@ impl Error for FoliationError {}
 ///
 /// Time labels are stored on vertices directly (as vertex data in the
 /// Delaunay triangulation). This struct tracks only the per-slice vertex
-/// counts and the total number of slices.
-#[derive(Debug, Clone)]
+/// counts and the total number of slices. Deserialization validates the same
+/// invariants as [`Self::from_slice_sizes`], so checkpoint data cannot create
+/// empty or mismatched slice bookkeeping.
+#[derive(Debug, Clone, Serialize)]
 pub struct Foliation {
     /// Number of vertices per time slice (`slice_sizes[t]`).
     slice_sizes: Vec<usize>,
@@ -343,28 +350,51 @@ pub struct Foliation {
     num_slices: u32,
 }
 
+#[derive(Deserialize)]
+struct SerializedFoliation {
+    slice_sizes: Vec<usize>,
+    num_slices: u32,
+}
+
+impl<'de> Deserialize<'de> for Foliation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let serialized = SerializedFoliation::deserialize(deserializer)?;
+        Self::from_slice_sizes(serialized.slice_sizes, serialized.num_slices)
+            .map_err(D::Error::custom)
+    }
+}
+
 impl Foliation {
     /// Creates a new foliation from pre-computed per-slice vertex counts.
     ///
     /// # Errors
     ///
-    /// Returns error if `slice_sizes.len() != num_slices` or if any slice is
-    /// empty.
+    /// Returns error if there are no slices, if `slice_sizes.len() != num_slices`,
+    /// or if any slice is empty.
     ///
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::Foliation;
+    /// use causal_triangulations::{Foliation, FoliationError};
     ///
     /// let foliation = Foliation::from_slice_sizes(vec![3, 4], 2)
     ///     .expect("both slices are non-empty");
     /// assert_eq!(foliation.num_slices(), 2);
     /// assert_eq!(foliation.labeled_vertex_count(), 7);
+    ///
+    /// let err = Foliation::from_slice_sizes(vec![], 0).expect_err("zero slices are invalid");
+    /// assert_eq!(err, FoliationError::EmptyFoliation);
     /// ```
     pub fn from_slice_sizes(
         slice_sizes: Vec<usize>,
         num_slices: u32,
     ) -> Result<Self, FoliationError> {
+        if slice_sizes.is_empty() {
+            return Err(FoliationError::EmptyFoliation);
+        }
         if slice_sizes.len() != num_slices as usize {
             return Err(FoliationError::SliceSizeMismatch {
                 slice_sizes_len: slice_sizes.len(),
@@ -429,6 +459,7 @@ impl Foliation {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::from_str;
 
     #[test]
     fn test_edge_type_equality() {
@@ -442,6 +473,13 @@ mod tests {
         let result = Foliation::from_slice_sizes(vec![0, 0, 0], 3);
         let err = result.expect_err("empty slices should be rejected");
         assert_eq!(err, FoliationError::EmptySlice { slice: 0 });
+    }
+
+    #[test]
+    fn test_foliation_zero_slices_rejected() {
+        let result = Foliation::from_slice_sizes(vec![], 0);
+        let err = result.expect_err("zero-slice foliations should be rejected");
+        assert_eq!(err, FoliationError::EmptyFoliation);
     }
 
     #[test]
@@ -465,6 +503,25 @@ mod tests {
                 num_slices: 3,
             }
         );
+    }
+
+    #[test]
+    fn foliation_deserialization_rejects_invalid_bookkeeping() {
+        let zero_slice_err = from_str::<Foliation>(r#"{"slice_sizes":[],"num_slices":0}"#)
+            .expect_err("zero slices should fail deserialization");
+        assert!(
+            zero_slice_err
+                .to_string()
+                .contains("at least one time slice")
+        );
+
+        let empty_err = from_str::<Foliation>(r#"{"slice_sizes":[0],"num_slices":1}"#)
+            .expect_err("empty slices should fail deserialization");
+        assert!(empty_err.to_string().contains("empty"));
+
+        let mismatch_err = from_str::<Foliation>(r#"{"slice_sizes":[3,3],"num_slices":3}"#)
+            .expect_err("mismatched slice counts should fail deserialization");
+        assert!(mismatch_err.to_string().contains("slice_sizes length"));
     }
 
     #[test]
@@ -589,6 +646,15 @@ mod tests {
         assert!(
             msg.contains('2') && msg.contains("empty"),
             "Display should mention slice index: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_foliation_error_empty_foliation_display() {
+        let err = FoliationError::EmptyFoliation;
+        assert_eq!(
+            err.to_string(),
+            "foliation must contain at least one time slice"
         );
     }
 

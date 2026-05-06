@@ -10,8 +10,17 @@ use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::MoveStatistics;
 use crate::cdt::metropolis::{MetropolisConfig, MonteCarloStep};
 use crate::cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
+use crate::config::{CdtConfig, CdtTopology};
+use crate::errors::{CdtError, CdtResult};
 use crate::geometry::CdtTriangulation2D;
 use num_traits::cast::NumCast;
+use serde::{Deserialize, Serialize};
+use serde_json::to_writer_pretty;
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::fs::{File, create_dir_all};
+use std::io::{BufWriter, Write};
+use std::path::Path;
 use std::time::Duration;
 
 /// Measurement data collected during simulation.
@@ -19,7 +28,7 @@ use std::time::Duration;
 /// Use [`Self::new`] and builder-style methods such as
 /// [`Self::with_volume_profile`] rather than struct literals outside this
 /// crate; additional measurement fields may be added over time.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Measurement {
     /// Monte Carlo step when measurement was taken
@@ -95,7 +104,12 @@ impl Measurement {
 /// Values are produced by [`MetropolisAlgorithm::run`](crate::cdt::metropolis::MetropolisAlgorithm::run)
 /// and include raw Monte Carlo steps, recorded measurements, final geometry,
 /// and convenience methods for common post-simulation summaries.
-#[derive(Debug)]
+///
+/// Serde serialization preserves the complete result object, including the
+/// final triangulation checkpoint. Use [`Self::write_summary_json`] when you
+/// want an analysis-friendly JSON report with configuration, aggregate
+/// statistics, step telemetry, and measurements.
+#[derive(Debug, Serialize, Deserialize)]
 pub struct SimulationResultsBackend {
     /// Configuration used for the simulation
     pub config: MetropolisConfig,
@@ -111,6 +125,38 @@ pub struct SimulationResultsBackend {
     pub elapsed_time: Duration,
     /// Final triangulation state
     pub triangulation: CdtTriangulation2D,
+}
+
+#[derive(Serialize)]
+struct SimulationSummary<'a> {
+    config: &'a CdtConfig,
+    metropolis_config: &'a MetropolisConfig,
+    action_config: &'a ActionConfig,
+    move_stats: &'a MoveStatistics,
+    aggregate: AggregateSummary,
+    final_triangulation: TriangulationSummary,
+    steps: &'a [MonteCarloStep],
+    measurements: &'a [Measurement],
+}
+
+#[derive(Serialize)]
+struct AggregateSummary {
+    acceptance_rate: f64,
+    average_action: f64,
+    elapsed_time_ms: u128,
+    measurement_count: usize,
+    step_count: usize,
+    average_volume_profile: Vec<f64>,
+    volume_fluctuations: Vec<f64>,
+}
+
+#[derive(Serialize)]
+struct TriangulationSummary {
+    vertices: usize,
+    edges: usize,
+    triangles: usize,
+    time_slices: u32,
+    topology: CdtTopology,
 }
 
 impl SimulationResultsBackend {
@@ -251,8 +297,7 @@ impl SimulationResultsBackend {
         let mut sums = vec![0.0; profile_len];
         for measurement in &measurements {
             for (index, &volume) in measurement.volume_profile.iter().enumerate() {
-                let volume: f64 = volume.into();
-                sums[index] += volume;
+                sums[index] += <f64 as From<u32>>::from(volume);
             }
         }
 
@@ -315,10 +360,7 @@ impl SimulationResultsBackend {
                 let volume = measurement
                     .volume_profile
                     .get(index)
-                    .map_or(0.0, |&volume| {
-                        let volume: f64 = volume.into();
-                        volume
-                    });
+                    .map_or(0.0, |&volume| <f64 as From<u32>>::from(volume));
                 let delta = volume - mean;
                 variances[index] += delta * delta;
             }
@@ -444,10 +486,182 @@ impl SimulationResultsBackend {
     /// ```
     #[must_use]
     pub fn equilibrium_measurements(&self) -> Vec<&Measurement> {
+        self.equilibrium_measurements_iter().collect()
+    }
+
+    /// Iterates over measurements after thermalization without allocating.
+    fn equilibrium_measurements_iter(&self) -> impl Iterator<Item = &Measurement> {
         self.measurements
             .iter()
-            .filter(|m| m.step >= self.config.thermalization_steps)
-            .collect()
+            .filter(|measurement| measurement.step >= self.config.thermalization_steps)
+    }
+
+    /// Writes one CSV row per recorded measurement.
+    ///
+    /// The CSV includes scalar measurement values plus accepted/delta-action
+    /// telemetry from the Monte Carlo step with the same step number when such a
+    /// step exists. Initial measurements at step 0 leave those telemetry columns
+    /// blank.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::OutputWriteFailed`] if the file or a parent directory
+    /// cannot be created, or if writing the CSV fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use causal_triangulations::prelude::simulation::*;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    ///     let results = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 2, 1, 1),
+    ///         ActionConfig::default(),
+    ///     )
+    ///     .run(tri)?;
+    ///     results.write_measurements_csv("measurements.csv")?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn write_measurements_csv(&self, path: impl AsRef<Path>) -> CdtResult<()> {
+        let path = path.as_ref();
+        ensure_parent_directory(path, "csv")?;
+        let file = File::create(path).map_err(|err| output_error(path, "csv", err))?;
+        let mut writer = BufWriter::new(file);
+        writeln!(
+            writer,
+            "step,action,vertices,edges,triangles,accepted,delta_action"
+        )
+        .map_err(|err| output_error(path, "csv", err))?;
+
+        let steps_by_number: HashMap<_, _> =
+            self.steps.iter().map(|step| (step.step, step)).collect();
+        for measurement in &self.measurements {
+            let step = steps_by_number.get(&measurement.step).copied();
+            let accepted = step.map_or(String::new(), |step| step.accepted.to_string());
+            let delta_action = step
+                .and_then(|step| step.delta_action)
+                .map_or_else(String::new, |delta| delta.to_string());
+            writeln!(
+                writer,
+                "{},{},{},{},{},{},{}",
+                measurement.step,
+                measurement.action,
+                measurement.vertices,
+                measurement.edges,
+                measurement.triangles,
+                accepted,
+                delta_action,
+            )
+            .map_err(|err| output_error(path, "csv", err))?;
+        }
+
+        writer.flush().map_err(|err| output_error(path, "csv", err))
+    }
+
+    /// Writes a JSON summary for external analysis and run bookkeeping.
+    ///
+    /// The summary stores the top-level CLI/configuration parameters, action and
+    /// Metropolis configuration, aggregate statistics, final triangulation counts,
+    /// Monte Carlo step telemetry, and all measurements. The aggregate
+    /// `average_action` is computed from [`Self::equilibrium_measurements`] so
+    /// it excludes the initial snapshot and thermalization window.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::OutputWriteFailed`] if the file or a parent directory
+    /// cannot be created, or if JSON serialization fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use causal_triangulations::prelude::simulation::*;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = CdtConfig {
+    ///         simulate: true,
+    ///         steps: 2,
+    ///         thermalization_steps: 1,
+    ///         measurement_frequency: 1,
+    ///         ..CdtConfig::new(12, 3)
+    ///     };
+    ///     let results = causal_triangulations::run_simulation(&config)?;
+    ///     results.write_summary_json(&config, "summary.json")?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn write_summary_json(&self, config: &CdtConfig, path: impl AsRef<Path>) -> CdtResult<()> {
+        let path = path.as_ref();
+        ensure_parent_directory(path, "json")?;
+        let file = File::create(path).map_err(|err| output_error(path, "json", err))?;
+        let mut writer = BufWriter::new(file);
+        let summary = SimulationSummary {
+            config,
+            metropolis_config: &self.config,
+            action_config: &self.action_config,
+            move_stats: &self.move_stats,
+            aggregate: AggregateSummary {
+                acceptance_rate: self.acceptance_rate(),
+                average_action: mean_measurement_action(self.equilibrium_measurements_iter()),
+                elapsed_time_ms: self.elapsed_time.as_millis(),
+                measurement_count: self.measurements.len(),
+                step_count: self.steps.len(),
+                average_volume_profile: self.average_volume_profile(),
+                volume_fluctuations: self.volume_fluctuations(),
+            },
+            final_triangulation: TriangulationSummary {
+                vertices: self.triangulation.vertex_count(),
+                edges: self.triangulation.edge_count(),
+                triangles: self.triangulation.face_count(),
+                time_slices: self.triangulation.time_slices(),
+                topology: self.triangulation.metadata().topology,
+            },
+            steps: &self.steps,
+            measurements: &self.measurements,
+        };
+
+        to_writer_pretty(&mut writer, &summary).map_err(|err| output_error(path, "json", err))?;
+        writeln!(writer).map_err(|err| output_error(path, "json", err))?;
+        writer
+            .flush()
+            .map_err(|err| output_error(path, "json", err))
+    }
+}
+
+/// Returns the mean action across a measurement stream.
+fn mean_measurement_action<'a>(measurements: impl IntoIterator<Item = &'a Measurement>) -> f64 {
+    let mut sum = 0.0;
+    let mut count = 0_usize;
+    for measurement in measurements {
+        sum += measurement.action;
+        count += 1;
+    }
+
+    if count == 0 {
+        return 0.0;
+    }
+
+    let count = NumCast::from(count).unwrap_or(1.0);
+    sum / count
+}
+
+/// Creates a parent directory for configured output paths when needed.
+fn ensure_parent_directory(path: &Path, format: &'static str) -> CdtResult<()> {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        create_dir_all(parent).map_err(|err| output_error(path, format, err))?;
+    }
+    Ok(())
+}
+
+/// Builds a typed output error without exposing I/O dependencies in public APIs.
+fn output_error(path: &Path, format: &'static str, err: impl Display) -> CdtError {
+    CdtError::OutputWriteFailed {
+        path: path.display().to_string(),
+        format: format.to_string(),
+        detail: err.to_string(),
     }
 }
 
@@ -457,6 +671,12 @@ mod tests {
     use crate::cdt::ergodic_moves::MoveType;
     use crate::cdt::triangulation::CdtTriangulation;
     use approx::assert_relative_eq;
+    use serde_json::{Value, from_str};
+    use std::env;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process;
+    use std::thread;
 
     /// Builds a result container around deterministic geometry for summary-method tests.
     fn results_with(
@@ -495,6 +715,31 @@ mod tests {
         }
     }
 
+    /// Returns a unique temporary path for output-writer tests.
+    fn temp_output_path(name: &str) -> PathBuf {
+        let thread_name = safe_thread_name();
+        env::temp_dir().join(format!(
+            "causal-triangulations-{name}-{}-{}",
+            process::id(),
+            thread_name
+        ))
+    }
+
+    /// Returns the current test thread name with path separators and
+    /// reserved characters removed.
+    fn safe_thread_name() -> String {
+        thread::current()
+            .name()
+            .unwrap_or("test")
+            .chars()
+            .map(|ch| match ch {
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+                ch if ch.is_control() => '_',
+                ch => ch,
+            })
+            .collect()
+    }
+
     #[test]
     fn measurement_builders_preserve_scalar_counts_and_profile() {
         let measurement = Measurement::new(7, -3.5, 12, 26, 12).with_volume_profile(vec![6, 6, 0]);
@@ -505,6 +750,120 @@ mod tests {
         assert_eq!(measurement.edges, 26);
         assert_eq!(measurement.triangles, 12);
         assert_eq!(measurement.volume_profile, vec![6, 6, 0]);
+    }
+
+    #[test]
+    fn writes_measurements_csv_with_matching_step_telemetry() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+        let results = results_with(
+            MetropolisConfig::new(1.0, 2, 1, 1),
+            vec![MonteCarloStep {
+                step: 1,
+                move_type: MoveType::Move22,
+                accepted: true,
+                action_before: 3.0,
+                action_after: Some(2.5),
+                delta_action: Some(-0.5),
+            }],
+            vec![
+                Measurement::new(0, 3.0, 12, 26, 12),
+                Measurement::new(1, 2.5, 12, 26, 12),
+            ],
+            triangulation,
+        );
+        let path = temp_output_path("measurements.csv");
+
+        results
+            .write_measurements_csv(&path)
+            .expect("CSV output should write");
+        let csv = fs::read_to_string(&path).expect("CSV output should be readable");
+        fs::remove_file(&path).expect("temporary CSV should be removable");
+
+        assert_eq!(
+            csv,
+            "step,action,vertices,edges,triangles,accepted,delta_action\n\
+             0,3,12,26,12,,\n\
+             1,2.5,12,26,12,true,-0.5\n"
+        );
+    }
+
+    #[test]
+    fn writes_summary_json_with_config_and_aggregates() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+        let results = results_with(
+            MetropolisConfig::new(1.0, 1, 0, 1),
+            vec![MonteCarloStep {
+                step: 1,
+                move_type: MoveType::Move22,
+                accepted: true,
+                action_before: 3.0,
+                action_after: Some(2.5),
+                delta_action: Some(-0.5),
+            }],
+            vec![Measurement::new(1, 2.5, 12, 26, 12)],
+            triangulation,
+        );
+        let config = CdtConfig {
+            steps: 1,
+            thermalization_steps: 0,
+            measurement_frequency: 1,
+            simulate: true,
+            ..CdtConfig::new(12, 3)
+        };
+        let path = temp_output_path("summary.json");
+
+        results
+            .write_summary_json(&config, &path)
+            .expect("JSON output should write");
+        let json = fs::read_to_string(&path).expect("JSON output should be readable");
+        fs::remove_file(&path).expect("temporary JSON should be removable");
+        let parsed: Value = from_str(&json).expect("summary should be valid JSON");
+
+        assert_eq!(parsed["config"]["vertices"], 12);
+        assert_eq!(parsed["aggregate"]["measurement_count"], 1);
+        assert_eq!(parsed["aggregate"]["step_count"], 1);
+        assert_eq!(parsed["final_triangulation"]["time_slices"], 3);
+        assert_eq!(parsed["measurements"][0]["step"], 1);
+    }
+
+    #[test]
+    fn summary_json_average_action_uses_equilibrium_measurements() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+        let results = results_with(
+            MetropolisConfig::new(1.0, 2, 1, 1),
+            vec![],
+            vec![
+                Measurement::new(0, 100.0, 12, 26, 12),
+                Measurement::new(1, 4.0, 12, 26, 12),
+                Measurement::new(2, 6.0, 12, 26, 12),
+            ],
+            triangulation,
+        );
+        let config = CdtConfig {
+            steps: 2,
+            thermalization_steps: 1,
+            measurement_frequency: 1,
+            simulate: true,
+            ..CdtConfig::new(12, 3)
+        };
+        let path = temp_output_path("equilibrium-summary.json");
+
+        results
+            .write_summary_json(&config, &path)
+            .expect("JSON output should write");
+        let json = fs::read_to_string(&path).expect("JSON output should be readable");
+        fs::remove_file(&path).expect("temporary JSON should be removable");
+        let parsed: Value = from_str(&json).expect("summary should be valid JSON");
+
+        assert_relative_eq!(
+            parsed["aggregate"]["average_action"]
+                .as_f64()
+                .expect("average action should be numeric"),
+            5.0
+        );
     }
 
     #[test]

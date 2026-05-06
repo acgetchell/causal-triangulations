@@ -46,7 +46,7 @@ The useful updates ported from MCMC are:
 - the MCMC-style `cliff.toml` template and `just changelog-unreleased <version>` flow, adapted to keep CDT's changelog archive step and avoid temporary local release tags;
 - a Semgrep rule that rejects `NaN` and infinity defaults after failed floating-point conversions, with a regression fixture under `tests/semgrep/`.
 - production-only Rust Semgrep rules that reject bare `unwrap()` and explicit `panic!` in non-test `src/` code while preserving idiomatic fail-fast usage in tests, doctests, examples, and benchmark setup.
-- a `validate-examples` recipe that runs Cargo examples and verifies stable output markers for the user-facing example contracts.
+- an `examples-validate` recipe that runs Cargo examples and verifies stable output markers for the user-facing example contracts.
 
 ## Deferred Updates
 
