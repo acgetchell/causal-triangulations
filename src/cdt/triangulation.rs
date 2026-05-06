@@ -8,11 +8,10 @@
 use crate::cdt::foliation::Foliation;
 use crate::config::CdtTopology;
 use crate::errors::{CdtError, CdtResult};
-#[cfg(test)]
 use crate::geometry::DelaunayBackend2D;
-#[cfg(test)]
-use crate::geometry::generators::build_delaunay2_with_data;
 use crate::geometry::traits::TriangulationQuery;
+use serde::de::Error as DeError;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::time::Instant;
 
 mod builders;
@@ -66,7 +65,7 @@ struct CachedValue<T> {
 }
 
 /// Events in simulation history
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SimulationEvent {
     /// Triangulation was created
     Created {
@@ -98,6 +97,101 @@ pub enum SimulationEvent {
         /// Action value measured
         action: f64,
     },
+}
+
+#[derive(Serialize)]
+struct SerializedCdtTriangulation<'a> {
+    geometry: &'a DelaunayBackend2D,
+    metadata: SerializedCdtMetadata<'a>,
+    foliation: &'a Option<Foliation>,
+}
+
+#[derive(Serialize)]
+struct SerializedCdtMetadata<'a> {
+    time_slices: u32,
+    dimension: u8,
+    topology: CdtTopology,
+    modification_count: u64,
+    simulation_history: &'a [SimulationEvent],
+}
+
+#[derive(Deserialize)]
+struct DeserializedCdtTriangulation {
+    geometry: DelaunayBackend2D,
+    metadata: DeserializedCdtMetadata,
+    foliation: Option<Foliation>,
+}
+
+#[derive(Deserialize)]
+struct DeserializedCdtMetadata {
+    time_slices: u32,
+    dimension: u8,
+    topology: CdtTopology,
+    modification_count: u64,
+    simulation_history: Vec<SimulationEvent>,
+}
+
+impl Serialize for CdtTriangulation<DelaunayBackend2D> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        SerializedCdtTriangulation {
+            geometry: &self.geometry,
+            metadata: SerializedCdtMetadata {
+                time_slices: self.metadata.time_slices,
+                dimension: self.metadata.dimension,
+                topology: self.metadata.topology,
+                modification_count: self.metadata.modification_count,
+                simulation_history: &self.metadata.simulation_history,
+            },
+            foliation: &self.foliation,
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for CdtTriangulation<DelaunayBackend2D> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let serialized = DeserializedCdtTriangulation::deserialize(deserializer)?;
+        let now = Instant::now();
+        let foliation_synced_at_modification = serialized
+            .foliation
+            .as_ref()
+            .map(|_| serialized.metadata.modification_count);
+        let tri = Self {
+            geometry: serialized.geometry,
+            metadata: CdtMetadata {
+                time_slices: serialized.metadata.time_slices,
+                dimension: serialized.metadata.dimension,
+                topology: serialized.metadata.topology,
+                creation_time: now,
+                last_modified: now,
+                modification_count: serialized.metadata.modification_count,
+                simulation_history: serialized.metadata.simulation_history,
+            },
+            cache: GeometryCache::default(),
+            foliation: serialized.foliation,
+            foliation_synced_at_modification,
+        };
+
+        tri.validate_checkpoint_invariants()
+            .map_err(DeError::custom)?;
+        Ok(tri)
+    }
+}
+
+impl CdtTriangulation<DelaunayBackend2D> {
+    fn validate_checkpoint_invariants(&self) -> CdtResult<()> {
+        self.validate_topology()?;
+        self.validate_foliation()?;
+        self.validate_causality()?;
+        self.validate_cell_classification()?;
+        Ok(())
+    }
 }
 
 impl<B: TriangulationQuery> CdtTriangulation<B> {
@@ -617,6 +711,10 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cdt::action::ActionConfig;
+    use crate::cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig};
+    use crate::geometry::generators::build_delaunay2_with_data;
+    use serde_json::{from_str, to_string};
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -1285,6 +1383,93 @@ mod tests {
                 && provided_value == "2"
                 && expected == "≥ 3"
         ));
+    }
+
+    #[test]
+    fn strip_checkpoint_roundtrip_preserves_foliation_and_classification() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit CDT strip should build");
+
+        let json = to_string(&triangulation).expect("checkpoint should serialize");
+        let restored: CdtTriangulation<DelaunayBackend2D> =
+            from_str(&json).expect("checkpoint should deserialize");
+
+        restored
+            .validate_checkpoint_invariants()
+            .expect("restored strip should validate checkpoint invariants");
+        assert_eq!(restored.slice_sizes(), triangulation.slice_sizes());
+        assert_eq!(restored.metadata().topology, CdtTopology::OpenBoundary);
+        assert_eq!(
+            restored
+                .geometry()
+                .faces()
+                .filter(|face| restored.cell_type(face).is_some())
+                .count(),
+            restored.face_count(),
+            "all strip cells should keep Up/Down classification"
+        );
+    }
+
+    #[test]
+    fn toroidal_checkpoint_roundtrip_preserves_topology_and_labels() {
+        let triangulation =
+            CdtTriangulation::from_toroidal_cdt(4, 3).expect("explicit torus should build");
+        let labels_before: Vec<_> = triangulation
+            .geometry()
+            .vertices()
+            .map(|vertex| triangulation.time_label(&vertex))
+            .collect();
+
+        let json = to_string(&triangulation).expect("checkpoint should serialize");
+        let restored: CdtTriangulation<DelaunayBackend2D> =
+            from_str(&json).expect("checkpoint should deserialize");
+        let labels_after: Vec<_> = restored
+            .geometry()
+            .vertices()
+            .map(|vertex| restored.time_label(&vertex))
+            .collect();
+
+        restored
+            .validate_checkpoint_invariants()
+            .expect("restored torus should validate checkpoint invariants");
+        assert_eq!(restored.metadata().topology, CdtTopology::Toroidal);
+        assert_eq!(restored.geometry().periodic_domain(), Some([1.0, 1.0]));
+        assert_eq!(restored.slice_sizes(), triangulation.slice_sizes());
+        assert_eq!(labels_after, labels_before);
+    }
+
+    #[test]
+    fn mcmc_checkpoint_roundtrip_preserves_history_and_invariants() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit CDT strip should build");
+        let algorithm = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 4, 0, 1).with_seed(13),
+            ActionConfig::default(),
+        );
+        let results = algorithm
+            .run(triangulation)
+            .expect("short MCMC run should complete");
+
+        let json = to_string(&results.triangulation).expect("checkpoint should serialize");
+        let restored: CdtTriangulation<DelaunayBackend2D> =
+            from_str(&json).expect("checkpoint should deserialize");
+
+        restored
+            .validate_checkpoint_invariants()
+            .expect("restored MCMC checkpoint should validate invariants");
+        assert_eq!(
+            restored.metadata().simulation_history.len(),
+            results.triangulation.metadata().simulation_history.len()
+        );
+        assert_eq!(
+            restored.metadata().modification_count,
+            results.triangulation.metadata().modification_count
+        );
+        assert_eq!(
+            restored.slice_sizes(),
+            results.triangulation.slice_sizes(),
+            "MCMC checkpoint should preserve foliation bookkeeping"
+        );
     }
 }
 

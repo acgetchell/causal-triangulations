@@ -146,7 +146,7 @@ Validate with:
 
 ```bash
 just examples
-just validate-examples
+just examples-validate
 ```
 
 Examples must:
@@ -155,7 +155,7 @@ Examples must:
 - run successfully
 - demonstrate correct API usage
 
-`just validate-examples` additionally checks stable output markers for user-facing Cargo examples. Keep those markers semantic rather than exact numeric values so simulation output can evolve without making the example contract brittle.
+`just examples-validate` additionally checks stable output markers for user-facing Cargo examples. Keep those markers semantic rather than exact numeric values so simulation output can evolve without making the example contract brittle.
 
 When adding or renaming a Cargo example, update `scripts/run_all_examples.sh` `validate_example_output()` with stable semantic output markers, or intentionally document why success-only validation is sufficient for that example.
 
@@ -291,7 +291,7 @@ just test-python       # pytest
 | Run all tests         | `just test-all`          |
 | Run Python tests      | `just test-python`       |
 | Run examples          | `just examples`          |
-| Validate examples     | `just validate-examples` |
+| Validate examples     | `just examples-validate` |
 | Run full CI           | `just ci`                |
 | Pre-commit check      | `just commit-check`      |
 
@@ -302,7 +302,7 @@ just test-python       # pytest
 | Changed files | Command                                |
 | ------------- | -------------------------------------- |
 | `tests/`      | `just test-integration` (or `just ci`) |
-| `examples/`   | `just validate-examples`               |
+| `examples/`   | `just examples-validate`               |
 | `benches/`    | `just bench-compile`                   |
 | `src/`        | `just test`                            |
 | `scripts/`    | `just test-python`                     |

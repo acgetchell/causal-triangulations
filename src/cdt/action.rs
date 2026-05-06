@@ -6,6 +6,7 @@
 //! which is based on the Regge calculus formulation of general relativity.
 
 use crate::errors::{CdtError, CdtResult};
+use serde::{Deserialize, Serialize};
 
 /// Calculates the 2D Regge Action for a given triangulation.
 ///
@@ -57,7 +58,7 @@ pub fn compute_regge_action(
 }
 
 /// Configuration for CDT action parameters.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ActionConfig {
     /// Coupling constant for vertices (κ₀)
     pub coupling_0: f64,

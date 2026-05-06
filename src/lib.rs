@@ -19,11 +19,35 @@
 //! - Metropolis-Hastings sampling over foliation-aware 2D ergodic moves
 //! - Volume-profile, Hausdorff-dimension, and spectral-dimension observables
 //!   for CDT analysis
+//! - CSV/JSON simulation output and resumable serde-backed CDT/MCMC checkpoints
 //!
 //! The crate root re-exports the most common construction, simulation,
 //! observable, and error types. Focused preludes under [`prelude`] provide
 //! smaller import surfaces for documentation, examples, integration tests, and
 //! benchmarks.
+//!
+//! # Checkpointing
+//!
+//! CDT triangulations backed by [`geometry::DelaunayBackend2D`] serialize their
+//! stable geometry, metadata, foliation, and simulation history while rebuilding
+//! transient caches and timestamps on load.
+//!
+//! ```
+//! use causal_triangulations::prelude::triangulation::*;
+//! use serde_json::{from_str, to_string};
+//!
+//! fn main() -> CdtResult<()> {
+//!     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+//!     let json = to_string(&tri).expect("serialize checkpoint");
+//!     let restored: CdtTriangulation2D = from_str(&json).expect("deserialize checkpoint");
+//!     restored.validate_topology()?;
+//!     restored.validate_foliation()?;
+//!     restored.validate_causality()?;
+//!     restored.validate_cell_classification()?;
+//!     assert_eq!(restored.slice_sizes(), &[4, 4, 4]);
+//!     Ok(())
+//! }
+//! ```
 //!
 //! # Example
 //!
@@ -110,7 +134,7 @@ pub use cdt::action::{ActionConfig, compute_regge_action};
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
 pub use cdt::foliation::{CellType, EdgeType, Foliation};
 pub use cdt::metropolis::{
-    CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget,
+    CdtMcmcCheckpoint, CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget,
     MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
 };
 pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
@@ -119,6 +143,7 @@ pub use config::{CdtConfig, CdtTopology, TestConfig};
 pub use errors::{CdtError, CdtResult};
 
 use crate::util::saturating_usize_to_u32;
+use std::env;
 use std::time::Duration;
 
 // Trait-based triangulation (recommended)
@@ -152,6 +177,7 @@ pub mod prelude {
     // Action and simulation setup
     pub use crate::cdt::action::ActionConfig;
     pub use crate::cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig};
+    pub use crate::run_simulation;
 
     // Configuration and errors
     pub use crate::config::{CdtConfig, CdtTopology};
@@ -235,20 +261,22 @@ pub mod prelude {
 
     /// Focused exports for running CDT simulations.
     ///
-    /// This prelude includes the Metropolis runner, delayed proposal adapter,
-    /// telemetry structs, and typed proposal errors needed by MCMC workflows.
+    /// This prelude includes [`run_simulation`], the Metropolis runner, delayed
+    /// proposal adapter, telemetry structs, result containers, and typed
+    /// proposal errors needed by MCMC workflows.
     /// Observable estimators live in [`crate::prelude::observables`].
     pub mod simulation {
-        pub use crate::CdtTriangulation;
         pub use crate::cdt::action::{ActionConfig, compute_regge_action};
         pub use crate::cdt::ergodic_moves::MoveType;
         pub use crate::cdt::metropolis::{
-            CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget,
-            MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
+            CdtMcmcCheckpoint, CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan,
+            CdtTarget, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
         };
         pub use crate::cdt::results::{Measurement, SimulationResultsBackend};
         pub use crate::config::{CdtConfig, CdtTopology};
         pub use crate::errors::{CdtError, CdtResult};
+        pub use crate::geometry::CdtTriangulation2D;
+        pub use crate::{CdtTriangulation, run_simulation};
     }
 
     /// Focused exports for CDT observables and post-simulation analysis.
@@ -358,6 +386,10 @@ pub mod prelude {
 /// a simulation dimension other than 2.
 /// Returns triangulation generation, topology, foliation, or Metropolis errors
 /// from the selected construction and simulation path.
+/// If [`CdtConfig::output_csv`] or [`CdtConfig::output_json`] is set, returns
+/// [`CdtError::OutputPathResolutionFailed`] if the current working directory
+/// cannot be resolved. Returns [`CdtError::OutputWriteFailed`] if the configured
+/// output file, parent directory creation, or JSON serialization fails.
 ///
 /// # Examples
 ///
@@ -422,7 +454,7 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
         triangulation.face_count()
     );
 
-    if config.simulate {
+    let results = if config.simulate {
         // Run full CDT simulation with MCMC backend
         let metropolis_config = config.to_metropolis_config();
         let action_config = config.to_action_config();
@@ -437,7 +469,7 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
         );
         log::info!("  Average action: {:.3}", results.average_action());
 
-        Ok(results)
+        results
     } else {
         // Just return basic simulation results with the triangulation
         let vertices = saturating_usize_to_u32(triangulation.vertex_count());
@@ -447,7 +479,7 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
             .to_action_config()
             .calculate_action(vertices, edges, triangles);
 
-        Ok(SimulationResultsBackend {
+        SimulationResultsBackend {
             config: config.to_metropolis_config(),
             action_config: config.to_action_config(),
             move_stats: MoveStatistics::new(),
@@ -462,14 +494,52 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
             }],
             elapsed_time: Duration::from_millis(0),
             triangulation,
-        })
+        }
+    };
+
+    write_configured_outputs(config, &results)?;
+    Ok(results)
+}
+
+/// Writes configured result outputs after a run completes.
+fn write_configured_outputs(
+    config: &CdtConfig,
+    results: &SimulationResultsBackend,
+) -> CdtResult<()> {
+    if config.output_csv.is_none() && config.output_json.is_none() {
+        return Ok(());
     }
+
+    let base_dir = env::current_dir().map_err(|err| CdtError::OutputPathResolutionFailed {
+        base_path: ".".to_string(),
+        detail: err.to_string(),
+    })?;
+
+    if let Some(path) = &config.output_csv {
+        let resolved = CdtConfig::resolve_path(&base_dir, path);
+        results.write_measurements_csv(&resolved)?;
+        log::info!("Wrote measurement CSV to {}", resolved.display());
+    }
+
+    if let Some(path) = &config.output_json {
+        let resolved = CdtConfig::resolve_path(&base_dir, path);
+        results.write_summary_json(config, &resolved)?;
+        log::info!("Wrote simulation JSON summary to {}", resolved.display());
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
+    use serde_json::{Value, from_str};
+    use std::env;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::process;
+    use std::thread;
 
     fn create_test_config() -> CdtConfig {
         CdtConfig {
@@ -486,7 +556,17 @@ mod tests {
             simulate: false,
             seed: Some(42),
             topology: CdtTopology::OpenBoundary,
+            output_csv: None,
+            output_json: None,
         }
+    }
+
+    fn temp_output_path(name: &str) -> PathBuf {
+        env::temp_dir().join(format!(
+            "causal-triangulations-run-{name}-{}-{}",
+            process::id(),
+            thread::current().name().unwrap_or("test")
+        ))
     }
 
     #[test]
@@ -519,6 +599,30 @@ mod tests {
         let results = run_simulation(&config).expect("Failed to run triangulation");
         // Check that we have some triangles
         assert!(results.triangulation.face_count() > 0);
+    }
+
+    #[test]
+    fn run_simulation_writes_configured_outputs() {
+        let csv_path = temp_output_path("measurements.csv");
+        let json_path = temp_output_path("summary.json");
+        let mut config = create_test_config();
+        config.output_csv = Some(csv_path.clone());
+        config.output_json = Some(json_path.clone());
+
+        run_simulation(&config).expect("configured outputs should write");
+
+        let csv = fs::read_to_string(&csv_path).expect("CSV output should be readable");
+        let json = fs::read_to_string(&json_path).expect("JSON output should be readable");
+        fs::remove_file(&csv_path).expect("temporary CSV output should be removable");
+        fs::remove_file(&json_path).expect("temporary JSON output should be removable");
+        let parsed: Value = from_str(&json).expect("JSON output should parse");
+
+        assert!(csv.starts_with("step,action,vertices,edges,triangles,accepted,delta_action\n"));
+        assert_eq!(parsed["config"]["vertices"], config.vertices);
+        assert_eq!(
+            parsed["final_triangulation"]["time_slices"],
+            config.timeslices
+        );
     }
 
     #[test]
@@ -670,6 +774,8 @@ mod tests {
             simulate: false,
             seed: None,
             topology: CdtTopology::Toroidal,
+            output_csv: None,
+            output_json: None,
         };
 
         let results = run_simulation(&config).expect("toroidal simulation should run");

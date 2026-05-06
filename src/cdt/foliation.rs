@@ -12,10 +12,11 @@
 //! CGAL's `vertex->info()` used in CDT-plusplus.  The `Foliation` struct
 //! tracks only aggregate bookkeeping (per-slice counts and total slices).
 
+use serde::{Deserialize, Serialize};
 use std::{error::Error, fmt};
 
 /// Classification of an edge
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum EdgeType {
     /// Both endpoints share the same time slice.
     Spacelike,
@@ -30,7 +31,7 @@ pub enum EdgeType {
 /// In a valid foliated triangulation every triangle spans exactly two
 /// adjacent time slices.  The type is determined by how many vertices
 /// sit on the lower vs. upper slice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CellType {
     /// **(2,1)** — two vertices at time *t*, one at *t + 1*.
     /// The spacelike base is in the lower slice.
@@ -335,7 +336,7 @@ impl Error for FoliationError {}
 /// Time labels are stored on vertices directly (as vertex data in the
 /// Delaunay triangulation). This struct tracks only the per-slice vertex
 /// counts and the total number of slices.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Foliation {
     /// Number of vertices per time slice (`slice_sizes[t]`).
     slice_sizes: Vec<usize>,

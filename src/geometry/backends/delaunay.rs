@@ -16,15 +16,18 @@ use crate::geometry::traits::{
 use delaunay::core::DataType;
 use delaunay::core::edge::EdgeKey;
 use delaunay::core::facet::FacetHandle;
-use delaunay::core::tds::{CellKey, VertexKey};
+use delaunay::core::tds::{CellKey, Tds, VertexKey};
 use delaunay::core::vertex::Vertex;
 use delaunay::geometry::kernel::AdaptiveKernel;
 use delaunay::geometry::point::Point;
 use delaunay::geometry::traits::coordinate::Coordinate;
+use delaunay::prelude::TopologyGuarantee;
 use delaunay::prelude::VertexBuilder;
 use delaunay::prelude::triangulation::flips::BistellarFlips;
-use delaunay::topology::traits::{GlobalTopology, TopologyKind};
+use delaunay::topology::traits::{GlobalTopology, TopologyKind, ToroidalConstructionMode};
 use delaunay::triangulation::DelaunayTriangulation;
+use serde::de::Error as DeError;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 
 type DelaunayKernel = AdaptiveKernel<f64>;
@@ -40,12 +43,165 @@ type RawVertex<VertexData, const D: usize> = Vertex<f64, VertexData, D>;
 /// are backed by the upstream Delaunay edit API where possible. `move_vertex()`, `clear()`,
 /// and `reserve_capacity()` are not yet implemented and return
 /// [`DelaunayError::NotImplemented`].
+///
+/// # Serialization
+///
+/// Serde checkpoints store the upstream triangulation data structure plus its
+/// global topology and topology-guarantee metadata. Deserialization rebuilds
+/// transient backend caches, including the interior-facet lookup used for local
+/// 2D edge queries.
 #[derive(Debug, Clone)]
 pub struct DelaunayBackend<VertexData: DataType, CellData: DataType, const D: usize> {
     /// The underlying Delaunay triangulation from the delaunay crate
     dt: RawTriangulation<VertexData, CellData, D>,
     /// Interior 2D edge to one incident facet suitable for k=2 local queries.
     interior_facets_by_edge: HashMap<EdgeKey, FacetHandle>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(bound(
+    serialize = "Tds<f64, VertexData, CellData, D>: Serialize",
+    deserialize = "Tds<f64, VertexData, CellData, D>: Deserialize<'de>"
+))]
+struct SerializedDelaunayBackend<VertexData: DataType, CellData: DataType, const D: usize> {
+    tds: Tds<f64, VertexData, CellData, D>,
+    global_topology: SerializableGlobalTopology,
+    topology_guarantee: SerializableTopologyGuarantee,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+enum SerializableGlobalTopology {
+    Euclidean,
+    Toroidal {
+        domain: Vec<f64>,
+        mode: SerializableToroidalConstructionMode,
+    },
+    Spherical,
+    Hyperbolic,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+enum SerializableToroidalConstructionMode {
+    Canonicalized,
+    PeriodicImagePoint,
+    Explicit,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+enum SerializableTopologyGuarantee {
+    Pseudomanifold,
+    PLManifold,
+    PLManifoldStrict,
+}
+
+impl<const D: usize> From<GlobalTopology<D>> for SerializableGlobalTopology {
+    fn from(topology: GlobalTopology<D>) -> Self {
+        match topology {
+            GlobalTopology::Euclidean => Self::Euclidean,
+            GlobalTopology::Toroidal { domain, mode } => Self::Toroidal {
+                domain: domain.to_vec(),
+                mode: mode.into(),
+            },
+            GlobalTopology::Spherical => Self::Spherical,
+            GlobalTopology::Hyperbolic => Self::Hyperbolic,
+        }
+    }
+}
+
+impl SerializableGlobalTopology {
+    fn into_global_topology<const D: usize, E: DeError>(self) -> Result<GlobalTopology<D>, E> {
+        match self {
+            Self::Euclidean => Ok(GlobalTopology::Euclidean),
+            Self::Toroidal { domain, mode } => {
+                let actual = domain.len();
+                let domain: [f64; D] = domain.try_into().map_err(|_| {
+                    E::custom(format!(
+                        "toroidal domain length mismatch: got {actual}, expected {D}"
+                    ))
+                })?;
+                Ok(GlobalTopology::Toroidal {
+                    domain,
+                    mode: mode.into(),
+                })
+            }
+            Self::Spherical => Ok(GlobalTopology::Spherical),
+            Self::Hyperbolic => Ok(GlobalTopology::Hyperbolic),
+        }
+    }
+}
+
+impl From<ToroidalConstructionMode> for SerializableToroidalConstructionMode {
+    fn from(mode: ToroidalConstructionMode) -> Self {
+        match mode {
+            ToroidalConstructionMode::Canonicalized => Self::Canonicalized,
+            ToroidalConstructionMode::PeriodicImagePoint => Self::PeriodicImagePoint,
+            ToroidalConstructionMode::Explicit => Self::Explicit,
+        }
+    }
+}
+
+impl From<SerializableToroidalConstructionMode> for ToroidalConstructionMode {
+    fn from(mode: SerializableToroidalConstructionMode) -> Self {
+        match mode {
+            SerializableToroidalConstructionMode::Canonicalized => Self::Canonicalized,
+            SerializableToroidalConstructionMode::PeriodicImagePoint => Self::PeriodicImagePoint,
+            SerializableToroidalConstructionMode::Explicit => Self::Explicit,
+        }
+    }
+}
+
+impl From<TopologyGuarantee> for SerializableTopologyGuarantee {
+    fn from(guarantee: TopologyGuarantee) -> Self {
+        match guarantee {
+            TopologyGuarantee::Pseudomanifold => Self::Pseudomanifold,
+            TopologyGuarantee::PLManifold => Self::PLManifold,
+            TopologyGuarantee::PLManifoldStrict => Self::PLManifoldStrict,
+        }
+    }
+}
+
+impl From<SerializableTopologyGuarantee> for TopologyGuarantee {
+    fn from(guarantee: SerializableTopologyGuarantee) -> Self {
+        match guarantee {
+            SerializableTopologyGuarantee::Pseudomanifold => Self::Pseudomanifold,
+            SerializableTopologyGuarantee::PLManifold => Self::PLManifold,
+            SerializableTopologyGuarantee::PLManifoldStrict => Self::PLManifoldStrict,
+        }
+    }
+}
+
+impl<VertexData: DataType, CellData: DataType, const D: usize> Serialize
+    for DelaunayBackend<VertexData, CellData, D>
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        SerializedDelaunayBackend {
+            tds: self.dt.tds().clone(),
+            global_topology: self.dt.global_topology().into(),
+            topology_guarantee: self.dt.topology_guarantee().into(),
+        }
+        .serialize(serializer)
+    }
+}
+
+impl<'de, VertexData: DataType, CellData: DataType, const D: usize> Deserialize<'de>
+    for DelaunayBackend<VertexData, CellData, D>
+{
+    fn deserialize<DE>(deserializer: DE) -> Result<Self, DE::Error>
+    where
+        DE: Deserializer<'de>,
+    {
+        let serialized = SerializedDelaunayBackend::deserialize(deserializer)?;
+        let mut dt = DelaunayTriangulation::from_tds_with_topology_guarantee(
+            serialized.tds,
+            AdaptiveKernel::new(),
+            serialized.topology_guarantee.into(),
+        );
+        dt.set_global_topology(serialized.global_topology.into_global_topology()?);
+        Ok(Self::from_triangulation(dt))
+    }
 }
 
 /// Opaque handle for vertices in Delaunay backend

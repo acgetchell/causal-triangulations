@@ -178,6 +178,52 @@ pub enum CdtError {
     /// MCMC framework error (e.g. NaN in log-probability)
     #[error("MCMC error: {0}")]
     Mcmc(String),
+    /// Writing CSV/JSON simulation output failed.
+    #[error("Failed to write {format} output to {path}: {detail}")]
+    OutputWriteFailed {
+        /// Target output path.
+        path: String,
+        /// Output format being written.
+        format: String,
+        /// Lower-level I/O or serialization error.
+        detail: String,
+    },
+    /// Resolving a configured output path failed before writing began.
+    #[error("Failed to resolve output path from base {base_path}: {detail}")]
+    OutputPathResolutionFailed {
+        /// Base path used for resolving configured output paths.
+        base_path: String,
+        /// Lower-level path resolution error.
+        detail: String,
+    },
+    /// Reading or decoding CSV/JSON simulation output failed.
+    #[error("Failed to read {format} output from {path}: {detail}")]
+    OutputReadFailed {
+        /// Source output path.
+        path: String,
+        /// Output format being read.
+        format: String,
+        /// Lower-level I/O or decoding error.
+        detail: String,
+    },
+    /// Serializing or deserializing a CDT or MCMC checkpoint failed.
+    #[error("Failed to {operation} {target} checkpoint: {detail}")]
+    CheckpointSerializationFailed {
+        /// Checkpoint operation being attempted.
+        operation: String,
+        /// Human-readable checkpoint target, such as "final triangulation".
+        target: String,
+        /// Lower-level serialization error.
+        detail: String,
+    },
+    /// Restoring or continuing an MCMC checkpoint failed before sampling resumed.
+    #[error("Failed to resume MCMC checkpoint [{reason}]: {detail}")]
+    CheckpointResumeFailed {
+        /// Structured reason category for the resume failure.
+        reason: String,
+        /// Human-readable reason resume could not proceed.
+        detail: String,
+    },
 }
 
 /// Keeps causality error formatting centralized so open and toroidal distances stay consistent.
@@ -456,6 +502,116 @@ mod tests {
         assert!(
             display.contains("NaN"),
             "Should contain NaN context: {display}"
+        );
+    }
+
+    #[test]
+    fn test_output_write_failed_error() {
+        let error = CdtError::OutputWriteFailed {
+            path: "measurements.csv".to_string(),
+            format: "CSV".to_string(),
+            detail: "permission denied".to_string(),
+        };
+        let CdtError::OutputWriteFailed {
+            path,
+            format,
+            detail,
+        } = &error
+        else {
+            panic!("expected OutputWriteFailed variant");
+        };
+        assert_eq!(path, "measurements.csv");
+        assert_eq!(format, "CSV");
+        assert_eq!(detail, "permission denied");
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Failed to write CSV output to measurements.csv: permission denied"
+        );
+    }
+
+    #[test]
+    fn test_output_path_resolution_failed_error() {
+        let error = CdtError::OutputPathResolutionFailed {
+            base_path: ".".to_string(),
+            detail: "No such file or directory".to_string(),
+        };
+        let CdtError::OutputPathResolutionFailed { base_path, detail } = &error else {
+            panic!("expected OutputPathResolutionFailed variant");
+        };
+        assert_eq!(base_path, ".");
+        assert_eq!(detail, "No such file or directory");
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Failed to resolve output path from base .: No such file or directory"
+        );
+    }
+
+    #[test]
+    fn test_output_read_failed_error() {
+        let error = CdtError::OutputReadFailed {
+            path: "summary.json".to_string(),
+            format: "JSON".to_string(),
+            detail: "expected value at line 1 column 1".to_string(),
+        };
+        let CdtError::OutputReadFailed {
+            path,
+            format,
+            detail,
+        } = &error
+        else {
+            panic!("expected OutputReadFailed variant");
+        };
+        assert_eq!(path, "summary.json");
+        assert_eq!(format, "JSON");
+        assert_eq!(detail, "expected value at line 1 column 1");
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Failed to read JSON output from summary.json: expected value at line 1 column 1"
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_serialization_failed_error() {
+        let error = CdtError::CheckpointSerializationFailed {
+            operation: "deserialize".to_string(),
+            target: "final triangulation".to_string(),
+            detail: "missing field `geometry`".to_string(),
+        };
+        let CdtError::CheckpointSerializationFailed {
+            operation,
+            target,
+            detail,
+        } = &error
+        else {
+            panic!("expected CheckpointSerializationFailed variant");
+        };
+        assert_eq!(operation, "deserialize");
+        assert_eq!(target, "final triangulation");
+        assert_eq!(detail, "missing field `geometry`");
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Failed to deserialize final triangulation checkpoint: missing field `geometry`"
+        );
+    }
+
+    #[test]
+    fn test_checkpoint_resume_failed_error() {
+        let error = CdtError::CheckpointResumeFailed {
+            reason: "incompatible temperature".to_string(),
+            detail: "temperature differs from checkpoint".to_string(),
+        };
+        let CdtError::CheckpointResumeFailed { reason, detail } = &error else {
+            panic!("expected CheckpointResumeFailed variant");
+        };
+        assert_eq!(reason, "incompatible temperature");
+        assert_eq!(detail, "temperature differs from checkpoint");
+        assert_eq!(
+            format!("{error}"),
+            "Failed to resume MCMC checkpoint [incompatible temperature]: temperature differs from checkpoint"
         );
     }
 

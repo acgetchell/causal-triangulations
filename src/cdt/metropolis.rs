@@ -18,12 +18,13 @@ use crate::config::validate_schedule;
 use crate::errors::{CdtError, CdtResult};
 use crate::geometry::CdtTriangulation2D;
 use crate::util::saturating_usize_to_u32;
-use markov_chain_monte_carlo::{DelayedProposal, Target};
-use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
+use markov_chain_monte_carlo::{Chain, ChainCheckpoint, DelayedProposal, Target};
+use rand::{Rng, RngExt, SeedableRng, rngs::Xoshiro256PlusPlus};
+use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::fmt;
 use std::hint::cold_path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const ACCEPTED_MOVE_RETRIES: usize = 8;
 
@@ -35,7 +36,7 @@ struct SimplexCounts {
 }
 
 /// Configuration for the Metropolis-Hastings algorithm.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MetropolisConfig {
     /// Temperature parameter (1/β)
     pub temperature: f64,
@@ -172,7 +173,7 @@ fn validate_temperature(temperature: f64) -> CdtResult<()> {
 }
 
 /// Result of a Monte Carlo step.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonteCarloStep {
     /// Step number
     pub step: u32,
@@ -643,6 +644,157 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
 // Metropolis algorithm
 // ---------------------------------------------------------------------------
 
+/// Resumable checkpoint for a CDT Metropolis-Hastings run.
+///
+/// The embedded [`ChainCheckpoint`] stores the current triangulation and
+/// accepted/rejected chain counters using the shared MCMC crate's portable
+/// checkpoint type. CDT adds the domain-specific runtime state needed for
+/// scientific continuation: action/config metadata, accumulated telemetry,
+/// both RNG streams, and the ergodic move system.
+///
+/// Resuming a serialized checkpoint continues from the stored chain counters
+/// and RNG streams. The triangulation is restored through its invariant-checked
+/// serde representation, so callers should rely on CDT observables and
+/// validation contracts rather than byte-for-byte backend identity.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::simulation::{
+///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+/// };
+///
+/// fn main() -> CdtResult<()> {
+///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+///     let algorithm = MetropolisAlgorithm::new(
+///         MetropolisConfig::new(1.0, 2, 0, 1).with_seed(13),
+///         ActionConfig::default(),
+///     );
+///     let checkpoint = algorithm.run_to_checkpoint(tri)?;
+///
+///     assert_eq!(checkpoint.current_step(), 2);
+///     assert_eq!(checkpoint.steps().len(), 2);
+///     assert_eq!(checkpoint.chain().total_steps(), 2);
+///     assert_eq!(checkpoint.config().steps, 2);
+///     assert_eq!(checkpoint.action_config(), &ActionConfig::default());
+///     assert!(checkpoint.current_action().is_finite());
+///     assert_eq!(checkpoint.move_stats().total_attempted(), 2);
+///     assert_eq!(checkpoint.measurements().len(), 3);
+///     Ok(())
+/// }
+/// ```
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CdtMcmcCheckpoint {
+    chain: ChainCheckpoint<CdtTriangulation2D>,
+    config: MetropolisConfig,
+    action_config: ActionConfig,
+    current_step: u32,
+    current_action: f64,
+    move_stats: MoveStatistics,
+    steps: Vec<MonteCarloStep>,
+    measurements: Vec<Measurement>,
+    elapsed_time: Duration,
+    acceptance_rng: Xoshiro256PlusPlus,
+    ergodics: ErgodicsSystem,
+}
+
+impl CdtMcmcCheckpoint {
+    /// Returns the generic MCMC chain checkpoint.
+    pub const fn chain(&self) -> &ChainCheckpoint<CdtTriangulation2D> {
+        &self.chain
+    }
+
+    /// Returns the Metropolis configuration used when the checkpoint was made.
+    #[must_use]
+    pub const fn config(&self) -> &MetropolisConfig {
+        &self.config
+    }
+
+    /// Returns the action configuration used when the checkpoint was made.
+    #[must_use]
+    pub const fn action_config(&self) -> &ActionConfig {
+        &self.action_config
+    }
+
+    /// Returns the last completed Monte Carlo step.
+    #[must_use]
+    pub const fn current_step(&self) -> u32 {
+        self.current_step
+    }
+
+    /// Returns the action of the checkpointed triangulation.
+    #[must_use]
+    pub const fn current_action(&self) -> f64 {
+        self.current_action
+    }
+
+    /// Returns accumulated move statistics through the checkpoint step.
+    #[must_use]
+    pub const fn move_stats(&self) -> &MoveStatistics {
+        &self.move_stats
+    }
+
+    /// Returns accumulated step telemetry through the checkpoint step.
+    #[must_use]
+    pub fn steps(&self) -> &[MonteCarloStep] {
+        &self.steps
+    }
+
+    /// Returns accumulated measurements through the checkpoint step.
+    #[must_use]
+    pub fn measurements(&self) -> &[Measurement] {
+        &self.measurements
+    }
+
+    /// Converts the checkpoint into a complete simulation result snapshot.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    ///     let checkpoint = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 2, 0, 1).with_seed(13),
+    ///         ActionConfig::default(),
+    ///     )
+    ///     .run_to_checkpoint(tri)?;
+    ///
+    ///     let results = checkpoint.into_results();
+    ///     assert_eq!(results.steps.len(), 2);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub fn into_results(self) -> SimulationResultsBackend {
+        let (triangulation, _, _) = self.chain.into_parts();
+        SimulationResultsBackend {
+            config: self.config,
+            action_config: self.action_config,
+            move_stats: self.move_stats,
+            steps: self.steps,
+            measurements: self.measurements,
+            elapsed_time: self.elapsed_time,
+            triangulation,
+        }
+    }
+}
+
+struct MetropolisRunState {
+    triangulation: CdtTriangulation2D,
+    current_step: u32,
+    current_action: f64,
+    acceptance_rng: Xoshiro256PlusPlus,
+    ergodics: ErgodicsSystem,
+    move_stats: MoveStatistics,
+    steps: Vec<MonteCarloStep>,
+    measurements: Vec<Measurement>,
+    elapsed_time: Duration,
+}
+
 /// Metropolis-Hastings algorithm implementation for CDT.
 ///
 /// Accepts or rejects proposed CDT move types before applying them.
@@ -685,11 +837,13 @@ impl MetropolisAlgorithm {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
-    /// configuration is invalid, [`CdtError::MetropolisMoveApplicationFailed`]
-    /// if an accepted move causes a hard backend mutation failure, or a
-    /// validation error for unrecoverable triangulation failures. Accepted move
-    /// types that cannot find a realizable local site after bounded retries are
-    /// recorded as rejected proposals.
+    /// configuration is invalid, [`CdtError::InvalidConfiguration`] if the
+    /// action configuration is invalid,
+    /// [`CdtError::MetropolisMoveApplicationFailed`] if an accepted move causes
+    /// a hard backend mutation failure, or a validation error for
+    /// unrecoverable triangulation failures. Accepted move types that cannot
+    /// find a realizable local site after bounded retries are recorded as
+    /// rejected proposals.
     ///
     /// # Examples
     ///
@@ -706,122 +860,638 @@ impl MetropolisAlgorithm {
     ///     Ok(())
     /// }
     /// ```
-    pub fn run(
+    pub fn run(&self, triangulation: CdtTriangulation2D) -> CdtResult<SimulationResultsBackend> {
+        Ok(self.run_to_checkpoint(triangulation)?.into_results())
+    }
+
+    /// Run the simulation and return both the final results and checkpoint.
+    ///
+    /// The checkpoint can be serialized and later resumed with
+    /// [`Self::resume_from_checkpoint`] without losing the CDT RNG streams.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
+    /// configuration is invalid, [`CdtError::InvalidConfiguration`] if the
+    /// action configuration is invalid,
+    /// [`CdtError::MetropolisMoveApplicationFailed`] if an accepted move causes
+    /// a hard backend mutation failure, or a validation error for
+    /// unrecoverable triangulation failures.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    ///     let algorithm = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 2, 0, 1).with_seed(13),
+    ///         ActionConfig::default(),
+    ///     );
+    ///     let (results, checkpoint) = algorithm.run_with_checkpoint(tri)?;
+    ///
+    ///     assert_eq!(results.steps.len(), checkpoint.steps().len());
+    ///     assert_eq!(checkpoint.current_step(), 2);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn run_with_checkpoint(
         &self,
-        mut triangulation: CdtTriangulation2D,
-    ) -> CdtResult<SimulationResultsBackend> {
-        // Validate configuration to fail fast before any work
+        triangulation: CdtTriangulation2D,
+    ) -> CdtResult<(SimulationResultsBackend, CdtMcmcCheckpoint)> {
+        let checkpoint = self.run_to_checkpoint(triangulation)?;
+        let results = checkpoint.clone().into_results();
+        Ok((results, checkpoint))
+    }
+
+    /// Run the simulation and return a resumable checkpoint.
+    ///
+    /// The checkpoint embeds the current triangulation in the MCMC crate's
+    /// [`ChainCheckpoint`] and stores CDT-specific proposal state, telemetry,
+    /// and RNG streams beside it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
+    /// configuration is invalid, [`CdtError::InvalidConfiguration`] if the
+    /// action configuration is invalid,
+    /// [`CdtError::MetropolisMoveApplicationFailed`] if an accepted move causes
+    /// a hard backend mutation failure, or a validation error for
+    /// unrecoverable triangulation failures.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    ///     let checkpoint = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 2, 0, 1).with_seed(13),
+    ///         ActionConfig::default(),
+    ///     )
+    ///     .run_to_checkpoint(tri)?;
+    ///
+    ///     assert_eq!(checkpoint.current_step(), 2);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn run_to_checkpoint(
+        &self,
+        triangulation: CdtTriangulation2D,
+    ) -> CdtResult<CdtMcmcCheckpoint> {
         self.config.validate()?;
         self.action_config.validate()?;
 
-        let mut rng = simulation_rng(self.config.seed);
-        let mut moves = self.config.seed.map_or_else(ErgodicsSystem::new, |seed| {
-            ErgodicsSystem::with_seed(seed.wrapping_add(0x9E37_79B9_7F4A_7C15))
-        });
-        let start = Instant::now();
-        let mut move_stats = MoveStatistics::new();
-        let mut steps = Vec::with_capacity(usize::try_from(self.config.steps).unwrap_or(0));
-        let mut measurements = Vec::new();
+        let mut state = self.initial_state(triangulation);
+        self.run_steps(&mut state, self.config.steps)?;
+        state.into_checkpoint(self.config.clone(), self.action_config.clone())
+    }
 
-        let mut current_action = action_for(&self.action_config, &triangulation);
-        measurements.push(measurement_for(0, current_action, &triangulation));
+    /// Continue a checkpoint for this algorithm's configured step count.
+    ///
+    /// `self.config.steps` is interpreted as an additional number of steps. The
+    /// returned [`SimulationResultsBackend`] is cumulative: it includes the
+    /// checkpointed prefix and the resumed suffix.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidSimulationConfiguration`] if the resumed
+    /// Metropolis configuration is invalid, [`CdtError::InvalidConfiguration`]
+    /// if the action configuration is invalid, or
+    /// [`CdtError::CheckpointResumeFailed`] if the checkpoint is incompatible
+    /// with this algorithm or internally inconsistent. Returns
+    /// [`CdtError::MetropolisMoveApplicationFailed`] or validation errors for
+    /// failures during resumed sampling.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    ///     let action = ActionConfig::default();
+    ///     let prefix = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 2, 0, 1).with_seed(13),
+    ///         action.clone(),
+    ///     );
+    ///     let checkpoint = prefix.run_to_checkpoint(tri)?;
+    ///
+    ///     let resumed = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 2, 0, 1).with_seed(999),
+    ///         action,
+    ///     )
+    ///     .resume_from_checkpoint(checkpoint)?;
+    ///
+    ///     assert_eq!(resumed.steps.len(), 4);
+    ///     assert_eq!(resumed.config.steps, 4);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn resume_from_checkpoint(
+        &self,
+        checkpoint: CdtMcmcCheckpoint,
+    ) -> CdtResult<SimulationResultsBackend> {
+        self.config.validate()?;
+        self.action_config.validate()?;
+        validate_resume_compatible(self, &checkpoint)?;
+
+        let mut result_config = checkpoint.config.clone();
+        result_config.steps = checkpoint
+            .current_step
+            .checked_add(self.config.steps)
+            .ok_or_else(|| {
+                checkpoint_resume_failed(
+                    "step count overflow",
+                    "resumed step count exceeds u32::MAX",
+                )
+            })?;
+
+        let mut state = MetropolisRunState::from_checkpoint(checkpoint)?;
+        self.run_steps(&mut state, self.config.steps)?;
+        state
+            .into_checkpoint(result_config, self.action_config.clone())
+            .map(CdtMcmcCheckpoint::into_results)
+    }
+
+    fn initial_state(&self, mut triangulation: CdtTriangulation2D) -> MetropolisRunState {
+        let current_action = action_for(&self.action_config, &triangulation);
+        let measurements = vec![measurement_for(0, current_action, &triangulation)];
         triangulation.record_event(SimulationEvent::MeasurementTaken {
             step: 0,
             action: current_action,
         });
 
-        for step in 1..=self.config.steps {
-            let move_type = moves.select_random_move();
-            move_stats.record_attempt(move_type);
-            triangulation.record_event(SimulationEvent::MoveAttempted {
-                move_type: format!("{move_type:?}"),
-                step: step.into(),
-            });
+        MetropolisRunState {
+            triangulation,
+            current_step: 0,
+            current_action,
+            acceptance_rng: simulation_rng(self.config.seed),
+            ergodics: self.config.seed.map_or_else(ErgodicsSystem::new, |seed| {
+                ErgodicsSystem::with_seed(seed.wrapping_add(0x9E37_79B9_7F4A_7C15))
+            }),
+            move_stats: MoveStatistics::new(),
+            steps: Vec::with_capacity(usize::try_from(self.config.steps).unwrap_or(0)),
+            measurements,
+            elapsed_time: Duration::ZERO,
+        }
+    }
 
-            let action_before = current_action;
-            let delta_action = proposed_delta_action(
-                &self.action_config,
-                simplex_counts(&triangulation),
-                move_type,
-            );
+    fn run_steps(&self, state: &mut MetropolisRunState, additional_steps: u32) -> CdtResult<()> {
+        let start = Instant::now();
+        for _ in 0..additional_steps {
+            let step = state.current_step.checked_add(1).ok_or_else(|| {
+                checkpoint_resume_failed(
+                    "step count overflow",
+                    "resumed step count exceeds u32::MAX",
+                )
+            })?;
+            run_one_step(self, state, step)?;
+            state.current_step = step;
+        }
+        state.elapsed_time += start.elapsed();
+        Ok(())
+    }
+}
 
-            let mut accepted = false;
-            let mut action_after = None;
-            if let Some(delta) = delta_action
-                && metropolis_accept(delta, self.config.temperature, &mut rng)
-            {
-                match apply_accepted_move(
-                    &mut triangulation,
-                    &mut moves,
-                    &self.action_config,
-                    move_type,
-                    action_before,
-                ) {
-                    Ok(AcceptedMoveResult::Applied {
-                        action_after: applied_action,
-                    }) => {
-                        accepted = true;
-                        action_after = Some(applied_action);
-                        current_action = applied_action;
-                        move_stats.record_success(move_type);
-                        triangulation.record_event(SimulationEvent::MoveAccepted {
-                            move_type: format!("{move_type:?}"),
-                            step: step.into(),
-                            action_change: applied_action - action_before,
-                        });
-                    }
-                    Ok(AcceptedMoveResult::NoApplicableSite { .. }) => {
-                        // A move type can be Metropolis-accepted even when bounded
-                        // random local-site selection finds no realizable site. That
-                        // is an ordinary proposal rejection, not a fatal simulation error.
-                    }
-                    Err(err) => {
-                        return Err(accepted_move_error(
-                            step,
-                            move_type,
-                            err.attempt,
-                            err.source.to_string(),
-                        ));
-                    }
-                }
-            }
-
-            steps.push(MonteCarloStep {
-                step,
-                move_type,
-                accepted,
-                action_before,
-                action_after,
-                delta_action,
-            });
-
-            if step.is_multiple_of(self.config.measurement_frequency) {
-                measurements.push(measurement_for(step, current_action, &triangulation));
-                triangulation.record_event(SimulationEvent::MeasurementTaken {
-                    step: step.into(),
-                    action: current_action,
-                });
-            }
+impl MetropolisRunState {
+    /// Restores the mutable simulation state from a validated checkpoint.
+    ///
+    /// The generic MCMC checkpoint rechecks target compatibility, then CDT
+    /// recomputes the action so serialized telemetry cannot silently diverge
+    /// from the invariant-checked triangulation payload.
+    fn from_checkpoint(checkpoint: CdtMcmcCheckpoint) -> CdtResult<Self> {
+        validate_checkpoint_counters(&checkpoint)?;
+        let target = CdtTarget::new(
+            checkpoint.action_config.clone(),
+            checkpoint.config.temperature,
+        )
+        .map_err(|err| {
+            checkpoint_resume_failed("checkpoint target configuration", err.to_string())
+        })?;
+        let chain = Chain::from_checkpoint(checkpoint.chain, &target)
+            .map_err(|err| checkpoint_resume_failed("mcmc chain restore", err.to_string()))?;
+        let triangulation = chain.into_state();
+        let actual_action = action_for(&checkpoint.action_config, &triangulation);
+        if !actions_match(actual_action, checkpoint.current_action) {
+            return Err(checkpoint_resume_failed(
+                "action mismatch",
+                format!(
+                    "checkpoint action mismatch: stored {}, recomputed {}",
+                    checkpoint.current_action, actual_action
+                ),
+            ));
         }
 
-        Ok(SimulationResultsBackend {
-            config: self.config.clone(),
-            action_config: self.action_config.clone(),
-            move_stats,
-            steps,
-            measurements,
-            elapsed_time: start.elapsed(),
+        Ok(Self {
             triangulation,
+            current_step: checkpoint.current_step,
+            current_action: checkpoint.current_action,
+            acceptance_rng: checkpoint.acceptance_rng,
+            ergodics: checkpoint.ergodics,
+            move_stats: checkpoint.move_stats,
+            steps: checkpoint.steps,
+            measurements: checkpoint.measurements,
+            elapsed_time: checkpoint.elapsed_time,
         })
     }
+
+    /// Converts mutable run state into a resumable CDT/MCMC checkpoint.
+    ///
+    /// The conversion rebuilds the generic chain counters from CDT move
+    /// statistics so serialized checkpoints keep both accounting systems in
+    /// lockstep.
+    fn into_checkpoint(
+        self,
+        config: MetropolisConfig,
+        action_config: ActionConfig,
+    ) -> CdtResult<CdtMcmcCheckpoint> {
+        let (accepted, rejected) = chain_counters(&self.move_stats)?;
+        Ok(CdtMcmcCheckpoint {
+            chain: ChainCheckpoint::new(self.triangulation, accepted, rejected),
+            config,
+            action_config,
+            current_step: self.current_step,
+            current_action: self.current_action,
+            move_stats: self.move_stats,
+            steps: self.steps,
+            measurements: self.measurements,
+            elapsed_time: self.elapsed_time,
+            acceptance_rng: self.acceptance_rng,
+            ergodics: self.ergodics,
+        })
+    }
+}
+
+/// Executes one additional Metropolis step against an initialized run state.
+///
+/// Fresh and resumed simulations use this shared path so checkpoint
+/// continuation cannot drift from ordinary sampling behavior.
+fn run_one_step(
+    algorithm: &MetropolisAlgorithm,
+    state: &mut MetropolisRunState,
+    step: u32,
+) -> CdtResult<()> {
+    let move_type = state.ergodics.select_random_move();
+    state.move_stats.record_attempt(move_type);
+    state
+        .triangulation
+        .record_event(SimulationEvent::MoveAttempted {
+            move_type: format!("{move_type:?}"),
+            step: step.into(),
+        });
+
+    let action_before = state.current_action;
+    let delta_action = proposed_delta_action(
+        &algorithm.action_config,
+        simplex_counts(&state.triangulation),
+        move_type,
+    );
+
+    let mut accepted = false;
+    let mut action_after = None;
+    if let Some(delta) = delta_action
+        && metropolis_accept(
+            delta,
+            algorithm.config.temperature,
+            &mut state.acceptance_rng,
+        )
+    {
+        match apply_accepted_move(
+            &mut state.triangulation,
+            &mut state.ergodics,
+            &algorithm.action_config,
+            move_type,
+            action_before,
+        ) {
+            Ok(AcceptedMoveResult::Applied {
+                action_after: applied_action,
+            }) => {
+                accepted = true;
+                action_after = Some(applied_action);
+                state.current_action = applied_action;
+                state.move_stats.record_success(move_type);
+                state
+                    .triangulation
+                    .record_event(SimulationEvent::MoveAccepted {
+                        move_type: format!("{move_type:?}"),
+                        step: step.into(),
+                        action_change: applied_action - action_before,
+                    });
+            }
+            Ok(AcceptedMoveResult::NoApplicableSite { .. }) => {
+                // A move type can be Metropolis-accepted even when bounded
+                // random local-site selection finds no realizable site. That
+                // is an ordinary proposal rejection, not a fatal simulation error.
+            }
+            Err(err) => {
+                return Err(accepted_move_error(
+                    step,
+                    move_type,
+                    err.attempt,
+                    err.source.to_string(),
+                ));
+            }
+        }
+    }
+
+    state.steps.push(MonteCarloStep {
+        step,
+        move_type,
+        accepted,
+        action_before,
+        action_after,
+        delta_action,
+    });
+
+    if step.is_multiple_of(algorithm.config.measurement_frequency) {
+        state.measurements.push(measurement_for(
+            step,
+            state.current_action,
+            &state.triangulation,
+        ));
+        state
+            .triangulation
+            .record_event(SimulationEvent::MeasurementTaken {
+                step: step.into(),
+                action: state.current_action,
+            });
+    }
+
+    Ok(())
+}
+
+/// Builds a structured checkpoint-resume error.
+fn checkpoint_resume_failed(reason: &'static str, detail: impl Into<String>) -> CdtError {
+    CdtError::CheckpointResumeFailed {
+        reason: reason.to_string(),
+        detail: detail.into(),
+    }
+}
+
+/// Verifies that a checkpoint can be resumed by the requested algorithm.
+///
+/// Resume accepts a different fresh seed because serialized checkpoints carry
+/// their own RNG streams, but rejects physics and sampling schedule changes
+/// that would make the cumulative chain scientifically ambiguous.
+fn validate_resume_compatible(
+    algorithm: &MetropolisAlgorithm,
+    checkpoint: &CdtMcmcCheckpoint,
+) -> CdtResult<()> {
+    if algorithm.action_config != checkpoint.action_config {
+        return Err(checkpoint_resume_failed(
+            "incompatible action configuration",
+            "action configuration differs from checkpoint",
+        ));
+    }
+    if algorithm.config.temperature.to_bits() != checkpoint.config.temperature.to_bits() {
+        return Err(checkpoint_resume_failed(
+            "incompatible temperature",
+            "temperature differs from checkpoint",
+        ));
+    }
+    if algorithm.config.thermalization_steps != checkpoint.config.thermalization_steps {
+        return Err(checkpoint_resume_failed(
+            "incompatible thermalization schedule",
+            "thermalization schedule differs from checkpoint",
+        ));
+    }
+    if algorithm.config.measurement_frequency != checkpoint.config.measurement_frequency {
+        return Err(checkpoint_resume_failed(
+            "incompatible measurement frequency",
+            "measurement frequency differs from checkpoint",
+        ));
+    }
+    validate_checkpoint_counters(checkpoint)
+}
+
+/// Checks that serialized chain counters and CDT telemetry agree.
+///
+/// The generic checkpoint, move statistics, current step, and step telemetry
+/// are redundant by design; this catches tampered or partially written
+/// checkpoint payloads before any resumed sampling occurs.
+fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
+    checkpoint
+        .config
+        .validate()
+        .map_err(|err| checkpoint_resume_failed("checkpoint configuration", err.to_string()))?;
+    checkpoint.action_config.validate().map_err(|err| {
+        checkpoint_resume_failed("checkpoint action configuration", err.to_string())
+    })?;
+
+    let (accepted, rejected) = chain_counters(&checkpoint.move_stats)?;
+    if checkpoint.chain.accepted() != accepted || checkpoint.chain.rejected() != rejected {
+        return Err(checkpoint_resume_failed(
+            "chain counter mismatch",
+            "chain counters do not match move statistics",
+        ));
+    }
+    if checkpoint.chain.total_steps()
+        != usize::try_from(checkpoint.current_step).unwrap_or(usize::MAX)
+    {
+        return Err(checkpoint_resume_failed(
+            "chain step mismatch",
+            "chain step count does not match checkpoint step",
+        ));
+    }
+    if checkpoint.steps.len() != checkpoint.chain.total_steps() {
+        return Err(checkpoint_resume_failed(
+            "step telemetry mismatch",
+            "step telemetry length does not match chain step count",
+        ));
+    }
+    validate_checkpoint_steps(checkpoint)?;
+    validate_checkpoint_measurements(checkpoint)?;
+    Ok(())
+}
+
+/// Checks that serialized per-step telemetry forms the exact prefix being resumed.
+fn validate_checkpoint_steps(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
+    let accepted_steps = checkpoint.steps.iter().filter(|step| step.accepted).count();
+    if accepted_steps != checkpoint.chain.accepted() {
+        return Err(checkpoint_resume_failed(
+            "step telemetry mismatch",
+            format!(
+                "accepted step count mismatch: got {}, expected {}",
+                accepted_steps,
+                checkpoint.chain.accepted()
+            ),
+        ));
+    }
+
+    for (index, step) in checkpoint.steps.iter().enumerate() {
+        let expected_step = u32::try_from(index + 1).map_err(|_| {
+            checkpoint_resume_failed(
+                "step telemetry overflow",
+                "step telemetry index exceeds u32::MAX",
+            )
+        })?;
+        if step.step != expected_step {
+            return Err(checkpoint_resume_failed(
+                "step telemetry mismatch",
+                format!(
+                    "step telemetry must be sequential: got step {}, expected {}",
+                    step.step, expected_step
+                ),
+            ));
+        }
+        if !step.action_before.is_finite() {
+            return Err(checkpoint_resume_failed(
+                "step telemetry mismatch",
+                format!("step {} has non-finite action_before", step.step),
+            ));
+        }
+        if let Some(delta_action) = step.delta_action
+            && !delta_action.is_finite()
+        {
+            return Err(checkpoint_resume_failed(
+                "step telemetry mismatch",
+                format!("step {} has non-finite delta_action", step.step),
+            ));
+        }
+        if step.accepted && step.delta_action.is_none() {
+            return Err(checkpoint_resume_failed(
+                "step telemetry mismatch",
+                format!("accepted step {} is missing delta_action", step.step),
+            ));
+        }
+        match (step.accepted, step.action_after) {
+            (true, Some(action_after)) if action_after.is_finite() => {
+                if let Some(delta_action) = step.delta_action
+                    && !actions_match(action_after, step.action_before + delta_action)
+                {
+                    return Err(checkpoint_resume_failed(
+                        "step telemetry mismatch",
+                        format!(
+                            "step {} action_after does not match delta_action",
+                            step.step
+                        ),
+                    ));
+                }
+            }
+            (true, Some(_)) => {
+                return Err(checkpoint_resume_failed(
+                    "step telemetry mismatch",
+                    format!("step {} has non-finite action_after", step.step),
+                ));
+            }
+            (true, None) => {
+                return Err(checkpoint_resume_failed(
+                    "step telemetry mismatch",
+                    format!("accepted step {} is missing action_after", step.step),
+                ));
+            }
+            (false, Some(_)) => {
+                return Err(checkpoint_resume_failed(
+                    "step telemetry mismatch",
+                    format!("rejected step {} unexpectedly has action_after", step.step),
+                ));
+            }
+            (false, None) => {}
+        }
+    }
+    Ok(())
+}
+
+/// Checks that serialized measurements match the configured sampling schedule.
+fn validate_checkpoint_measurements(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
+    let expected_measurements = usize::try_from(
+        u64::from(checkpoint.current_step) / u64::from(checkpoint.config.measurement_frequency) + 1,
+    )
+    .map_err(|_| {
+        checkpoint_resume_failed(
+            "measurement telemetry overflow",
+            "scheduled measurement count exceeds usize::MAX",
+        )
+    })?;
+    if checkpoint.measurements.len() != expected_measurements {
+        return Err(checkpoint_resume_failed(
+            "measurement telemetry mismatch",
+            format!(
+                "scheduled measurement count mismatch: got {}, expected {}",
+                checkpoint.measurements.len(),
+                expected_measurements
+            ),
+        ));
+    }
+
+    for (index, measurement) in checkpoint.measurements.iter().enumerate() {
+        let expected_step = u64::try_from(index)
+            .ok()
+            .and_then(|index| index.checked_mul(u64::from(checkpoint.config.measurement_frequency)))
+            .and_then(|step| u32::try_from(step).ok())
+            .ok_or_else(|| {
+                checkpoint_resume_failed(
+                    "measurement telemetry overflow",
+                    "scheduled measurement step exceeds u32::MAX",
+                )
+            })?;
+        if measurement.step != expected_step {
+            return Err(checkpoint_resume_failed(
+                "measurement telemetry mismatch",
+                format!(
+                    "measurement telemetry must follow the sampling schedule: got step {}, expected {}",
+                    measurement.step, expected_step
+                ),
+            ));
+        }
+        if !measurement.action.is_finite() {
+            return Err(checkpoint_resume_failed(
+                "measurement telemetry mismatch",
+                format!(
+                    "measurement at step {} has non-finite action",
+                    measurement.step
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Converts CDT move statistics into generic MCMC chain counters.
+///
+/// Accepted and rejected counts are derived from proposal accounting, with
+/// overflow and impossible accepted-above-attempted states reported as
+/// checkpoint resume errors instead of panicking.
+fn chain_counters(move_stats: &MoveStatistics) -> CdtResult<(usize, usize)> {
+    let attempted = move_stats.total_attempted();
+    let accepted = move_stats.total_accepted();
+    let rejected = attempted.checked_sub(accepted).ok_or_else(|| {
+        checkpoint_resume_failed(
+            "move statistics invariant",
+            "accepted move count exceeds attempted move count",
+        )
+    })?;
+    Ok((
+        usize::try_from(accepted).map_err(|_| {
+            checkpoint_resume_failed(
+                "counter conversion overflow",
+                "accepted move count exceeds usize::MAX",
+            )
+        })?,
+        usize::try_from(rejected).map_err(|_| {
+            checkpoint_resume_failed(
+                "counter conversion overflow",
+                "rejected move count exceeds usize::MAX",
+            )
+        })?,
+    ))
 }
 
 /// Builds the RNG used only for Metropolis acceptance draws.
 ///
 /// This keeps acceptance randomness separate from move-site selection, so seeded
 /// simulations are reproducible while unseeded simulations still draw fresh entropy.
-fn simulation_rng(seed: Option<u64>) -> StdRng {
-    seed.map_or_else(rand::make_rng, StdRng::seed_from_u64)
+fn simulation_rng(seed: Option<u64>) -> Xoshiro256PlusPlus {
+    seed.map_or_else(rand::make_rng, Xoshiro256PlusPlus::seed_from_u64)
 }
 
 /// Reads simplex counts through the CDT wrapper for action and measurement code.
@@ -895,8 +1565,17 @@ fn proposed_delta_action(
 ///
 /// Factoring this out keeps the probability rule isolated from move selection
 /// and makes deterministic unit tests possible with a seeded RNG.
-fn metropolis_accept(delta_action: f64, temperature: f64, rng: &mut StdRng) -> bool {
+fn metropolis_accept<R: Rng + ?Sized>(delta_action: f64, temperature: f64, rng: &mut R) -> bool {
     delta_action <= 0.0 || rng.random::<f64>() < (-delta_action / temperature).exp()
+}
+
+/// Compares action values with a scale-aware tolerance for checkpoint validation.
+fn actions_match(left: f64, right: f64) -> bool {
+    if !(left.is_finite() && right.is_finite()) {
+        return false;
+    }
+    let scale = left.abs().max(right.abs()).max(1.0);
+    (left - right).abs() <= f64::EPSILON * scale * 8.0
 }
 
 /// Applies an already-accepted move, rolling back and retrying failed sites.
@@ -955,7 +1634,7 @@ fn apply_accepted_move(
     }
 
     debug_assert!(
-        (action_for(action_config, triangulation) - action_before).abs() < f64::EPSILON,
+        actions_match(action_for(action_config, triangulation), action_before),
         "failed accepted move retries must leave the triangulation rolled back"
     );
     Ok(AcceptedMoveResult::NoApplicableSite { last_rejection })
@@ -1004,6 +1683,8 @@ mod tests {
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
     use markov_chain_monte_carlo::Chain;
+    use rand::rngs::StdRng;
+    use serde_json::{from_str, to_string, to_value};
 
     fn assert_optional_relative_eq(left: Option<f64>, right: Option<f64>) {
         match (left, right) {
@@ -1011,6 +1692,32 @@ mod tests {
             (None, None) => {}
             other => panic!("expected matching optional floats, got {other:?}"),
         }
+    }
+
+    fn short_checkpoint() -> CdtMcmcCheckpoint {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+        MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 2, 0, 1).with_seed(13),
+            ActionConfig::default(),
+        )
+        .run_to_checkpoint(triangulation)
+        .expect("short prefix run should checkpoint")
+    }
+
+    fn assert_checkpoint_resume_failed(
+        result: CdtResult<SimulationResultsBackend>,
+        expected_reason: &str,
+        expected_detail: &str,
+    ) {
+        let Err(CdtError::CheckpointResumeFailed { reason, detail }) = result else {
+            panic!("expected checkpoint resume failure");
+        };
+        assert_eq!(reason, expected_reason);
+        assert!(
+            detail.contains(expected_detail),
+            "expected detail to contain {expected_detail:?}, got {detail:?}"
+        );
     }
 
     #[test]
@@ -1116,6 +1823,250 @@ mod tests {
                 && measurement.edges > 0
                 && measurement.triangles > 0
         }));
+    }
+
+    #[test]
+    fn serialized_checkpoint_resumes_from_stored_rng_state() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+        let action_config = ActionConfig::default();
+        let prefix = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 4, 0, 1).with_seed(13),
+            action_config.clone(),
+        );
+        let checkpoint = prefix
+            .run_to_checkpoint(triangulation)
+            .expect("prefix run should checkpoint");
+        let checkpoint_json = to_string(&checkpoint).expect("checkpoint should serialize");
+        let checkpoint: CdtMcmcCheckpoint =
+            from_str(&checkpoint_json).expect("checkpoint should deserialize");
+        let alternate_checkpoint: CdtMcmcCheckpoint =
+            from_str(&checkpoint_json).expect("checkpoint should deserialize again");
+        let first_resume_algorithm = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 6, 0, 1).with_seed(999),
+            action_config.clone(),
+        );
+        let first_resumed = first_resume_algorithm
+            .resume_from_checkpoint(checkpoint)
+            .expect("resume should complete");
+        let second_resume_algorithm = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 6, 0, 1).with_seed(123),
+            action_config,
+        );
+        let second_resumed = second_resume_algorithm
+            .resume_from_checkpoint(alternate_checkpoint)
+            .expect("resume should ignore fresh seed and use checkpoint RNG state");
+
+        assert_eq!(first_resumed.config.steps, 10);
+        assert_eq!(first_resumed.steps.len(), 10);
+        assert_eq!(first_resumed.steps[4].step, 5);
+        first_resumed
+            .triangulation
+            .validate_topology()
+            .expect("resumed triangulation should preserve topology");
+        first_resumed
+            .triangulation
+            .validate_foliation()
+            .expect("resumed triangulation should preserve foliation");
+        first_resumed
+            .triangulation
+            .validate_causality()
+            .expect("resumed triangulation should preserve causality");
+        first_resumed
+            .triangulation
+            .validate_cell_classification()
+            .expect("resumed triangulation should preserve cell classification");
+        assert_eq!(
+            to_value(&first_resumed.steps).expect("steps should serialize"),
+            to_value(&second_resumed.steps).expect("steps should serialize")
+        );
+        assert_eq!(
+            to_value(&first_resumed.measurements).expect("measurements should serialize"),
+            to_value(&second_resumed.measurements).expect("measurements should serialize")
+        );
+        assert_eq!(
+            to_value(&first_resumed.move_stats).expect("stats should serialize"),
+            to_value(&second_resumed.move_stats).expect("stats should serialize")
+        );
+        assert_eq!(
+            first_resumed.triangulation.vertex_count(),
+            second_resumed.triangulation.vertex_count()
+        );
+        assert_eq!(
+            first_resumed.triangulation.edge_count(),
+            second_resumed.triangulation.edge_count()
+        );
+        assert_eq!(
+            first_resumed.triangulation.face_count(),
+            second_resumed.triangulation.face_count()
+        );
+        assert_eq!(
+            first_resumed.triangulation.slice_sizes(),
+            second_resumed.triangulation.slice_sizes()
+        );
+    }
+
+    #[test]
+    fn resume_rejects_incompatible_action_config() {
+        let checkpoint = short_checkpoint();
+        let algorithm = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 2, 0, 1).with_seed(999),
+            ActionConfig::new(2.0, 1.0, 0.1),
+        );
+
+        assert_checkpoint_resume_failed(
+            algorithm.resume_from_checkpoint(checkpoint),
+            "incompatible action configuration",
+            "action configuration",
+        );
+    }
+
+    #[test]
+    fn resume_rejects_incompatible_sampling_schedule() {
+        let checkpoint = short_checkpoint();
+        let algorithm = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 2, 0, 2).with_seed(999),
+            ActionConfig::default(),
+        );
+
+        assert_checkpoint_resume_failed(
+            algorithm.resume_from_checkpoint(checkpoint),
+            "incompatible measurement frequency",
+            "measurement frequency",
+        );
+    }
+
+    #[test]
+    fn resume_rejects_inconsistent_checkpoint_counters() {
+        let mut checkpoint = short_checkpoint();
+        checkpoint.move_stats.record_attempt(MoveType::Move22);
+        let algorithm = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 2, 0, 1).with_seed(999),
+            ActionConfig::default(),
+        );
+
+        assert_checkpoint_resume_failed(
+            algorithm.resume_from_checkpoint(checkpoint),
+            "chain counter mismatch",
+            "chain counters",
+        );
+    }
+
+    #[test]
+    fn resume_rejects_inconsistent_step_telemetry() {
+        let mut checkpoint = short_checkpoint();
+        checkpoint.steps.pop();
+        let algorithm = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 2, 0, 1).with_seed(999),
+            ActionConfig::default(),
+        );
+
+        assert_checkpoint_resume_failed(
+            algorithm.resume_from_checkpoint(checkpoint),
+            "step telemetry mismatch",
+            "step telemetry length",
+        );
+    }
+
+    #[test]
+    fn resume_rejects_nonsequential_step_telemetry() {
+        let mut checkpoint = short_checkpoint();
+        checkpoint.steps[0].step = 2;
+        let algorithm = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 2, 0, 1).with_seed(999),
+            ActionConfig::default(),
+        );
+
+        assert_checkpoint_resume_failed(
+            algorithm.resume_from_checkpoint(checkpoint),
+            "step telemetry mismatch",
+            "step telemetry must be sequential",
+        );
+    }
+
+    #[test]
+    fn resume_rejects_step_acceptance_counter_mismatch() {
+        let mut checkpoint = short_checkpoint();
+        if let Some(step) = checkpoint.steps.iter_mut().find(|step| step.accepted) {
+            step.accepted = false;
+            step.action_after = None;
+        } else {
+            let step = &mut checkpoint.steps[0];
+            step.accepted = true;
+            step.delta_action = Some(0.0);
+            step.action_after = Some(step.action_before);
+        }
+        let algorithm = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 2, 0, 1).with_seed(999),
+            ActionConfig::default(),
+        );
+
+        assert_checkpoint_resume_failed(
+            algorithm.resume_from_checkpoint(checkpoint),
+            "step telemetry mismatch",
+            "accepted step count mismatch",
+        );
+    }
+
+    #[test]
+    fn resume_rejects_missing_scheduled_measurement() {
+        let mut checkpoint = short_checkpoint();
+        checkpoint.measurements.pop();
+        let algorithm = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 2, 0, 1).with_seed(999),
+            ActionConfig::default(),
+        );
+
+        assert_checkpoint_resume_failed(
+            algorithm.resume_from_checkpoint(checkpoint),
+            "measurement telemetry mismatch",
+            "scheduled measurement count mismatch",
+        );
+    }
+
+    #[test]
+    fn resume_rejects_checkpoint_action_mismatch() {
+        let mut checkpoint = short_checkpoint();
+        checkpoint.current_action += 1.0;
+        let algorithm = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 2, 0, 1).with_seed(999),
+            ActionConfig::default(),
+        );
+
+        assert_checkpoint_resume_failed(
+            algorithm.resume_from_checkpoint(checkpoint),
+            "action mismatch",
+            "checkpoint action mismatch",
+        );
+    }
+
+    #[test]
+    fn checkpoint_restore_maps_invalid_checkpoint_config_to_resume_failure() {
+        let mut checkpoint = short_checkpoint();
+        checkpoint.config.temperature = f64::NAN;
+        let Err(CdtError::CheckpointResumeFailed { reason, detail }) =
+            MetropolisRunState::from_checkpoint(checkpoint)
+        else {
+            panic!("expected checkpoint configuration failure");
+        };
+
+        assert_eq!(reason, "checkpoint configuration");
+        assert!(detail.contains("temperature"));
+    }
+
+    #[test]
+    fn chain_counters_rejects_accepted_above_attempted() {
+        let stats = MoveStatistics {
+            moves_22_accepted: 1,
+            ..MoveStatistics::new()
+        };
+        let Err(CdtError::CheckpointResumeFailed { reason, detail }) = chain_counters(&stats)
+        else {
+            panic!("expected impossible move statistics to fail");
+        };
+
+        assert_eq!(reason, "move statistics invariant");
+        assert!(detail.contains("accepted move count exceeds attempted move count"));
     }
 
     #[test]

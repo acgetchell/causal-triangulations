@@ -184,6 +184,7 @@ dependencies = [
  "proptest",
  "rand 0.10.1",
  "serde",
+ "serde_json",
  "slotmap",
  "thiserror",
 ]
@@ -687,6 +688,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8953e926feb16a077a9032d75603fc6d9cb00355354bca4981440177e3d7203e"
 dependencies = [
  "rand 0.10.1",
+ "serde",
 ]
 
 [[package]]
@@ -967,6 +969,7 @@ dependencies = [
  "chacha20",
  "getrandom 0.4.2",
  "rand_core 0.10.0",
+ "serde",
 ]
 
 [[package]]
