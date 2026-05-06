@@ -294,16 +294,16 @@ impl TriangulationQuery for MockBackend {
         self.dimension
     }
 
-    fn vertices(&self) -> Box<dyn Iterator<Item = Self::VertexHandle> + '_> {
-        Box::new(self.vertices.keys().map(|&id| MockVertexHandle(id)))
+    fn vertices(&self) -> impl Iterator<Item = Self::VertexHandle> + '_ {
+        self.vertices.keys().map(|&id| MockVertexHandle(id))
     }
 
-    fn edges(&self) -> Box<dyn Iterator<Item = Self::EdgeHandle> + '_> {
-        Box::new(self.edges.keys().map(|&id| MockEdgeHandle(id)))
+    fn edges(&self) -> impl Iterator<Item = Self::EdgeHandle> + '_ {
+        self.edges.keys().map(|&id| MockEdgeHandle(id))
     }
 
-    fn faces(&self) -> Box<dyn Iterator<Item = Self::FaceHandle> + '_> {
-        Box::new(self.faces.keys().map(|&id| MockFaceHandle(id)))
+    fn faces(&self) -> impl Iterator<Item = Self::FaceHandle> + '_ {
+        self.faces.keys().map(|&id| MockFaceHandle(id))
     }
 
     fn vertex_coordinates(

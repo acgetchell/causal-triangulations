@@ -80,6 +80,8 @@ Public APIs must **not panic**.
 
 Use explicit error propagation.
 
+Production `src/` code must not use bare `unwrap()` or explicit `panic!`. Use `?`, typed errors, `Option`, or an intentional fallback instead. Tests, doctests, examples, and benchmark setup may fail fast when a broken fixture should stop execution immediately; prefer `expect("reason")` over bare `unwrap()` in user-facing examples so failures remain diagnosable.
+
 ### Fallible public functions
 
 Return `Result`:
@@ -196,13 +198,22 @@ Types that are part of the crate's **stable public API** (documented, intended f
 
 When adding a new public API type, add a corresponding `pub use` line in the re-export block at the top of `lib.rs`.
 
-Focused preludes under `prelude::` must remain small, orthogonal, and purpose-specific. Use them in doctests, integration tests, examples, and benchmarks instead of deep module paths when demonstrating public workflows:
+The broad `prelude::*` must stay small. It should cover common quick-start workflows such as CDT construction, basic configuration, simulation startup, query traits, and error handling. Do not use it as a dumping ground for every public type.
+
+Focused preludes under `prelude::` must remain small, orthogonal, and purpose-specific. Use them in doctests, integration tests, examples, and benchmarks instead of deep module paths when demonstrating public workflows. Avoid duplicating specialized APIs across scoped preludes unless the overlap is deliberate and documented:
 
 - `prelude::geometry` for backend construction, geometry generators, and geometry traits
 - `prelude::triangulation` for CDT wrappers, foliation classification, topology metadata, and triangulation queries
 - `prelude::moves` for local ergodic move kernels, move results, move types, and move statistics
 - `prelude::action` for standalone action configuration and Regge action calculations
-- `prelude::simulation` for Metropolis/action simulation workflows and simulation result types
+- `prelude::simulation` for Metropolis/action simulation workflows, proposal types, simulation result types, and telemetry needed to inspect or debug simulations
+- `prelude::observables` for user-facing analysis APIs that measure triangulations or derived physical observables, such as volume profiles, Hausdorff-dimension estimators, and spectral-dimension estimators
+
+Keep the simulation and observables boundaries crisp:
+
+- Export user-facing observable estimators from `prelude::observables`, not `prelude::simulation`.
+- Keep simulation telemetry, proposal adapters, and result containers in `prelude::simulation`; do not export them from `prelude::observables` merely because an observable can be computed from them.
+- Examples and doctests for measurements should prefer `prelude::observables::*`; examples and doctests for running MCMC should prefer `prelude::simulation::*`.
 
 ---
 
@@ -274,6 +285,8 @@ Before adding a dependency, consider:
 ---
 
 ## Geometry Backend Isolation
+
+`src/geometry/` is the backend interface layer. It is responsible for wrapping the upstream `delaunay` crate behind this crate's traits, opaque handles, generators, and backend adapters. `src/cdt/` is the CDT domain layer: it owns foliation, topology, causality, moves, action, simulation, results, and observables.
 
 Direct `use delaunay::` imports are **restricted** to the `src/geometry/` subtree:
 

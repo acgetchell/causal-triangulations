@@ -29,7 +29,7 @@ The broad-exception Semgrep rule now covers the full Python support-script tree.
 
 Some differences remain because CDT has different workflows and project invariants:
 
-- CDT runs examples through `scripts/run_all_examples.sh`, which discovers current examples dynamically and applies a timeout. The MCMC `validate-examples` recipe checks fixed seeded output markers for a smaller, stable example set; CDT should only add marker checks once example output contracts are intentionally stable.
+- CDT runs examples through `scripts/run_all_examples.sh`, which discovers current examples dynamically and applies a timeout. Its `--validate` mode checks stable semantic output markers for known Cargo examples without requiring exact numeric output.
 - CDT keeps `archive-changelog` so completed release series move under `docs/archive/changelog/`; MCMC does not yet archive old changelog sections.
 - CDT keeps a dedicated `performance.yml` workflow and local `perf-*` recipes. MCMC does not have matching CDT benchmark-baseline tooling.
 - CDT has a repository rule SARIF workflow for the local Semgrep rules. A Codacy workflow was not ported because it depends on project-specific `CODACY_PROJECT_TOKEN` setup and would duplicate the existing repository-rule SARIF signal until Codacy is configured for this repository.
@@ -45,11 +45,11 @@ The useful updates ported from MCMC are:
 - CodeQL analysis for GitHub Actions and Rust, using `build-mode: none` for Rust;
 - the MCMC-style `cliff.toml` template and `just changelog-unreleased <version>` flow, adapted to keep CDT's changelog archive step and avoid temporary local release tags;
 - a Semgrep rule that rejects `NaN` and infinity defaults after failed floating-point conversions, with a regression fixture under `tests/semgrep/`.
+- production-only Rust Semgrep rules that reject bare `unwrap()` and explicit `panic!` in non-test `src/` code while preserving idiomatic fail-fast usage in tests, doctests, examples, and benchmark setup.
+- a `validate-examples` recipe that runs Cargo examples and verifies stable output markers for the user-facing example contracts.
 
 ## Deferred Updates
 
 These were evaluated but not ported in this pass:
 
 - `codacy.yml`: defer until the repository has an intentional Codacy project token and a decision about whether Codacy should upload repository-owned OpenGrep/Semgrep findings in addition to `.github/workflows/semgrep-sarif.yml`.
-- `validate-examples`: defer until example outputs have stable, documented success markers. For now, `just examples` validates compilation and successful execution of all discovered examples.
-- broad no-`unwrap`/`panic` Semgrep rules: defer because current production and doctest code intentionally uses many invariant checks and examples. These need a separate cleanup plan before becoming blocking policy.

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Metropolis-Hastings algorithm for Causal Dynamical Triangulations.
 //!
 //! This module implements the Monte Carlo sampling algorithm used to sample
@@ -10,18 +12,18 @@
 
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
+use crate::cdt::results::{Measurement, SimulationResultsBackend};
 use crate::cdt::triangulation::SimulationEvent;
 use crate::config::validate_schedule;
 use crate::errors::{CdtError, CdtResult};
 use crate::geometry::CdtTriangulation2D;
-use crate::geometry::traits::TriangulationQuery;
+use crate::util::saturating_usize_to_u32;
 use markov_chain_monte_carlo::{DelayedProposal, Target};
-use num_traits::cast::NumCast;
 use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
 use std::error::Error;
 use std::fmt;
 use std::hint::cold_path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 const ACCEPTED_MOVE_RETRIES: usize = 8;
 
@@ -156,6 +158,19 @@ fn invalid_sim_config(setting: &str, provided_value: String, expected: String) -
     }
 }
 
+/// Rejects temperatures that would make target log probabilities non-finite.
+fn validate_temperature(temperature: f64) -> CdtResult<()> {
+    if temperature.is_finite() && temperature > 0.0 {
+        Ok(())
+    } else {
+        Err(invalid_sim_config(
+            "temperature",
+            temperature.to_string(),
+            "finite and positive".to_string(),
+        ))
+    }
+}
+
 /// Result of a Monte Carlo step.
 #[derive(Debug, Clone)]
 pub struct MonteCarloStep {
@@ -171,21 +186,6 @@ pub struct MonteCarloStep {
     pub action_after: Option<f64>,
     /// Change in action (ΔS)
     pub delta_action: Option<f64>,
-}
-
-/// Measurement data collected during simulation.
-#[derive(Debug, Clone)]
-pub struct Measurement {
-    /// Monte Carlo step when measurement was taken
-    pub step: u32,
-    /// Current action value
-    pub action: f64,
-    /// Number of vertices
-    pub vertices: u32,
-    /// Number of edges
-    pub edges: u32,
-    /// Number of triangles
-    pub triangles: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -204,31 +204,37 @@ pub struct CdtTarget {
 impl CdtTarget {
     /// Creates a new CDT target distribution.
     ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidConfiguration`] if the action couplings are
+    /// non-finite, or [`CdtError::InvalidSimulationConfiguration`] if
+    /// `temperature` is not finite and positive.
+    ///
     /// # Examples
     ///
     /// ```
     /// use causal_triangulations::prelude::action::ActionConfig;
     /// use causal_triangulations::prelude::simulation::CdtTarget;
     ///
-    /// let _target = CdtTarget::new(ActionConfig::default(), 1.0);
+    /// let _target = CdtTarget::new(ActionConfig::default(), 1.0)?;
+    /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
-    #[must_use]
-    pub const fn new(action_config: ActionConfig, temperature: f64) -> Self {
-        Self {
+    pub fn new(action_config: ActionConfig, temperature: f64) -> CdtResult<Self> {
+        action_config.validate()?;
+        validate_temperature(temperature)?;
+        Ok(Self {
             action_config,
             temperature,
-        }
+        })
     }
 }
 
 impl Target<CdtTriangulation2D> for CdtTarget {
     fn log_prob(&self, state: &CdtTriangulation2D) -> f64 {
-        let g = state.geometry();
-        let action = self.action_config.calculate_action(
-            u32::try_from(g.vertex_count()).unwrap_or_default(),
-            u32::try_from(g.edge_count()).unwrap_or_default(),
-            u32::try_from(g.face_count()).unwrap_or_default(),
-        );
+        let counts = simplex_counts(state);
+        let action =
+            self.action_config
+                .calculate_action(counts.vertices, counts.edges, counts.triangles);
         -action / self.temperature
     }
 }
@@ -243,27 +249,22 @@ impl Target<CdtTriangulation2D> for CdtTarget {
 ///
 /// ```
 /// use causal_triangulations::prelude::action::ActionConfig;
-/// use causal_triangulations::prelude::simulation::{
-///     CdtProposal, CdtProposalError, CdtTriangulation,
-/// };
+/// use causal_triangulations::prelude::moves::MoveType;
+/// use causal_triangulations::prelude::simulation::{CdtProposal, CdtTriangulation};
 /// use markov_chain_monte_carlo::DelayedProposal;
 /// use rand::{SeedableRng, rngs::StdRng};
 ///
-/// # fn main() -> Result<(), CdtProposalError> {
-/// let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
-///     .expect("fixed seeded triangulation should build");
-/// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)?;
+/// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7)?;
 /// let mut rng = StdRng::seed_from_u64(11);
 ///
-/// let plan = proposal
-///     .propose_plan(&tri, &mut rng)?
-///     .expect("CDT proposals always select a move type");
+/// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
+///     return Ok(());
+/// };
 /// assert!(matches!(
 ///     plan.move_type(),
-///     causal_triangulations::prelude::moves::MoveType::Move22
-///         | causal_triangulations::prelude::moves::MoveType::Move13Add
-///         | causal_triangulations::prelude::moves::MoveType::Move31Remove
-///         | causal_triangulations::prelude::moves::MoveType::EdgeFlip
+///     MoveType::Move22 | MoveType::Move13Add | MoveType::Move31Remove | MoveType::EdgeFlip
 /// ));
 /// assert!(plan.action_before().is_finite());
 /// if let (Some(delta), Some(action_after)) = (plan.delta_action(), plan.action_after()) {
@@ -325,29 +326,23 @@ impl CdtProposalPlan {
 ///
 /// ```
 /// use causal_triangulations::prelude::action::ActionConfig;
-/// use causal_triangulations::prelude::simulation::{
-///     CdtProposal, CdtProposalError, CdtTriangulation,
-/// };
+/// use causal_triangulations::prelude::simulation::{CdtProposal, CdtTriangulation};
 /// use markov_chain_monte_carlo::DelayedProposal;
 /// use rand::{SeedableRng, rngs::StdRng};
 ///
-/// # fn main() -> Result<(), CdtProposalError> {
-/// let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
-///     .expect("fixed seeded triangulation should build");
-/// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)?;
+/// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7)?;
 /// let mut rng = StdRng::seed_from_u64(11);
-/// let plan = proposal
-///     .propose_plan(&tri, &mut rng)?
-///     .expect("CDT proposals always select a move type");
+/// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
+///     return Ok(());
+/// };
 ///
 /// let info = proposal.info(&plan);
 /// assert_eq!(info.move_type, plan.move_type());
-/// match (info.delta_action, plan.delta_action()) {
-///     (Some(info_delta), Some(plan_delta)) => {
-///         approx::assert_relative_eq!(info_delta, plan_delta, epsilon = 1e-12);
-///     }
-///     (None, None) => {}
-///     other => panic!("delta-action mismatch: {other:?}"),
+/// assert_eq!(info.delta_action.is_some(), plan.delta_action().is_some());
+/// if let (Some(info_delta), Some(plan_delta)) = (info.delta_action, plan.delta_action()) {
+///     approx::assert_relative_eq!(info_delta, plan_delta, epsilon = 1e-12);
 /// }
 /// # Ok(())
 /// # }
@@ -477,16 +472,13 @@ impl Error for CdtProposalError {
 ///
 /// ```
 /// use causal_triangulations::prelude::action::ActionConfig;
-/// use causal_triangulations::prelude::simulation::{
-///     CdtProposal, CdtProposalError, CdtTriangulation,
-/// };
+/// use causal_triangulations::prelude::simulation::{CdtProposal, CdtTriangulation};
 /// use markov_chain_monte_carlo::DelayedProposal;
 /// use rand::{SeedableRng, rngs::StdRng};
 ///
-/// # fn main() -> Result<(), CdtProposalError> {
-/// let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
-///     .expect("fixed seeded triangulation should build");
-/// let mut proposal = CdtProposal::new(ActionConfig::default());
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)?;
+/// let mut proposal = CdtProposal::new(ActionConfig::default())?;
 /// let mut rng = StdRng::seed_from_u64(7);
 ///
 /// let plan = proposal.propose_plan(&tri, &mut rng)?;
@@ -507,20 +499,26 @@ impl CdtProposal {
     /// Delayed scoring is delegated to the target passed to
     /// [`DelayedProposal::proposed_log_prob`].
     ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidConfiguration`] if the action couplings are
+    /// non-finite.
+    ///
     /// # Examples
     ///
     /// ```
     /// use causal_triangulations::prelude::action::ActionConfig;
     /// use causal_triangulations::prelude::simulation::CdtProposal;
     ///
-    /// let _proposal = CdtProposal::new(ActionConfig::default());
+    /// let _proposal = CdtProposal::new(ActionConfig::default())?;
+    /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
-    #[must_use]
-    pub fn new(action_config: ActionConfig) -> Self {
-        Self {
+    pub fn new(action_config: ActionConfig) -> CdtResult<Self> {
+        action_config.validate()?;
+        Ok(Self {
             action_config,
             moves: ErgodicsSystem::new(),
-        }
+        })
     }
 
     /// Creates a seeded delayed CDT proposal distribution.
@@ -529,20 +527,26 @@ impl CdtProposal {
     /// [`DelayedProposal::propose_plan`] is still accepted for compatibility
     /// with generic MCMC drivers.
     ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidConfiguration`] if the action couplings are
+    /// non-finite.
+    ///
     /// # Examples
     ///
     /// ```
     /// use causal_triangulations::prelude::action::ActionConfig;
     /// use causal_triangulations::prelude::simulation::CdtProposal;
     ///
-    /// let _proposal = CdtProposal::with_seed(ActionConfig::default(), 42);
+    /// let _proposal = CdtProposal::with_seed(ActionConfig::default(), 42)?;
+    /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
-    #[must_use]
-    pub fn with_seed(action_config: ActionConfig, seed: u64) -> Self {
-        Self {
+    pub fn with_seed(action_config: ActionConfig, seed: u64) -> CdtResult<Self> {
+        action_config.validate()?;
+        Ok(Self {
             action_config,
             moves: ErgodicsSystem::with_seed(seed),
-        }
+        })
     }
 }
 
@@ -683,15 +687,16 @@ impl MetropolisAlgorithm {
     ///
     /// ```
     /// use causal_triangulations::prelude::simulation::{
-    ///     ActionConfig, CdtError, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
     /// };
     ///
-    /// let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53).unwrap();
-    /// let config = MetropolisConfig::new(1.0, 2, 1, 1).with_seed(7);
-    /// let results = MetropolisAlgorithm::new(config, ActionConfig::default())
-    ///     .run(tri)
-    ///     .expect("run simulation");
-    /// assert_eq!(results.steps.len(), 2);
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)?;
+    ///     let config = MetropolisConfig::new(1.0, 2, 1, 1).with_seed(7);
+    ///     let results = MetropolisAlgorithm::new(config, ActionConfig::default()).run(tri)?;
+    ///     assert_eq!(results.steps.len(), 2);
+    ///     Ok(())
+    /// }
     /// ```
     pub fn run(
         &self,
@@ -817,9 +822,9 @@ fn simulation_rng(seed: Option<u64>) -> StdRng {
 /// makes integer saturation explicit at the simulation boundary.
 fn simplex_counts(triangulation: &CdtTriangulation2D) -> SimplexCounts {
     SimplexCounts {
-        vertices: u32::try_from(triangulation.vertex_count()).unwrap_or(u32::MAX),
-        edges: u32::try_from(triangulation.edge_count()).unwrap_or(u32::MAX),
-        triangles: u32::try_from(triangulation.face_count()).unwrap_or(u32::MAX),
+        vertices: saturating_usize_to_u32(triangulation.vertex_count()),
+        edges: saturating_usize_to_u32(triangulation.edge_count()),
+        triangles: saturating_usize_to_u32(triangulation.face_count()),
     }
 }
 
@@ -844,6 +849,7 @@ fn measurement_for(step: u32, action: f64, triangulation: &CdtTriangulation2D) -
         vertices: counts.vertices,
         edges: counts.edges,
         triangles: counts.triangles,
+        volume_profile: triangulation.volume_profile(),
     }
 }
 
@@ -980,145 +986,11 @@ fn attempt_move(
     }
 }
 
-/// Results from a simulation using the new backend system.
-#[derive(Debug)]
-pub struct SimulationResultsBackend {
-    /// Configuration used for the simulation
-    pub config: MetropolisConfig,
-    /// Action configuration used
-    pub action_config: ActionConfig,
-    /// Metropolis-level ergodic move statistics
-    pub move_stats: MoveStatistics,
-    /// All Monte Carlo steps performed
-    pub steps: Vec<MonteCarloStep>,
-    /// Measurements taken during simulation
-    pub measurements: Vec<Measurement>,
-    /// Total simulation time
-    pub elapsed_time: Duration,
-    /// Final triangulation state
-    pub triangulation: CdtTriangulation2D,
-}
-
-impl SimulationResultsBackend {
-    /// Calculates the acceptance rate for the simulation.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use approx::assert_relative_eq;
-    /// use causal_triangulations::prelude::simulation::{
-    ///     ActionConfig, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
-    /// };
-    /// use std::time::Duration;
-    ///
-    /// let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53).unwrap();
-    /// let config = MetropolisConfig::new(1.0, 1, 0, 1).with_seed(7);
-    /// let results = SimulationResultsBackend {
-    ///     config,
-    ///     action_config: ActionConfig::default(),
-    ///     move_stats: Default::default(),
-    ///     steps: vec![],
-    ///     measurements: vec![],
-    ///     elapsed_time: Duration::from_millis(0),
-    ///     triangulation: tri,
-    /// };
-    /// assert_relative_eq!(results.acceptance_rate(), 0.0);
-    /// ```
-    #[must_use]
-    pub fn acceptance_rate(&self) -> f64 {
-        if self.steps.is_empty() {
-            return 0.0;
-        }
-
-        let accepted_count = self.steps.iter().filter(|step| step.accepted).count();
-        let total_count = self.steps.len();
-
-        let accepted_f64 = NumCast::from(accepted_count).unwrap_or(0.0);
-        let total_f64 = NumCast::from(total_count).unwrap_or(1.0);
-
-        accepted_f64 / total_f64
-    }
-
-    /// Calculates the average action over all measurements.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use approx::assert_relative_eq;
-    /// use causal_triangulations::prelude::simulation::{
-    ///     ActionConfig, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
-    /// };
-    /// use std::time::Duration;
-    ///
-    /// let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53).unwrap();
-    /// let config = MetropolisConfig::new(1.0, 1, 0, 1).with_seed(7);
-    /// let results = SimulationResultsBackend {
-    ///     config,
-    ///     action_config: ActionConfig::default(),
-    ///     move_stats: Default::default(),
-    ///     steps: vec![],
-    ///     measurements: vec![],
-    ///     elapsed_time: Duration::from_millis(0),
-    ///     triangulation: tri,
-    /// };
-    /// assert_relative_eq!(results.average_action(), 0.0);
-    /// ```
-    #[must_use]
-    pub fn average_action(&self) -> f64 {
-        if self.measurements.is_empty() {
-            return 0.0;
-        }
-
-        let sum: f64 = self.measurements.iter().map(|m| m.action).sum();
-        let count = self.measurements.len();
-
-        let count_f64 = NumCast::from(count).unwrap_or(1.0);
-
-        sum / count_f64
-    }
-
-    /// Returns measurements after thermalization.
-    ///
-    /// Measurements are recorded for the initial state at step 0, then after
-    /// completed-move counts divisible by
-    /// [`MetropolisConfig::measurement_frequency`]. This accessor defines
-    /// equilibrium as `measurement.step >= thermalization_steps`, so a
-    /// measurement taken exactly on the thermalization boundary is included.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::simulation::{
-    ///     ActionConfig, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
-    /// };
-    /// use std::time::Duration;
-    ///
-    /// let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53).unwrap();
-    /// let config = MetropolisConfig::new(1.0, 2, 1, 1).with_seed(7);
-    /// let results = SimulationResultsBackend {
-    ///     config,
-    ///     action_config: ActionConfig::default(),
-    ///     move_stats: Default::default(),
-    ///     steps: vec![],
-    ///     measurements: vec![],
-    ///     elapsed_time: Duration::from_millis(0),
-    ///     triangulation: tri,
-    /// };
-    /// assert!(results.equilibrium_measurements().is_empty());
-    /// ```
-    #[must_use]
-    pub fn equilibrium_measurements(&self) -> Vec<&Measurement> {
-        self.measurements
-            .iter()
-            .filter(|m| m.step >= self.config.thermalization_steps)
-            .collect()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cdt::triangulation::CdtTriangulation;
+    use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
     use markov_chain_monte_carlo::Chain;
 
@@ -1194,7 +1066,8 @@ mod tests {
         let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
             .expect("Failed to create triangulation");
 
-        let target = CdtTarget::new(ActionConfig::default(), 1.0);
+        let target =
+            CdtTarget::new(ActionConfig::default(), 1.0).expect("valid target configuration");
 
         let log_prob = Target::log_prob(&target, &triangulation);
         assert!(log_prob.is_finite(), "log_prob should be finite");
@@ -1232,6 +1105,38 @@ mod tests {
                 && measurement.edges > 0
                 && measurement.triangles > 0
         }));
+    }
+
+    #[test]
+    fn explicit_cdt_volume_profiles_count_time_slabs() {
+        let strip = CdtTriangulation::from_cdt_strip(4, 3).expect("create explicit strip");
+        assert_eq!(strip.volume_profile(), vec![6, 6, 0]);
+
+        let torus = CdtTriangulation::from_toroidal_cdt(3, 3).expect("create explicit torus");
+        assert_eq!(torus.volume_profile(), vec![6, 6, 6]);
+    }
+
+    #[test]
+    fn measurement_records_volume_profile_for_foliated_triangulation() {
+        let triangulation = CdtTriangulation::from_cdt_strip(4, 3).expect("create explicit strip");
+        let measurement = measurement_for(0, 1.0, &triangulation);
+
+        assert_eq!(measurement.volume_profile, vec![6, 6, 0]);
+        assert_eq!(
+            measurement.volume_profile.iter().sum::<u32>(),
+            measurement.triangles
+        );
+    }
+
+    #[test]
+    fn volume_profile_is_empty_without_current_foliation() {
+        let triangulation =
+            CdtTriangulation::from_seeded_points(5, 2, 2, 53).expect("create seeded triangulation");
+        let measurement = measurement_for(0, 1.0, &triangulation);
+
+        assert!(!triangulation.has_foliation());
+        assert!(triangulation.volume_profile().is_empty());
+        assert!(measurement.volume_profile.is_empty());
     }
 
     #[test]
@@ -1494,6 +1399,68 @@ mod tests {
     }
 
     #[test]
+    fn cdt_target_rejects_invalid_temperature() {
+        for temperature in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            let Err(err) = CdtTarget::new(ActionConfig::default(), temperature) else {
+                panic!("temperature {temperature:?} should be rejected");
+            };
+
+            match err {
+                CdtError::InvalidSimulationConfiguration {
+                    setting,
+                    provided_value: _,
+                    expected,
+                } => {
+                    assert_eq!(setting, "temperature");
+                    assert_eq!(expected, "finite and positive");
+                }
+                other => panic!("Expected InvalidSimulationConfiguration, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn cdt_target_rejects_invalid_action_config() {
+        let Err(err) = CdtTarget::new(ActionConfig::new(f64::NAN, 1.0, 0.0), 1.0) else {
+            panic!("invalid action config should be rejected");
+        };
+
+        match err {
+            CdtError::InvalidConfiguration {
+                setting,
+                provided_value: _,
+                expected,
+            } => {
+                assert_eq!(setting, "coupling_0");
+                assert_eq!(expected, "finite");
+            }
+            other => panic!("Expected InvalidConfiguration, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn cdt_proposal_rejects_invalid_action_config() {
+        let action_config = ActionConfig::new(1.0, f64::NEG_INFINITY, 0.0);
+        let Err(err) = CdtProposal::new(action_config.clone()) else {
+            panic!("invalid action config should be rejected");
+        };
+
+        match err {
+            CdtError::InvalidConfiguration {
+                setting,
+                provided_value: _,
+                expected,
+            } => {
+                assert_eq!(setting, "coupling_2");
+                assert_eq!(expected, "finite");
+            }
+            other => panic!("Expected InvalidConfiguration, got {other:?}"),
+        }
+
+        assert!(CdtProposal::with_seed(action_config, 7).is_err());
+    }
+
+    #[test]
     fn unseeded_config_uses_random_rng() {
         let config = MetropolisConfig::new(1.0, 5, 1, 1); // no seed
         assert!(config.seed.is_none());
@@ -1504,85 +1471,12 @@ mod tests {
     }
 
     #[test]
-    fn test_simulation_results() {
-        let config = MetropolisConfig::new(1.0, 20, 10, 5);
-        let steps = vec![
-            MonteCarloStep {
-                step: 1,
-                move_type: MoveType::Move22,
-                accepted: true,
-                action_before: 3.0,
-                action_after: Some(2.5),
-                delta_action: Some(-0.5),
-            },
-            MonteCarloStep {
-                step: 2,
-                move_type: MoveType::Move13Add,
-                accepted: false,
-                action_before: 2.5,
-                action_after: None,
-                delta_action: Some(0.8),
-            },
-            MonteCarloStep {
-                step: 3,
-                move_type: MoveType::Move31Remove,
-                accepted: true,
-                action_before: 2.5,
-                action_after: Some(2.0),
-                delta_action: Some(-0.5),
-            },
-        ];
-        let measurements = vec![
-            Measurement {
-                step: 0,
-                action: 1.0,
-                vertices: 3,
-                edges: 3,
-                triangles: 1,
-            },
-            Measurement {
-                step: 10,
-                action: 2.0,
-                vertices: 4,
-                edges: 5,
-                triangles: 2,
-            },
-            Measurement {
-                step: 15,
-                action: 3.0,
-                vertices: 5,
-                edges: 7,
-                triangles: 3,
-            },
-        ];
-
-        let triangulation =
-            CdtTriangulation::from_random_points(3, 1, 2).expect("Failed to create triangulation");
-
-        let results = SimulationResultsBackend {
-            config,
-            action_config: ActionConfig::default(),
-            move_stats: MoveStatistics::new(),
-            steps,
-            measurements,
-            elapsed_time: Duration::from_millis(100),
-            triangulation,
-        };
-
-        assert_relative_eq!(results.acceptance_rate(), 2.0 / 3.0);
-        assert_relative_eq!(results.average_action(), 2.0);
-
-        let equilibrium = results.equilibrium_measurements();
-        assert_eq!(equilibrium.len(), 2);
-        assert_eq!(equilibrium[0].step, 10);
-        assert_eq!(equilibrium[1].step, 15);
-    }
-
-    #[test]
     fn cdt_proposal_scores_delayed_plan() {
         let action_config = ActionConfig::default();
-        let target = CdtTarget::new(action_config.clone(), 1.0);
-        let mut proposal = CdtProposal::with_seed(action_config, 7);
+        let target =
+            CdtTarget::new(action_config.clone(), 1.0).expect("valid target configuration");
+        let mut proposal =
+            CdtProposal::with_seed(action_config, 7).expect("valid proposal configuration");
         let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
         let mut rng = StdRng::seed_from_u64(7);
 
@@ -1607,8 +1501,10 @@ mod tests {
     #[test]
     fn cdt_proposal_scores_impossible_plan_as_negative_infinity() {
         let action_config = ActionConfig::default();
-        let target = CdtTarget::new(action_config.clone(), 1.0);
-        let proposal = CdtProposal::with_seed(action_config, 7);
+        let target =
+            CdtTarget::new(action_config.clone(), 1.0).expect("valid target configuration");
+        let proposal =
+            CdtProposal::with_seed(action_config, 7).expect("valid proposal configuration");
         let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
         let plan = CdtProposalPlan {
             move_type: MoveType::Move31Remove,
@@ -1628,11 +1524,13 @@ mod tests {
     #[test]
     fn cdt_proposal_uses_delayed_chain() {
         let action_config = ActionConfig::default();
-        let target = CdtTarget::new(action_config.clone(), 1.0);
+        let target =
+            CdtTarget::new(action_config.clone(), 1.0).expect("valid target configuration");
         let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
         let mut chain = Chain::new(triangulation, &target)
             .expect("initial state should have finite log probability");
-        let mut proposal = CdtProposal::with_seed(action_config, 7);
+        let mut proposal =
+            CdtProposal::with_seed(action_config, 7).expect("valid proposal configuration");
         let mut rng = StdRng::seed_from_u64(11);
 
         let step = chain
@@ -1646,7 +1544,8 @@ mod tests {
     #[test]
     fn cdt_proposal_commit_applies_concrete_planned_state() {
         let action_config = ActionConfig::default();
-        let mut proposal = CdtProposal::with_seed(action_config.clone(), 11);
+        let mut proposal = CdtProposal::with_seed(action_config.clone(), 11)
+            .expect("valid proposal configuration");
         let mut triangulation =
             CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed to create");
         let proposed_state =

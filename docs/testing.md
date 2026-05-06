@@ -10,7 +10,7 @@ This document summarizes the repository's current test coverage and the main gap
 - **Documentation tests**: public doctests run through `just test-doc` and as part of the broader CI path.
 - **Examples and benchmark compilation**: `just ci` compiles benchmarks and runs all example programs.
 
-The issue #105 toroidal regression is covered by `tests/integration_tests.rs::test_toroidal_metropolis_preserves_topology_after_many_accepted_moves`, which runs a seeded S1 x S1 Metropolis simulation, requires at least 100 accepted moves, and verifies topology, foliation, causality, cell classification, and chi = 0 at the end.
+The issue #105 toroidal regression is covered by `tests/integration_tests.rs::test_toroidal_metropolis_preserves_topology_after_many_accepted_moves`, which runs a seeded S¹×S¹ Metropolis simulation, requires at least 100 accepted moves, and verifies topology, foliation, causality, cell classification, and χ = 0 at the end.
 
 ## Remaining Gaps
 

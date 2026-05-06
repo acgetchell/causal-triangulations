@@ -17,6 +17,8 @@ This implementation also supports open-boundary strip variants. `from_toroidal_c
 
 ## Architecture
 
+Foliation is CDT domain logic. The implementation stores labels in the Delaunay-backed geometry through crate-owned wrapper APIs, but direct interaction with upstream `delaunay::` types remains confined to the `src/geometry/` backend interface layer.
+
 Time labels are stored **directly as vertex data** in the Delaunay triangulation, using the `Vertex<f64, u32, 2>` type parameter. This mirrors CGAL's `vertex->info()` used in CDT-plusplus. The `Foliation` struct tracks only aggregate bookkeeping.
 
 ```text

@@ -17,21 +17,27 @@
 //! - Foliated 2D triangulation construction and validation
 //! - Foliation-aware 2D ergodic moves backed by bistellar flips
 //! - Metropolis-Hastings sampling over foliation-aware 2D ergodic moves
+//! - Volume-profile, Hausdorff-dimension, and spectral-dimension observables
+//!   for CDT analysis
 //!
-//! The crate root re-exports the most common construction, simulation, and
-//! error types. Focused preludes under [`prelude`] provide smaller import
-//! surfaces for documentation, examples, integration tests, and benchmarks.
+//! The crate root re-exports the most common construction, simulation,
+//! observable, and error types. Focused preludes under [`prelude`] provide
+//! smaller import surfaces for documentation, examples, integration tests, and
+//! benchmarks.
 //!
 //! # Example
 //!
 //! ```
 //! use causal_triangulations::prelude::triangulation::CdtTriangulation;
+//! use causal_triangulations::prelude::errors::CdtResult;
 //!
-//! let tri = CdtTriangulation::from_toroidal_cdt(4, 3)
-//!     .expect("build toroidal CDT");
-//! assert_eq!(tri.vertex_count(), 12);
-//! assert!(tri.validate_topology().is_ok());
-//! assert!(tri.validate_foliation().is_ok());
+//! fn main() -> CdtResult<()> {
+//!     let tri = CdtTriangulation::from_toroidal_cdt(4, 3)?;
+//!     assert_eq!(tri.vertex_count(), 12);
+//!     assert!(tri.validate_topology().is_ok());
+//!     assert!(tri.validate_foliation().is_ok());
+//!     Ok(())
+//! }
 //! ```
 
 // Module declarations (avoiding mod.rs files)
@@ -91,6 +97,10 @@ pub mod cdt {
     pub mod foliation;
     /// Metropolis-Hastings algorithm implementation.
     pub mod metropolis;
+    /// User-facing CDT observable estimators.
+    pub mod observables;
+    /// Simulation result containers and measurement summaries.
+    pub mod results;
     /// CDT triangulation wrapper.
     pub mod triangulation;
 }
@@ -100,12 +110,15 @@ pub use cdt::action::{ActionConfig, compute_regge_action};
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
 pub use cdt::foliation::{CellType, EdgeType, Foliation};
 pub use cdt::metropolis::{
-    CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget, Measurement,
-    MetropolisAlgorithm, MetropolisConfig, MonteCarloStep, SimulationResultsBackend,
+    CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget,
+    MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
 };
+pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
+pub use cdt::results::{Measurement, SimulationResultsBackend};
 pub use config::{CdtConfig, CdtTopology, TestConfig};
 pub use errors::{CdtError, CdtResult};
 
+use crate::util::saturating_usize_to_u32;
 use std::time::Duration;
 
 // Trait-based triangulation (recommended)
@@ -114,16 +127,21 @@ pub use geometry::traits::TriangulationQuery;
 
 /// Prelude module for convenient imports.
 ///
-/// Provides commonly used types for CDT construction, simulation, and analysis.
+/// Provides the small set of types most examples need for CDT construction,
+/// configuration, simulation startup, and error handling. Use scoped preludes
+/// such as [`prelude::simulation`], [`prelude::observables`], and
+/// [`prelude::geometry`] for specialized workflows.
 ///
 /// # Quick start
 ///
 /// ```
 /// use causal_triangulations::prelude::*;
 ///
-/// let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)
-///     .expect("create seeded triangulation");
-/// assert!(tri.validate().is_ok());
+/// fn main() -> CdtResult<()> {
+///     let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)?;
+///     assert!(tri.validate().is_ok());
+///     Ok(())
+/// }
 /// ```
 pub mod prelude {
     // Core CDT types
@@ -131,20 +149,9 @@ pub mod prelude {
     pub use crate::geometry::CdtTriangulation2D;
     pub use crate::geometry::traits::TriangulationQuery;
 
-    // Foliation / classification
-    pub use crate::cdt::foliation::{CellType, EdgeType, Foliation, FoliationError};
-
-    // Action
-    pub use crate::cdt::action::{ActionConfig, compute_regge_action};
-
-    // Ergodic moves
-    pub use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
-
-    // Metropolis simulation
-    pub use crate::cdt::metropolis::{
-        CdtProposal, CdtTarget, Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
-        SimulationResultsBackend,
-    };
+    // Action and simulation setup
+    pub use crate::cdt::action::ActionConfig;
+    pub use crate::cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig};
 
     // Configuration and errors
     pub use crate::config::{CdtConfig, CdtTopology};
@@ -194,9 +201,11 @@ pub mod prelude {
     /// ```
     /// use causal_triangulations::prelude::triangulation::*;
     ///
-    /// let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
-    ///     .expect("create triangulation");
-    /// assert!(tri.vertex_count() >= 3);
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)?;
+    ///     assert!(tri.vertex_count() >= 3);
+    ///     Ok(())
+    /// }
     /// ```
     pub mod triangulation {
         pub use crate::CdtTriangulation;
@@ -228,17 +237,49 @@ pub mod prelude {
     ///
     /// This prelude includes the Metropolis runner, delayed proposal adapter,
     /// telemetry structs, and typed proposal errors needed by MCMC workflows.
+    /// Observable estimators live in [`crate::prelude::observables`].
     pub mod simulation {
         pub use crate::CdtTriangulation;
         pub use crate::cdt::action::{ActionConfig, compute_regge_action};
         pub use crate::cdt::ergodic_moves::MoveType;
         pub use crate::cdt::metropolis::{
             CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget,
-            Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
-            SimulationResultsBackend,
+            MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
         };
+        pub use crate::cdt::results::{Measurement, SimulationResultsBackend};
         pub use crate::config::{CdtConfig, CdtTopology};
         pub use crate::errors::{CdtError, CdtResult};
+    }
+
+    /// Focused exports for CDT observables and post-simulation analysis.
+    ///
+    /// This prelude is intended for measuring triangulations without importing
+    /// simulation runner, telemetry, proposal, or move APIs.
+    /// It intentionally re-exports [`CdtTriangulation`] and
+    /// [`CdtTriangulation2D`] so observable doctests can build inputs with
+    /// constructors such as [`CdtTriangulation::from_cdt_strip`] without
+    /// importing the triangulation or geometry preludes separately.
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    /// use causal_triangulations::prelude::observables::*;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    ///     let profile = tri.volume_profile();
+    ///
+    ///     assert_eq!(profile.len(), 3);
+    ///     assert!(estimate_hausdorff_dimension(&tri).is_some_and(f64::is_finite));
+    ///     assert!(estimate_spectral_dimension(&tri).is_some_and(f64::is_finite));
+    ///     Ok(())
+    /// }
+    /// ```
+    pub mod observables {
+        pub use crate::CdtTriangulation;
+        pub use crate::cdt::observables::{
+            estimate_hausdorff_dimension, estimate_spectral_dimension,
+        };
+        pub use crate::geometry::CdtTriangulation2D;
     }
 
     /// Focused exports for geometry backend construction and querying.
@@ -248,28 +289,35 @@ pub mod prelude {
     /// queries), without pulling in simulation-specific symbols.
     ///
     /// ```
+    /// use causal_triangulations::CdtResult;
     /// use causal_triangulations::prelude::geometry::*;
     ///
-    /// let dt = build_delaunay2_with_data(&[
-    ///     ([0.0, 0.0], 0),
-    ///     ([1.0, 0.0], 0),
-    ///     ([0.5, 1.0], 1),
-    /// ])
-    /// .expect("build labeled triangle");
+    /// fn main() -> CdtResult<()> {
+    ///     let dt = build_delaunay2_with_data(&[
+    ///         ([0.0, 0.0], 0),
+    ///         ([1.0, 0.0], 0),
+    ///         ([0.5, 1.0], 1),
+    ///     ])?;
     ///
-    /// let backend = DelaunayBackend2D::from_triangulation(dt);
-    /// assert!(backend.is_valid());
+    ///     let mut backend = DelaunayBackend2D::from_triangulation(dt);
+    ///     assert!(backend.is_valid());
     ///
-    /// let topology: GlobalTopology<2> = GlobalTopology::Toroidal {
-    ///     domain: [1.0, 1.0],
-    ///     mode: ToroidalConstructionMode::Explicit,
-    /// };
-    /// assert!(matches!(topology, GlobalTopology::Toroidal { .. }));
+    ///     let topology: GlobalTopology<2> = GlobalTopology::Toroidal {
+    ///         domain: [1.0, 1.0],
+    ///         mode: ToroidalConstructionMode::Explicit,
+    ///     };
+    ///     assert!(matches!(topology, GlobalTopology::Toroidal { .. }));
+    ///
+    ///     let error = backend.insert_vertex(&[0.0]).expect_err("coordinate dimension is invalid");
+    ///     assert!(matches!(error, DelaunayError::CoordinateDimensionMismatch { .. }));
+    ///     Ok(())
+    /// }
     /// ```
     pub mod geometry {
         pub use crate::geometry::DelaunayBackend2D;
         pub use crate::geometry::backends::delaunay::{
-            DelaunayBackend, DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
+            DelaunayBackend, DelaunayEdgeHandle, DelaunayError, DelaunayFaceHandle,
+            DelaunayVertexHandle,
         };
         pub use crate::geometry::backends::mock::MockBackend;
         pub use crate::geometry::generators::{
@@ -306,18 +354,21 @@ pub mod prelude {
 /// # Examples
 ///
 /// ```
-/// use causal_triangulations::{CdtConfig, run_simulation};
+/// use causal_triangulations::{CdtConfig, CdtResult, run_simulation};
 ///
-/// let config = CdtConfig {
-///     steps: 1,
-///     thermalization_steps: 0,
-///     measurement_frequency: 1,
-///     seed: Some(7),
-///     simulate: false,
-///     ..CdtConfig::new(5, 2)
-/// };
-/// let results = run_simulation(&config).unwrap();
-/// assert_eq!(results.measurements.len(), 1);
+/// fn main() -> CdtResult<()> {
+///     let config = CdtConfig {
+///         steps: 1,
+///         thermalization_steps: 0,
+///         measurement_frequency: 1,
+///         seed: Some(7),
+///         simulate: false,
+///         ..CdtConfig::new(5, 2)
+///     };
+///     let results = run_simulation(&config)?;
+///     assert_eq!(results.measurements.len(), 1);
+///     Ok(())
+/// }
 /// ```
 pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend> {
     // Validate configuration early to fail fast with clear error messages
@@ -385,11 +436,12 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
         Ok(results)
     } else {
         // Just return basic simulation results with the triangulation
-        let initial_action = config.to_action_config().calculate_action(
-            u32::try_from(triangulation.vertex_count()).unwrap_or_default(),
-            u32::try_from(triangulation.edge_count()).unwrap_or_default(),
-            u32::try_from(triangulation.face_count()).unwrap_or_default(),
-        );
+        let vertices = saturating_usize_to_u32(triangulation.vertex_count());
+        let edges = saturating_usize_to_u32(triangulation.edge_count());
+        let triangles = saturating_usize_to_u32(triangulation.face_count());
+        let initial_action = config
+            .to_action_config()
+            .calculate_action(vertices, edges, triangles);
 
         Ok(SimulationResultsBackend {
             config: config.to_metropolis_config(),
@@ -399,9 +451,10 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
             measurements: vec![Measurement {
                 step: 0,
                 action: initial_action,
-                vertices: u32::try_from(triangulation.vertex_count()).unwrap_or_default(),
-                edges: u32::try_from(triangulation.edge_count()).unwrap_or_default(),
-                triangles: u32::try_from(triangulation.face_count()).unwrap_or_default(),
+                vertices,
+                edges,
+                triangles,
+                volume_profile: triangulation.volume_profile(),
             }],
             elapsed_time: Duration::from_millis(0),
             triangulation,
@@ -410,7 +463,7 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
 }
 
 #[cfg(test)]
-mod lib_tests {
+mod tests {
     use super::*;
     use approx::assert_relative_eq;
 

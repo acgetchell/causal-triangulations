@@ -151,8 +151,8 @@ check-fast:
     cargo check
 
 # CI simulation: comprehensive validation (matches .github/workflows/ci.yml)
-# Runs: checks + all tests (Rust + Python) + examples + bench compile
-ci: check bench-compile test-all examples
+# Runs: checks + all tests (Rust + Python) + validated examples + bench compile
+ci: check bench-compile test-all validate-examples
     @echo "🎯 CI checks complete!"
 
 # CI with performance baseline
@@ -200,6 +200,9 @@ doc-check:
 examples:
     ./scripts/run_all_examples.sh
 
+validate-examples:
+    ./scripts/run_all_examples.sh --validate
+
 # Fix (mutating): apply formatters/auto-fixes
 fix: toml-fmt fmt python-fix shell-fmt markdown-fix yaml-fix
     @echo "✅ Fixes applied!"
@@ -227,8 +230,9 @@ help-workflows:
     @echo "  just test-python       # Python tests only (pytest)"
     @echo "  just test-release      # All tests in release mode"
     @echo "  just test-cli          # CLI integration tests only"
-    @echo "  just test-examples     # Run all examples"
+    @echo "  just test-examples     # Compile all examples as tests"
     @echo "  just examples          # Run all example scripts"
+    @echo "  just validate-examples # Run examples and validate stable output markers"
     @echo "  just coverage          # Generate coverage report (HTML)"
     @echo "  just coverage-ci       # Generate coverage for CI (XML)"
     @echo ""

@@ -55,14 +55,23 @@ pub trait TriangulationQuery: GeometryBackend {
     /// Get the dimensionality of the triangulation
     fn dimension(&self) -> usize;
 
-    /// Iterate over all vertices in the triangulation
-    fn vertices(&self) -> Box<dyn Iterator<Item = Self::VertexHandle> + '_>;
+    /// Iterate over all vertices in the triangulation.
+    ///
+    /// Implementations return a concrete iterator so repeated topology scans do
+    /// not require heap allocation or dynamic dispatch.
+    fn vertices(&self) -> impl Iterator<Item = Self::VertexHandle> + '_;
 
-    /// Iterate over all edges in the triangulation
-    fn edges(&self) -> Box<dyn Iterator<Item = Self::EdgeHandle> + '_>;
+    /// Iterate over all edges in the triangulation.
+    ///
+    /// Implementations return a concrete iterator so repeated topology scans do
+    /// not require heap allocation or dynamic dispatch.
+    fn edges(&self) -> impl Iterator<Item = Self::EdgeHandle> + '_;
 
-    /// Iterate over all faces in the triangulation
-    fn faces(&self) -> Box<dyn Iterator<Item = Self::FaceHandle> + '_>;
+    /// Iterate over all faces in the triangulation.
+    ///
+    /// Implementations return a concrete iterator so repeated topology scans do
+    /// not require heap allocation or dynamic dispatch.
+    fn faces(&self) -> impl Iterator<Item = Self::FaceHandle> + '_;
 
     /// Get the coordinates of a vertex
     ///

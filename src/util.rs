@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Utility functions for random number generation and mathematical operations.
 
 use rand::random;
@@ -6,22 +8,16 @@ use rand::random;
 // Safe numeric conversions
 // ---------------------------------------------------------------------------
 
-/// Convert a `usize` to `i32`, saturating at `i32::MAX`.
-///
-/// Useful for Euler characteristic calculations where simplex counts
-/// are `usize` but arithmetic needs signed integers.
-///
-/// # Examples
-///
-/// ```
-/// use causal_triangulations::util::saturating_usize_to_i32;
-///
-/// assert_eq!(saturating_usize_to_i32(42), 42);
-/// assert_eq!(saturating_usize_to_i32(usize::MAX), i32::MAX);
-/// ```
+/// Converts a `usize` to `i32`, saturating at `i32::MAX`.
 #[must_use]
-pub fn saturating_usize_to_i32(n: usize) -> i32 {
+pub(crate) fn saturating_usize_to_i32(n: usize) -> i32 {
     i32::try_from(n).unwrap_or(i32::MAX)
+}
+
+/// Converts a `usize` to `u32`, saturating at `u32::MAX`.
+#[must_use]
+pub(crate) fn saturating_usize_to_u32(n: usize) -> u32 {
+    u32::try_from(n).unwrap_or(u32::MAX)
 }
 
 /// Convert a y-coordinate to a time-slice index via `round()`, clamped to `[0, max_t]`.
@@ -132,6 +128,25 @@ mod tests {
     fn test_saturating_usize_to_i32_overflow() {
         assert_eq!(saturating_usize_to_i32(i32::MAX as usize + 1), i32::MAX);
         assert_eq!(saturating_usize_to_i32(usize::MAX), i32::MAX);
+    }
+
+    #[test]
+    fn test_saturating_usize_to_u32_normal() {
+        assert_eq!(saturating_usize_to_u32(0), 0);
+        assert_eq!(saturating_usize_to_u32(1), 1);
+        assert_eq!(saturating_usize_to_u32(42), 42);
+    }
+
+    #[test]
+    fn test_saturating_usize_to_u32_boundary() {
+        assert_eq!(saturating_usize_to_u32(u32::MAX as usize), u32::MAX);
+    }
+
+    #[test]
+    fn test_saturating_usize_to_u32_overflow() {
+        #[cfg(target_pointer_width = "64")]
+        assert_eq!(saturating_usize_to_u32(u32::MAX as usize + 1), u32::MAX);
+        assert_eq!(saturating_usize_to_u32(usize::MAX), u32::MAX);
     }
 
     #[test]

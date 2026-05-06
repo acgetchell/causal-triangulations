@@ -7,7 +7,7 @@ Thank you for your interest in contributing to the [**causal-triangulations**][c
 - [Code of Conduct](#code-of-conduct)
 - [Getting Started](#getting-started)
 - [Development Environment Setup](#development-environment-setup)
-- [Project Structure](#project-structure)
+- [Code Organization](#code-organization)
 - [Development Workflow](#development-workflow)
 - [Just Command Runner](#just-command-runner)
 - [Code Style and Standards](#code-style-and-standards)
@@ -145,36 +145,9 @@ info: downloading component 'clippy'
 
 This is normal and only happens once.
 
-## Project Structure
+## Code Organization
 
-```text
-causal-triangulations/
-├── src/                    # Core library code
-│   ├── cdt/               # CDT-specific implementations
-│   │   ├── action.rs      # Regge action calculations
-│   │   ├── metropolis.rs  # Monte Carlo simulation
-│   │   ├── ergodic_moves.rs # Pachner moves
-│   │   └── triangulation.rs # CDT triangulation wrapper
-│   ├── geometry/          # Geometry abstraction layer
-│   │   ├── backends/      # Geometry backend implementations
-│   │   ├── mesh.rs        # Mesh data structures
-│   │   ├── operations.rs  # High-level operations
-│   │   └── traits.rs      # Geometry traits
-│   ├── config.rs          # Configuration management
-│   ├── errors.rs          # Error types
-│   ├── util.rs            # Utility functions
-│   ├── lib.rs             # Library root
-│   └── main.rs            # CLI binary
-├── examples/              # Usage examples
-│   ├── basic_cdt.rs       # Library usage example
-│   └── scripts/           # Ready-to-use simulation scripts
-├── tests/                 # Test suite
-│   ├── cli.rs             # CLI integration tests
-│   └── integration_tests.rs # System integration tests
-├── benches/               # Performance benchmarks
-├── docs/                  # Documentation
-└── justfile               # Task automation
-```
+The source/module layout and architecture-sensitive boundaries live in [docs/code_organization.md](docs/code_organization.md). Keep that file current when adding, removing, or moving source files, examples, or architecture-significant modules.
 
 ## Development Workflow
 
@@ -203,13 +176,33 @@ just --list          # Show all available commands
 just help-workflows  # Detailed workflow guidance
 ```
 
+### Repository Tooling Map
+
+```text
+.github/workflows/codeql.yml # CodeQL analysis for Actions and Rust
+.github/workflows/semgrep-sarif.yml # Repository Semgrep rule SARIF upload
+rustfmt.toml           # Stable Rust formatting settings
+cliff.toml             # git-cliff changelog template and commit grouping
+semgrep.yaml           # Repository-owned Semgrep rules
+docs/dev/python.md     # Python script style and validation guidance
+docs/dev/tooling-alignment.md # Tooling comparison and issue #112 decisions
+docs/roadmap.md        # High-level release direction and non-goals
+tests/semgrep/         # Semgrep rule fixtures run by `just semgrep-test`
+scripts/archive_changelog.py # Split completed changelog minor series into archive files
+scripts/coverage_report.py # Cobertura coverage summary helper
+scripts/postprocess_changelog.py # Markdown hygiene for git-cliff changelogs
+scripts/tag_release.py # Annotated release tags from root or archived changelog sections
+```
+
 ### Typical Development Cycle
 
 1. **Start working on a feature/fix**:
 
    ```bash
-   git checkout -b feature/your-feature-name
+   git checkout -b fix/307-topology-validation
    ```
+
+   Branch names should follow `{type}/{issue}-descriptor-or-two`, such as `fix/307-topology-validation` or `perf/315-bench-profile`.
 
 2. **Development cycle**:
 
