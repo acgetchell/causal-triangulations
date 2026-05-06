@@ -537,9 +537,11 @@ impl CdtConfig {
     /// # Errors
     ///
     /// Returns a structured error describing the invalid configuration entry.
-    /// Toroidal topology additionally requires `timeslices ≥ 3`,
-    /// `vertices ≥ 3 · timeslices`, and `vertices` evenly divisible by
-    /// `timeslices` so each spatial slice carries the same `N ≥ 3` vertices.
+    /// Open-boundary topology additionally requires `timeslices ≥ 2`,
+    /// `vertices ≥ 4 · timeslices`, and `vertices` evenly divisible by
+    /// `timeslices` so each spatial slice carries the same `N ≥ 4` vertices.
+    /// Toroidal topology requires the analogous `timeslices ≥ 3` and `N ≥ 3`
+    /// constraints.
     ///
     /// # Examples
     ///
@@ -568,43 +570,48 @@ impl CdtConfig {
         validate_coupling("coupling_2", self.coupling_2)?;
         validate_coupling("cosmological_constant", self.cosmological_constant)?;
 
-        if matches!(self.topology, CdtTopology::Toroidal) {
-            // Toroidal topology requires T ≥ 3 (T = 2 makes adjacent slices
-            // share two timelike sides per spatial edge, producing a
-            // non-manifold mesh) and vertices distributed evenly among
-            // slices with at least 3 per slice (any fewer and the spatial
-            // ring degenerates).
-            if self.timeslices < 3 {
-                return Err(invalid_config(
-                    "timeslices",
-                    &self.timeslices,
-                    &"≥ 3 for toroidal topology",
-                ));
-            }
-            if !self.vertices.is_multiple_of(self.timeslices) {
-                return Err(invalid_config_parts(
-                    "vertices",
-                    self.vertices.to_string(),
-                    format!(
-                        "divisible by timeslices ({}) for toroidal topology",
-                        self.timeslices
-                    ),
-                ));
-            }
-            let min_total = self.timeslices.checked_mul(3).ok_or_else(|| {
+        let (minimum_slices, minimum_vertices_per_slice, topology_label) = match self.topology {
+            CdtTopology::OpenBoundary => (2, 4, "open-boundary topology"),
+            CdtTopology::Toroidal => (3, 3, "toroidal topology"),
+        };
+
+        if self.timeslices < minimum_slices {
+            return Err(invalid_config_parts(
+                "timeslices",
+                self.timeslices.to_string(),
+                format!("≥ {minimum_slices} for {topology_label}"),
+            ));
+        }
+        if !self.vertices.is_multiple_of(self.timeslices) {
+            return Err(invalid_config_parts(
+                "vertices",
+                self.vertices.to_string(),
+                format!(
+                    "divisible by timeslices ({}) for {topology_label}",
+                    self.timeslices
+                ),
+            ));
+        }
+        let min_total = self
+            .timeslices
+            .checked_mul(minimum_vertices_per_slice)
+            .ok_or_else(|| {
                 invalid_config_parts(
                     "timeslices",
                     self.timeslices.to_string(),
-                    "3 · timeslices must fit in u32 for toroidal topology".to_string(),
+                    format!(
+                        "{minimum_vertices_per_slice} · timeslices must fit in u32 for {topology_label}"
+                    ),
                 )
             })?;
-            if self.vertices < min_total {
-                return Err(invalid_config_parts(
-                    "vertices",
-                    self.vertices.to_string(),
-                    format!("≥ 3 · timeslices ({min_total}) for toroidal topology"),
-                ));
-            }
+        if self.vertices < min_total {
+            return Err(invalid_config_parts(
+                "vertices",
+                self.vertices.to_string(),
+                format!(
+                    "≥ {minimum_vertices_per_slice} · timeslices ({min_total}) for {topology_label}"
+                ),
+            ));
         }
 
         validate_schedule(
@@ -721,8 +728,8 @@ mod tests {
 
     #[test]
     fn test_config_new() {
-        let config = CdtConfig::new(32, 3);
-        assert_eq!(config.vertices, 32);
+        let config = CdtConfig::new(36, 3);
+        assert_eq!(config.vertices, 36);
         assert_eq!(config.timeslices, 3);
         assert_eq!(config.dimension(), 2);
         assert!(!config.simulate);
@@ -748,12 +755,12 @@ mod tests {
         reason = "validation test exercises the full structured configuration error matrix"
     )]
     fn test_config_validation() {
-        let valid_config = CdtConfig::new(32, 3);
+        let valid_config = CdtConfig::new(36, 3);
         assert!(valid_config.validate().is_ok());
 
         let invalid_vertices = CdtConfig {
             vertices: 2,
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         assert!(matches!(
             invalid_vertices.validate(),
@@ -766,7 +773,7 @@ mod tests {
 
         let invalid_timeslices = CdtConfig {
             timeslices: 0,
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         assert!(matches!(
             invalid_timeslices.validate(),
@@ -779,7 +786,7 @@ mod tests {
 
         let invalid_temperature = CdtConfig {
             temperature: -1.0,
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         assert!(matches!(
             invalid_temperature.validate(),
@@ -794,7 +801,7 @@ mod tests {
 
         let invalid_measurement_frequency = CdtConfig {
             measurement_frequency: 0,
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         assert!(matches!(
             invalid_measurement_frequency.validate(),
@@ -809,7 +816,7 @@ mod tests {
 
         let invalid_steps = CdtConfig {
             steps: 0,
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         assert!(matches!(
             invalid_steps.validate(),
@@ -822,7 +829,7 @@ mod tests {
 
         let invalid_dimension = CdtConfig {
             dimension: Some(4),
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         assert!(matches!(
             invalid_dimension.validate(),
@@ -838,7 +845,7 @@ mod tests {
             ("coupling_2", f64::INFINITY),
             ("cosmological_constant", f64::NEG_INFINITY),
         ] {
-            let mut invalid_action_coupling = CdtConfig::new(32, 3);
+            let mut invalid_action_coupling = CdtConfig::new(36, 3);
             match setting {
                 "coupling_0" => invalid_action_coupling.coupling_0 = value,
                 "coupling_2" => invalid_action_coupling.coupling_2 = value,
@@ -859,7 +866,7 @@ mod tests {
             coupling_0: -1.5,
             coupling_2: 0.0,
             cosmological_constant: 2.25,
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         assert!(
             finite_action_couplings.validate().is_ok(),
@@ -868,7 +875,7 @@ mod tests {
 
         let measurement_frequency_exceeds_steps = CdtConfig {
             measurement_frequency: 2_000,
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         assert!(matches!(
             measurement_frequency_exceeds_steps.validate(),
@@ -885,7 +892,7 @@ mod tests {
             steps: 11,
             thermalization_steps: 10,
             measurement_frequency: 10,
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         assert!(
             boundary_aligned_measurement.validate().is_ok(),
@@ -896,7 +903,7 @@ mod tests {
             steps: 10,
             thermalization_steps: 10,
             measurement_frequency: 5,
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         assert!(
             boundary_aligned_final_measurement.validate().is_ok(),
@@ -907,7 +914,7 @@ mod tests {
             steps: 20,
             thermalization_steps: 15,
             measurement_frequency: 10,
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         assert!(
             final_step_measurement.validate().is_ok(),
@@ -918,7 +925,7 @@ mod tests {
             steps: 19,
             thermalization_steps: 15,
             measurement_frequency: 10,
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         match insufficient_measurements.validate() {
             Err(CdtError::InvalidConfiguration {
@@ -942,7 +949,7 @@ mod tests {
             steps: 10,
             thermalization_steps: 11,
             measurement_frequency: 1,
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         assert!(matches!(
             thermalization_exceeds_steps.validate(),
@@ -959,7 +966,7 @@ mod tests {
             steps: u32::MAX,
             thermalization_steps: u32::MAX,
             measurement_frequency: 2,
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         match overflowed_post_thermalization_boundary.validate() {
             Err(CdtError::InvalidConfiguration {
@@ -1048,18 +1055,6 @@ mod tests {
                 && expected == "≥ 3 · timeslices (9) for toroidal topology"
         ));
 
-        // OpenBoundary must NOT enforce divisibility/T≥3 rules.
-        let open_boundary_indivisible = CdtConfig {
-            topology: CdtTopology::OpenBoundary,
-            vertices: 11,
-            timeslices: 3,
-            ..CdtConfig::new(11, 3)
-        };
-        assert!(
-            open_boundary_indivisible.validate().is_ok(),
-            "OpenBoundary should not require vertex/timeslice divisibility"
-        );
-
         let toroidal_min_total_overflow = CdtConfig {
             topology: CdtTopology::Toroidal,
             vertices: u32::MAX,
@@ -1079,10 +1074,75 @@ mod tests {
     }
 
     #[test]
+    fn test_config_validation_open_boundary_regular_slices() {
+        let valid_open_boundary = CdtConfig {
+            topology: CdtTopology::OpenBoundary,
+            vertices: 12,
+            timeslices: 3,
+            ..CdtConfig::new(12, 3)
+        };
+        assert!(
+            valid_open_boundary.validate().is_ok(),
+            "valid open-boundary config should validate"
+        );
+
+        let open_boundary_too_few_slices = CdtConfig {
+            topology: CdtTopology::OpenBoundary,
+            vertices: 4,
+            timeslices: 1,
+            ..CdtConfig::new(4, 1)
+        };
+        assert!(matches!(
+            open_boundary_too_few_slices.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "timeslices"
+                && provided_value == "1"
+                && expected == "≥ 2 for open-boundary topology"
+        ));
+
+        let open_boundary_indivisible = CdtConfig {
+            topology: CdtTopology::OpenBoundary,
+            vertices: 11,
+            timeslices: 3,
+            ..CdtConfig::new(11, 3)
+        };
+        assert!(matches!(
+            open_boundary_indivisible.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "vertices"
+                && provided_value == "11"
+                && expected == "divisible by timeslices (3) for open-boundary topology"
+        ));
+
+        let open_boundary_too_few_per_slice = CdtConfig {
+            topology: CdtTopology::OpenBoundary,
+            vertices: 9,
+            timeslices: 3,
+            ..CdtConfig::new(9, 3)
+        };
+        assert!(matches!(
+            open_boundary_too_few_per_slice.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == "vertices"
+                && provided_value == "9"
+                && expected == "≥ 4 · timeslices (12) for open-boundary topology"
+        ));
+    }
+
+    #[test]
     fn test_dimension_defaults_to_two_when_unspecified() {
         let config = CdtConfig {
             dimension: None,
-            ..CdtConfig::new(32, 3)
+            ..CdtConfig::new(36, 3)
         };
         assert_eq!(config.dimension(), 2);
     }

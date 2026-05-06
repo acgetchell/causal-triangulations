@@ -10,7 +10,7 @@ use proptest::prelude::*;
 
 /// Shared triangulation created once (fixed seed, cheap).
 fn test_triangulation() -> CdtTriangulation2D {
-    CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Fixed-seed triangulation")
+    CdtTriangulation::from_cdt_strip(4, 3).expect("regular open-boundary strip")
 }
 
 proptest! {

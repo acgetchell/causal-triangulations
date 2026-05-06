@@ -193,7 +193,7 @@ The implementation is split into child modules under `src/cdt/triangulation/`:
 - `OpenBoundary` (default) — finite strip with boundary, χ ∈ {1, 2}
 - `Toroidal` — periodic in space and time, S¹×S¹, χ = 0
 - Wired through `CdtConfig.topology`, `CdtConfigOverrides.topology`, the CLI `--topology` flag, and `CdtMetadata.topology`
-- `run_simulation()` dispatches on topology: `Toroidal` → `from_toroidal_cdt`, `OpenBoundary` → `from_seeded_points` / `from_random_points`
+- `run_simulation()` dispatches on topology: `Toroidal` → `from_toroidal_cdt`, `OpenBoundary` → `from_cdt_strip`; `vertices` is the total vertex count and must divide evenly across `timeslices`
 
 ### `cdt/metropolis.rs` — Metropolis move ordering
 

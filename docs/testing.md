@@ -12,6 +12,8 @@ This document summarizes the repository's current test coverage and the main gap
 
 The issue #105 toroidal regression is covered by `tests/integration_tests.rs::test_toroidal_metropolis_preserves_topology_after_many_accepted_moves`, which runs a seeded S¹×S¹ Metropolis simulation, requires at least 100 accepted moves, and verifies topology, foliation, causality, cell classification, and χ = 0 at the end.
 
+Open-boundary simulation entrypoints are covered by crate-root tests that require `run_simulation()` to build a foliated regular CDT strip, preserve adjacent-slice causality, classify cells, and report a non-empty volume profile. Configuration tests also reject open-boundary totals that cannot be split into equal-size spatial slices.
+
 ## Remaining Gaps
 
 ### Ergodic Move Sampling

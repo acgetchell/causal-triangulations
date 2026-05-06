@@ -178,17 +178,20 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(slice_sizes)
     }
 
-    /// Creates a CDT triangulation with a Delaunay backend from random points.
+    /// Creates an unfoliated triangulation with a Delaunay backend from random points.
     ///
-    /// This is the recommended way to create triangulations for simulations.
+    /// This is useful for raw geometry tests and experiments. It does not
+    /// assign time labels or CDT cell classifications, so production CDT
+    /// simulations should prefer [`CdtTriangulation::from_cdt_strip`] or
+    /// [`CdtTriangulation::from_toroidal_cdt`].
     ///
     /// # Errors
     ///
     /// Returns [`CdtError::UnsupportedDimension`] if `dimension != 2`.
     /// Returns [`CdtError::InvalidGenerationParameters`] if `vertices < 3`.
     /// Returns [`CdtError::DelaunayGenerationFailed`] if random point generation
-    /// or Delaunay construction fails, and propagates validation errors from
-    /// [`CdtTriangulation::try_new`].
+    /// or Delaunay construction fails. Propagates metadata validation errors
+    /// from [`CdtTriangulation::try_new`], including `time_slices == 0`.
     ///
     /// # Examples
     ///
@@ -198,6 +201,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_random_points(5, 2, 2)?;
     ///     assert_eq!(tri.time_slices(), 2);
+    ///     assert!(!tri.has_foliation());
     ///     Ok(())
     /// }
     /// ```
@@ -220,18 +224,22 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Self::try_new(backend, time_slices, dimension)
     }
 
-    /// Creates a CDT triangulation with a Delaunay backend from a fixed random seed.
+    /// Creates an unfoliated triangulation with a Delaunay backend from a fixed random seed.
     ///
-    /// Use this builder for examples, tests, benchmarks, and reproducible
-    /// simulations that need deterministic input geometry.
+    /// Use this builder for raw geometry examples, tests, and benchmarks that
+    /// need deterministic input geometry. It does not assign time labels or
+    /// CDT cell classifications, so production CDT simulations should prefer
+    /// [`CdtTriangulation::from_cdt_strip`] or
+    /// [`CdtTriangulation::from_toroidal_cdt`].
     ///
     /// # Errors
     ///
     /// Returns [`CdtError::UnsupportedDimension`] if `dimension != 2`.
     /// Returns [`CdtError::InvalidGenerationParameters`] if `vertices < 3`.
     /// Returns [`CdtError::DelaunayGenerationFailed`] if seeded point
-    /// generation or Delaunay construction fails, and propagates validation
-    /// errors from [`CdtTriangulation::try_new`].
+    /// generation or Delaunay construction fails. Propagates metadata
+    /// validation errors from [`CdtTriangulation::try_new`], including
+    /// `time_slices == 0`.
     ///
     /// # Examples
     ///
@@ -241,6 +249,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)?;
     ///     assert_eq!(tri.vertex_count(), 5);
+    ///     assert!(!tri.has_foliation());
     ///     Ok(())
     /// }
     /// ```

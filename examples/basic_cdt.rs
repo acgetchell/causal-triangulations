@@ -23,13 +23,13 @@ fn main() -> CdtResult<()> {
     info!("Starting basic CDT example");
 
     // Configuration parameters
-    let vertices = 64;
+    let vertices_per_slice = 16;
     let timeslices = 4;
-    let dimension = 2;
+    let vertices = vertices_per_slice * timeslices;
 
     // Create initial triangulation
     info!("Creating initial triangulation with {vertices} vertices and {timeslices} timeslices");
-    let triangulation = CdtTriangulation::from_random_points(vertices, timeslices, dimension)?;
+    let triangulation = CdtTriangulation::from_cdt_strip(vertices_per_slice, timeslices)?;
 
     info!(
         "Initial triangulation: {} vertices, {} edges, {} faces",

@@ -138,8 +138,8 @@ pub use geometry::traits::TriangulationQuery;
 /// use causal_triangulations::prelude::*;
 ///
 /// fn main() -> CdtResult<()> {
-///     let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)?;
-///     assert!(tri.validate().is_ok());
+///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+///     assert!(tri.validate_foliation().is_ok());
 ///     Ok(())
 /// }
 /// ```
@@ -202,8 +202,8 @@ pub mod prelude {
     /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53)?;
-    ///     assert!(tri.vertex_count() >= 3);
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    ///     assert_eq!(tri.slice_sizes(), &[4, 4, 4]);
     ///     Ok(())
     /// }
     /// ```
@@ -319,7 +319,7 @@ pub mod prelude {
             DelaunayBackend, DelaunayEdgeHandle, DelaunayError, DelaunayFaceHandle,
             DelaunayVertexHandle,
         };
-        pub use crate::geometry::backends::mock::MockBackend;
+        pub use crate::geometry::backends::mock::{MockBackend, MockError};
         pub use crate::geometry::generators::{
             GlobalTopology, TopologyGuarantee, ToroidalConstructionMode,
             build_delaunay2_from_cells, build_delaunay2_with_data, build_delaunay2_with_topology,
@@ -334,6 +334,11 @@ pub mod prelude {
 ///
 /// This function uses the trait-based geometry backend system, which provides
 /// better abstraction and testability compared to legacy approaches.
+/// Open-boundary runs construct a regular foliated strip with
+/// [`CdtTriangulation::from_cdt_strip`]; toroidal runs construct a periodic
+/// mesh with [`CdtTriangulation::from_toroidal_cdt`]. In both cases,
+/// [`CdtConfig::vertices`] is the total vertex count and must divide evenly
+/// across [`CdtConfig::timeslices`].
 ///
 /// # Arguments
 ///
@@ -345,11 +350,14 @@ pub mod prelude {
 ///
 /// # Errors
 ///
-/// Returns [`CdtError::InvalidConfiguration`] if the configuration fails validation
-/// (e.g., invalid measurement frequency or inconsistent parameters).
+/// Returns [`CdtError::InvalidConfiguration`] if the configuration fails validation,
+/// including invalid measurement schedules, unsupported open-boundary or
+/// toroidal slice counts, or a total vertex count that cannot be divided into
+/// regular spatial slices.
 /// Returns [`CdtError::UnsupportedDimension`] if a validated configuration requests
 /// a simulation dimension other than 2.
-/// Returns triangulation generation errors from the underlying triangulation creation.
+/// Returns triangulation generation, topology, foliation, or Metropolis errors
+/// from the selected construction and simulation path.
 ///
 /// # Examples
 ///
@@ -363,7 +371,7 @@ pub mod prelude {
 ///         measurement_frequency: 1,
 ///         seed: Some(7),
 ///         simulate: false,
-///         ..CdtConfig::new(5, 2)
+///         ..CdtConfig::new(8, 2)
 ///     };
 ///     let results = run_simulation(&config)?;
 ///     assert_eq!(results.measurements.len(), 1);
@@ -391,10 +399,9 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
 
     // Create initial triangulation based on topology.
     //
-    // `config.vertices` is always the *total* vertex count.  For
-    // [`CdtTopology::Toroidal`], `validate()` has already checked that
-    // `vertices % timeslices == 0` and `vertices >= 3 * timeslices`, so we
-    // can safely divide to recover N = vertices/T per slice.
+    // `config.vertices` is always the *total* vertex count. `validate()` has
+    // already checked the topology-specific divisibility and per-slice lower
+    // bounds, so we can safely divide to recover N = vertices/T per slice.
     let triangulation = match config.topology {
         CdtTopology::Toroidal => {
             log::info!("Constructing toroidal CDT (S¹×S¹)");
@@ -402,12 +409,9 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
             CdtTriangulation::from_toroidal_cdt(vertices_per_slice, timeslices)?
         }
         CdtTopology::OpenBoundary => {
-            if let Some(seed) = config.seed {
-                log::info!("RNG seed: {seed}");
-                CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?
-            } else {
-                CdtTriangulation::from_random_points(vertices, timeslices, 2)?
-            }
+            log::info!("Constructing open-boundary CDT strip");
+            let vertices_per_slice = vertices / timeslices;
+            CdtTriangulation::from_cdt_strip(vertices_per_slice, timeslices)?
         }
     };
 
@@ -470,7 +474,7 @@ mod tests {
     fn create_test_config() -> CdtConfig {
         CdtConfig {
             dimension: Some(2),
-            vertices: 32,
+            vertices: 36,
             timeslices: 3,
             temperature: 1.0,
             steps: 10,
@@ -491,6 +495,21 @@ mod tests {
         assert!(config.dimension.is_some());
         let results = run_simulation(&config).expect("Failed to run triangulation");
         assert!(results.triangulation.face_count() > 0);
+        assert!(results.triangulation.has_foliation());
+        assert_eq!(results.triangulation.slice_sizes(), &[12, 12, 12]);
+        assert!(!results.triangulation.volume_profile().is_empty());
+        results
+            .triangulation
+            .validate_foliation()
+            .expect("open-boundary run should build a valid foliation");
+        results
+            .triangulation
+            .validate_causality()
+            .expect("open-boundary run should preserve adjacent-slice causality");
+        results
+            .triangulation
+            .validate_cell_classification()
+            .expect("open-boundary run should classify CDT cells");
         assert!(!results.measurements.is_empty());
     }
 
@@ -601,6 +620,19 @@ mod tests {
 
         let results = run_simulation(&config).expect("simulation should run with real moves");
         assert_eq!(results.steps.len(), usize::try_from(config.steps).unwrap());
+        assert!(results.triangulation.has_foliation());
+        results
+            .triangulation
+            .validate_foliation()
+            .expect("simulated open-boundary run should keep valid foliation");
+        results
+            .triangulation
+            .validate_causality()
+            .expect("simulated open-boundary run should keep adjacent-slice causality");
+        results
+            .triangulation
+            .validate_cell_classification()
+            .expect("simulated open-boundary run should keep CDT cell classification");
         assert!(!results.measurements.is_empty());
     }
 
