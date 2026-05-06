@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! High-level triangulation operations.
 //!
 //! This module provides common operations that work across different

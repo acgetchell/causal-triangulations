@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! 2D Regge Action calculation for Causal Dynamical Triangulations.
 //!
 //! This module implements the discrete Einstein-Hilbert action used in CDT,

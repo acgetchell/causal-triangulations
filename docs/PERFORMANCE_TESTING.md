@@ -73,7 +73,7 @@ just perf-check
 # Strict 5% threshold for critical changes
 just perf-check 5.0
 
-# Relaxed 15% threshold for experimental features
+# Relaxed 15% threshold for exploratory changes
 just perf-check 15.0
 ```
 

@@ -12,7 +12,7 @@ Before modifying code, agents MUST read:
 
 - `AGENTS.md` (this file)
 - **All files in `docs/dev/*.md`** – repository development rules
-- `docs/project.md` – module layout and architecture
+- `docs/code_organization.md` – module layout and architecture
 
 The `docs/dev/` directory contains the authoritative development guidance for this repository. Agents must load every file in that directory before making changes.
 
@@ -92,6 +92,14 @@ When using the `gh` CLI to view issues, PRs, or other GitHub objects:
 - **ALWAYS** use the patch editing mechanism provided by the agent
 - Shell text tools may be used for **read‑only analysis only**
 
+### Public API Preludes
+
+- Keep `prelude::*` small and focused on common quick-start workflows.
+- Keep scoped preludes minimal and orthogonal; do not duplicate specialized APIs across scoped preludes unless the overlap is intentionally documented.
+- `prelude::observables` is the user-facing analysis surface for measuring triangulations and derived physical observables.
+- `prelude::simulation` is for running, inspecting, and debugging simulations; it may expose telemetry and proposal/result types, but should not become the home for user-facing observable estimators.
+- Detailed prelude boundary guidance lives in `docs/dev/rust.md`.
+
 ### Commit Message Generation
 
 When generating commit messages:
@@ -163,16 +171,16 @@ Key principle:
 - **Edition**: 2024
 - **Unsafe code**: forbidden (`#![forbid(unsafe_code)]`)
 - **Architecture**: CDT physics layered over a pluggable geometry backend (`delaunay` crate). Direct `use delaunay::` imports are restricted to `src/geometry/` (`backends/delaunay.rs` and `generators.rs`); all other modules use the trait-based abstractions and `DelaunayBackend2D` type alias (see `docs/dev/rust.md § Geometry Backend Isolation`)
-- **Modules**: `src/cdt/` (CDT logic: moves, action, Metropolis, foliation), `src/geometry/` (geometry abstractions and backends), `src/config.rs` (simulation configuration)
-- **Foliation**: `src/cdt/foliation.rs` assigns per-vertex time labels via `VertexSecondaryMap`; `from_foliated_cylinder` constructs foliated triangulations; `validate_causality` enforces |Δt| ≤ 1 on edges. Design documented in `docs/foliation.md`
-- **Ergodic moves**: `attempt_22_move`, `attempt_13_move`, `attempt_31_move`, `attempt_edge_flip` are currently placeholder implementations; full `delaunay::Tds` integration is planned
+- **Modules**: `src/cdt/` (CDT logic: moves, action, Metropolis, foliation, observables), `src/geometry/` (geometry abstractions and backends), `src/config.rs` (simulation configuration)
+- **Foliation**: `src/cdt/foliation.rs` defines foliation bookkeeping and edge/cell classification. Time labels are stored as vertex data; `from_cdt_strip` and `from_toroidal_cdt` construct labeled CDT triangulations; `validate_causality` enforces adjacent-slice edges (with circular distance on toroidal time). Design documented in `docs/foliation.md`
+- **Ergodic moves**: `attempt_22_move`, `attempt_13_move`, `attempt_31_move`, `attempt_edge_flip` are Delaunay-backed, foliation-aware move kernels. They mutate through narrow CDT-owned edit operations, roll back failed finalized mutations, and preserve topology/foliation invariants
 - **Python scripts**: `scripts/` contains benchmark, changelog, and hardware utilities; tests in `scripts/tests/` run via pytest
-- **When adding/removing files**: Update `docs/project.md`
+- **When adding/removing files**: Update `docs/code_organization.md`
 
 Architecture details are documented in:
 
 ```text
-docs/project.md
+docs/code_organization.md
 ```
 
 ---

@@ -14,21 +14,23 @@ The library leverages high-performance [Delaunay triangulation] backends and pro
 
 ## ✨ Features
 
-- [x] 2D Causal Dynamical Triangulations with time-foliation (early implementation)
-- [x] Metropolis-Hastings simulation loop with proposal-before-mutation move ordering
-- [x] Regge action calculation with configurable coupling constants (experimental)
-- [x] Ergodic moves (Alexander/Pachner moves) with causal constraints (experimental)
-- [x] Command-line interface for simulation workflows (early)
-- [x] Benchmarking and performance analysis infrastructure (in progress)
-- [x] Cross-platform compatibility (Linux, macOS, Windows)
+- [x] Explicit 1+1 CDT strip and toroidal S¹×S¹ constructors with foliation invariants
+- [x] Foliation-aware topology, causality, and cell-classification validation
+- [x] Proposal-before-mutation Metropolis-Hastings simulation with rollback on failed accepted moves
+- [x] Regge action calculation with configurable coupling constants
+- [x] Alexander/Pachner-style local move proposals with causal constraints
+- [x] Volume-profile, Hausdorff-dimension, and spectral-dimension observables for CDT analysis
+- [x] Focused public preludes for simulation, triangulation, geometry, action, and observables
+- [x] Command-line interface, examples, Criterion benchmarks, and CI-aligned validation tooling
+- [x] Cross-platform compatibility: Linux, macOS, Windows
 
 See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## 🚧 Project Status
 
-🚧 **Pre-release (0.0.x)** — This crate is under active development and **not yet ready for production use**. APIs, data structures, and module boundaries may change without notice.
+🚧 **Pre-release (0.0.x)** — The 1+1 CDT foundation is implemented and tested, but this crate is still under active development and **not yet ready for production use**. APIs, data structures, and module boundaries may change before v0.1.0.
 
-The library currently supports an initial 2D CDT implementation, with planned extensions to 3D and 4D.
+The library currently supports validated 1+1 CDT construction, foliation checks, Metropolis sampling, and core observables. Higher-dimensional CDT support, full move-kernel maturity, visualization/export workflows, and advanced ensemble-analysis helpers remain roadmap work.
 
 See [`docs/roadmap.md`](docs/roadmap.md) for current direction, near-term candidates, and non-goals.
 
@@ -180,18 +182,7 @@ See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/PE
 
 ## 🛣️ Roadmap
 
-- [x] Integrate an existing Rust **Delaunay** triangulation library (e.g., [`delaunay`](https://crates.io/crates/delaunay))
-- [x] 2D Delaunay triangulation scaffold
-- [ ] 1+1 foliation (causal time‑slicing)
-- [ ] 2D ergodic moves (Alexander/Pachner moves with causal constraints, fully validated)
-- [ ] 2D Metropolis–Hastings (stabilized on `markov-chain-monte-carlo` delayed proposals)
-- [ ] Diffusion‑accelerated MCMC (exploration)
-- [ ] Basic visualization hooks (export to common mesh formats)
-- [ ] 3D Delaunay + 2+1 foliation + moves + M–H
-- [ ] 4D Delaunay + 3+1 foliation + moves + M–H
-- [ ] Mass initialization via **Constrained Delaunay** in 3D/4D
-- [ ] Shortest paths & geodesic distance
-- [ ] Curvature estimates / Einstein tensor (discrete Regge‑like observables)
+The high-level roadmap, including 1+1 maturity work, future 2+1 and 3+1 CDT topology tracks, observables, dual/Voronoi geometry, visualization, and non-goals, lives in [`docs/roadmap.md`](docs/roadmap.md).
 
 ## Design notes
 
@@ -199,7 +190,7 @@ See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/PE
 - **Foliation‑aware data model**: explicit time labels; space‑like vs time‑like edges encoded in types.
 - **Testing**: unit + property tests for invariants (e.g., move reversibility, manifoldness).
 
-For comprehensive guidelines on contributing, development environment setup, testing, and project structure, please see [CONTRIBUTING.md](CONTRIBUTING.md).
+For comprehensive guidelines on contributing, development environment setup, testing, and code organization, please see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 This includes information about:
 
@@ -207,7 +198,7 @@ This includes information about:
 - Running benchmarks and performance analysis
 - Code style and standards
 - Submitting changes and pull requests
-- Project structure and development tools
+- Code organization and development tools
 
 ## 📚 References
 

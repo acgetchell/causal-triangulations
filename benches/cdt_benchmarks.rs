@@ -338,6 +338,7 @@ fn bench_simulation_analysis(c: &mut Criterion) {
                 vertices: 15,
                 edges: 32,
                 triangles: 18,
+                volume_profile: vec![9, 9, 0],
             },
             Measurement {
                 step: 10,
@@ -345,6 +346,7 @@ fn bench_simulation_analysis(c: &mut Criterion) {
                 vertices: 16,
                 edges: 34,
                 triangles: 19,
+                volume_profile: vec![9, 10, 0],
             },
             Measurement {
                 step: 20,
@@ -352,6 +354,7 @@ fn bench_simulation_analysis(c: &mut Criterion) {
                 vertices: 15,
                 edges: 31,
                 triangles: 17,
+                volume_profile: vec![8, 9, 0],
             },
         ],
         elapsed_time: Duration::from_millis(37),

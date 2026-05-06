@@ -3,7 +3,7 @@ title: "References and Citations"
 description: "Academic references and bibliographic citations used throughout the causal-triangulations library"
 keywords: ["references", "citations", "causal dynamical triangulations", "quantum gravity", "bibliography"]
 author: "Adam Getchell"
-date: "2025-10-07"
+date: "2026-05-06"
 category: "Documentation"
 tags: ["academic", "research", "citations", "physics", "quantum gravity"]
 layout: "page"
@@ -37,6 +37,16 @@ This section contains the seminal papers and foundational work that established 
 - Loll, R. "Quantum Gravity from Causal Dynamical Triangulations: A Review." _Classical and Quantum Gravity_ 37, no. 1 (2020): 013002. DOI: [10.1088/1361-6382/ab57c7](https://doi.org/10.1088/1361-6382/ab57c7). arXiv: [1905.08669](https://arxiv.org/abs/1905.08669)
 
 - Ambjørn, J., Görlich, A., Jurkiewicz, J., and Loll, R. "Nonperturbative Quantum Gravity." _Physics Reports_ 519, no. 4-5 (2012): 127-210. DOI: [10.1016/j.physrep.2012.03.007](https://doi.org/10.1016/j.physrep.2012.03.007). arXiv: [1203.3591](https://arxiv.org/abs/1203.3591)
+
+### Volume Profiles and Dimensional Observables
+
+- Ambjørn, J., Jurkiewicz, J., and Loll, R. "Reconstructing the Universe." _Physical Review D_ 72, no. 6 (2005): 064014. DOI: [10.1103/PhysRevD.72.064014](https://doi.org/10.1103/PhysRevD.72.064014). arXiv: [hep-th/0505154](https://arxiv.org/abs/hep-th/0505154)
+
+- Ambjørn, J., Jurkiewicz, J., and Loll, R. "The Spectral Dimension of the Universe is Scale Dependent." _Physical Review Letters_ 95, no. 17 (2005): 171301. DOI: [10.1103/PhysRevLett.95.171301](https://doi.org/10.1103/PhysRevLett.95.171301). arXiv: [hep-th/0505113](https://arxiv.org/abs/hep-th/0505113)
+
+- Ambjørn, J., Budd, T., and Watabiki, Y. "Scale-dependent Hausdorff dimensions in 2d gravity." _Physics Letters B_ 736 (2014): 339-343. DOI: [10.1016/j.physletb.2014.07.047](https://doi.org/10.1016/j.physletb.2014.07.047). arXiv: [1406.6251](https://arxiv.org/abs/1406.6251)
+
+- van der Duin, J., Loll, R., Schiffer, M., and Silva, A. "Quantum gravity and effective topology." _The European Physical Journal C_ 86, no. 2 (2026): 102. DOI: [10.1140/epjc/s10052-026-15322-x](https://doi.org/10.1140/epjc/s10052-026-15322-x)
 
 ## Monte Carlo Methods in Quantum Gravity
 

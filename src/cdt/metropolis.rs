@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Metropolis-Hastings algorithm for Causal Dynamical Triangulations.
 //!
 //! This module implements the Monte Carlo sampling algorithm used to sample
@@ -10,11 +12,12 @@
 
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
+use crate::cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
 use crate::cdt::triangulation::SimulationEvent;
 use crate::config::validate_schedule;
 use crate::errors::{CdtError, CdtResult};
 use crate::geometry::CdtTriangulation2D;
-use crate::geometry::traits::TriangulationQuery;
+use crate::util::saturating_usize_to_u32;
 use markov_chain_monte_carlo::{DelayedProposal, Target};
 use num_traits::cast::NumCast;
 use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
@@ -186,6 +189,13 @@ pub struct Measurement {
     pub edges: u32,
     /// Number of triangles
     pub triangles: u32,
+    /// Per-slice triangle counts `N₂(t)` from
+    /// [`CdtTriangulation::volume_profile`](crate::cdt::triangulation::CdtTriangulation::volume_profile).
+    ///
+    /// Entry `t` counts classifiable CDT triangles assigned to time slab `t`;
+    /// the vector is empty when the measured triangulation has no current
+    /// foliation.
+    pub volume_profile: Vec<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -223,12 +233,10 @@ impl CdtTarget {
 
 impl Target<CdtTriangulation2D> for CdtTarget {
     fn log_prob(&self, state: &CdtTriangulation2D) -> f64 {
-        let g = state.geometry();
-        let action = self.action_config.calculate_action(
-            u32::try_from(g.vertex_count()).unwrap_or_default(),
-            u32::try_from(g.edge_count()).unwrap_or_default(),
-            u32::try_from(g.face_count()).unwrap_or_default(),
-        );
+        let counts = simplex_counts(state);
+        let action =
+            self.action_config
+                .calculate_action(counts.vertices, counts.edges, counts.triangles);
         -action / self.temperature
     }
 }
@@ -817,9 +825,9 @@ fn simulation_rng(seed: Option<u64>) -> StdRng {
 /// makes integer saturation explicit at the simulation boundary.
 fn simplex_counts(triangulation: &CdtTriangulation2D) -> SimplexCounts {
     SimplexCounts {
-        vertices: u32::try_from(triangulation.vertex_count()).unwrap_or(u32::MAX),
-        edges: u32::try_from(triangulation.edge_count()).unwrap_or(u32::MAX),
-        triangles: u32::try_from(triangulation.face_count()).unwrap_or(u32::MAX),
+        vertices: saturating_usize_to_u32(triangulation.vertex_count()),
+        edges: saturating_usize_to_u32(triangulation.edge_count()),
+        triangles: saturating_usize_to_u32(triangulation.face_count()),
     }
 }
 
@@ -844,6 +852,7 @@ fn measurement_for(step: u32, action: f64, triangulation: &CdtTriangulation2D) -
         vertices: counts.vertices,
         edges: counts.edges,
         triangles: counts.triangles,
+        volume_profile: triangulation.volume_profile(),
     }
 }
 
@@ -1077,6 +1086,223 @@ impl SimulationResultsBackend {
         sum / count_f64
     }
 
+    /// Averages [`Measurement::volume_profile`] values after thermalization.
+    ///
+    /// The result has one entry per measured time slice.  Missing entries in a
+    /// measurement are treated as zero, which keeps unfoliated simulations
+    /// represented by an empty profile rather than a partially inferred one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use approx::assert_relative_eq;
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtTriangulation, Measurement, MetropolisConfig, SimulationResultsBackend,
+    /// };
+    /// use std::time::Duration;
+    ///
+    /// let tri = CdtTriangulation::from_cdt_strip(4, 3).unwrap();
+    /// let config = MetropolisConfig::new(1.0, 20, 10, 5).with_seed(7);
+    /// let results = SimulationResultsBackend {
+    ///     config,
+    ///     action_config: ActionConfig::default(),
+    ///     move_stats: Default::default(),
+    ///     steps: vec![],
+    ///     measurements: vec![
+    ///         Measurement {
+    ///             step: 0,
+    ///             action: 1.0,
+    ///             vertices: 12,
+    ///             edges: 26,
+    ///             triangles: 12,
+    ///             volume_profile: vec![6, 6, 0],
+    ///         },
+    ///         Measurement {
+    ///             step: 10,
+    ///             action: 2.0,
+    ///             vertices: 12,
+    ///             edges: 26,
+    ///             triangles: 12,
+    ///             volume_profile: vec![4, 8, 0],
+    ///         },
+    ///     ],
+    ///     elapsed_time: Duration::from_millis(0),
+    ///     triangulation: tri,
+    /// };
+    /// let profile = results.average_volume_profile();
+    /// assert_relative_eq!(profile[0], 4.0);
+    /// assert_relative_eq!(profile[1], 8.0);
+    /// ```
+    #[must_use]
+    pub fn average_volume_profile(&self) -> Vec<f64> {
+        let measurements = self.equilibrium_measurements();
+        let profile_len = measurements
+            .iter()
+            .map(|measurement| measurement.volume_profile.len())
+            .max()
+            .unwrap_or(0);
+        if measurements.is_empty() || profile_len == 0 {
+            return Vec::new();
+        }
+
+        let mut sums = vec![0.0; profile_len];
+        for measurement in &measurements {
+            for (index, &volume) in measurement.volume_profile.iter().enumerate() {
+                let volume: f64 = volume.into();
+                sums[index] += volume;
+            }
+        }
+
+        let count = NumCast::from(measurements.len()).unwrap_or(1.0);
+        sums.into_iter().map(|sum| sum / count).collect()
+    }
+
+    /// Computes per-slice standard deviations of [`Measurement::volume_profile`].
+    ///
+    /// The standard deviation is evaluated over equilibrium measurements, using
+    /// the same post-thermalization selection as [`Self::average_volume_profile`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use approx::assert_relative_eq;
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtTriangulation, Measurement, MetropolisConfig, SimulationResultsBackend,
+    /// };
+    /// use std::time::Duration;
+    ///
+    /// let tri = CdtTriangulation::from_cdt_strip(4, 3).unwrap();
+    /// let config = MetropolisConfig::new(1.0, 20, 10, 5).with_seed(7);
+    /// let results = SimulationResultsBackend {
+    ///     config,
+    ///     action_config: ActionConfig::default(),
+    ///     move_stats: Default::default(),
+    ///     steps: vec![],
+    ///     measurements: vec![
+    ///         Measurement {
+    ///             step: 10,
+    ///             action: 2.0,
+    ///             vertices: 12,
+    ///             edges: 26,
+    ///             triangles: 12,
+    ///             volume_profile: vec![4, 8, 0],
+    ///         },
+    ///         Measurement {
+    ///             step: 15,
+    ///             action: 3.0,
+    ///             vertices: 12,
+    ///             edges: 26,
+    ///             triangles: 12,
+    ///             volume_profile: vec![6, 6, 0],
+    ///         },
+    ///     ],
+    ///     elapsed_time: Duration::from_millis(0),
+    ///     triangulation: tri,
+    /// };
+    /// let fluctuations = results.volume_fluctuations();
+    /// assert_relative_eq!(fluctuations[0], 1.0);
+    /// assert_relative_eq!(fluctuations[1], 1.0);
+    /// ```
+    #[must_use]
+    pub fn volume_fluctuations(&self) -> Vec<f64> {
+        let measurements = self.equilibrium_measurements();
+        let means = self.average_volume_profile();
+        if measurements.is_empty() || means.is_empty() {
+            return Vec::new();
+        }
+
+        let mut variances = vec![0.0; means.len()];
+        for measurement in &measurements {
+            for (index, mean) in means.iter().enumerate() {
+                let volume = measurement
+                    .volume_profile
+                    .get(index)
+                    .map_or(0.0, |&volume| {
+                        let volume: f64 = volume.into();
+                        volume
+                    });
+                let delta = volume - mean;
+                variances[index] += delta * delta;
+            }
+        }
+
+        let count = NumCast::from(measurements.len()).unwrap_or(1.0);
+        variances
+            .into_iter()
+            .map(|variance| (variance / count).sqrt())
+            .collect()
+    }
+
+    /// Estimates the Hausdorff dimension of the final triangulation.
+    ///
+    /// This is a post-simulation observable computed from dual-graph geodesic
+    /// ball growth using [`estimate_hausdorff_dimension`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
+    /// };
+    /// use std::time::Duration;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    ///     let results = SimulationResultsBackend {
+    ///         config: MetropolisConfig::new(1.0, 1, 0, 1),
+    ///         action_config: ActionConfig::default(),
+    ///         move_stats: Default::default(),
+    ///         steps: vec![],
+    ///         measurements: vec![],
+    ///         elapsed_time: Duration::from_millis(0),
+    ///         triangulation: tri,
+    ///     };
+    ///     assert!(results
+    ///         .hausdorff_dimension_estimate()
+    ///         .is_some_and(f64::is_finite));
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub fn hausdorff_dimension_estimate(&self) -> Option<f64> {
+        estimate_hausdorff_dimension(&self.triangulation)
+    }
+
+    /// Estimates the spectral dimension of the final triangulation.
+    ///
+    /// This is a post-simulation observable computed from dual-graph diffusion
+    /// return probability using [`estimate_spectral_dimension`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
+    /// };
+    /// use std::time::Duration;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_toroidal_cdt(6, 6)?;
+    ///     let results = SimulationResultsBackend {
+    ///         config: MetropolisConfig::new(1.0, 1, 0, 1),
+    ///         action_config: ActionConfig::default(),
+    ///         move_stats: Default::default(),
+    ///         steps: vec![],
+    ///         measurements: vec![],
+    ///         elapsed_time: Duration::from_millis(0),
+    ///         triangulation: tri,
+    ///     };
+    ///     assert!(results
+    ///         .spectral_dimension_estimate()
+    ///         .is_some_and(f64::is_finite));
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub fn spectral_dimension_estimate(&self) -> Option<f64> {
+        estimate_spectral_dimension(&self.triangulation)
+    }
+
     /// Returns measurements after thermalization.
     ///
     /// Measurements are recorded for the initial state at step 0, then after
@@ -1119,6 +1345,7 @@ impl SimulationResultsBackend {
 mod tests {
     use super::*;
     use crate::cdt::triangulation::CdtTriangulation;
+    use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
     use markov_chain_monte_carlo::Chain;
 
@@ -1232,6 +1459,38 @@ mod tests {
                 && measurement.edges > 0
                 && measurement.triangles > 0
         }));
+    }
+
+    #[test]
+    fn explicit_cdt_volume_profiles_count_time_slabs() {
+        let strip = CdtTriangulation::from_cdt_strip(4, 3).expect("create explicit strip");
+        assert_eq!(strip.volume_profile(), vec![6, 6, 0]);
+
+        let torus = CdtTriangulation::from_toroidal_cdt(3, 3).expect("create explicit torus");
+        assert_eq!(torus.volume_profile(), vec![6, 6, 6]);
+    }
+
+    #[test]
+    fn measurement_records_volume_profile_for_foliated_triangulation() {
+        let triangulation = CdtTriangulation::from_cdt_strip(4, 3).expect("create explicit strip");
+        let measurement = measurement_for(0, 1.0, &triangulation);
+
+        assert_eq!(measurement.volume_profile, vec![6, 6, 0]);
+        assert_eq!(
+            measurement.volume_profile.iter().sum::<u32>(),
+            measurement.triangles
+        );
+    }
+
+    #[test]
+    fn volume_profile_is_empty_without_current_foliation() {
+        let triangulation =
+            CdtTriangulation::from_seeded_points(5, 2, 2, 53).expect("create seeded triangulation");
+        let measurement = measurement_for(0, 1.0, &triangulation);
+
+        assert!(!triangulation.has_foliation());
+        assert!(triangulation.volume_profile().is_empty());
+        assert!(measurement.volume_profile.is_empty());
     }
 
     #[test]
@@ -1539,6 +1798,7 @@ mod tests {
                 vertices: 3,
                 edges: 3,
                 triangles: 1,
+                volume_profile: vec![1, 0, 0],
             },
             Measurement {
                 step: 10,
@@ -1546,6 +1806,7 @@ mod tests {
                 vertices: 4,
                 edges: 5,
                 triangles: 2,
+                volume_profile: vec![1, 1, 0],
             },
             Measurement {
                 step: 15,
@@ -1553,6 +1814,7 @@ mod tests {
                 vertices: 5,
                 edges: 7,
                 triangles: 3,
+                volume_profile: vec![1, 2, 0],
             },
         ];
 
@@ -1571,11 +1833,86 @@ mod tests {
 
         assert_relative_eq!(results.acceptance_rate(), 2.0 / 3.0);
         assert_relative_eq!(results.average_action(), 2.0);
+        assert_eq!(results.average_volume_profile(), vec![1.0, 1.5, 0.0]);
+        assert_eq!(results.volume_fluctuations(), vec![0.0, 0.5, 0.0]);
 
         let equilibrium = results.equilibrium_measurements();
         assert_eq!(equilibrium.len(), 2);
         assert_eq!(equilibrium[0].step, 10);
         assert_eq!(equilibrium[1].step, 15);
+    }
+
+    #[test]
+    fn volume_observables_treat_missing_profile_entries_as_zero() {
+        let triangulation =
+            CdtTriangulation::from_random_points(3, 1, 2).expect("Failed to create triangulation");
+        let results = SimulationResultsBackend {
+            config: MetropolisConfig::new(1.0, 20, 10, 5),
+            action_config: ActionConfig::default(),
+            move_stats: MoveStatistics::new(),
+            steps: vec![],
+            measurements: vec![
+                Measurement {
+                    step: 10,
+                    action: 2.0,
+                    vertices: 4,
+                    edges: 5,
+                    triangles: 2,
+                    volume_profile: vec![4, 8, 1],
+                },
+                Measurement {
+                    step: 15,
+                    action: 3.0,
+                    vertices: 5,
+                    edges: 7,
+                    triangles: 3,
+                    volume_profile: vec![6],
+                },
+            ],
+            elapsed_time: Duration::from_millis(100),
+            triangulation,
+        };
+
+        assert_eq!(results.average_volume_profile(), vec![5.0, 4.0, 0.5]);
+        let fluctuations = results.volume_fluctuations();
+        assert_relative_eq!(fluctuations[0], 1.0);
+        assert_relative_eq!(fluctuations[1], 4.0);
+        assert_relative_eq!(fluctuations[2], 0.5);
+    }
+
+    #[test]
+    fn volume_observables_are_empty_when_profiles_are_empty() {
+        let triangulation =
+            CdtTriangulation::from_random_points(3, 1, 2).expect("Failed to create triangulation");
+        let results = SimulationResultsBackend {
+            config: MetropolisConfig::new(1.0, 20, 10, 5),
+            action_config: ActionConfig::default(),
+            move_stats: MoveStatistics::new(),
+            steps: vec![],
+            measurements: vec![
+                Measurement {
+                    step: 10,
+                    action: 2.0,
+                    vertices: 4,
+                    edges: 5,
+                    triangles: 2,
+                    volume_profile: Vec::new(),
+                },
+                Measurement {
+                    step: 15,
+                    action: 3.0,
+                    vertices: 5,
+                    edges: 7,
+                    triangles: 3,
+                    volume_profile: Vec::new(),
+                },
+            ],
+            elapsed_time: Duration::from_millis(100),
+            triangulation,
+        };
+
+        assert!(results.average_volume_profile().is_empty());
+        assert!(results.volume_fluctuations().is_empty());
     }
 
     #[test]

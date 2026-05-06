@@ -1,0 +1,208 @@
+# Code Organization Guide
+
+This document lists the files checked into the repository and summarizes the architecture-sensitive module boundaries for the causal-triangulations crate.
+
+## Project Structure
+
+### Complete Directory Tree
+
+> **Tip**: regenerate this tree from tracked files:
+>
+> ```bash
+> git --no-pager ls-files | LC_ALL=C sort | \
+>   LC_ALL=C tree -a --charset UTF-8 --dirsfirst --noreport -F --fromfile
+> ```
+>
+> This keeps the directory tree synchronized with the files that GitHub will display.
+
+```text
+causal-triangulations/
+├── .github/
+│   ├── workflows/
+│   │   ├── audit.yml
+│   │   ├── ci.yml
+│   │   ├── codecov.yml
+│   │   ├── codeql.yml
+│   │   ├── performance.yml
+│   │   ├── rust-clippy.yml
+│   │   └── semgrep-sarif.yml
+│   ├── CODEOWNERS
+│   └── dependabot.yml
+├── benches/
+│   ├── README.md
+│   └── cdt_benchmarks.rs
+├── docs/
+│   ├── dev/
+│   │   ├── commands.md
+│   │   ├── python.md
+│   │   ├── rust.md
+│   │   ├── testing.md
+│   │   └── tooling-alignment.md
+│   ├── CLI_EXAMPLES.md
+│   ├── PERFORMANCE_TESTING.md
+│   ├── RELEASING.md
+│   ├── code_organization.md
+│   ├── foliation.md
+│   ├── metropolis.md
+│   ├── moves.md
+│   ├── roadmap.md
+│   └── testing.md
+├── examples/
+│   ├── scripts/
+│   │   ├── README.md
+│   │   ├── basic_simulation.sh
+│   │   ├── parameter_sweep.sh
+│   │   └── performance_test.sh
+│   ├── basic_cdt.rs
+│   ├── find_good_seeds.rs
+│   └── observables.rs
+├── proptest-regressions/
+│   └── cdt/
+│       └── triangulation.txt
+├── scripts/
+│   ├── tests/
+│   │   ├── __init__.py
+│   │   ├── conftest.py
+│   │   ├── test_archive_changelog.py
+│   │   ├── test_benchmark_models.py
+│   │   ├── test_benchmark_utils.py
+│   │   ├── test_coverage_report.py
+│   │   ├── test_hardware_utils.py
+│   │   ├── test_postprocess_changelog.py
+│   │   ├── test_subprocess_utils.py
+│   │   └── test_tag_release.py
+│   ├── README.md
+│   ├── archive_changelog.py
+│   ├── benchmark_models.py
+│   ├── benchmark_utils.py
+│   ├── coverage_report.py
+│   ├── hardware_utils.py
+│   ├── performance_analysis.py
+│   ├── postprocess_changelog.py
+│   ├── run_all_examples.sh
+│   ├── subprocess_utils.py
+│   └── tag_release.py
+├── src/
+│   ├── cdt/
+│   │   ├── action.rs
+│   │   ├── ergodic_moves.rs
+│   │   ├── foliation.rs
+│   │   ├── metropolis.rs
+│   │   ├── observables.rs
+│   │   └── triangulation.rs
+│   ├── geometry/
+│   │   ├── backends/
+│   │   │   ├── delaunay.rs
+│   │   │   └── mock.rs
+│   │   ├── generators.rs
+│   │   ├── operations.rs
+│   │   └── traits.rs
+│   ├── config.rs
+│   ├── errors.rs
+│   ├── lib.rs
+│   ├── main.rs
+│   └── util.rs
+├── tests/
+│   ├── semgrep/
+│   │   ├── scripts/
+│   │   │   └── tests/
+│   │   │       └── python_exceptions.py
+│   │   └── src/
+│   │       └── project_rules/
+│   │           └── rust_style.rs
+│   ├── cli.rs
+│   ├── integration_tests.rs
+│   ├── proptest_foliation.rs
+│   └── proptest_metropolis.rs
+├── .bencher.toml
+├── .codecov.yml
+├── .coderabbit.yml
+├── .gitignore
+├── .python-version
+├── .taplo.toml
+├── .yamllint
+├── AGENTS.md
+├── CHANGELOG.md
+├── CODE_OF_CONDUCT.md
+├── CONTRIBUTING.md
+├── Cargo.lock
+├── Cargo.toml
+├── LICENSE
+├── README.md
+├── REFERENCES.md
+├── cliff.toml
+├── clippy.toml
+├── dprint.json
+├── justfile
+├── pyproject.toml
+├── rust-toolchain.toml
+├── rustfmt.toml
+├── semgrep.yaml
+├── ty.toml
+├── typos.toml
+└── uv.lock
+```
+
+## Key Modules
+
+### `cdt/foliation.rs` — Foliation
+
+Assigns each vertex to a discrete time slice, enabling classification of edges as spacelike or timelike and triangles as up or down. See `docs/foliation.md` for design details.
+
+- `Foliation` — aggregate bookkeeping (per-slice vertex counts, total slices)
+- `EdgeType` — `Spacelike` (same slice) or `Timelike` (adjacent slices)
+- `CellType` — `Up` (2,1) or `Down` (1,2) triangle classification, encoded as `i32` cell data
+- Time labels are stored directly as vertex data (`Vertex.data: Option<u32>`), mirroring CDT-plusplus’s `vertex->info()`
+
+### `cdt/triangulation.rs` — Foliation integration
+
+- `from_cdt_strip(vertices_per_slice, num_slices)` — explicit open-boundary 1+1 CDT strip with strict Up/Down cell classification
+- `from_toroidal_cdt(vertices_per_slice, num_slices)` — explicit S¹×S¹ toroidal CDT (χ = 0); requires `vertices_per_slice ≥ 3` and `num_slices ≥ 3`
+- `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
+- Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`
+- Validation: `validate_topology()` (χ expectation depends on `CdtTopology`), `validate_foliation()` (structural; closed S¹ spacelike rings on toroidal), `validate_causality()` (no edge spans >1 slice), `validate_cell_classification()` (strict Up/Down cell classification and validation pass)
+- Mutable backend access is not exposed. CDT code mutates Delaunay state only through narrow crate-internal operations (`flip_edge`, `subdivide_face`, `remove_vertex`, `set_vertex_data`) that invalidate cached counts and foliation synchronization bookkeeping on success.
+
+### `config.rs` — `CdtTopology` enum
+
+- `OpenBoundary` (default) — finite strip with boundary, χ ∈ {1, 2}
+- `Toroidal` — periodic in space and time, S¹×S¹, χ = 0
+- Wired through `CdtConfig.topology`, `CdtConfigOverrides.topology`, the CLI `--topology` flag, and `CdtMetadata.topology`
+- `run_simulation()` dispatches on topology: `Toroidal` → `from_toroidal_cdt`, `OpenBoundary` → `from_seeded_points` / `from_random_points`
+
+### `cdt/metropolis.rs` — Metropolis move ordering
+
+`MetropolisAlgorithm::run()` proposes a move type, computes `ΔS` from the move's simplex-count delta, accepts or rejects the proposal, and only mutates the triangulation after acceptance. Accepted applications that fail are rolled back from a triangulation snapshot and retried at another random local site; retry exhaustion is recorded as a rejection, while hard backend failures remain structured errors. Toroidal move finalization rejects and rolls back candidate sites that would violate χ = 0 or the closed-S¹ per-slice foliation invariant. See `docs/metropolis.md` for the detailed ordering.
+
+### `cdt/observables.rs` — User-facing estimators
+
+- `estimate_hausdorff_dimension` — estimates Hausdorff dimension from combinatorial dual-graph geodesic ball growth, returning `None` when the triangulation is too small or live face adjacency cannot be resolved
+- `estimate_spectral_dimension` — estimates spectral dimension from dual-graph diffusion return probability, returning `None` when the graph is too small or lacks enough positive return-probability samples for a fit
+- `CdtTriangulation::volume_profile` measures per-slice triangle counts on a triangulation; `SimulationResultsBackend` provides aggregate volume-profile summaries for simulation outputs
+- Import triangulation-focused analysis APIs through `prelude::observables`; use `prelude::simulation` when constructing or inspecting simulation result containers
+
+### `geometry/generators.rs` — Delaunay triangulation generators
+
+- `generate_delaunay2` — builds a 2D Delaunay triangulation with optional seed
+- `build_delaunay2_with_data` — builds from coordinate + vertex-data pairs
+- `build_delaunay2_from_cells` / `build_delaunay2_with_topology` — builds from explicit cell connectivity (no Delaunay point insertion); the latter also accepts `TopologyGuarantee` and `GlobalTopology` metadata so non-sphere Euler characteristics validate correctly
+- `build_toroidal_delaunay2` — convenience wrapper for explicit toroidal meshes (χ = 0)
+- `random_delaunay2`, `seeded_delaunay2` — convenience wrappers
+- `DelaunayTriangulation2D` — type alias for the concrete 2D triangulation type
+
+Together with `backends/delaunay.rs`, this module is the only place that directly imports from the `delaunay` crate.
+
+The CDT strip and toroidal constructors keep their internal cell working sets as fixed triangles (`[usize; 3]`) and reserve storage up front. They currently adapt those triangles to `Vec<Vec<usize>>` at the generator boundary because the explicit-cell generator API still accepts Vec-backed cell index lists; a future generator cleanup should accept fixed triangle cells directly to remove that per-triangle allocation.
+
+### `util.rs` — Numeric helpers
+
+- `saturating_usize_to_i32` — crate-internal usize→i32 conversion for Euler characteristic arithmetic
+- `saturating_usize_to_u32` — crate-internal usize→u32 conversion for simulation measurements and action inputs
+- `y_to_time_bucket` — f64→Option<u32> via round(), for time-slice assignment
+- `f64_band_to_u32` — f64→u32 clamped, for y-coordinate binning
+
+## Key Dependencies
+
+- `delaunay` (v0.7.6) — geometry backend (Delaunay triangulations, vertex data for time labels, `set_vertex_data_by_key` for O(1) label mutation)
+- `markov-chain-monte-carlo` (v0.3) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, `Target`)
+- `num-traits` — `ToPrimitive` and `NumCast` for checked or saturating numeric conversions

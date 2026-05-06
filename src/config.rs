@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Configuration management for CDT simulations.
 //!
 //! This module provides structured configuration for various aspects of

@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! CDT triangulation wrapper - backend-agnostic.
 //!
 //! This module provides CDT-specific triangulation data structures that work
@@ -1860,6 +1862,53 @@ impl CdtTriangulation<DelaunayBackend2D> {
         self.foliation().map_or(&[], Foliation::slice_sizes)
     }
 
+    /// Counts strict CDT triangles by the time slab of their lower slice.
+    ///
+    /// The returned vector has one entry per configured time slice.  Entry
+    /// `t` counts finite triangular cells whose [`CellType`] spans slice `t`
+    /// to `t + 1`; for toroidal triangulations the final entry includes cells
+    /// spanning the temporal wrap from `T - 1` to `0`.  If no current
+    /// foliation is present, returns an empty profile.
+    ///
+    /// Faces that cannot be classified as strict CDT cells are skipped, so the
+    /// profile sum can be smaller than [`Self::face_count`] for approximate or
+    /// partially foliated triangulations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// let tri = CdtTriangulation::from_cdt_strip(4, 3)
+    ///     .expect("build explicit CDT strip");
+    /// assert_eq!(tri.volume_profile(), vec![6, 6, 0]);
+    /// ```
+    #[must_use]
+    pub fn volume_profile(&self) -> Vec<u32> {
+        if !self.has_current_foliation() {
+            return Vec::new();
+        }
+
+        let Ok(slice_count) = usize::try_from(self.metadata.time_slices) else {
+            return Vec::new();
+        };
+        let mut profile = vec![0_u32; slice_count];
+
+        for face in self.geometry.faces() {
+            let Some(slice) = self.face_time_slice(&face) else {
+                continue;
+            };
+            let Ok(index) = usize::try_from(slice) else {
+                continue;
+            };
+            if let Some(count) = profile.get_mut(index) {
+                *count = count.saturating_add(1);
+            }
+        }
+
+        profile
+    }
+
     // -------------------------------------------------------------------------
     // Cell (triangle) classification
     // -------------------------------------------------------------------------
@@ -1935,6 +1984,39 @@ impl CdtTriangulation<DelaunayBackend2D> {
             Some(CellType::Down)
         } else {
             None
+        }
+    }
+
+    /// Returns the lower time-slab index assigned to a classifiable CDT face.
+    fn face_time_slice(&self, face: &DelaunayFaceHandle) -> Option<u32> {
+        self.cell_type(face)?;
+
+        let vertices = self.geometry.face_vertices(face).ok()?;
+        let [v0, v1, v2] = vertices.as_slice() else {
+            return None;
+        };
+
+        let labels = [
+            self.geometry.vertex_data_by_key(v0.vertex_key())?,
+            self.geometry.vertex_data_by_key(v1.vertex_key())?,
+            self.geometry.vertex_data_by_key(v2.vertex_key())?,
+        ];
+
+        match self.metadata.topology {
+            CdtTopology::OpenBoundary => Some(labels[0].min(labels[1]).min(labels[2])),
+            CdtTopology::Toroidal => {
+                let total = self.metadata.time_slices;
+                for slice in 0..total {
+                    let next = (slice + 1) % total;
+                    let spans_slab = labels.iter().all(|&label| label == slice || label == next)
+                        && labels.contains(&slice)
+                        && labels.contains(&next);
+                    if spans_slab {
+                        return Some(slice);
+                    }
+                }
+                None
+            }
         }
     }
 

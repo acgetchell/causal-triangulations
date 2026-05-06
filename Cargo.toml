@@ -4,6 +4,7 @@ version = "0.0.1"
 authors = [ "Adam Getchell <adam@adamgetchell.org>" ]
 categories = [ "science", "mathematics", "algorithms", "simulation" ]
 edition = "2024"
+documentation = "https://docs.rs/causal-triangulations"
 homepage = "https://github.com/acgetchell/causal-triangulations"
 keywords = [
     "quantum-gravity",

@@ -17,10 +17,13 @@
 //! - Foliated 2D triangulation construction and validation
 //! - Foliation-aware 2D ergodic moves backed by bistellar flips
 //! - Metropolis-Hastings sampling over foliation-aware 2D ergodic moves
+//! - Volume-profile, Hausdorff-dimension, and spectral-dimension observables
+//!   for CDT analysis
 //!
-//! The crate root re-exports the most common construction, simulation, and
-//! error types. Focused preludes under [`prelude`] provide smaller import
-//! surfaces for documentation, examples, integration tests, and benchmarks.
+//! The crate root re-exports the most common construction, simulation,
+//! observable, and error types. Focused preludes under [`prelude`] provide
+//! smaller import surfaces for documentation, examples, integration tests, and
+//! benchmarks.
 //!
 //! # Example
 //!
@@ -91,6 +94,8 @@ pub mod cdt {
     pub mod foliation;
     /// Metropolis-Hastings algorithm implementation.
     pub mod metropolis;
+    /// User-facing CDT observable estimators.
+    pub mod observables;
     /// CDT triangulation wrapper.
     pub mod triangulation;
 }
@@ -103,9 +108,11 @@ pub use cdt::metropolis::{
     CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget, Measurement,
     MetropolisAlgorithm, MetropolisConfig, MonteCarloStep, SimulationResultsBackend,
 };
+pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
 pub use config::{CdtConfig, CdtTopology, TestConfig};
 pub use errors::{CdtError, CdtResult};
 
+use crate::util::saturating_usize_to_u32;
 use std::time::Duration;
 
 // Trait-based triangulation (recommended)
@@ -114,7 +121,10 @@ pub use geometry::traits::TriangulationQuery;
 
 /// Prelude module for convenient imports.
 ///
-/// Provides commonly used types for CDT construction, simulation, and analysis.
+/// Provides the small set of types most examples need for CDT construction,
+/// configuration, simulation startup, and error handling. Use scoped preludes
+/// such as [`prelude::simulation`], [`prelude::observables`], and
+/// [`prelude::geometry`] for specialized workflows.
 ///
 /// # Quick start
 ///
@@ -131,20 +141,9 @@ pub mod prelude {
     pub use crate::geometry::CdtTriangulation2D;
     pub use crate::geometry::traits::TriangulationQuery;
 
-    // Foliation / classification
-    pub use crate::cdt::foliation::{CellType, EdgeType, Foliation, FoliationError};
-
-    // Action
-    pub use crate::cdt::action::{ActionConfig, compute_regge_action};
-
-    // Ergodic moves
-    pub use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
-
-    // Metropolis simulation
-    pub use crate::cdt::metropolis::{
-        CdtProposal, CdtTarget, Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
-        SimulationResultsBackend,
-    };
+    // Action and simulation setup
+    pub use crate::cdt::action::ActionConfig;
+    pub use crate::cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig};
 
     // Configuration and errors
     pub use crate::config::{CdtConfig, CdtTopology};
@@ -228,6 +227,7 @@ pub mod prelude {
     ///
     /// This prelude includes the Metropolis runner, delayed proposal adapter,
     /// telemetry structs, and typed proposal errors needed by MCMC workflows.
+    /// Observable estimators live in [`crate::prelude::observables`].
     pub mod simulation {
         pub use crate::CdtTriangulation;
         pub use crate::cdt::action::{ActionConfig, compute_regge_action};
@@ -239,6 +239,33 @@ pub mod prelude {
         };
         pub use crate::config::{CdtConfig, CdtTopology};
         pub use crate::errors::{CdtError, CdtResult};
+    }
+
+    /// Focused exports for CDT observables and post-simulation analysis.
+    ///
+    /// This prelude is intended for measuring triangulations without importing
+    /// simulation runner, telemetry, proposal, or move APIs.
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    /// use causal_triangulations::prelude::observables::*;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    ///     let profile = tri.volume_profile();
+    ///
+    ///     assert_eq!(profile.len(), 3);
+    ///     assert!(estimate_hausdorff_dimension(&tri).is_some_and(f64::is_finite));
+    ///     assert!(estimate_spectral_dimension(&tri).is_some_and(f64::is_finite));
+    ///     Ok(())
+    /// }
+    /// ```
+    pub mod observables {
+        pub use crate::CdtTriangulation;
+        pub use crate::cdt::observables::{
+            estimate_hausdorff_dimension, estimate_spectral_dimension,
+        };
+        pub use crate::geometry::CdtTriangulation2D;
     }
 
     /// Focused exports for geometry backend construction and querying.
@@ -385,11 +412,12 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
         Ok(results)
     } else {
         // Just return basic simulation results with the triangulation
-        let initial_action = config.to_action_config().calculate_action(
-            u32::try_from(triangulation.vertex_count()).unwrap_or_default(),
-            u32::try_from(triangulation.edge_count()).unwrap_or_default(),
-            u32::try_from(triangulation.face_count()).unwrap_or_default(),
-        );
+        let vertices = saturating_usize_to_u32(triangulation.vertex_count());
+        let edges = saturating_usize_to_u32(triangulation.edge_count());
+        let triangles = saturating_usize_to_u32(triangulation.face_count());
+        let initial_action = config
+            .to_action_config()
+            .calculate_action(vertices, edges, triangles);
 
         Ok(SimulationResultsBackend {
             config: config.to_metropolis_config(),
@@ -399,9 +427,10 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
             measurements: vec![Measurement {
                 step: 0,
                 action: initial_action,
-                vertices: u32::try_from(triangulation.vertex_count()).unwrap_or_default(),
-                edges: u32::try_from(triangulation.edge_count()).unwrap_or_default(),
-                triangles: u32::try_from(triangulation.face_count()).unwrap_or_default(),
+                vertices,
+                edges,
+                triangles,
+                volume_profile: triangulation.volume_profile(),
             }],
             elapsed_time: Duration::from_millis(0),
             triangulation,
