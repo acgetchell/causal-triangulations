@@ -132,7 +132,7 @@ pub mod cdt {
 // Re-exports for convenience
 pub use cdt::action::{ActionConfig, compute_regge_action};
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
-pub use cdt::foliation::{CellType, EdgeType, Foliation};
+pub use cdt::foliation::{CellType, EdgeType, Foliation, FoliationError};
 pub use cdt::metropolis::{
     CdtMcmcCheckpoint, CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget,
     MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
@@ -388,8 +388,10 @@ pub mod prelude {
 /// from the selected construction and simulation path.
 /// If [`CdtConfig::output_csv`] or [`CdtConfig::output_json`] is set, returns
 /// [`CdtError::OutputPathResolutionFailed`] if the current working directory
-/// cannot be resolved. Returns [`CdtError::OutputWriteFailed`] if the configured
-/// output file, parent directory creation, or JSON serialization fails.
+/// cannot be resolved. Returns [`CdtError::OutputPathConflict`] if CSV and JSON
+/// outputs resolve to the same file. Returns [`CdtError::OutputWriteFailed`] if
+/// the configured output file, parent directory creation, or JSON serialization
+/// fails.
 ///
 /// # Examples
 ///
@@ -515,14 +517,30 @@ fn write_configured_outputs(
         detail: err.to_string(),
     })?;
 
-    if let Some(path) = &config.output_csv {
-        let resolved = CdtConfig::resolve_path(&base_dir, path);
+    let resolved_csv = config
+        .output_csv
+        .as_ref()
+        .map(|path| CdtConfig::resolve_path(&base_dir, path));
+    let resolved_json = config
+        .output_json
+        .as_ref()
+        .map(|path| CdtConfig::resolve_path(&base_dir, path));
+
+    if let (Some(csv_path), Some(json_path)) = (&resolved_csv, &resolved_json)
+        && csv_path == json_path
+    {
+        return Err(CdtError::OutputPathConflict {
+            csv_path: csv_path.display().to_string(),
+            json_path: json_path.display().to_string(),
+        });
+    }
+
+    if let Some(resolved) = resolved_csv {
         results.write_measurements_csv(&resolved)?;
         log::info!("Wrote measurement CSV to {}", resolved.display());
     }
 
-    if let Some(path) = &config.output_json {
-        let resolved = CdtConfig::resolve_path(&base_dir, path);
+    if let Some(resolved) = resolved_json {
         results.write_summary_json(config, &resolved)?;
         log::info!("Wrote simulation JSON summary to {}", resolved.display());
     }
@@ -562,11 +580,27 @@ mod tests {
     }
 
     fn temp_output_path(name: &str) -> PathBuf {
+        let thread_name = safe_thread_name();
         env::temp_dir().join(format!(
             "causal-triangulations-run-{name}-{}-{}",
             process::id(),
-            thread::current().name().unwrap_or("test")
+            thread_name
         ))
+    }
+
+    /// Returns the current test thread name with path separators and
+    /// reserved characters removed.
+    fn safe_thread_name() -> String {
+        thread::current()
+            .name()
+            .unwrap_or("test")
+            .chars()
+            .map(|ch| match ch {
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+                ch if ch.is_control() => '_',
+                ch => ch,
+            })
+            .collect()
     }
 
     #[test]
@@ -623,6 +657,27 @@ mod tests {
             parsed["final_triangulation"]["time_slices"],
             config.timeslices
         );
+    }
+
+    #[test]
+    fn run_simulation_rejects_overlapping_output_paths() {
+        let path = temp_output_path("shared-output");
+        let mut config = create_test_config();
+        config.output_csv = Some(path.clone());
+        config.output_json = Some(path.clone());
+
+        let error = run_simulation(&config).expect_err("overlapping outputs should fail");
+
+        let CdtError::OutputPathConflict {
+            csv_path,
+            json_path,
+        } = error
+        else {
+            panic!("expected output path conflict error");
+        };
+        assert_eq!(csv_path, path.display().to_string());
+        assert_eq!(json_path, path.display().to_string());
+        assert!(!path.exists());
     }
 
     #[test]

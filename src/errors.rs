@@ -196,6 +196,14 @@ pub enum CdtError {
         /// Lower-level path resolution error.
         detail: String,
     },
+    /// Configured CSV and JSON output paths resolve to the same file.
+    #[error("CSV output path {csv_path} and JSON output path {json_path} resolve to the same file")]
+    OutputPathConflict {
+        /// Resolved CSV output path.
+        csv_path: String,
+        /// Resolved JSON output path.
+        json_path: String,
+    },
     /// Reading or decoding CSV/JSON simulation output failed.
     #[error("Failed to read {format} output from {path}: {detail}")]
     OutputReadFailed {
@@ -545,6 +553,27 @@ mod tests {
         assert_eq!(
             display,
             "Failed to resolve output path from base .: No such file or directory"
+        );
+    }
+
+    #[test]
+    fn test_output_path_conflict_error() {
+        let error = CdtError::OutputPathConflict {
+            csv_path: "output/results".to_string(),
+            json_path: "output/results".to_string(),
+        };
+        let CdtError::OutputPathConflict {
+            csv_path,
+            json_path,
+        } = &error
+        else {
+            panic!("expected OutputPathConflict variant");
+        };
+        assert_eq!(csv_path, "output/results");
+        assert_eq!(json_path, "output/results");
+        assert_eq!(
+            format!("{error}"),
+            "CSV output path output/results and JSON output path output/results resolve to the same file"
         );
     }
 

@@ -49,7 +49,9 @@ type RawVertex<VertexData, const D: usize> = Vertex<f64, VertexData, D>;
 /// Serde checkpoints store the upstream triangulation data structure plus its
 /// global topology and topology-guarantee metadata. Deserialization rebuilds
 /// transient backend caches, including the interior-facet lookup used for local
-/// 2D edge queries.
+/// 2D edge queries. Toroidal topology checkpoints must contain finite,
+/// strictly positive periods; invalid domains are rejected during
+/// deserialization before a backend can observe them.
 #[derive(Debug, Clone)]
 pub struct DelaunayBackend<VertexData: DataType, CellData: DataType, const D: usize> {
     /// The underlying Delaunay triangulation from the delaunay crate
@@ -119,6 +121,13 @@ impl SerializableGlobalTopology {
                         "toroidal domain length mismatch: got {actual}, expected {D}"
                     ))
                 })?;
+                for (index, period) in domain.iter().copied().enumerate() {
+                    if !period.is_finite() || period <= 0.0 {
+                        return Err(E::custom(format!(
+                            "invalid toroidal period at index {index}: {period}"
+                        )));
+                    }
+                }
                 Ok(GlobalTopology::Toroidal {
                     domain,
                     mode: mode.into(),
@@ -172,6 +181,8 @@ impl From<SerializableTopologyGuarantee> for TopologyGuarantee {
 
 impl<VertexData: DataType, CellData: DataType, const D: usize> Serialize
     for DelaunayBackend<VertexData, CellData, D>
+where
+    Tds<f64, VertexData, CellData, D>: Serialize,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -188,6 +199,8 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> Serialize
 
 impl<'de, VertexData: DataType, CellData: DataType, const D: usize> Deserialize<'de>
     for DelaunayBackend<VertexData, CellData, D>
+where
+    Tds<f64, VertexData, CellData, D>: Deserialize<'de>,
 {
     fn deserialize<DE>(deserializer: DE) -> Result<Self, DE::Error>
     where
@@ -1178,6 +1191,22 @@ mod tests {
     use slotmap::KeyData;
 
     use super::*;
+
+    #[test]
+    fn toroidal_topology_deserialization_rejects_invalid_periods() {
+        for period in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
+            let topology = SerializableGlobalTopology::Toroidal {
+                domain: vec![period, 1.0],
+                mode: SerializableToroidalConstructionMode::Explicit,
+            };
+
+            let error = topology
+                .into_global_topology::<2, serde::de::value::Error>()
+                .expect_err("invalid toroidal period should fail deserialization");
+
+            assert!(error.to_string().contains("invalid toroidal period"));
+        }
+    }
 
     #[test]
     fn test_delaunay_mutation_error_messages_preserve_context() {

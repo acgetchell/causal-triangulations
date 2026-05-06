@@ -15,11 +15,27 @@ use std::process::{self, Command};
 use std::thread;
 
 fn temp_output_dir(name: &str) -> PathBuf {
+    let thread_name = safe_thread_name();
     env::temp_dir().join(format!(
         "causal-triangulations-cli-{name}-{}-{}",
         process::id(),
-        thread::current().name().unwrap_or("test")
+        thread_name
     ))
+}
+
+/// Returns the current test thread name with path separators and
+/// reserved characters removed.
+fn safe_thread_name() -> String {
+    thread::current()
+        .name()
+        .unwrap_or("test")
+        .chars()
+        .map(|ch| match ch {
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+            ch if ch.is_control() => '_',
+            ch => ch,
+        })
+        .collect()
 }
 
 #[test]

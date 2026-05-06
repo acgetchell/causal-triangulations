@@ -1039,7 +1039,7 @@ impl MetropolisAlgorithm {
                 ErgodicsSystem::with_seed(seed.wrapping_add(0x9E37_79B9_7F4A_7C15))
             }),
             move_stats: MoveStatistics::new(),
-            steps: Vec::with_capacity(usize::try_from(self.config.steps).unwrap_or(0)),
+            steps: Vec::new(),
             measurements,
             elapsed_time: Duration::ZERO,
         }

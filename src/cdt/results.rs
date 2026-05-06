@@ -486,10 +486,14 @@ impl SimulationResultsBackend {
     /// ```
     #[must_use]
     pub fn equilibrium_measurements(&self) -> Vec<&Measurement> {
+        self.equilibrium_measurements_iter().collect()
+    }
+
+    /// Iterates over measurements after thermalization without allocating.
+    fn equilibrium_measurements_iter(&self) -> impl Iterator<Item = &Measurement> {
         self.measurements
             .iter()
-            .filter(|m| m.step >= self.config.thermalization_steps)
-            .collect()
+            .filter(|measurement| measurement.step >= self.config.thermalization_steps)
     }
 
     /// Writes one CSV row per recorded measurement.
@@ -560,7 +564,9 @@ impl SimulationResultsBackend {
     ///
     /// The summary stores the top-level CLI/configuration parameters, action and
     /// Metropolis configuration, aggregate statistics, final triangulation counts,
-    /// Monte Carlo step telemetry, and all measurements.
+    /// Monte Carlo step telemetry, and all measurements. The aggregate
+    /// `average_action` is computed from [`Self::equilibrium_measurements`] so
+    /// it excludes the initial snapshot and thermalization window.
     ///
     /// # Errors
     ///
@@ -597,7 +603,7 @@ impl SimulationResultsBackend {
             move_stats: &self.move_stats,
             aggregate: AggregateSummary {
                 acceptance_rate: self.acceptance_rate(),
-                average_action: self.average_action(),
+                average_action: mean_measurement_action(self.equilibrium_measurements_iter()),
                 elapsed_time_ms: self.elapsed_time.as_millis(),
                 measurement_count: self.measurements.len(),
                 step_count: self.steps.len(),
@@ -621,6 +627,23 @@ impl SimulationResultsBackend {
             .flush()
             .map_err(|err| output_error(path, "json", err))
     }
+}
+
+/// Returns the mean action across a measurement stream.
+fn mean_measurement_action<'a>(measurements: impl IntoIterator<Item = &'a Measurement>) -> f64 {
+    let mut sum = 0.0;
+    let mut count = 0_usize;
+    for measurement in measurements {
+        sum += measurement.action;
+        count += 1;
+    }
+
+    if count == 0 {
+        return 0.0;
+    }
+
+    let count = NumCast::from(count).unwrap_or(1.0);
+    sum / count
 }
 
 /// Creates a parent directory for configured output paths when needed.
@@ -694,11 +717,27 @@ mod tests {
 
     /// Returns a unique temporary path for output-writer tests.
     fn temp_output_path(name: &str) -> PathBuf {
+        let thread_name = safe_thread_name();
         env::temp_dir().join(format!(
             "causal-triangulations-{name}-{}-{}",
             process::id(),
-            thread::current().name().unwrap_or("test")
+            thread_name
         ))
+    }
+
+    /// Returns the current test thread name with path separators and
+    /// reserved characters removed.
+    fn safe_thread_name() -> String {
+        thread::current()
+            .name()
+            .unwrap_or("test")
+            .chars()
+            .map(|ch| match ch {
+                '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*' => '_',
+                ch if ch.is_control() => '_',
+                ch => ch,
+            })
+            .collect()
     }
 
     #[test]
@@ -787,6 +826,44 @@ mod tests {
         assert_eq!(parsed["aggregate"]["step_count"], 1);
         assert_eq!(parsed["final_triangulation"]["time_slices"], 3);
         assert_eq!(parsed["measurements"][0]["step"], 1);
+    }
+
+    #[test]
+    fn summary_json_average_action_uses_equilibrium_measurements() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+        let results = results_with(
+            MetropolisConfig::new(1.0, 2, 1, 1),
+            vec![],
+            vec![
+                Measurement::new(0, 100.0, 12, 26, 12),
+                Measurement::new(1, 4.0, 12, 26, 12),
+                Measurement::new(2, 6.0, 12, 26, 12),
+            ],
+            triangulation,
+        );
+        let config = CdtConfig {
+            steps: 2,
+            thermalization_steps: 1,
+            measurement_frequency: 1,
+            simulate: true,
+            ..CdtConfig::new(12, 3)
+        };
+        let path = temp_output_path("equilibrium-summary.json");
+
+        results
+            .write_summary_json(&config, &path)
+            .expect("JSON output should write");
+        let json = fs::read_to_string(&path).expect("JSON output should be readable");
+        fs::remove_file(&path).expect("temporary JSON should be removable");
+        let parsed: Value = from_str(&json).expect("summary should be valid JSON");
+
+        assert_relative_eq!(
+            parsed["aggregate"]["average_action"]
+                .as_f64()
+                .expect("average action should be numeric"),
+            5.0
+        );
     }
 
     #[test]

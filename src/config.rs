@@ -24,7 +24,12 @@ use std::path::{Component, Path, PathBuf};
 /// - [`OpenBoundary`](Self::OpenBoundary) — open-boundary generation; topology
 ///   validation accepts disk-like χ = 1 and sphere-like χ = 2 configurations
 /// - [`Toroidal`](Self::Toroidal) — periodic in both space and time (S¹×S¹, χ = 0)
+///
+/// Serde uses the same kebab-case vocabulary as the CLI (`open-boundary`,
+/// `toroidal`) so saved JSON configuration can round-trip through command-line
+/// overrides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum CdtTopology {
     /// Finite strip with open boundaries (Euler characteristic χ = 1 for
     /// disk-like or χ = 2 for sphere-like configurations).
@@ -103,7 +108,8 @@ pub struct CdtConfig {
     ///
     /// Relative paths are resolved from the current working directory with
     /// [`CdtConfig::resolve_path`]. Parent directories are created when output
-    /// is written.
+    /// is written. [`crate::run_simulation`] rejects configurations where CSV
+    /// and JSON output paths resolve to the same file.
     #[arg(long, value_name = "PATH")]
     pub output_csv: Option<PathBuf>,
 
@@ -111,7 +117,8 @@ pub struct CdtConfig {
     ///
     /// Relative paths are resolved from the current working directory with
     /// [`CdtConfig::resolve_path`]. Parent directories are created when output
-    /// is written.
+    /// is written. [`crate::run_simulation`] rejects configurations where CSV
+    /// and JSON output paths resolve to the same file.
     #[arg(long, value_name = "PATH")]
     pub output_json: Option<PathBuf>,
 }
@@ -780,6 +787,17 @@ mod tests {
         assert!(!config.simulate);
         assert_eq!(config.output_csv, None);
         assert_eq!(config.output_json, None);
+    }
+
+    #[test]
+    fn topology_serializes_with_cli_vocabulary() {
+        let json =
+            serde_json::to_string(&CdtTopology::OpenBoundary).expect("topology should serialize");
+        assert_eq!(json, "\"open-boundary\"");
+
+        let topology: CdtTopology =
+            serde_json::from_str("\"toroidal\"").expect("topology should deserialize");
+        assert_eq!(topology, CdtTopology::Toroidal);
     }
 
     #[test]
