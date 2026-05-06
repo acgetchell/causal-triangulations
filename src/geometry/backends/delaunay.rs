@@ -37,9 +37,9 @@ type RawVertex<VertexData, const D: usize> = Vertex<f64, VertexData, D>;
 /// # Mutation support
 ///
 /// The [`TriangulationMut`] methods (`insert_vertex`, `remove_vertex`, `flip_edge`, etc.)
-/// are backed by the upstream Delaunay edit API where possible. `move_vertex()` is not yet
-/// implemented and returns [`DelaunayError::NotImplemented`]. The `clear()` and
-/// `reserve_capacity()` methods are currently no-ops that emit a `log::warn!` diagnostic.
+/// are backed by the upstream Delaunay edit API where possible. `move_vertex()`, `clear()`,
+/// and `reserve_capacity()` are not yet implemented and return
+/// [`DelaunayError::NotImplemented`].
 #[derive(Debug, Clone)]
 pub struct DelaunayBackend<VertexData: DataType, CellData: DataType, const D: usize> {
     /// The underlying Delaunay triangulation from the delaunay crate
@@ -136,6 +136,17 @@ pub enum DelaunayError {
         expected: usize,
     },
 
+    /// Coordinate value cannot be used by geometric predicates.
+    #[error("non-finite coordinate for {operation}: axis {axis} = {value}")]
+    NonFiniteCoordinate {
+        /// Backend operation that received the coordinate.
+        operation: &'static str,
+        /// Coordinate axis.
+        axis: usize,
+        /// Supplied non-finite value.
+        value: f64,
+    },
+
     /// Vertex construction failed before a backend mutation could be attempted.
     #[error("failed to build vertex for {operation}: {detail}")]
     VertexBuildFailed {
@@ -199,6 +210,15 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
                     actual: coords.len(),
                     expected: D,
                 })?;
+        for (axis, value) in coords.iter().copied().enumerate() {
+            if !value.is_finite() {
+                return Err(DelaunayError::NonFiniteCoordinate {
+                    operation,
+                    axis,
+                    value,
+                });
+            }
+        }
         let mut builder = VertexBuilder::<f64, VertexData, D>::default().point(Point::new(coords));
         if let Some(data) = data {
             builder = builder.data(data);
@@ -979,16 +999,14 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
         ))
     }
 
-    fn clear(&mut self) {
-        // TODO: Implement clear operation.
-        log::warn!("DelaunayBackend::clear() is not yet implemented; triangulation unchanged");
+    fn clear(&mut self) -> Result<(), Self::Error> {
+        Err(DelaunayError::NotImplemented { operation: "clear" })
     }
 
-    fn reserve_capacity(&mut self, vertices: usize, faces: usize) {
-        // TODO: Implement capacity reservation.
-        log::warn!(
-            "DelaunayBackend::reserve_capacity(vertices={vertices}, faces={faces}) is not yet implemented"
-        );
+    fn reserve_capacity(&mut self, _vertices: usize, _faces: usize) -> Result<(), Self::Error> {
+        Err(DelaunayError::NotImplemented {
+            operation: "reserve_capacity",
+        })
     }
 }
 
@@ -1685,6 +1703,14 @@ mod tests {
                 expected: 2,
             })
         ));
+        assert!(matches!(
+            backend.insert_vertex(&[f64::NAN, 0.0]),
+            Err(DelaunayError::NonFiniteCoordinate {
+                operation: "insert_vertex",
+                axis: 0,
+                value,
+            }) if value.is_nan()
+        ));
 
         let bogus_vertex = VertexKey::from(KeyData::from_ffi(u64::MAX));
         assert!(matches!(
@@ -1710,21 +1736,36 @@ mod tests {
             Err(DelaunayError::NonFlippableEdge { reason, .. })
                 if reason.contains("interior 2D facet"),
         ));
+    }
 
-        let counts_before_noops = (
+    #[test]
+    fn clear_and_reserve_report_unsupported_without_mutating() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("labeled triangle should build");
+        let mut backend = DelaunayBackend::from_triangulation(dt);
+        let counts_before = (
             backend.vertex_count(),
             backend.edge_count(),
             backend.face_count(),
         );
-        backend.clear();
-        backend.reserve_capacity(32, 64);
+
+        assert!(matches!(
+            backend.clear(),
+            Err(DelaunayError::NotImplemented { operation: "clear" })
+        ));
+        assert!(matches!(
+            backend.reserve_capacity(32, 64),
+            Err(DelaunayError::NotImplemented {
+                operation: "reserve_capacity"
+            })
+        ));
         assert_eq!(
             (
                 backend.vertex_count(),
                 backend.edge_count(),
                 backend.face_count(),
             ),
-            counts_before_noops
+            counts_before
         );
     }
 

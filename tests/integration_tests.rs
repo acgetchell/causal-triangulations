@@ -20,8 +20,14 @@ mod integration_tests {
     #[test]
     fn test_complete_cdt_simulation_workflow_runs_moves() {
         // Test full CDT simulation pipeline
-        let triangulation = CdtTriangulation::from_seeded_points(32, 3, 2, 42)
-            .expect("Failed to create initial triangulation");
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(8, 4).expect("Failed to create initial triangulation");
+        triangulation
+            .validate_foliation()
+            .expect("initial strip foliation is valid");
+        triangulation
+            .validate_causality()
+            .expect("initial strip causality is valid");
 
         let config = MetropolisConfig::new(1.0, 10, 5, 2).with_seed(42);
         let action_config = ActionConfig::default();
@@ -225,10 +231,10 @@ mod integration_tests {
     #[test]
     fn test_seeded_simulation_reproducibility() {
         // Test that seeded simulation inputs consistently produce the same move trace.
-        let triangulation1 = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
-            .expect("Failed to create first triangulation");
-        let triangulation2 = CdtTriangulation::from_seeded_points(5, 1, 2, 53)
-            .expect("Failed to create second triangulation");
+        let triangulation1 =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Failed to create first triangulation");
+        let triangulation2 =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Failed to create second triangulation");
 
         let config = MetropolisConfig::new(1.0, 10, 2, 2).with_seed(123);
         let action_config = ActionConfig::default();

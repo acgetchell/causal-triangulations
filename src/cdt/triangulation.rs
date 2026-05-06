@@ -133,7 +133,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// Wraps an existing geometry backend and tags it with [`CdtTopology`].
     /// The backend itself is not modified; pass a backend whose Euler
     /// characteristic and metadata invariants match the supplied topology,
-    /// otherwise this constructor or [`Self::validate_topology`] will reject it.
+    /// otherwise this constructor rejects it.
     ///
     /// Toroidal triangulations must use at least three time slices so the
     /// periodic neighbors `t - 1` and `t + 1` remain distinct.
@@ -141,7 +141,9 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidTriangulationMetadata`] when the requested
-    /// topology metadata is internally inconsistent.
+    /// topology metadata is internally inconsistent. Returns
+    /// [`CdtError::TopologyMismatch`] when the backend Euler characteristic does
+    /// not match the requested topology.
     ///
     /// # Examples
     ///
@@ -192,6 +194,32 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///         && expected == "≥ 3"
     /// ));
     /// ```
+    ///
+    /// ```rust
+    /// use causal_triangulations::prelude::errors::CdtError;
+    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ])
+    /// .expect("build labeled triangle");
+    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    ///
+    /// let err = CdtTriangulation::with_topology(backend, 3, 2, CdtTopology::Toroidal)
+    ///     .expect_err("a planar triangle cannot be published as toroidal");
+    /// assert!(matches!(
+    ///     err,
+    ///     CdtError::TopologyMismatch {
+    ///         topology,
+    ///         euler_characteristic: 1,
+    ///         expected_euler_characteristics,
+    ///         ..
+    ///     } if topology == "toroidal" && expected_euler_characteristics == vec![0]
+    /// ));
+    /// ```
     pub fn with_topology(
         geometry: B,
         time_slices: u32,
@@ -201,6 +229,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         let mut tri = Self::wrap_unchecked(geometry, time_slices, dimension, topology);
         tri.apply_time_slices(time_slices)?;
         tri.validate_metadata()?;
+        tri.validate_topology()?;
         Ok(tri)
     }
 
@@ -1198,15 +1227,13 @@ mod tests {
 
     #[test]
     fn test_validate_topology_toroidal_rejects_chi_nonzero() {
-        // Build a non-toroidal triangulation, then label its metadata as
-        // Toroidal so validate_topology() expects χ=0 but gets χ1.
+        // Build a non-toroidal triangulation, then try to label its metadata as
+        // Toroidal. The checked public constructor must reject it immediately.
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
             .expect("Should build labeled triangle");
         let backend = DelaunayBackend2D::from_triangulation(dt);
-        let tri = CdtTriangulation::with_topology(backend, 3, 2, CdtTopology::Toroidal)
-            .expect("valid toroidal metadata");
 
-        let result = tri.validate_topology();
+        let result = CdtTriangulation::with_topology(backend, 3, 2, CdtTopology::Toroidal);
         assert!(matches!(
             result,
             Err(CdtError::TopologyMismatch {

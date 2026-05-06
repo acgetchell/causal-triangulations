@@ -115,8 +115,8 @@ use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, Metropolis
 use causal_triangulations::prelude::triangulation::CdtTriangulation;
 
 fn main() -> CdtResult<()> {
-    // Create triangulation from random points
-    let triangulation = CdtTriangulation::from_random_points(20, 1, 2)?;
+    // Create a foliated open-boundary CDT strip.
+    let triangulation = CdtTriangulation::from_cdt_strip(8, 4)?;
 
     // Configure and run the Monte Carlo simulation.
     let metropolis_config = MetropolisConfig::new(1.0, 1000, 100, 10);

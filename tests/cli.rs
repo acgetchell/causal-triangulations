@@ -13,7 +13,7 @@ use std::process::Command;
 fn exit_success() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
     cmd.arg("-v");
-    cmd.arg("32");
+    cmd.arg("36");
     cmd.arg("-t");
     cmd.arg("3");
     cmd.assert().success();
@@ -24,7 +24,7 @@ fn cdt_cli_args() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
 
     cmd.arg("-v");
-    cmd.arg("32");
+    cmd.arg("36");
     cmd.arg("-t");
     cmd.arg("3");
     cmd.env("RUST_LOG", "info");
@@ -48,7 +48,7 @@ fn cdt_cli_invalid_args() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
 
     cmd.arg("-v");
-    cmd.arg("32");
+    cmd.arg("36");
     cmd.arg("-t");
     cmd.arg("3");
     cmd.arg("-d");
@@ -64,7 +64,7 @@ fn cdt_cli_out_of_range_args() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
 
     cmd.arg("-v");
-    cmd.arg("32");
+    cmd.arg("36");
     cmd.arg("-t");
     cmd.arg("3");
     cmd.arg("-d");
@@ -81,7 +81,7 @@ fn cdt_cli_invalid_measurement_frequency_zero() {
     // but we test the error message for completeness
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
 
-    cmd.arg("--vertices").arg("10");
+    cmd.arg("--vertices").arg("12");
     cmd.arg("--timeslices").arg("3");
     cmd.arg("--measurement-frequency").arg("0");
 
@@ -94,7 +94,7 @@ fn cdt_cli_invalid_measurement_frequency_zero() {
 fn cdt_cli_invalid_measurement_frequency_too_large() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
 
-    cmd.arg("--vertices").arg("10");
+    cmd.arg("--vertices").arg("12");
     cmd.arg("--timeslices").arg("3");
     cmd.arg("--steps").arg("100");
     cmd.arg("--measurement-frequency").arg("200");
@@ -109,7 +109,7 @@ fn cdt_cli_invalid_measurement_frequency_too_large() {
 fn cdt_cli_runs_simulation_with_real_moves() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
 
-    cmd.arg("--vertices").arg("10");
+    cmd.arg("--vertices").arg("12");
     cmd.arg("--timeslices").arg("3");
     cmd.arg("--steps").arg("20");
     cmd.arg("--thermalization-steps").arg("15");
@@ -125,7 +125,7 @@ fn cdt_cli_runs_simulation_with_real_moves() {
 fn cdt_cli_rejects_missing_post_thermalization_measurement() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
 
-    cmd.arg("--vertices").arg("10");
+    cmd.arg("--vertices").arg("12");
     cmd.arg("--timeslices").arg("3");
     cmd.arg("--steps").arg("19");
     cmd.arg("--thermalization-steps").arg("15");
@@ -168,7 +168,7 @@ fn cdt_cli_config_validation_comprehensive() {
     // Test a complex scenario with valid parameters to ensure our validation doesn't break normal usage
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
 
-    cmd.arg("--vertices").arg("10");
+    cmd.arg("--vertices").arg("12");
     cmd.arg("--timeslices").arg("3");
     cmd.arg("--steps").arg("50");
     cmd.arg("--measurement-frequency").arg("5");

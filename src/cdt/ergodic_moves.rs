@@ -1196,21 +1196,20 @@ mod tests {
     }
 
     #[test]
-    fn toroidal_invariant_rejection_reports_topology_mismatch() {
+    fn checked_toroidal_wrapper_rejects_topology_mismatch() {
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
             .expect("build labeled triangle");
         let backend = DelaunayBackend2D::from_triangulation(dt);
-        let triangulation = CdtTriangulation2D::with_topology(backend, 3, 2, CdtTopology::Toroidal)
-            .expect("toroidal metadata should be internally valid");
+        let result = CdtTriangulation2D::with_topology(backend, 3, 2, CdtTopology::Toroidal);
 
         assert!(matches!(
-            toroidal_invariant_rejection(&triangulation),
-            Some(MoveResult::Rejected(CdtError::TopologyMismatch {
+            result,
+            Err(CdtError::TopologyMismatch {
                 topology,
                 euler_characteristic: 1,
                 expected_euler_characteristics,
                 ..
-            })) if topology == "toroidal" && expected_euler_characteristics == [0]
+            }) if topology == "toroidal" && expected_euler_characteristics == [0]
         ));
     }
 

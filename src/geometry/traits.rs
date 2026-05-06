@@ -308,9 +308,66 @@ pub trait TriangulationMut: TriangulationQuery {
         point: &[Self::Coordinate],
     ) -> Result<SubdivisionResult<Self::VertexHandle, Self::FaceHandle>, Self::Error>;
 
-    /// Clear all elements from the triangulation
-    fn clear(&mut self);
+    /// Remove every vertex, edge, and face from the triangulation.
+    ///
+    /// A successful call leaves the backend in an empty, reusable state. Backends
+    /// whose storage model cannot be cleared in place should report that through
+    /// their associated error type instead of silently leaving geometry behind.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the backend cannot clear its current storage or
+    /// when the operation is unsupported by that backend.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::{
+    ///     MockBackend, MockError, TriangulationMut, TriangulationQuery,
+    /// };
+    ///
+    /// fn main() -> Result<(), MockError> {
+    ///     let mut backend = MockBackend::create_triangle();
+    ///     assert!(backend.vertex_count() > 0);
+    ///
+    ///     backend.clear()?;
+    ///
+    ///     assert_eq!(backend.vertex_count(), 0);
+    ///     assert_eq!(backend.edge_count(), 0);
+    ///     assert_eq!(backend.face_count(), 0);
+    ///     Ok(())
+    /// }
+    /// ```
+    fn clear(&mut self) -> Result<(), Self::Error>;
 
-    /// Reserve capacity for vertices and faces
-    fn reserve_capacity(&mut self, vertices: usize, faces: usize);
+    /// Reserve storage capacity for at least `vertices` vertices and `faces` faces.
+    ///
+    /// Implementations may reserve additional derived storage, such as edge or
+    /// adjacency buffers. Backends that cannot expose a meaningful reservation
+    /// operation should report that through their associated error type instead
+    /// of treating the request as a successful no-op.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when allocation fails, the backend cannot honor the
+    /// requested capacity, or the operation is unsupported by that backend.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::{
+    ///     MockBackend, MockError, TriangulationMut, TriangulationQuery,
+    /// };
+    ///
+    /// fn main() -> Result<(), MockError> {
+    ///     let mut backend = MockBackend::create_triangle();
+    ///     let counts = (backend.vertex_count(), backend.edge_count(), backend.face_count());
+    ///
+    ///     backend.reserve_capacity(16, 8)?;
+    ///
+    ///     assert_eq!(counts, (backend.vertex_count(), backend.edge_count(), backend.face_count()));
+    ///     Ok(())
+    /// }
+    /// ```
+    fn reserve_capacity(&mut self, vertices: usize, faces: usize) -> Result<(), Self::Error>;
 }

@@ -55,6 +55,17 @@ pub enum MockError {
     #[error("Invalid operation: {0}")]
     Operation(String),
 
+    /// Storage reservation failed.
+    #[error("Reservation failed for {operation} requesting {requested_capacity} slots: {detail}")]
+    ReservationFailed {
+        /// Operation being attempted.
+        operation: &'static str,
+        /// Capacity requested for the targeted storage map.
+        requested_capacity: usize,
+        /// Allocation failure detail.
+        detail: String,
+    },
+
     /// Coordinate arity does not match the mock backend dimension.
     #[error("Invalid coordinate dimension for {operation}: got {actual}, expected {expected}")]
     InvalidCoordinateDimension {
@@ -540,17 +551,40 @@ impl TriangulationMut for MockBackend {
         Ok(SubdivisionResult::new(new_vertex, new_faces, face))
     }
 
-    fn clear(&mut self) {
+    fn clear(&mut self) -> Result<(), Self::Error> {
         self.vertices.clear();
         self.edges.clear();
         self.faces.clear();
         self.next_vertex_id = 0;
         self.next_edge_id = 0;
         self.next_face_id = 0;
+        Ok(())
     }
 
-    fn reserve_capacity(&mut self, _vertices: usize, _faces: usize) {
-        // No-op for HashMap-based storage
+    fn reserve_capacity(&mut self, vertices: usize, faces: usize) -> Result<(), Self::Error> {
+        self.vertices
+            .try_reserve(vertices)
+            .map_err(|err| MockError::ReservationFailed {
+                operation: "reserve_capacity(vertices)",
+                requested_capacity: vertices,
+                detail: err.to_string(),
+            })?;
+        self.faces
+            .try_reserve(faces)
+            .map_err(|err| MockError::ReservationFailed {
+                operation: "reserve_capacity(faces)",
+                requested_capacity: faces,
+                detail: err.to_string(),
+            })?;
+        let edges = vertices.saturating_add(faces);
+        self.edges
+            .try_reserve(edges)
+            .map_err(|err| MockError::ReservationFailed {
+                operation: "reserve_capacity(edges)",
+                requested_capacity: edges,
+                detail: err.to_string(),
+            })?;
+        Ok(())
     }
 }
 
@@ -694,7 +728,9 @@ mod tests {
     #[test]
     fn test_mock_backend_basic_mutations_update_state() {
         let mut backend = MockBackend::create_triangle();
-        backend.reserve_capacity(8, 4);
+        backend
+            .reserve_capacity(8, 4)
+            .expect("mock backend should reserve storage");
 
         let vertex = backend
             .insert_vertex(&[2.0, 3.0])
@@ -754,7 +790,7 @@ mod tests {
             .expect("mock vertex removal should succeed");
         assert!(removed_faces.is_empty());
 
-        backend.clear();
+        backend.clear().expect("mock backend should clear storage");
         assert_eq!(backend.vertex_count(), 0);
         assert_eq!(backend.edge_count(), 0);
         assert_eq!(backend.face_count(), 0);
@@ -762,6 +798,22 @@ mod tests {
         assert_eq!(backend.vertices().count(), 0);
         assert_eq!(backend.edges().count(), 0);
         assert_eq!(backend.faces().count(), 0);
+    }
+
+    #[test]
+    fn test_mock_backend_reservation_failure_reports_requested_capacity() {
+        let mut backend = MockBackend::create_triangle();
+
+        let result = backend.reserve_capacity(usize::MAX, 0);
+
+        assert!(matches!(
+            result,
+            Err(MockError::ReservationFailed {
+                operation: "reserve_capacity(vertices)",
+                requested_capacity: usize::MAX,
+                detail,
+            }) if !detail.is_empty()
+        ));
     }
 
     #[test]
