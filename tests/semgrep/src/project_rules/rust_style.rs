@@ -51,6 +51,9 @@ fn nonfinite_conversion_default_fixture(value: Option<f64>) {
     // ruleid: causal-triangulations.rust.no-nonfinite-unwrap-defaults
     let _ = value.unwrap_or_else(|| f64::NAN);
 
+    // ruleid: causal-triangulations.rust.no-nonfinite-unwrap-defaults
+    let _ = value.unwrap_or_else(|| std::f64::NAN);
+
     // ok: causal-triangulations.rust.no-nonfinite-unwrap-defaults
     let _ = value.unwrap_or(f64::MAX);
 }

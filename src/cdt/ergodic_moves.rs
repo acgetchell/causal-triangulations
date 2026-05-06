@@ -336,6 +336,12 @@ impl ErgodicsSystem {
         self.attempt_13_move_mutating(triangulation)
     }
 
+    /// Rollback boundary for an accepted (1,3) move application.
+    ///
+    /// Clones a snapshot, subdivides the selected face, applies the inserted
+    /// vertex label, and finishes CDT bookkeeping. Once the snapshot exists,
+    /// every early return must pass a `MoveResult` through `rollback_if_failed`
+    /// or restore state itself.
     fn attempt_13_move_mutating(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         let geometric_candidates: Vec<_> = triangulation
             .geometry()
@@ -435,6 +441,11 @@ impl ErgodicsSystem {
         self.attempt_31_move_mutating(triangulation)
     }
 
+    /// Rollback boundary for an accepted (3,1) move application.
+    ///
+    /// Clones a snapshot, removes the selected vertex, and finishes CDT
+    /// bookkeeping. Once the snapshot exists, every early return must pass a
+    /// `MoveResult` through `rollback_if_failed` or restore state itself.
     fn attempt_31_move_mutating(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         let geometric_candidates: Vec<_> = triangulation
             .geometry()
