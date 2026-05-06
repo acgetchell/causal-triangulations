@@ -600,13 +600,16 @@ impl ErgodicsSystem {
         triangulation: &mut CdtTriangulation2D,
         move_type: MoveType,
     ) -> MoveResult {
-        match triangulation.synchronize_foliation_from_live_labels() {
-            Ok(()) => {
-                self.stats.record_success(move_type);
-                MoveResult::Success
-            }
-            Err(err) => MoveResult::HardFailure(err),
+        if let Err(err) = triangulation.synchronize_foliation_from_live_labels() {
+            return MoveResult::HardFailure(err);
         }
+
+        if let Some(rejection) = toroidal_invariant_rejection(triangulation) {
+            return rejection;
+        }
+
+        self.stats.record_success(move_type);
+        MoveResult::Success
     }
 }
 
@@ -930,9 +933,27 @@ fn removal_is_causal(triangulation: &CdtTriangulation2D, vertex: &DelaunayVertex
     label_count(triangulation, label) > 1
 }
 
+/// Preserves toroidal post-move invariant errors as rollbackable rejections.
+fn toroidal_invariant_rejection(triangulation: &CdtTriangulation2D) -> Option<MoveResult> {
+    if !matches!(triangulation.metadata().topology, CdtTopology::Toroidal) {
+        return None;
+    }
+
+    if let Err(err) = triangulation.validate_topology() {
+        return Some(MoveResult::Rejected(err));
+    }
+
+    if let Err(err) = triangulation.validate_foliation() {
+        return Some(MoveResult::Rejected(err));
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cdt::foliation::FoliationError;
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{build_delaunay2_from_cells, build_delaunay2_with_data};
     use approx::{abs_diff_eq, assert_relative_eq};
@@ -1157,6 +1178,65 @@ mod tests {
 
         assert_relative_eq!(point[0], 5.0 / 6.0, epsilon = 1e-12);
         assert_relative_eq!(point[1], 1.0 / 9.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn toroidal_invariant_rejection_accepts_valid_torus() {
+        let triangulation =
+            CdtTriangulation2D::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
+
+        assert_eq!(toroidal_invariant_rejection(&triangulation), None);
+    }
+
+    #[test]
+    fn toroidal_invariant_rejection_ignores_open_boundary_topology() {
+        let triangulation = single_triangle();
+
+        assert_eq!(toroidal_invariant_rejection(&triangulation), None);
+    }
+
+    #[test]
+    fn toroidal_invariant_rejection_reports_topology_mismatch() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+            .expect("build labeled triangle");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let triangulation = CdtTriangulation2D::with_topology(backend, 3, 2, CdtTopology::Toroidal)
+            .expect("toroidal metadata should be internally valid");
+
+        assert!(matches!(
+            toroidal_invariant_rejection(&triangulation),
+            Some(MoveResult::Rejected(CdtError::TopologyMismatch {
+                topology,
+                euler_characteristic: 1,
+                expected_euler_characteristics,
+                ..
+            })) if topology == "toroidal" && expected_euler_characteristics == [0]
+        ));
+    }
+
+    #[test]
+    fn toroidal_invariant_rejection_reports_foliation_mismatch() {
+        let mut triangulation =
+            CdtTriangulation2D::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
+        let vertex = triangulation
+            .geometry()
+            .vertices()
+            .find(|vertex| triangulation.time_label(vertex) == Some(1))
+            .expect("fixture has a slice-1 vertex");
+
+        triangulation
+            .set_vertex_data(&vertex, Some(0))
+            .expect("fixture vertex label can be edited");
+
+        assert!(matches!(
+            toroidal_invariant_rejection(&triangulation),
+            Some(MoveResult::Rejected(CdtError::Foliation(
+                FoliationError::LabelMismatch { .. }
+                    | FoliationError::SpacelikeDegreeViolation { .. }
+                    | FoliationError::SpacelikeSubgraphSizeMismatch { .. }
+                    | FoliationError::SpacelikeNonClosedRing { .. }
+            )))
+        ));
     }
 
     #[test]

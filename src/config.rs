@@ -84,7 +84,7 @@ pub struct CdtConfig {
     #[arg(long, default_value = "0.1")]
     pub cosmological_constant: f64,
 
-    /// Run full CDT simulation (currently requires real move kernels from #55)
+    /// Run the full CDT Metropolis simulation after constructing the initial triangulation.
     #[arg(long, default_value_t = false)]
     pub simulate: bool,
 

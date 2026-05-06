@@ -78,6 +78,10 @@ Structural checks:
 1. Every vertex has a time label (labeled count = vertex count)
 2. Every time slice is non-empty
 3. `slice_sizes` sum is consistent with labeled count
+4. For toroidal topology, every spatial slice is one closed S¹ ring: each vertex has exactly two spacelike neighbors in its slice, and the slice subgraph is a single connected cycle
+5. For toroidal topology, timelike edges connect each slice to both neighboring time slices modulo `T`
+
+Ergodic moves resynchronize foliation bookkeeping from live vertex labels after mutation. On toroidal triangulations, the move kernel immediately reruns `validate_topology()` and `validate_foliation()` before recording success; failures are rolled back and returned as ordinary local-site rejections.
 
 ### `validate_causality_delaunay()`
 
@@ -102,6 +106,6 @@ Strict cell-classification check:
 - `CdtError::ValidationFailed { check, detail }` — for structural foliation issues and foliation-assignment failures (for example unreadable vertex coordinates)
 - `CdtError::InvalidGenerationParameters` — for invalid constructor parameters
 
-## Future Work
+## Regression Coverage
 
-- **Foliation-aware ergodic moves**: continue broadening topology-preservation tests for accepted move sequences
+- `tests/integration_tests.rs::test_toroidal_metropolis_preserves_topology_after_many_accepted_moves` runs a seeded toroidal Metropolis simulation, requires at least 100 accepted moves, and checks final topology, foliation, causality, cell classification, and χ = 0.
