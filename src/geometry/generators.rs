@@ -429,6 +429,100 @@ pub fn build_toroidal_delaunay2(
     )
 }
 
+/// Builds a periodic 2D toroidal Delaunay triangulation from coordinate-data pairs.
+///
+/// This uses the upstream periodic image-point constructor rather than explicit
+/// cell assembly. The builder requests [`TopologyGuarantee::PLManifold`], so
+/// the resulting toroidal mesh is suitable for the full Delaunay Level 1-4
+/// validation path exposed by
+/// [`DelaunayBackend::validate_delaunay`](crate::geometry::backends::delaunay::DelaunayBackend::validate_delaunay).
+///
+/// # Errors
+///
+/// Returns [`crate::CdtError::InvalidGenerationParameters`] if any coordinate is
+/// non-finite or either toroidal period is non-finite/non-positive. Returns
+/// [`crate::CdtError::VertexBuildFailed`] if a vertex cannot be constructed, or
+/// [`crate::CdtError::DelaunayGenerationFailed`] if upstream periodic Delaunay
+/// construction rejects the point set.
+///
+/// # Examples
+///
+/// Build the minimal 3 × 3 periodic toroidal lattice used by
+/// [`CdtTriangulation::from_toroidal_cdt`](crate::CdtTriangulation::from_toroidal_cdt)
+/// and validate it with the upstream Level 1-4 checks:
+///
+/// ```
+/// use causal_triangulations::CdtResult;
+/// use causal_triangulations::prelude::geometry::*;
+///
+/// fn main() -> CdtResult<()> {
+///     const N: usize = 3;
+///     const T: usize = 3;
+///     let mut vertices: Vec<([f64; 2], u32)> = Vec::with_capacity(N * T);
+///
+///     for t in 0..T {
+///         for i in 0..N {
+///             #[allow(clippy::cast_precision_loss)]
+///             let coord = [i as f64, t as f64];
+///             let label = u32::try_from(t).expect("slice index fits in u32");
+///             vertices.push((coord, label));
+///         }
+///     }
+///
+///     let dt = build_periodic_toroidal_delaunay2(&vertices, [3.0, 3.0])?;
+///     assert_eq!(dt.number_of_vertices(), N * T);
+///     assert_eq!(dt.number_of_cells(), 2 * N * T);
+///
+///     let backend = DelaunayBackend2D::from_triangulation(dt);
+///     backend
+///         .validate_delaunay()
+///         .expect("periodic toroidal mesh passes Level 1-4 validation");
+///     Ok(())
+/// }
+/// ```
+pub fn build_periodic_toroidal_delaunay2(
+    coords_with_data: &[([f64; 2], u32)],
+    domain: [f64; 2],
+) -> CdtResult<DelaunayTriangulation2D> {
+    validate_toroidal_domain(domain)?;
+    validate_explicit_coordinates(coords_with_data)?;
+
+    let vertices: Vec<_> = coords_with_data
+        .iter()
+        .enumerate()
+        .map(|(i, (coord, data))| {
+            let point = Point::<f64, 2>::new(*coord);
+            VertexBuilder::<f64, u32, 2>::default()
+                .point(point)
+                .data(*data)
+                .build()
+                .map_err(|e| CdtError::VertexBuildFailed {
+                    context: format!("periodic toroidal vertex {i}"),
+                    underlying_error: e.to_string(),
+                })
+        })
+        .collect::<CdtResult<Vec<_>>>()?;
+
+    let vertex_count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
+    let coordinate_range = coords_with_data
+        .iter()
+        .flat_map(|(c, _)| c.iter().copied())
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
+            (lo.min(v), hi.max(v))
+        });
+
+    DelaunayTriangulationBuilder::from_vertices(&vertices)
+        .toroidal_periodic(domain)
+        .topology_guarantee(TopologyGuarantee::PLManifold)
+        .build::<i32>()
+        .map_err(|e| CdtError::DelaunayGenerationFailed {
+            vertex_count,
+            coordinate_range,
+            attempt: 1,
+            underlying_error: e.to_string(),
+        })
+}
+
 // =========================================================================
 // Test helpers (panicking convenience wrappers, compiled only during tests)
 // =========================================================================
@@ -468,6 +562,7 @@ pub(crate) fn seeded_delaunay2(
 mod tests {
     use super::*;
     use crate::errors::CdtError;
+    use crate::geometry::DelaunayBackend2D;
     use std::collections::HashMap;
 
     /// Produces an order-independent snapshot of vertices and cell connectivity for seeded tests.
@@ -593,6 +688,86 @@ mod tests {
             .expect("3×3 toroidal mesh should build");
         assert_eq!(dt.number_of_vertices(), N * T);
         assert_eq!(dt.number_of_cells(), 2 * N * T);
+    }
+
+    #[test]
+    fn test_build_periodic_toroidal_delaunay2_3x3_validates_level_1_to_4() {
+        const N: usize = 3;
+        const T: usize = 3;
+        const DOMAIN: [f64; 2] = [3.0, 3.0];
+        let mut vertices: Vec<([f64; 2], u32)> = Vec::with_capacity(N * T);
+        for t in 0..T {
+            for i in 0..N {
+                #[expect(
+                    clippy::cast_precision_loss,
+                    reason = "small deterministic test indices are converted to f64 lattice coordinates"
+                )]
+                let coord = [i as f64, t as f64];
+                let label = u32::try_from(t).expect("slice index fits in u32");
+                vertices.push((coord, label));
+            }
+        }
+
+        let dt = build_periodic_toroidal_delaunay2(&vertices, DOMAIN)
+            .expect("periodic 3×3 toroidal mesh should build");
+        assert_eq!(dt.number_of_vertices(), N * T);
+        assert_eq!(dt.number_of_cells(), 2 * N * T);
+
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+        backend
+            .validate_delaunay()
+            .expect("periodic toroidal mesh must pass upstream Level 1-4 validation");
+    }
+
+    #[test]
+    fn test_build_periodic_toroidal_delaunay2_rejects_invalid_domain() {
+        let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.0, 1.0], 1)];
+
+        for (domain, expected_value) in [
+            ([0.0, 3.0], "axis 0 period 0"),
+            ([-1.0, 3.0], "axis 0 period -1"),
+            ([3.0, f64::NAN], "axis 1 period NaN"),
+            ([f64::INFINITY, 3.0], "axis 0 period inf"),
+        ] {
+            let result = build_periodic_toroidal_delaunay2(&vertices, domain);
+            assert!(
+                matches!(
+                    result,
+                    Err(CdtError::InvalidGenerationParameters {
+                        ref issue,
+                        ref provided_value,
+                        ref expected_range,
+                    }) if issue == "Invalid toroidal domain"
+                        && provided_value == expected_value
+                        && expected_range == "finite and positive periods"
+                ),
+                "invalid periodic toroidal domain {domain:?} should be rejected, got {result:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_periodic_toroidal_delaunay2_rejects_non_finite_coordinate() {
+        let vertices = [
+            ([0.0, 0.0], 0u32),
+            ([1.0, f64::NEG_INFINITY], 0),
+            ([0.0, 1.0], 1),
+        ];
+
+        let result = build_periodic_toroidal_delaunay2(&vertices, [3.0, 3.0]);
+        assert!(
+            matches!(
+                result,
+                Err(CdtError::InvalidGenerationParameters {
+                    ref issue,
+                    ref provided_value,
+                    ref expected_range,
+                }) if issue == "Non-finite vertex coordinate"
+                    && provided_value == "vertex 1 axis 1 = -inf"
+                    && expected_range == "finite coordinate values"
+            ),
+            "periodic toroidal non-finite coordinate should be rejected, got {result:?}"
+        );
     }
 
     #[test]

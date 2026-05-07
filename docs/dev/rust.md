@@ -210,6 +210,7 @@ Focused preludes under `prelude::` must remain small, orthogonal, and purpose-sp
 - `prelude::triangulation` for CDT wrappers, foliation classification, topology metadata, and triangulation queries
 - `prelude::moves` for local ergodic move kernels, move results, move types, and move statistics
 - `prelude::action` for standalone action configuration and Regge action calculations
+- `prelude::errors` for crate error types and typed error-category enums needed to pattern-match failures
 - `prelude::simulation` for Metropolis/action simulation workflows, proposal types, simulation result types, and telemetry needed to inspect or debug simulations
 - `prelude::observables` for user-facing analysis APIs that measure triangulations or derived physical observables, such as volume profiles, Hausdorff-dimension estimators, and spectral-dimension estimators
 

@@ -30,6 +30,9 @@ path = "src/main.rs"
 name = "cdt_benchmarks"
 harness = false
 
+[features]
+slow-tests = [  ]
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]

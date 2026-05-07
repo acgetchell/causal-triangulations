@@ -85,7 +85,7 @@ mod tests {
 
     #[test]
     fn set_vertex_data_marks_foliation_stale_and_invalidates_cache() {
-        let mut tri = CdtTriangulation::from_cdt_strip(4, 2).expect("build explicit strip");
+        let mut tri = CdtTriangulation::from_cdt_strip(4, 2).expect("build Delaunay strip");
         let vertex = tri
             .geometry()
             .vertices()

@@ -76,6 +76,22 @@ Integration tests should validate:
 
 ---
 
+### Regression Tests
+
+Location:
+
+```text
+tests/regressions.rs
+```
+
+Regression tests capture specific previously observed bugs or blocking upstream limitations. Each regression test should document:
+
+- the issue, blocker, or failure mode it guards
+- the user-visible symptom that exposed the bug
+- how expectations should change when the underlying fix lands
+
+---
+
 ### Python Tests
 
 Location:
@@ -147,6 +163,12 @@ Run integration tests:
 
 ```bash
 just test-integration
+```
+
+Run feature-gated slow integration tests:
+
+```bash
+just test-slow
 ```
 
 Run all tests:

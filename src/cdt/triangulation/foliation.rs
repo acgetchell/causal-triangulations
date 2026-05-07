@@ -5,7 +5,7 @@
 use super::CdtTriangulation;
 use crate::cdt::foliation::{CellType, EdgeType, Foliation, FoliationError, classify_cell};
 use crate::config::CdtTopology;
-use crate::errors::{CdtError, CdtResult};
+use crate::errors::{CdtError, CdtResult, CdtValidationCheck};
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
@@ -303,7 +303,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             .map(|vh| {
                 let coords = self.geometry.vertex_coordinates(&vh).map_err(|e| {
                     CdtError::ValidationFailed {
-                        check: "foliation_assignment".to_string(),
+                        check: CdtValidationCheck::FoliationAssignment,
                         detail: format!(
                             "failed to read coordinates for vertex {:?}: {e}",
                             vh.vertex_key()
@@ -312,7 +312,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 })?;
                 if coords.len() < 2 {
                     return Err(CdtError::ValidationFailed {
-                        check: "foliation_assignment".to_string(),
+                        check: CdtValidationCheck::FoliationAssignment,
                         detail: format!(
                             "vertex {:?} has {} coordinates, expected ≥ 2",
                             vh.vertex_key(),
@@ -847,7 +847,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         for face in self.geometry.faces() {
             if self.cell_type(&face).is_none() {
                 return Err(CdtError::ValidationFailed {
-                    check: "cell_classification".to_string(),
+                    check: CdtValidationCheck::CellClassification,
                     detail: format!(
                         "face {:?} is not a strict CDT cell (expected Up or Down)",
                         face.cell_key()
@@ -889,7 +889,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         for face in &faces {
             let Some(ct) = self.cell_type(face) else {
                 return Err(CdtError::ValidationFailed {
-                    check: "cell_classification".to_string(),
+                    check: CdtValidationCheck::CellClassification,
                     detail: format!(
                         "face {:?} is not a strict CDT cell (expected Up or Down)",
                         face.cell_key()
@@ -1015,13 +1015,13 @@ mod tests {
         DelaunayBackend2D::from_triangulation(dt)
     }
 
-    /// Builds an explicit strip and verifies it is a strict CDT mesh.
+    /// Builds a Delaunay strip and verifies it is a strict CDT mesh.
     fn strict_strip(
         vertices_per_slice: u32,
         num_slices: u32,
     ) -> CdtTriangulation<DelaunayBackend2D> {
         let tri = CdtTriangulation::from_cdt_strip(vertices_per_slice, num_slices)
-            .expect("explicit strip construction should succeed");
+            .expect("Delaunay strip construction should succeed");
         assert_eq!(
             tri.vertex_count(),
             vertices_per_slice as usize * num_slices as usize
@@ -1035,11 +1035,11 @@ mod tests {
             vec![vertices_per_slice as usize; num_slices as usize].as_slice()
         );
         tri.validate_foliation()
-            .expect("explicit strip foliation should validate");
+            .expect("Delaunay strip foliation should validate");
         tri.validate_causality_delaunay()
-            .expect("explicit strip causality should validate");
+            .expect("Delaunay strip causality should validate");
         tri.validate_cell_classification()
-            .expect("all explicit strip cells should classify");
+            .expect("all Delaunay strip cells should classify");
         tri
     }
 
@@ -1208,11 +1208,11 @@ mod tests {
             result,
             Err(CdtError::InvalidTriangulationMetadata {
                 ref field,
-                ref topology,
+                topology,
                 ref provided_value,
                 ref expected,
             }) if field == "timeslices"
-                && topology == "toroidal"
+                && topology == CdtTopology::Toroidal
                 && provided_value == "2"
                 && expected == "≥ 3"
         ));
@@ -1257,7 +1257,7 @@ mod tests {
         for face in tri.geometry().faces() {
             let edge_types = tri
                 .face_edge_types(&face)
-                .expect("explicit strip face should expose edge types");
+                .expect("Delaunay strip face should expose edge types");
             assert_eq!(
                 edge_types
                     .iter()
@@ -1291,7 +1291,7 @@ mod tests {
             .faces()
             .next()
             .expect("Triangle should contain a face");
-        assert_eq!(tri.cell_type_from_data(&face), None);
+        assert_eq!(tri.cell_type_from_data(&face), tri.cell_type(&face));
         let live_ct = tri
             .cell_type(&face)
             .expect("Single face should be classifiable");
@@ -1316,18 +1316,14 @@ mod tests {
     #[test]
     fn classification_rejects_same_slice_triangle() {
         let backend = labeled_triangle_backend([0, 0, 0]);
-        let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 1, 2)
-            .expect("single-slice labels should build foliation");
 
         assert!(matches!(
-            tri.validate_cell_classification(),
-            Err(CdtError::ValidationFailed { ref check, .. })
-                if check == "cell_classification"
-        ));
-        assert!(matches!(
-            tri.classify_all_cells(),
-            Err(CdtError::ValidationFailed { ref check, .. })
-                if check == "cell_classification"
+            CdtTriangulation::from_labeled_delaunay(backend, 1, 2),
+            Err(CdtError::ValidationFailed { ref check, ref detail })
+                if *check == CdtValidationCheck::Causality
+                    && detail.contains("invalid CDT triangle")
+                    && detail.contains("spacelike=3")
+                    && detail.contains("timelike=0")
         ));
     }
 

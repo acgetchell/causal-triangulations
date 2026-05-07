@@ -755,7 +755,7 @@ mod tests {
     #[test]
     fn writes_measurements_csv_with_matching_step_telemetry() {
         let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let results = results_with(
             MetropolisConfig::new(1.0, 2, 1, 1),
             vec![MonteCarloStep {
@@ -791,7 +791,7 @@ mod tests {
     #[test]
     fn writes_summary_json_with_config_and_aggregates() {
         let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let results = results_with(
             MetropolisConfig::new(1.0, 1, 0, 1),
             vec![MonteCarloStep {
@@ -831,7 +831,7 @@ mod tests {
     #[test]
     fn summary_json_average_action_uses_equilibrium_measurements() {
         let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let results = results_with(
             MetropolisConfig::new(1.0, 2, 1, 1),
             vec![],
@@ -901,7 +901,7 @@ mod tests {
             Measurement::new(15, 3.0, 5, 7, 3).with_volume_profile(vec![1, 2, 0]),
         ];
         let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let results = results_with(config, steps, measurements, triangulation);
 
         assert_relative_eq!(results.acceptance_rate(), 2.0 / 3.0);
@@ -918,7 +918,7 @@ mod tests {
     #[test]
     fn volume_observables_treat_missing_profile_entries_as_zero() {
         let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let results = results_with(
             MetropolisConfig::new(1.0, 20, 10, 5),
             vec![],
@@ -939,7 +939,7 @@ mod tests {
     #[test]
     fn volume_observables_are_empty_when_profiles_are_empty() {
         let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let results = results_with(
             MetropolisConfig::new(1.0, 20, 10, 5),
             vec![],
@@ -957,7 +957,7 @@ mod tests {
     #[test]
     fn volume_fluctuations_are_empty_for_single_equilibrium_measurement() {
         let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let results = results_with(
             MetropolisConfig::new(1.0, 20, 10, 5),
             vec![],
@@ -975,7 +975,7 @@ mod tests {
     #[test]
     fn summaries_are_empty_for_no_steps_or_measurements() {
         let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let results = results_with(
             MetropolisConfig::new(1.0, 20, 10, 5),
             vec![],
@@ -993,7 +993,7 @@ mod tests {
     #[test]
     fn dimension_estimates_delegate_to_final_triangulation() {
         let triangulation =
-            CdtTriangulation::from_toroidal_cdt(6, 6).expect("explicit torus should build");
+            CdtTriangulation::from_toroidal_cdt(6, 6).expect("periodic torus should build");
         let results = results_with(
             MetropolisConfig::new(1.0, 1, 0, 1),
             vec![],

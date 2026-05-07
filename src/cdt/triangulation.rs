@@ -186,11 +186,7 @@ impl<'de> Deserialize<'de> for CdtTriangulation<DelaunayBackend2D> {
 
 impl CdtTriangulation<DelaunayBackend2D> {
     fn validate_checkpoint_invariants(&self) -> CdtResult<()> {
-        self.validate_topology()?;
-        self.validate_foliation()?;
-        self.validate_causality()?;
-        self.validate_cell_classification()?;
-        Ok(())
+        self.validate_evolved_cdt()
     }
 }
 
@@ -283,7 +279,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///         provided_value,
     ///         expected,
     ///     } if field == "timeslices"
-    ///         && topology == "toroidal"
+    ///         && topology == CdtTopology::Toroidal
     ///         && provided_value == "2"
     ///         && expected == "≥ 3"
     /// ));
@@ -311,7 +307,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///         euler_characteristic: 1,
     ///         expected_euler_characteristics,
     ///         ..
-    ///     } if topology == "toroidal" && expected_euler_characteristics == vec![0]
+    ///     } if topology == CdtTopology::Toroidal && expected_euler_characteristics == vec![0]
     /// ));
     /// ```
     pub fn with_topology(
@@ -357,7 +353,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         if time_slices == 0 {
             return Err(CdtError::InvalidTriangulationMetadata {
                 field: "timeslices".to_string(),
-                topology: Self::topology_label(topology).to_string(),
+                topology,
                 provided_value: "0".to_string(),
                 expected: "≥ 1".to_string(),
             });
@@ -366,21 +362,13 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         if matches!(topology, CdtTopology::Toroidal) && time_slices < 3 {
             return Err(CdtError::InvalidTriangulationMetadata {
                 field: "timeslices".to_string(),
-                topology: Self::topology_label(topology).to_string(),
+                topology,
                 provided_value: time_slices.to_string(),
                 expected: "≥ 3".to_string(),
             });
         }
 
         Ok(())
-    }
-
-    /// Human-readable topology label for metadata diagnostics.
-    const fn topology_label(topology: CdtTopology) -> &'static str {
-        match topology {
-            CdtTopology::OpenBoundary => "open boundary",
-            CdtTopology::Toroidal => "toroidal",
-        }
     }
 
     /// Validates CDT metadata against backend and topology invariants.
@@ -391,7 +379,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         if usize::from(self.metadata.dimension) != backend_dimension {
             return Err(CdtError::InvalidTriangulationMetadata {
                 field: "dimension".to_string(),
-                topology: Self::topology_label(self.metadata.topology).to_string(),
+                topology: self.metadata.topology,
                 provided_value: self.metadata.dimension.to_string(),
                 expected: format!("backend dimension ({backend_dimension})"),
             });
@@ -593,7 +581,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
 
             if !expected.contains(&euler_char) {
                 return Err(CdtError::TopologyMismatch {
-                    topology: Self::topology_label(self.metadata.topology).to_string(),
+                    topology: self.metadata.topology,
                     euler_characteristic: euler_char,
                     expected_euler_characteristics: expected.to_vec(),
                     vertices: self.geometry.vertex_count(),
@@ -657,7 +645,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///
     /// ```
     /// use causal_triangulations::prelude::errors::CdtError;
-    /// use causal_triangulations::prelude::triangulation::CdtTriangulation;
+    /// use causal_triangulations::prelude::triangulation::{CdtTopology, CdtTriangulation};
     ///
     /// let mut tri = CdtTriangulation::from_toroidal_cdt(4, 3)
     ///     .expect("build toroidal triangulation");
@@ -671,7 +659,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///         provided_value,
     ///         expected,
     ///     } if field == "timeslices"
-    ///         && topology == "toroidal"
+    ///         && topology == CdtTopology::Toroidal
     ///         && provided_value == "2"
     ///         && expected == "≥ 3"
     /// ));
@@ -715,6 +703,7 @@ mod tests {
     use crate::cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig};
     use crate::geometry::generators::build_delaunay2_with_data;
     use serde_json::{from_str, to_string};
+    use std::num::NonZeroUsize;
     use std::thread;
     use std::time::{Duration, Instant};
 
@@ -747,11 +736,11 @@ mod tests {
             result,
             Err(CdtError::InvalidTriangulationMetadata {
                 ref field,
-                ref topology,
+                topology,
                 ref provided_value,
                 ref expected,
             }) if field == "timeslices"
-                && topology == "open boundary"
+                && topology == CdtTopology::OpenBoundary
                 && provided_value == "0"
                 && expected == "≥ 1"
         ));
@@ -766,11 +755,11 @@ mod tests {
             result,
             Err(CdtError::InvalidTriangulationMetadata {
                 ref field,
-                ref topology,
+                topology,
                 ref provided_value,
                 ref expected,
             }) if field == "dimension"
-                && topology == "open boundary"
+                && topology == CdtTopology::OpenBoundary
                 && provided_value == "3"
                 && expected == "backend dimension (2)"
         ));
@@ -1315,11 +1304,11 @@ mod tests {
         assert!(matches!(
             result,
             Err(CdtError::TopologyMismatch {
-                ref topology,
+                topology,
                 euler_characteristic: 0,
                 ref expected_euler_characteristics,
                 ..
-            }) if topology == "open boundary" && expected_euler_characteristics == &[1, 2]
+            }) if topology == CdtTopology::OpenBoundary && expected_euler_characteristics == &[1, 2]
         ));
     }
 
@@ -1335,11 +1324,11 @@ mod tests {
         assert!(matches!(
             result,
             Err(CdtError::TopologyMismatch {
-                ref topology,
+                topology,
                 euler_characteristic: 1,
                 ref expected_euler_characteristics,
                 ..
-            }) if topology == "toroidal" && expected_euler_characteristics == &[0]
+            }) if topology == CdtTopology::Toroidal && expected_euler_characteristics == &[0]
         ));
     }
 
@@ -1352,11 +1341,11 @@ mod tests {
             result,
             Err(CdtError::InvalidTriangulationMetadata {
                 ref field,
-                ref topology,
+                topology,
                 ref provided_value,
                 ref expected,
             }) if field == "timeslices"
-                && topology == "toroidal"
+                && topology == CdtTopology::Toroidal
                 && provided_value == "2"
                 && expected == "≥ 3"
         ));
@@ -1375,11 +1364,11 @@ mod tests {
             result,
             Err(CdtError::InvalidTriangulationMetadata {
                 ref field,
-                ref topology,
+                topology,
                 ref provided_value,
                 ref expected,
             }) if field == "timeslices"
-                && topology == "toroidal"
+                && topology == CdtTopology::Toroidal
                 && provided_value == "2"
                 && expected == "≥ 3"
         ));
@@ -1388,7 +1377,7 @@ mod tests {
     #[test]
     fn strip_checkpoint_roundtrip_preserves_foliation_and_classification() {
         let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit CDT strip should build");
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay CDT strip should build");
 
         let json = to_string(&triangulation).expect("checkpoint should serialize");
         let restored: CdtTriangulation<DelaunayBackend2D> =
@@ -1411,10 +1400,41 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_invariants_reject_structurally_invalid_geometry() {
+        let valid = CdtTriangulation::from_cdt_strip(4, 3).expect("valid strip should build");
+        let triangulation = CdtTriangulation {
+            geometry: valid.geometry().with_cleared_neighbors_for_test(),
+            metadata: valid.metadata.clone(),
+            cache: GeometryCache::default(),
+            foliation: valid.foliation.clone(),
+            foliation_synced_at_modification: valid.foliation_synced_at_modification,
+        };
+        let invariant_error = triangulation
+            .validate_checkpoint_invariants()
+            .expect_err("checkpoint invariants should reject invalid geometry");
+        assert!(
+            matches!(
+                invariant_error,
+                CdtError::DelaunayValidationFailed {
+                    level,
+                    ..
+                } if level == crate::DelaunayValidationLevel::Three
+            ),
+            "unexpected checkpoint invariant error: {invariant_error:?}"
+        );
+        let json = to_string(&triangulation).expect("invalid fixture should serialize");
+        let restored: CdtTriangulation<DelaunayBackend2D> =
+            from_str(&json).expect("backend serde may rebuild neighbor links");
+        restored
+            .validate_checkpoint_invariants()
+            .expect("roundtrip should restore valid structural geometry");
+    }
+
+    #[test]
     fn toroidal_checkpoint_roundtrip_preserves_topology_and_labels() {
         let triangulation =
-            CdtTriangulation::from_toroidal_cdt(4, 3).expect("explicit torus should build");
-        let labels_before: Vec<_> = triangulation
+            CdtTriangulation::from_toroidal_cdt(4, 3).expect("periodic torus should build");
+        let mut labels_before: Vec<_> = triangulation
             .geometry()
             .vertices()
             .map(|vertex| triangulation.time_label(&vertex))
@@ -1423,25 +1443,47 @@ mod tests {
         let json = to_string(&triangulation).expect("checkpoint should serialize");
         let restored: CdtTriangulation<DelaunayBackend2D> =
             from_str(&json).expect("checkpoint should deserialize");
-        let labels_after: Vec<_> = restored
+        let mut labels_after: Vec<_> = restored
             .geometry()
             .vertices()
             .map(|vertex| restored.time_label(&vertex))
             .collect();
+        labels_before.sort_unstable();
+        labels_after.sort_unstable();
 
         restored
             .validate_checkpoint_invariants()
             .expect("restored torus should validate checkpoint invariants");
         assert_eq!(restored.metadata().topology, CdtTopology::Toroidal);
-        assert_eq!(restored.geometry().periodic_domain(), Some([1.0, 1.0]));
+        assert_eq!(restored.geometry().periodic_domain(), Some([4.0, 3.0]));
         assert_eq!(restored.slice_sizes(), triangulation.slice_sizes());
         assert_eq!(labels_after, labels_before);
     }
 
     #[test]
+    fn checkpoint_roundtrip_preserves_delaunay_check_interval() {
+        let mut triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay CDT strip should build");
+        triangulation.set_delaunay_check_interval(NonZeroUsize::new(8));
+
+        let json = to_string(&triangulation).expect("checkpoint should serialize");
+        let restored: CdtTriangulation<DelaunayBackend2D> =
+            from_str(&json).expect("checkpoint should deserialize");
+
+        assert!(
+            !restored.geometry().should_check_delaunay_after(7),
+            "EveryN(8) should not be due before the eighth accepted mutation"
+        );
+        assert!(
+            restored.geometry().should_check_delaunay_after(8),
+            "EveryN(8) should be preserved across checkpoint roundtrip"
+        );
+    }
+
+    #[test]
     fn mcmc_checkpoint_roundtrip_preserves_history_and_invariants() {
         let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit CDT strip should build");
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay CDT strip should build");
         let algorithm = MetropolisAlgorithm::new(
             MetropolisConfig::new(1.0, 4, 0, 1).with_seed(13),
             ActionConfig::default(),

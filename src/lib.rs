@@ -140,7 +140,9 @@ pub use cdt::metropolis::{
 pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
 pub use cdt::results::{Measurement, SimulationResultsBackend};
 pub use config::{CdtConfig, CdtTopology, TestConfig};
-pub use errors::{CdtError, CdtResult};
+pub use errors::{
+    CdtError, CdtResult, CdtValidationCheck, CheckpointResumeReason, DelaunayValidationLevel,
+};
 
 use crate::util::saturating_usize_to_u32;
 use std::env;
@@ -192,17 +194,21 @@ pub mod prelude {
     ///
     /// ```
     /// use causal_triangulations::prelude::errors::CdtError;
+    /// use causal_triangulations::prelude::moves::MoveType;
     ///
     /// let err = CdtError::MetropolisMoveApplicationFailed {
     ///     step: 3,
-    ///     move_type: "Move31Remove".to_string(),
+    ///     move_type: MoveType::Move31Remove,
     ///     attempts: 8,
     ///     last_failure: "no geometrically valid candidate site found".to_string(),
     /// };
     /// assert!(format!("{err}").contains("Metropolis accepted Move31Remove"));
     /// ```
     pub mod errors {
-        pub use crate::errors::{CdtError, CdtResult};
+        pub use crate::errors::{
+            CdtError, CdtResult, CdtValidationCheck, CheckpointResumeReason,
+            DelaunayValidationLevel,
+        };
     }
 
     /// Focused exports for CDT action calculations.
@@ -351,7 +357,7 @@ pub mod prelude {
         pub use crate::geometry::generators::{
             GlobalTopology, TopologyGuarantee, ToroidalConstructionMode,
             build_delaunay2_from_cells, build_delaunay2_with_data, build_delaunay2_with_topology,
-            build_toroidal_delaunay2, generate_delaunay2,
+            build_periodic_toroidal_delaunay2, build_toroidal_delaunay2, generate_delaunay2,
         };
         pub use crate::geometry::operations::TriangulationOps;
         pub use crate::geometry::traits::{TriangulationMut, TriangulationQuery};

@@ -9,7 +9,7 @@
 //! - edge flips: retained as an API-compatible alias for the 2D (2,2) move
 
 use crate::config::CdtTopology;
-use crate::errors::CdtError;
+use crate::errors::{CdtError, CdtValidationCheck};
 use crate::geometry::CdtTriangulation2D;
 use crate::geometry::backends::delaunay::{DelaunayFaceHandle, DelaunayVertexHandle};
 use crate::geometry::traits::{EdgeAdjacentFaces, TriangulationQuery};
@@ -410,7 +410,7 @@ impl ErgodicsSystem {
 
         let Some(point) = centroid(triangulation, &face) else {
             return MoveResult::Rejected(CdtError::ValidationFailed {
-                check: "ergodic Move13Add candidate geometry".to_string(),
+                check: CdtValidationCheck::ErgodicMoveCandidateGeometry,
                 detail: format!(
                     "face {:?} could not be converted to a 2D centroid",
                     face.cell_key()
@@ -644,10 +644,6 @@ impl ErgodicsSystem {
     ) -> MoveResult {
         if let Err(err) = triangulation.synchronize_foliation_from_live_labels() {
             return MoveResult::HardFailure(err);
-        }
-
-        if let Some(rejection) = toroidal_invariant_rejection(triangulation) {
-            return rejection;
         }
 
         self.stats.record_success(move_type);
@@ -975,30 +971,12 @@ fn removal_is_causal(triangulation: &CdtTriangulation2D, vertex: &DelaunayVertex
     label_count(triangulation, label) > 1
 }
 
-/// Preserves toroidal post-move invariant errors as rollbackable rejections.
-fn toroidal_invariant_rejection(triangulation: &CdtTriangulation2D) -> Option<MoveResult> {
-    if !matches!(triangulation.metadata().topology, CdtTopology::Toroidal) {
-        return None;
-    }
-
-    if let Err(err) = triangulation.validate_topology() {
-        return Some(MoveResult::Rejected(err));
-    }
-
-    if let Err(err) = triangulation.validate_foliation() {
-        return Some(MoveResult::Rejected(err));
-    }
-
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cdt::foliation::FoliationError;
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{build_delaunay2_from_cells, build_delaunay2_with_data};
-    use approx::{abs_diff_eq, assert_relative_eq};
+    use approx::assert_relative_eq;
     use std::collections::HashSet;
 
     /// Builds the minimal foliated triangle fixture used by `(1,3)` tests.
@@ -1160,7 +1138,7 @@ mod tests {
             &mut triangulation,
             snapshot,
             MoveResult::HardFailure(CdtError::ValidationFailed {
-                check: "test rollback".to_string(),
+                check: CdtValidationCheck::ErgodicMoveCandidateGeometry,
                 detail: "simulated post-mutation failure".to_string(),
             }),
         );
@@ -1180,61 +1158,11 @@ mod tests {
 
     #[test]
     fn unwraps_toroidal_centroid() {
-        let triangulation =
-            CdtTriangulation2D::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
-        let face = triangulation
-            .geometry()
-            .faces()
-            .find(|face| {
-                let vertices = triangulation
-                    .geometry()
-                    .face_vertices(face)
-                    .expect("face vertices");
-                let mut zero_x = 0;
-                let mut boundary_x = 0;
-                let mut zero_y = 0;
-                let mut next_y = 0;
-                for vertex in vertices {
-                    let coords = triangulation
-                        .geometry()
-                        .vertex_coordinates(&vertex)
-                        .expect("vertex coordinates");
-                    if abs_diff_eq!(coords[0], 0.0, epsilon = 1e-12) {
-                        zero_x += 1;
-                    }
-                    if abs_diff_eq!(coords[0], 0.75, epsilon = 1e-12) {
-                        boundary_x += 1;
-                    }
-                    if abs_diff_eq!(coords[1], 0.0, epsilon = 1e-12) {
-                        zero_y += 1;
-                    }
-                    if abs_diff_eq!(coords[1], 1.0 / 3.0, epsilon = 1e-12) {
-                        next_y += 1;
-                    }
-                }
-                zero_x == 1 && boundary_x == 2 && zero_y == 2 && next_y == 1
-            })
-            .expect("wrap-around face");
+        let point = toroidal_centroid(&[[0.0, 0.0], [3.0, 0.0], [3.0, 1.0]], [4.0, 3.0])
+            .expect("toroidal centroid");
 
-        let point = centroid(&triangulation, &face).expect("toroidal centroid");
-
-        assert_relative_eq!(point[0], 5.0 / 6.0, epsilon = 1e-12);
-        assert_relative_eq!(point[1], 1.0 / 9.0, epsilon = 1e-12);
-    }
-
-    #[test]
-    fn toroidal_invariant_rejection_accepts_valid_torus() {
-        let triangulation =
-            CdtTriangulation2D::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
-
-        assert_eq!(toroidal_invariant_rejection(&triangulation), None);
-    }
-
-    #[test]
-    fn toroidal_invariant_rejection_ignores_open_boundary_topology() {
-        let triangulation = single_triangle();
-
-        assert_eq!(toroidal_invariant_rejection(&triangulation), None);
+        assert_relative_eq!(point[0], 10.0 / 3.0, epsilon = 1e-12);
+        assert_relative_eq!(point[1], 1.0 / 3.0, epsilon = 1e-12);
     }
 
     #[test]
@@ -1251,32 +1179,7 @@ mod tests {
                 euler_characteristic: 1,
                 expected_euler_characteristics,
                 ..
-            }) if topology == "toroidal" && expected_euler_characteristics == [0]
-        ));
-    }
-
-    #[test]
-    fn toroidal_invariant_rejection_reports_foliation_mismatch() {
-        let mut triangulation =
-            CdtTriangulation2D::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
-        let vertex = triangulation
-            .geometry()
-            .vertices()
-            .find(|vertex| triangulation.time_label(vertex) == Some(1))
-            .expect("fixture has a slice-1 vertex");
-
-        triangulation
-            .set_vertex_data(&vertex, Some(0))
-            .expect("fixture vertex label can be edited");
-
-        assert!(matches!(
-            toroidal_invariant_rejection(&triangulation),
-            Some(MoveResult::Rejected(CdtError::Foliation(
-                FoliationError::LabelMismatch { .. }
-                    | FoliationError::SpacelikeDegreeViolation { .. }
-                    | FoliationError::SpacelikeSubgraphSizeMismatch { .. }
-                    | FoliationError::SpacelikeNonClosedRing { .. }
-            )))
+            }) if topology == CdtTopology::Toroidal && expected_euler_characteristics == [0]
         ));
     }
 
@@ -1327,6 +1230,46 @@ mod tests {
             ),
             counts_before
         );
+    }
+
+    #[test]
+    fn periodic_toroidal_move_13_reports_backend_offset_limitation() {
+        let mut system = ErgodicsSystem::with_seed(7);
+        let mut triangulation =
+            CdtTriangulation2D::from_toroidal_cdt(8, 8).expect("build toroidal CDT");
+        let counts_before = (
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+        );
+
+        let result = system.attempt_13_move(&mut triangulation);
+
+        assert!(
+            matches!(
+                result,
+                MoveResult::Rejected(CdtError::BackendMutationFailed {
+                    ref operation,
+                    ref detail,
+                    ..
+                }) if operation == "subdivide_face"
+                    && detail.contains("periodic external cell")
+                    && detail.contains("aligned periodic offsets")
+            ),
+            "periodic toroidal Move13Add should expose the upstream periodic-offset flip limitation, got {result:?}"
+        );
+        assert_eq!(
+            (
+                triangulation.vertex_count(),
+                triangulation.edge_count(),
+                triangulation.face_count(),
+            ),
+            counts_before,
+            "rejected periodic toroidal mutation should roll back geometry"
+        );
+        triangulation
+            .validate()
+            .expect("rejected periodic toroidal move should preserve evolved CDT invariants");
     }
 
     #[test]

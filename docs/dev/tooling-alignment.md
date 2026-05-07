@@ -32,6 +32,7 @@ Some differences remain because CDT has different workflows and project invarian
 - CDT runs examples through `scripts/run_all_examples.sh`, which discovers current examples dynamically and applies a timeout. Its `--validate` mode checks stable semantic output markers for known Cargo examples without requiring exact numeric output.
 - CDT keeps `archive-changelog` so completed release series move under `docs/archive/changelog/`; MCMC does not yet archive old changelog sections.
 - CDT keeps a dedicated `performance.yml` workflow and local `perf-*` recipes. MCMC does not have matching CDT benchmark-baseline tooling.
+- CDT exposes feature-gated long-running Rust checks through the `slow-tests` Cargo feature and the `just test-slow` recipe, keeping normal CI fast while giving stabilization work a named path for heavier integration coverage.
 - CDT has a repository rule SARIF workflow for the local Semgrep rules. A Codacy workflow was not ported because it depends on project-specific `CODACY_PROJECT_TOKEN` setup and would duplicate the existing repository-rule SARIF signal until Codacy is configured for this repository.
 - CDT Semgrep rules include geometry-backend isolation, foliation/topology validation, focused prelude imports, Python support-script discipline, and typed error policies. These are repository-specific and should not be weakened while porting generic rules.
 - CDT and MCMC both require Python `>=3.12` for repository-managed support tooling.

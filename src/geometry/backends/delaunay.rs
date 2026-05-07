@@ -9,6 +9,7 @@
 //! (see `docs/dev/rust.md § Geometry Backend Isolation`).
 // cspell:ignore vkey
 
+use crate::DelaunayValidationLevel;
 use crate::geometry::traits::{
     EdgeAdjacentFaces, EdgeAdjacentFacesResult, FlipResult, GeometryBackend, SubdivisionResult,
     TriangulationMut, TriangulationQuery,
@@ -24,11 +25,13 @@ use delaunay::geometry::traits::coordinate::Coordinate;
 use delaunay::prelude::TopologyGuarantee;
 use delaunay::prelude::VertexBuilder;
 use delaunay::prelude::triangulation::flips::BistellarFlips;
+use delaunay::prelude::triangulation::repair::DelaunayCheckPolicy;
 use delaunay::topology::traits::{GlobalTopology, TopologyKind, ToroidalConstructionMode};
 use delaunay::triangulation::DelaunayTriangulation;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 
 type DelaunayKernel = AdaptiveKernel<f64>;
 type RawTriangulation<VertexData, CellData, const D: usize> =
@@ -69,6 +72,8 @@ struct SerializedDelaunayBackend<VertexData: DataType, CellData: DataType, const
     tds: Tds<f64, VertexData, CellData, D>,
     global_topology: SerializableGlobalTopology,
     topology_guarantee: SerializableTopologyGuarantee,
+    #[serde(default)]
+    delaunay_check_policy: SerializableDelaunayCheckPolicy,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -94,6 +99,13 @@ enum SerializableTopologyGuarantee {
     Pseudomanifold,
     PLManifold,
     PLManifoldStrict,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+enum SerializableDelaunayCheckPolicy {
+    #[default]
+    EndOnly,
+    EveryN(usize),
 }
 
 impl<const D: usize> From<GlobalTopology<D>> for SerializableGlobalTopology {
@@ -179,6 +191,27 @@ impl From<SerializableTopologyGuarantee> for TopologyGuarantee {
     }
 }
 
+impl From<DelaunayCheckPolicy> for SerializableDelaunayCheckPolicy {
+    fn from(policy: DelaunayCheckPolicy) -> Self {
+        match policy {
+            DelaunayCheckPolicy::EndOnly => Self::EndOnly,
+            DelaunayCheckPolicy::EveryN(n) => Self::EveryN(n.get()),
+        }
+    }
+}
+
+impl SerializableDelaunayCheckPolicy {
+    fn into_delaunay_check_policy<E: DeError>(self) -> Result<DelaunayCheckPolicy, E> {
+        match self {
+            Self::EndOnly => Ok(DelaunayCheckPolicy::EndOnly),
+            Self::EveryN(n) => NonZeroUsize::new(n).map_or_else(
+                || Err(E::custom("delaunay check interval must be non-zero")),
+                |interval| Ok(DelaunayCheckPolicy::EveryN(interval)),
+            ),
+        }
+    }
+}
+
 impl<VertexData: DataType, CellData: DataType, const D: usize> Serialize
     for DelaunayBackend<VertexData, CellData, D>
 where
@@ -192,6 +225,7 @@ where
             tds: self.dt.tds().clone(),
             global_topology: self.dt.global_topology().into(),
             topology_guarantee: self.dt.topology_guarantee().into(),
+            delaunay_check_policy: self.dt.delaunay_check_policy().into(),
         }
         .serialize(serializer)
     }
@@ -213,6 +247,11 @@ where
             serialized.topology_guarantee.into(),
         );
         dt.set_global_topology(serialized.global_topology.into_global_topology()?);
+        dt.set_delaunay_check_policy(
+            serialized
+                .delaunay_check_policy
+                .into_delaunay_check_policy()?,
+        );
         Ok(Self::from_triangulation(dt))
     }
 }
@@ -360,6 +399,15 @@ pub enum DelaunayError {
         expected: &'static str,
         /// Output shape or detail observed from the upstream result.
         actual: String,
+    },
+
+    /// Upstream Delaunay backend validation failed.
+    #[error("Delaunay backend validation failed [{level}]: {detail}")]
+    ValidationFailed {
+        /// Cumulative upstream validation level being enforced.
+        level: DelaunayValidationLevel,
+        /// Underlying validation diagnostic.
+        detail: String,
     },
 }
 
@@ -538,7 +586,141 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// ```
     #[must_use]
     pub fn is_delaunay(&self) -> bool {
-        self.dt.validate().is_ok()
+        self.validate_delaunay().is_ok()
+    }
+
+    /// Validates the triangulation with the upstream full Delaunay validator.
+    ///
+    /// This delegates to [`DelaunayTriangulation::validate`], which performs
+    /// the cumulative Level 1-4 checks: neighbor pointer consistency, Euler
+    /// characteristic, coherent orientation, and the Delaunay in-sphere
+    /// predicate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DelaunayError::ValidationFailed`] with the upstream diagnostic
+    /// when any Level 1-4 validation check fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::DelaunayBackend2D;
+    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    ///
+    /// let dt = build_delaunay2_with_data(&[
+    ///     ([0.0, 0.0], 0_u32),
+    ///     ([1.0, 0.0], 0),
+    ///     ([0.5, 1.0], 1),
+    /// ]).unwrap();
+    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// backend.validate_delaunay().unwrap();
+    /// ```
+    pub fn validate_delaunay(&self) -> Result<(), DelaunayError> {
+        self.dt
+            .validate()
+            .map_err(|err| DelaunayError::ValidationFailed {
+                level: DelaunayValidationLevel::Four,
+                detail: err.to_string(),
+            })
+    }
+
+    /// Validates structural TDS geometry invariants used by evolved CDT states.
+    ///
+    /// This delegates to the upstream TDS validator without requiring the Level
+    /// 4 empty-circumsphere predicate. CDT layers its own topology, foliation,
+    /// causality, and classification checks above this structural backend check
+    /// for evolved states, because ergodic CDT moves are not expected to
+    /// preserve Delaunay-ness. Use [`Self::validate_delaunay`] for
+    /// initialization-grade Level 1-4 validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DelaunayError::ValidationFailed`] with the upstream diagnostic
+    /// when any structural validation check fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::DelaunayBackend2D;
+    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    ///
+    /// fn main() -> causal_triangulations::CdtResult<()> {
+    ///     let dt = build_delaunay2_with_data(&[
+    ///         ([0.0, 0.0], 0_u32),
+    ///         ([1.0, 0.0], 0),
+    ///         ([0.5, 1.0], 1),
+    ///     ])?;
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt);
+    ///
+    ///     assert!(backend.validate_structural().is_ok());
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn validate_structural(&self) -> Result<(), DelaunayError> {
+        self.dt
+            .tds()
+            .validate()
+            .map_err(|err| DelaunayError::ValidationFailed {
+                level: DelaunayValidationLevel::Three,
+                detail: err.to_string(),
+            })
+    }
+
+    /// Configures global validation cadence using Delaunay's check policy.
+    ///
+    /// The policy is stored with checkpoints and is consumed by CDT sampling as a
+    /// cadence over accepted local mutations. `None` restores the upstream
+    /// end-only policy; `Some(n)` runs a full CDT evolved-state validation when
+    /// the accepted-move count is a multiple of `n`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::DelaunayBackend2D;
+    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use std::num::NonZeroUsize;
+    ///
+    /// fn main() -> causal_triangulations::CdtResult<()> {
+    ///     let dt = build_delaunay2_with_data(&[
+    ///         ([0.0, 0.0], 0_u32),
+    ///         ([1.0, 0.0], 0),
+    ///         ([0.5, 1.0], 1),
+    ///     ])?;
+    ///     let mut backend = DelaunayBackend2D::from_triangulation(dt);
+    ///
+    ///     backend.set_delaunay_check_interval(NonZeroUsize::new(16));
+    ///     backend.set_delaunay_check_interval(None);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn set_delaunay_check_interval(&mut self, interval: Option<NonZeroUsize>) {
+        let policy = interval.map_or(DelaunayCheckPolicy::EndOnly, DelaunayCheckPolicy::EveryN);
+        self.dt.set_delaunay_check_policy(policy);
+    }
+
+    /// Returns `true` when the current Delaunay check policy is due.
+    ///
+    /// CDT passes the accepted local-mutation count here to reuse the same
+    /// `EveryN` cadence semantics as the upstream Delaunay crate.
+    #[must_use]
+    pub(crate) fn should_check_delaunay_after(&self, completed_mutations: u64) -> bool {
+        usize::try_from(completed_mutations)
+            .is_ok_and(|count| self.dt.delaunay_check_policy().should_check(count))
+    }
+
+    /// Builds a clone with invalid neighbor links for checkpoint validation tests.
+    #[cfg(test)]
+    pub(crate) fn with_cleared_neighbors_for_test(&self) -> Self {
+        let mut tds = self.dt.tds().clone();
+        tds.clear_all_neighbors();
+        let mut dt = DelaunayTriangulation::from_tds_with_topology_guarantee(
+            tds,
+            AdaptiveKernel::new(),
+            self.dt.topology_guarantee(),
+        );
+        dt.set_global_topology(self.dt.global_topology());
+        dt.set_delaunay_check_policy(self.dt.delaunay_check_policy());
+        Self::from_triangulation(dt)
     }
 
     /// Returns the high-level topology kind (`Euclidean`, `Toroidal`, etc.) of the
@@ -574,7 +756,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// let tri = CdtTriangulation::from_toroidal_cdt(3, 3).unwrap();
-    /// assert_eq!(tri.geometry().periodic_domain(), Some([1.0, 1.0]));
+    /// assert_eq!(tri.geometry().periodic_domain(), Some([3.0, 3.0]));
     /// ```
     #[must_use]
     pub const fn periodic_domain(&self) -> Option<[f64; D]> {
@@ -1251,6 +1433,15 @@ mod tests {
             malformed_insert.to_string(),
             "flip_k1_insert returned unexpected output for face CellKey(3v1) at point [0.5, 0.5]: expected exactly one inserted-face vertex for the inserted point, got 2 inserted-face vertices including unexpected VertexKey(4v1)"
         );
+
+        let validation = DelaunayError::ValidationFailed {
+            level: DelaunayValidationLevel::Three,
+            detail: "orientation check failed".to_string(),
+        };
+        assert_eq!(
+            validation.to_string(),
+            "Delaunay backend validation failed [Level 1-3]: orientation check failed"
+        );
     }
 
     #[test]
@@ -1273,6 +1464,9 @@ mod tests {
         let backend = DelaunayBackend::from_triangulation(dt);
 
         assert!(backend.is_valid(), "Triangulation should be valid");
+        backend
+            .validate_delaunay()
+            .expect("full upstream Level 1-4 validation should pass");
         assert!(
             backend.is_delaunay(),
             "Valid Delaunay triangulation should pass is_delaunay"

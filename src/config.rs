@@ -15,7 +15,7 @@ use crate::errors::{CdtError, CdtResult};
 use clap::{Parser, ValueEnum};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
-use std::fmt::Display;
+use std::fmt::{self, Display};
 use std::path::{Component, Path, PathBuf};
 
 /// Topology of the spatial slices in the CDT triangulation.
@@ -42,6 +42,15 @@ pub enum CdtTopology {
     /// which constructs an explicit `(N · T)`-vertex mesh with both spatial
     /// and temporal wrap-around.
     Toroidal,
+}
+
+impl fmt::Display for CdtTopology {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OpenBoundary => formatter.write_str("open boundary"),
+            Self::Toroidal => formatter.write_str("toroidal"),
+        }
+    }
 }
 
 /// Main configuration structure for CDT simulations.

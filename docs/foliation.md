@@ -35,19 +35,30 @@ Vertex data is set at construction time via `VertexBuilder::data(t)`. For post-c
 
 ## Time Label Assignment
 
-For `from_cdt_strip()` and `from_toroidal_cdt()`, time labels are assigned directly while building vertices. Vertex `(i, t)` receives label `t`, so each slice starts with exactly `vertices_per_slice` vertices and every constructed triangle spans adjacent slices.
+For `from_cdt_strip()` and `from_toroidal_cdt()`, time labels are assigned directly while building vertices. Vertex `(i, t)` receives label `t`, so each slice starts with exactly `vertices_per_slice` vertices. The constructors require their Delaunay-built cells to span adjacent slices before returning.
 
 `assign_foliation_by_y()` uses band-based bucketing and writes labels through the same CDT-owned label-write path.
 
-## Grid Construction (`from_cdt_strip`)
+## Delaunay Construction
 
-The open-boundary strip constructor places vertices on a grid with:
+The open-boundary strip constructor places vertices in a lightly perturbed layered grid with:
 
 - **Spatial extent**: 1.0, with `vertices_per_slice` evenly spaced vertices per slice
 - **Temporal gap**: 1.0, with integer y-coordinates `0, 1, 2, ...`
-- **Connectivity**: each quad between adjacent slices is split into one Up `(2,1)` and one Down `(1,2)` triangle
+- **Connectivity**: produced by Delaunay point insertion, then checked for strict Up/Down cell classification
 
 Parameters: `vertices_per_slice ≥ 4`, `num_slices ≥ 2`.
+
+The toroidal constructor places vertices on a unit lattice in an `N × T` periodic domain and uses the upstream periodic image-point Delaunay constructor. It then checks the requested `V = N·T`, `E = 3·N·T`, `F = 2·N·T` toroidal counts and strict CDT classification.
+
+## Initialization vs Evolution Validation
+
+Initial CDT constructors are stricter than post-move validation:
+
+- **Initialization**: `from_cdt_strip()` and `from_toroidal_cdt()` must pass upstream Delaunay Level 1-4 validation before returning. This certifies the starting mesh as a valid, well-behaved PL-manifold and Delaunay triangulation.
+- **After ergodic moves / simulation completion**: `CdtTriangulation::validate()` requires upstream structural validity plus CDT topology, foliation, causality, and cell-classification invariants. It intentionally does not require Level 4 Delaunay-ness, because the CDT move kernels are not expected to preserve the Delaunay empty-circumsphere predicate.
+
+If the move set is ever changed to preserve Delaunay-ness, final-state validation should be tightened to include Level 4 as well.
 
 ## Edge Classification
 
