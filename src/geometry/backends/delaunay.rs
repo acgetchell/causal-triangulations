@@ -2218,10 +2218,27 @@ mod tests {
             .edges()
             .find(|edge| backend.can_flip_edge(edge))
             .expect("seeded triangulation should contain a flippable edge");
+        let facet = backend
+            .interior_facet_for_edge(edge.key)
+            .expect("flippable edge should resolve to an interior facet");
+        let dt_before = backend.dt.clone();
+        let facets_before = backend.interior_facets_by_edge.clone();
+
+        backend
+            .dt
+            .flip_k2(facet)
+            .expect("raw flip should succeed before structural validation");
+        backend.rebuild_interior_facet_index();
+        let mut backend = backend.with_cleared_neighbors_for_test();
 
         let error = backend
-            .flip_edge(edge)
-            .expect_err("structurally invalid flip should be rejected");
+            .validate_mutation_or_restore(
+                dt_before,
+                facets_before,
+                "flip_k2",
+                format!("edge {:?} -- {:?}", edge.key.v0(), edge.key.v1()),
+            )
+            .expect_err("corrupted post-flip geometry should be rejected");
 
         assert!(
             matches!(

@@ -1920,6 +1920,33 @@ mod tests {
     }
 
     #[test]
+    fn run_with_checkpoint_returns_matching_results_and_checkpoint() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let algorithm = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 3, 0, 1).with_seed(13),
+            ActionConfig::default(),
+        );
+
+        let (results, checkpoint) = algorithm
+            .run_with_checkpoint(triangulation)
+            .expect("checkpointed run should complete");
+
+        assert_eq!(checkpoint.current_step(), 3);
+        assert_eq!(results.steps.len(), checkpoint.steps().len());
+        assert_eq!(&results.config, checkpoint.config());
+        let checkpoint_results = checkpoint.into_results();
+        assert_eq!(
+            results.triangulation.vertex_count(),
+            checkpoint_results.triangulation.vertex_count()
+        );
+        checkpoint_results
+            .triangulation
+            .validate()
+            .expect("checkpoint triangulation should satisfy evolved invariants");
+    }
+
+    #[test]
     fn serialized_checkpoint_resumes_from_stored_rng_state() {
         let triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");

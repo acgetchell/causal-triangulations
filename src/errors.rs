@@ -55,7 +55,7 @@ impl fmt::Display for CdtValidationCheck {
             Self::Causality => formatter.write_str("causality"),
             Self::CellClassification => formatter.write_str("cell_classification"),
             Self::ErgodicMoveCandidateGeometry => {
-                formatter.write_str("ergodic move candidate geometry")
+                formatter.write_str("ergodic_move_candidate_geometry")
             }
         }
     }
@@ -509,7 +509,7 @@ mod tests {
         );
         assert_eq!(
             CdtValidationCheck::ErgodicMoveCandidateGeometry.to_string(),
-            "ergodic move candidate geometry"
+            "ergodic_move_candidate_geometry"
         );
     }
 
