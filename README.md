@@ -14,7 +14,7 @@ The library leverages high-performance [Delaunay triangulation] backends and pro
 
 ## ✨ Features
 
-- [x] Explicit 1+1 CDT strip and toroidal S¹×S¹ constructors with foliation invariants
+- [x] Delaunay-built 1+1 CDT strip and periodic toroidal S¹×S¹ constructors with foliation invariants
 - [x] Foliation-aware topology, causality, and cell-classification validation
 - [x] Proposal-before-mutation Metropolis-Hastings simulation with rollback on failed accepted moves
 - [x] Regge action calculation with configurable coupling constants

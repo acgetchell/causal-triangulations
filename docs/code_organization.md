@@ -119,8 +119,10 @@ causal-triangulations/
 │   │           └── rust_style.rs
 │   ├── cli.rs
 │   ├── integration_tests.rs
+│   ├── physics_integration.rs
 │   ├── proptest_foliation.rs
-│   └── proptest_metropolis.rs
+│   ├── proptest_metropolis.rs
+│   └── regressions.rs
 ├── .bencher.toml
 ├── .codecov.yml
 ├── .coderabbit.yml
@@ -175,16 +177,16 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 This is CDT domain logic layered over the geometry backend interface. It may use `DelaunayBackend2D` and crate-owned Delaunay handles, but it does not reach through to upstream `delaunay::` APIs directly.
 
 - Owns the `CdtTriangulation` wrapper, `CdtMetadata`, `SimulationEvent`, metadata validation, cached simplex-count accessors, and common backend-agnostic wrapper methods
-- `from_cdt_strip(vertices_per_slice, num_slices)` — explicit open-boundary 1+1 CDT strip with strict Up/Down cell classification
-- `from_toroidal_cdt(vertices_per_slice, num_slices)` — explicit S¹×S¹ toroidal CDT (χ = 0); requires `vertices_per_slice ≥ 3` and `num_slices ≥ 3`
+- `from_cdt_strip(vertices_per_slice, num_slices)` — Delaunay-built open-boundary 1+1 CDT strip with strict Up/Down cell classification and upstream Level 1–4 Delaunay validation before wrapping
+- `from_toroidal_cdt(vertices_per_slice, num_slices)` — periodic Delaunay S¹×S¹ toroidal CDT (χ = 0) with upstream Level 1–4 validation before wrapping; requires `vertices_per_slice ≥ 3` and `num_slices ≥ 3`
 - `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`
-- Validation: `validate_topology()` (χ expectation depends on `CdtTopology`), `validate_foliation()` (structural; closed S¹ spacelike rings on toroidal), `validate_causality()` (no edge spans >1 slice), `validate_cell_classification()` (strict Up/Down cell classification and validation pass)
+- Validation: constructors require upstream Delaunay Level 1–4 validation for initial meshes; `validate()` is the post-move/final-state contract and requires upstream structural validity plus CDT topology, foliation, causality, and strict Up/Down cell classification
 - Mutable backend access is not exposed. CDT code mutates Delaunay state only through narrow crate-internal operations (`flip_edge`, `subdivide_face`, `remove_vertex`, `set_vertex_data`) that invalidate cached counts and foliation synchronization bookkeeping on success.
 
 The implementation is split into child modules under `src/cdt/triangulation/`:
 
-- `builders.rs` — Delaunay-backed random/seeded/labeled builders plus explicit strip and toroidal CDT builders
+- `builders.rs` — Delaunay-backed random/seeded/labeled builders plus strip and periodic toroidal CDT builders
 - `foliation.rs` — foliation assignment, slice and label queries, volume profiles, cell/edge classification, and foliation synchronization
 - `moves.rs` — narrow crate-internal Delaunay mutation hooks used by ergodic moves
 - `validation.rs` — full CDT validation and Delaunay-backed causality checks
@@ -232,13 +234,14 @@ The implementation is split into child modules under `src/cdt/triangulation/`:
 - `generate_delaunay2` — builds a 2D Delaunay triangulation with optional seed
 - `build_delaunay2_with_data` — builds from coordinate + vertex-data pairs
 - `build_delaunay2_from_cells` / `build_delaunay2_with_topology` — builds from explicit cell connectivity (no Delaunay point insertion); the latter also accepts `TopologyGuarantee` and `GlobalTopology` metadata so non-sphere Euler characteristics validate correctly
-- `build_toroidal_delaunay2` — convenience wrapper for explicit toroidal meshes (χ = 0)
+- `build_toroidal_delaunay2` — convenience wrapper for explicit toroidal meshes (χ = 0; no point-insertion Delaunay guarantee)
+- `build_periodic_toroidal_delaunay2` — builds true periodic toroidal Delaunay meshes through the upstream image-point constructor
 - `random_delaunay2`, `seeded_delaunay2` — convenience wrappers
 - `DelaunayTriangulation2D` — type alias for the concrete 2D triangulation type
 
 Together with `backends/delaunay.rs`, this module is the only place that directly imports from the `delaunay` crate.
 
-The CDT strip and toroidal constructors keep their internal cell working sets as fixed triangles (`[usize; 3]`) and reserve storage up front. They currently adapt those triangles to `Vec<Vec<usize>>` at the generator boundary because the explicit-cell generator API still accepts Vec-backed cell index lists; a future generator cleanup should accept fixed triangle cells directly to remove that per-triangle allocation.
+The toroidal CDT constructor builds from labeled lattice vertices and delegates to the upstream periodic image-point constructor, then validates the resulting Delaunay triangulation before CDT foliation, causality, topology, and cell-classification checks run.
 
 ### `util.rs` — Numeric helpers
 

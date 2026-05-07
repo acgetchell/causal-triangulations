@@ -380,7 +380,7 @@ mod tests {
 
     #[test]
     fn hausdorff_estimate_uses_dual_graph_ball_growth() {
-        let triangulation = CdtTriangulation::from_cdt_strip(4, 3).expect("create explicit strip");
+        let triangulation = CdtTriangulation::from_cdt_strip(4, 3).expect("create Delaunay strip");
         let estimate = estimate_hausdorff_dimension(&triangulation)
             .expect("strip dual graph should have enough radii for a fit");
 
@@ -399,7 +399,7 @@ mod tests {
     #[test]
     fn spectral_estimate_uses_dual_graph_return_probability() {
         let triangulation =
-            CdtTriangulation::from_toroidal_cdt(6, 6).expect("create explicit torus");
+            CdtTriangulation::from_toroidal_cdt(6, 6).expect("create periodic torus");
         let estimate = estimate_spectral_dimension(&triangulation)
             .expect("torus dual graph should have enough diffusion data");
 

@@ -15,7 +15,7 @@ use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, Move
 use crate::cdt::results::{Measurement, SimulationResultsBackend};
 use crate::cdt::triangulation::SimulationEvent;
 use crate::config::validate_schedule;
-use crate::errors::{CdtError, CdtResult};
+use crate::errors::{CdtError, CdtResult, CheckpointResumeReason};
 use crate::geometry::CdtTriangulation2D;
 use crate::util::saturating_usize_to_u32;
 use markov_chain_monte_carlo::{Chain, ChainCheckpoint, DelayedProposal, Target};
@@ -1010,7 +1010,7 @@ impl MetropolisAlgorithm {
             .checked_add(self.config.steps)
             .ok_or_else(|| {
                 checkpoint_resume_failed(
-                    "step count overflow",
+                    CheckpointResumeReason::StepCountOverflow,
                     "resumed step count exceeds u32::MAX",
                 )
             })?;
@@ -1050,7 +1050,7 @@ impl MetropolisAlgorithm {
         for _ in 0..additional_steps {
             let step = state.current_step.checked_add(1).ok_or_else(|| {
                 checkpoint_resume_failed(
-                    "step count overflow",
+                    CheckpointResumeReason::StepCountOverflow,
                     "resumed step count exceeds u32::MAX",
                 )
             })?;
@@ -1075,15 +1075,25 @@ impl MetropolisRunState {
             checkpoint.config.temperature,
         )
         .map_err(|err| {
-            checkpoint_resume_failed("checkpoint target configuration", err.to_string())
+            checkpoint_resume_failed(
+                CheckpointResumeReason::CheckpointTargetConfiguration,
+                err.to_string(),
+            )
         })?;
-        let chain = Chain::from_checkpoint(checkpoint.chain, &target)
-            .map_err(|err| checkpoint_resume_failed("mcmc chain restore", err.to_string()))?;
+        let chain = Chain::from_checkpoint(checkpoint.chain, &target).map_err(|err| {
+            checkpoint_resume_failed(CheckpointResumeReason::McmcChainRestore, err.to_string())
+        })?;
         let triangulation = chain.into_state();
+        triangulation.validate_evolved_cdt().map_err(|err| {
+            checkpoint_resume_failed(
+                CheckpointResumeReason::TriangulationInvariants,
+                err.to_string(),
+            )
+        })?;
         let actual_action = action_for(&checkpoint.action_config, &triangulation);
         if !actions_match(actual_action, checkpoint.current_action) {
             return Err(checkpoint_resume_failed(
-                "action mismatch",
+                CheckpointResumeReason::ActionMismatch,
                 format!(
                     "checkpoint action mismatch: stored {}, recomputed {}",
                     checkpoint.current_action, actual_action
@@ -1114,6 +1124,7 @@ impl MetropolisRunState {
         config: MetropolisConfig,
         action_config: ActionConfig,
     ) -> CdtResult<CdtMcmcCheckpoint> {
+        self.triangulation.validate_evolved_cdt()?;
         let (accepted, rejected) = chain_counters(&self.move_stats)?;
         Ok(CdtMcmcCheckpoint {
             chain: ChainCheckpoint::new(self.triangulation, accepted, rejected),
@@ -1186,6 +1197,7 @@ fn run_one_step(
                         step: step.into(),
                         action_change: applied_action - action_before,
                     });
+                validate_evolved_cdt_if_due(state)?;
             }
             Ok(AcceptedMoveResult::NoApplicableSite { .. }) => {
                 // A move type can be Metropolis-accepted even when bounded
@@ -1229,10 +1241,22 @@ fn run_one_step(
     Ok(())
 }
 
+/// Runs the expensive full evolved-state validation only when the backend policy is due.
+fn validate_evolved_cdt_if_due(state: &MetropolisRunState) -> CdtResult<()> {
+    if state
+        .triangulation
+        .geometry()
+        .should_check_delaunay_after(state.move_stats.total_accepted())
+    {
+        state.triangulation.validate_evolved_cdt()?;
+    }
+    Ok(())
+}
+
 /// Builds a structured checkpoint-resume error.
-fn checkpoint_resume_failed(reason: &'static str, detail: impl Into<String>) -> CdtError {
+fn checkpoint_resume_failed(reason: CheckpointResumeReason, detail: impl Into<String>) -> CdtError {
     CdtError::CheckpointResumeFailed {
-        reason: reason.to_string(),
+        reason,
         detail: detail.into(),
     }
 }
@@ -1248,25 +1272,25 @@ fn validate_resume_compatible(
 ) -> CdtResult<()> {
     if algorithm.action_config != checkpoint.action_config {
         return Err(checkpoint_resume_failed(
-            "incompatible action configuration",
+            CheckpointResumeReason::IncompatibleActionConfiguration,
             "action configuration differs from checkpoint",
         ));
     }
     if algorithm.config.temperature.to_bits() != checkpoint.config.temperature.to_bits() {
         return Err(checkpoint_resume_failed(
-            "incompatible temperature",
+            CheckpointResumeReason::IncompatibleTemperature,
             "temperature differs from checkpoint",
         ));
     }
     if algorithm.config.thermalization_steps != checkpoint.config.thermalization_steps {
         return Err(checkpoint_resume_failed(
-            "incompatible thermalization schedule",
+            CheckpointResumeReason::IncompatibleThermalizationSchedule,
             "thermalization schedule differs from checkpoint",
         ));
     }
     if algorithm.config.measurement_frequency != checkpoint.config.measurement_frequency {
         return Err(checkpoint_resume_failed(
-            "incompatible measurement frequency",
+            CheckpointResumeReason::IncompatibleMeasurementFrequency,
             "measurement frequency differs from checkpoint",
         ));
     }
@@ -1279,18 +1303,23 @@ fn validate_resume_compatible(
 /// are redundant by design; this catches tampered or partially written
 /// checkpoint payloads before any resumed sampling occurs.
 fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
-    checkpoint
-        .config
-        .validate()
-        .map_err(|err| checkpoint_resume_failed("checkpoint configuration", err.to_string()))?;
+    checkpoint.config.validate().map_err(|err| {
+        checkpoint_resume_failed(
+            CheckpointResumeReason::CheckpointConfiguration,
+            err.to_string(),
+        )
+    })?;
     checkpoint.action_config.validate().map_err(|err| {
-        checkpoint_resume_failed("checkpoint action configuration", err.to_string())
+        checkpoint_resume_failed(
+            CheckpointResumeReason::CheckpointActionConfiguration,
+            err.to_string(),
+        )
     })?;
 
     let (accepted, rejected) = chain_counters(&checkpoint.move_stats)?;
     if checkpoint.chain.accepted() != accepted || checkpoint.chain.rejected() != rejected {
         return Err(checkpoint_resume_failed(
-            "chain counter mismatch",
+            CheckpointResumeReason::ChainCounterMismatch,
             "chain counters do not match move statistics",
         ));
     }
@@ -1298,13 +1327,13 @@ fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()>
         != usize::try_from(checkpoint.current_step).unwrap_or(usize::MAX)
     {
         return Err(checkpoint_resume_failed(
-            "chain step mismatch",
+            CheckpointResumeReason::ChainStepMismatch,
             "chain step count does not match checkpoint step",
         ));
     }
     if checkpoint.steps.len() != checkpoint.chain.total_steps() {
         return Err(checkpoint_resume_failed(
-            "step telemetry mismatch",
+            CheckpointResumeReason::StepTelemetryMismatch,
             "step telemetry length does not match chain step count",
         ));
     }
@@ -1318,7 +1347,7 @@ fn validate_checkpoint_steps(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
     let accepted_steps = checkpoint.steps.iter().filter(|step| step.accepted).count();
     if accepted_steps != checkpoint.chain.accepted() {
         return Err(checkpoint_resume_failed(
-            "step telemetry mismatch",
+            CheckpointResumeReason::StepTelemetryMismatch,
             format!(
                 "accepted step count mismatch: got {}, expected {}",
                 accepted_steps,
@@ -1330,13 +1359,13 @@ fn validate_checkpoint_steps(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
     for (index, step) in checkpoint.steps.iter().enumerate() {
         let expected_step = u32::try_from(index + 1).map_err(|_| {
             checkpoint_resume_failed(
-                "step telemetry overflow",
+                CheckpointResumeReason::StepTelemetryOverflow,
                 "step telemetry index exceeds u32::MAX",
             )
         })?;
         if step.step != expected_step {
             return Err(checkpoint_resume_failed(
-                "step telemetry mismatch",
+                CheckpointResumeReason::StepTelemetryMismatch,
                 format!(
                     "step telemetry must be sequential: got step {}, expected {}",
                     step.step, expected_step
@@ -1345,7 +1374,7 @@ fn validate_checkpoint_steps(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
         }
         if !step.action_before.is_finite() {
             return Err(checkpoint_resume_failed(
-                "step telemetry mismatch",
+                CheckpointResumeReason::StepTelemetryMismatch,
                 format!("step {} has non-finite action_before", step.step),
             ));
         }
@@ -1353,13 +1382,13 @@ fn validate_checkpoint_steps(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
             && !delta_action.is_finite()
         {
             return Err(checkpoint_resume_failed(
-                "step telemetry mismatch",
+                CheckpointResumeReason::StepTelemetryMismatch,
                 format!("step {} has non-finite delta_action", step.step),
             ));
         }
         if step.accepted && step.delta_action.is_none() {
             return Err(checkpoint_resume_failed(
-                "step telemetry mismatch",
+                CheckpointResumeReason::StepTelemetryMismatch,
                 format!("accepted step {} is missing delta_action", step.step),
             ));
         }
@@ -1369,7 +1398,7 @@ fn validate_checkpoint_steps(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
                     && !actions_match(action_after, step.action_before + delta_action)
                 {
                     return Err(checkpoint_resume_failed(
-                        "step telemetry mismatch",
+                        CheckpointResumeReason::StepTelemetryMismatch,
                         format!(
                             "step {} action_after does not match delta_action",
                             step.step
@@ -1379,19 +1408,19 @@ fn validate_checkpoint_steps(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
             }
             (true, Some(_)) => {
                 return Err(checkpoint_resume_failed(
-                    "step telemetry mismatch",
+                    CheckpointResumeReason::StepTelemetryMismatch,
                     format!("step {} has non-finite action_after", step.step),
                 ));
             }
             (true, None) => {
                 return Err(checkpoint_resume_failed(
-                    "step telemetry mismatch",
+                    CheckpointResumeReason::StepTelemetryMismatch,
                     format!("accepted step {} is missing action_after", step.step),
                 ));
             }
             (false, Some(_)) => {
                 return Err(checkpoint_resume_failed(
-                    "step telemetry mismatch",
+                    CheckpointResumeReason::StepTelemetryMismatch,
                     format!("rejected step {} unexpectedly has action_after", step.step),
                 ));
             }
@@ -1408,13 +1437,13 @@ fn validate_checkpoint_measurements(checkpoint: &CdtMcmcCheckpoint) -> CdtResult
     )
     .map_err(|_| {
         checkpoint_resume_failed(
-            "measurement telemetry overflow",
+            CheckpointResumeReason::MeasurementTelemetryOverflow,
             "scheduled measurement count exceeds usize::MAX",
         )
     })?;
     if checkpoint.measurements.len() != expected_measurements {
         return Err(checkpoint_resume_failed(
-            "measurement telemetry mismatch",
+            CheckpointResumeReason::MeasurementTelemetryMismatch,
             format!(
                 "scheduled measurement count mismatch: got {}, expected {}",
                 checkpoint.measurements.len(),
@@ -1430,13 +1459,13 @@ fn validate_checkpoint_measurements(checkpoint: &CdtMcmcCheckpoint) -> CdtResult
             .and_then(|step| u32::try_from(step).ok())
             .ok_or_else(|| {
                 checkpoint_resume_failed(
-                    "measurement telemetry overflow",
+                    CheckpointResumeReason::MeasurementTelemetryOverflow,
                     "scheduled measurement step exceeds u32::MAX",
                 )
             })?;
         if measurement.step != expected_step {
             return Err(checkpoint_resume_failed(
-                "measurement telemetry mismatch",
+                CheckpointResumeReason::MeasurementTelemetryMismatch,
                 format!(
                     "measurement telemetry must follow the sampling schedule: got step {}, expected {}",
                     measurement.step, expected_step
@@ -1445,7 +1474,7 @@ fn validate_checkpoint_measurements(checkpoint: &CdtMcmcCheckpoint) -> CdtResult
         }
         if !measurement.action.is_finite() {
             return Err(checkpoint_resume_failed(
-                "measurement telemetry mismatch",
+                CheckpointResumeReason::MeasurementTelemetryMismatch,
                 format!(
                     "measurement at step {} has non-finite action",
                     measurement.step
@@ -1466,20 +1495,20 @@ fn chain_counters(move_stats: &MoveStatistics) -> CdtResult<(usize, usize)> {
     let accepted = move_stats.total_accepted();
     let rejected = attempted.checked_sub(accepted).ok_or_else(|| {
         checkpoint_resume_failed(
-            "move statistics invariant",
+            CheckpointResumeReason::MoveStatisticsInvariant,
             "accepted move count exceeds attempted move count",
         )
     })?;
     Ok((
         usize::try_from(accepted).map_err(|_| {
             checkpoint_resume_failed(
-                "counter conversion overflow",
+                CheckpointResumeReason::CounterConversionOverflow,
                 "accepted move count exceeds usize::MAX",
             )
         })?,
         usize::try_from(rejected).map_err(|_| {
             checkpoint_resume_failed(
-                "counter conversion overflow",
+                CheckpointResumeReason::CounterConversionOverflow,
                 "rejected move count exceeds usize::MAX",
             )
         })?,
@@ -1645,7 +1674,7 @@ fn apply_accepted_move(
 /// The move kernels keep causal, geometric, and backend failures orthogonal; this
 /// wrapper adds the Metropolis step, move type, and retry context callers need to
 /// debug a failed accepted application.
-fn accepted_move_error(
+const fn accepted_move_error(
     step: u32,
     move_type: MoveType,
     attempts: usize,
@@ -1653,7 +1682,7 @@ fn accepted_move_error(
 ) -> CdtError {
     CdtError::MetropolisMoveApplicationFailed {
         step,
-        move_type: format!("{move_type:?}"),
+        move_type,
         attempts,
         last_failure,
     }
@@ -1685,6 +1714,7 @@ mod tests {
     use markov_chain_monte_carlo::Chain;
     use rand::rngs::StdRng;
     use serde_json::{from_str, to_string, to_value};
+    use std::num::NonZeroUsize;
 
     fn assert_optional_relative_eq(left: Option<f64>, right: Option<f64>) {
         match (left, right) {
@@ -1696,7 +1726,7 @@ mod tests {
 
     fn short_checkpoint() -> CdtMcmcCheckpoint {
         let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         MetropolisAlgorithm::new(
             MetropolisConfig::new(1.0, 2, 0, 1).with_seed(13),
             ActionConfig::default(),
@@ -1705,9 +1735,23 @@ mod tests {
         .expect("short prefix run should checkpoint")
     }
 
+    fn empty_run_state(triangulation: CdtTriangulation2D) -> MetropolisRunState {
+        MetropolisRunState {
+            triangulation,
+            current_step: 0,
+            current_action: 0.0,
+            acceptance_rng: simulation_rng(Some(1)),
+            ergodics: ErgodicsSystem::with_seed(2),
+            move_stats: MoveStatistics::new(),
+            steps: Vec::new(),
+            measurements: Vec::new(),
+            elapsed_time: Duration::ZERO,
+        }
+    }
+
     fn assert_checkpoint_resume_failed(
         result: CdtResult<SimulationResultsBackend>,
-        expected_reason: &str,
+        expected_reason: CheckpointResumeReason,
         expected_detail: &str,
     ) {
         let Err(CdtError::CheckpointResumeFailed { reason, detail }) = result else {
@@ -1717,6 +1761,56 @@ mod tests {
         assert!(
             detail.contains(expected_detail),
             "expected detail to contain {expected_detail:?}, got {detail:?}"
+        );
+    }
+
+    #[test]
+    fn full_validation_cadence_uses_delaunay_check_policy() {
+        let mut triangulation =
+            CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
+        triangulation.set_delaunay_check_interval(NonZeroUsize::new(1));
+        let vertex = triangulation
+            .geometry()
+            .vertices()
+            .find(|vertex| triangulation.time_label(vertex) == Some(1))
+            .expect("fixture has a slice-1 vertex");
+        triangulation
+            .set_vertex_data(&vertex, Some(0))
+            .expect("fixture vertex label can be edited");
+
+        let mut state = empty_run_state(triangulation);
+        state.move_stats.record_success(MoveType::Move22);
+
+        assert!(
+            validate_evolved_cdt_if_due(&state).is_err(),
+            "EveryN(1) should run full validation after the first accepted move"
+        );
+    }
+
+    #[test]
+    fn end_only_validation_policy_defers_until_checkpoint() {
+        let mut triangulation =
+            CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
+        triangulation.set_delaunay_check_interval(None);
+        let vertex = triangulation
+            .geometry()
+            .vertices()
+            .find(|vertex| triangulation.time_label(vertex) == Some(1))
+            .expect("fixture has a slice-1 vertex");
+        triangulation
+            .set_vertex_data(&vertex, Some(0))
+            .expect("fixture vertex label can be edited");
+
+        let mut state = empty_run_state(triangulation);
+        state.move_stats.record_success(MoveType::Move22);
+
+        validate_evolved_cdt_if_due(&state)
+            .expect("EndOnly should skip cadence validation on accepted moves");
+        assert!(
+            state
+                .into_checkpoint(MetropolisConfig::default(), ActionConfig::default())
+                .is_err(),
+            "mandatory checkpoint validation should still catch the invalid final state"
         );
     }
 
@@ -1826,9 +1920,36 @@ mod tests {
     }
 
     #[test]
+    fn run_with_checkpoint_returns_matching_results_and_checkpoint() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let algorithm = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 3, 0, 1).with_seed(13),
+            ActionConfig::default(),
+        );
+
+        let (results, checkpoint) = algorithm
+            .run_with_checkpoint(triangulation)
+            .expect("checkpointed run should complete");
+
+        assert_eq!(checkpoint.current_step(), 3);
+        assert_eq!(results.steps.len(), checkpoint.steps().len());
+        assert_eq!(&results.config, checkpoint.config());
+        let checkpoint_results = checkpoint.into_results();
+        assert_eq!(
+            results.triangulation.vertex_count(),
+            checkpoint_results.triangulation.vertex_count()
+        );
+        checkpoint_results
+            .triangulation
+            .validate()
+            .expect("checkpoint triangulation should satisfy evolved invariants");
+    }
+
+    #[test]
     fn serialized_checkpoint_resumes_from_stored_rng_state() {
         let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("explicit strip should build");
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let action_config = ActionConfig::default();
         let prefix = MetropolisAlgorithm::new(
             MetropolisConfig::new(1.0, 4, 0, 1).with_seed(13),
@@ -1916,7 +2037,7 @@ mod tests {
 
         assert_checkpoint_resume_failed(
             algorithm.resume_from_checkpoint(checkpoint),
-            "incompatible action configuration",
+            CheckpointResumeReason::IncompatibleActionConfiguration,
             "action configuration",
         );
     }
@@ -1931,7 +2052,7 @@ mod tests {
 
         assert_checkpoint_resume_failed(
             algorithm.resume_from_checkpoint(checkpoint),
-            "incompatible measurement frequency",
+            CheckpointResumeReason::IncompatibleMeasurementFrequency,
             "measurement frequency",
         );
     }
@@ -1947,7 +2068,7 @@ mod tests {
 
         assert_checkpoint_resume_failed(
             algorithm.resume_from_checkpoint(checkpoint),
-            "chain counter mismatch",
+            CheckpointResumeReason::ChainCounterMismatch,
             "chain counters",
         );
     }
@@ -1963,7 +2084,7 @@ mod tests {
 
         assert_checkpoint_resume_failed(
             algorithm.resume_from_checkpoint(checkpoint),
-            "step telemetry mismatch",
+            CheckpointResumeReason::StepTelemetryMismatch,
             "step telemetry length",
         );
     }
@@ -1979,7 +2100,7 @@ mod tests {
 
         assert_checkpoint_resume_failed(
             algorithm.resume_from_checkpoint(checkpoint),
-            "step telemetry mismatch",
+            CheckpointResumeReason::StepTelemetryMismatch,
             "step telemetry must be sequential",
         );
     }
@@ -2003,7 +2124,7 @@ mod tests {
 
         assert_checkpoint_resume_failed(
             algorithm.resume_from_checkpoint(checkpoint),
-            "step telemetry mismatch",
+            CheckpointResumeReason::StepTelemetryMismatch,
             "accepted step count mismatch",
         );
     }
@@ -2019,7 +2140,7 @@ mod tests {
 
         assert_checkpoint_resume_failed(
             algorithm.resume_from_checkpoint(checkpoint),
-            "measurement telemetry mismatch",
+            CheckpointResumeReason::MeasurementTelemetryMismatch,
             "scheduled measurement count mismatch",
         );
     }
@@ -2035,7 +2156,7 @@ mod tests {
 
         assert_checkpoint_resume_failed(
             algorithm.resume_from_checkpoint(checkpoint),
-            "action mismatch",
+            CheckpointResumeReason::ActionMismatch,
             "checkpoint action mismatch",
         );
     }
@@ -2050,7 +2171,7 @@ mod tests {
             panic!("expected checkpoint configuration failure");
         };
 
-        assert_eq!(reason, "checkpoint configuration");
+        assert_eq!(reason, CheckpointResumeReason::CheckpointConfiguration);
         assert!(detail.contains("temperature"));
     }
 
@@ -2065,22 +2186,22 @@ mod tests {
             panic!("expected impossible move statistics to fail");
         };
 
-        assert_eq!(reason, "move statistics invariant");
+        assert_eq!(reason, CheckpointResumeReason::MoveStatisticsInvariant);
         assert!(detail.contains("accepted move count exceeds attempted move count"));
     }
 
     #[test]
     fn explicit_cdt_volume_profiles_count_time_slabs() {
-        let strip = CdtTriangulation::from_cdt_strip(4, 3).expect("create explicit strip");
+        let strip = CdtTriangulation::from_cdt_strip(4, 3).expect("create Delaunay strip");
         assert_eq!(strip.volume_profile(), vec![6, 6, 0]);
 
-        let torus = CdtTriangulation::from_toroidal_cdt(3, 3).expect("create explicit torus");
+        let torus = CdtTriangulation::from_toroidal_cdt(3, 3).expect("create periodic torus");
         assert_eq!(torus.volume_profile(), vec![6, 6, 6]);
     }
 
     #[test]
     fn measurement_records_volume_profile_for_foliated_triangulation() {
-        let triangulation = CdtTriangulation::from_cdt_strip(4, 3).expect("create explicit strip");
+        let triangulation = CdtTriangulation::from_cdt_strip(4, 3).expect("create Delaunay strip");
         let measurement = measurement_for(0, 1.0, &triangulation);
 
         assert_eq!(measurement.volume_profile, vec![6, 6, 0]);

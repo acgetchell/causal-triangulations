@@ -3,19 +3,31 @@
 //! Whole-triangulation validation and causality checks.
 
 use super::CdtTriangulation;
-use crate::errors::{CdtError, CdtResult};
+use crate::errors::{CdtError, CdtResult, CdtValidationCheck, DelaunayValidationLevel};
 use crate::geometry::DelaunayBackend2D;
+use crate::geometry::backends::delaunay::DelaunayError;
 use crate::geometry::traits::TriangulationQuery;
+use std::num::NonZeroUsize;
 
 impl CdtTriangulation<DelaunayBackend2D> {
-    /// Validate CDT properties (geometry, Delaunay, topology, causality, foliation).
+    /// Validate post-construction CDT properties.
+    ///
+    /// This is the invariant set required after ergodic moves and completed
+    /// simulations: upstream structural geometry validity plus CDT topology,
+    /// foliation, causality, and cell-classification checks. It intentionally
+    /// does not require the Level 4 Delaunay empty-circumsphere predicate,
+    /// because local CDT moves are not expected to preserve Delaunay-ness.
+    ///
+    /// Constructors that create initial simulation meshes perform the stricter
+    /// Level 1-4 Delaunay validation before returning.
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::ValidationFailed`] if backend geometry, Delaunay,
-    /// causality, or cell-classification checks fail. Returns topology or
-    /// foliation errors from the corresponding validators when those
-    /// invariants are violated.
+    /// Returns [`CdtError::DelaunayValidationFailed`] if backend structural
+    /// geometry fails upstream validation. Returns
+    /// [`CdtError::ValidationFailed`] if causality or cell-classification checks
+    /// fail, and returns topology or foliation errors from the corresponding
+    /// validators when those invariants are violated.
     ///
     /// # Examples
     ///
@@ -29,36 +41,68 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// }
     /// ```
     pub fn validate(&self) -> CdtResult<()> {
-        if !self.geometry.is_valid() {
-            return Err(CdtError::ValidationFailed {
-                check: "geometry".to_string(),
+        self.validate_evolved_cdt()
+    }
+
+    /// Configures how often simulation runs perform full evolved-state validation.
+    ///
+    /// This reuses the Delaunay crate's global check policy as the cadence knob:
+    /// `Some(n)` means validate the full CDT evolved-state contract after every
+    /// `n` accepted local mutations; `None` means skip cadence checks and rely on
+    /// mandatory final validation at checkpoint/result construction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::num::NonZeroUsize;
+    ///
+    /// let mut tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    /// tri.set_delaunay_check_interval(NonZeroUsize::new(8));
+    /// # Ok::<(), causal_triangulations::CdtError>(())
+    /// ```
+    pub fn set_delaunay_check_interval(&mut self, interval: Option<NonZeroUsize>) {
+        self.geometry.set_delaunay_check_interval(interval);
+    }
+
+    /// Validates the post-move/final CDT invariant contract.
+    pub(crate) fn validate_evolved_cdt(&self) -> CdtResult<()> {
+        self.geometry
+            .validate_structural()
+            .map_err(|err| CdtError::DelaunayValidationFailed {
+                level: DelaunayValidationLevel::Three,
                 detail: format!(
-                    "triangulation is not valid (V={}, E={}, F={})",
+                    "{}; triangulation counts: V={}, E={}, F={}",
+                    validation_detail(err),
                     self.geometry.vertex_count(),
                     self.geometry.edge_count(),
                     self.geometry.face_count(),
                 ),
-            });
-        }
-
-        if !self.geometry.is_delaunay() {
-            return Err(CdtError::ValidationFailed {
-                check: "Delaunay".to_string(),
-                detail: format!(
-                    "triangulation does not satisfy Delaunay property (V={}, E={}, F={})",
-                    self.geometry.vertex_count(),
-                    self.geometry.edge_count(),
-                    self.geometry.face_count(),
-                ),
-            });
-        }
-
+            })?;
         self.validate_topology()?;
         self.validate_foliation()?;
         self.validate_causality()?;
         self.validate_cell_classification()?;
 
         Ok(())
+    }
+
+    /// Validates the initialization contract for labeled CDT constructors.
+    ///
+    /// Initial meshes must be genuine Delaunay triangulations and must satisfy
+    /// the stricter CDT foliation, topology, causality, and cell-classification
+    /// invariants before any simulation code can observe them.
+    pub(crate) fn validate_initial_delaunay_cdt(&mut self) -> CdtResult<()> {
+        self.geometry
+            .validate_delaunay()
+            .map_err(|err| CdtError::DelaunayValidationFailed {
+                level: DelaunayValidationLevel::Four,
+                detail: validation_detail(err),
+            })?;
+        self.validate_topology()?;
+        self.validate_foliation()?;
+        self.validate_causality()?;
+        self.classify_all_cells().map(|_| ())
     }
 
     /// Validate causality constraints.
@@ -142,14 +186,14 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     self.geometry.face_count(),
                 );
                 CdtError::ValidationFailed {
-                    check: "causality".to_string(),
+                    check: CdtValidationCheck::Causality,
                     detail: "failed to resolve face vertices".to_string(),
                 }
             })?;
 
             if verts.len() != 3 {
                 return Err(CdtError::ValidationFailed {
-                    check: "causality".to_string(),
+                    check: CdtValidationCheck::Causality,
                     detail: format!(
                         "face {:?} has {} vertices, expected 3",
                         face.cell_key(),
@@ -168,7 +212,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                         face,
                     );
                     CdtError::ValidationFailed {
-                        check: "causality".to_string(),
+                        check: CdtValidationCheck::Causality,
                         detail: format!(
                             "vertex {:?} has no time label in a foliated triangulation",
                             verts[0].vertex_key(),
@@ -185,7 +229,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                         face,
                     );
                     CdtError::ValidationFailed {
-                        check: "causality".to_string(),
+                        check: CdtValidationCheck::Causality,
                         detail: format!(
                             "vertex {:?} has no time label in a foliated triangulation",
                             verts[1].vertex_key(),
@@ -202,7 +246,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                         face,
                     );
                     CdtError::ValidationFailed {
-                        check: "causality".to_string(),
+                        check: CdtValidationCheck::Causality,
                         detail: format!(
                             "vertex {:?} has no time label in a foliated triangulation",
                             verts[2].vertex_key(),
@@ -230,7 +274,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
             if !(spacelike == 1 && timelike == 2) {
                 return Err(CdtError::ValidationFailed {
-                    check: "causality".to_string(),
+                    check: CdtValidationCheck::Causality,
                     detail: format!(
                         "invalid CDT triangle at face {:?}: spacelike={}, timelike={}",
                         face.cell_key(),
@@ -242,6 +286,14 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
 
         Ok(())
+    }
+}
+
+/// Extracts upstream validation diagnostics without duplicating wrapper context.
+fn validation_detail(error: DelaunayError) -> String {
+    match error {
+        DelaunayError::ValidationFailed { detail, .. } => detail,
+        other => other.to_string(),
     }
 }
 
@@ -408,7 +460,7 @@ mod tests {
         assert!(matches!(
             tri.validate_causality_delaunay(),
             Err(CdtError::ValidationFailed { ref check, ref detail })
-                if check == "causality"
+                if *check == CdtValidationCheck::Causality
                     && detail.contains("has no time label in a foliated triangulation")
         ));
     }
@@ -416,19 +468,16 @@ mod tests {
     #[test]
     fn validate_and_causality_reject_all_spacelike_triangle() {
         let backend = labeled_triangle_backend([0, 0, 0]);
-        let tri = CdtTriangulation::from_labeled_delaunay(backend, 1, 2)
-            .expect("single-slice labels should form foliation bookkeeping");
+        let result = CdtTriangulation::from_labeled_delaunay(backend, 1, 2);
 
-        for result in [tri.validate_causality_delaunay(), tri.validate()] {
-            assert!(matches!(
-                result,
-                Err(CdtError::ValidationFailed { ref check, ref detail })
-                    if check == "causality"
-                        && detail.contains("invalid CDT triangle")
-                        && detail.contains("spacelike=3")
-                        && detail.contains("timelike=0")
-            ));
-        }
+        assert!(matches!(
+            result,
+            Err(CdtError::ValidationFailed { ref check, ref detail })
+                if *check == CdtValidationCheck::Causality
+                    && detail.contains("invalid CDT triangle")
+                    && detail.contains("spacelike=3")
+                    && detail.contains("timelike=0")
+        ));
     }
 
     #[test]

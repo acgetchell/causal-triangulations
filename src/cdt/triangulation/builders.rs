@@ -8,22 +8,24 @@ use crate::config::CdtTopology;
 use crate::errors::{CdtError, CdtResult};
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::generators::{
-    build_delaunay2_from_cells, build_toroidal_delaunay2, generate_delaunay2,
+    build_delaunay2_with_data, build_periodic_toroidal_delaunay2, generate_delaunay2,
 };
 use crate::geometry::traits::TriangulationQuery;
 
-/// Rewrites explicit toroidal builder failures with CDT-level generation context.
+/// Rewrites toroidal builder failures with CDT-level generation context.
 ///
 /// The lower geometry builder reports failures in terms of its input shape; this
 /// helper preserves the underlying diagnostic while normalizing the public error
-/// fields to the toroidal CDT constructor's vertex count, domain, and first attempt.
+/// fields to the toroidal CDT constructor's vertex count and first attempt.
 pub(super) fn remap_toroidal_generation_error(error: CdtError, total_vertices: u32) -> CdtError {
     match error {
         CdtError::DelaunayGenerationFailed {
-            underlying_error, ..
+            coordinate_range,
+            underlying_error,
+            ..
         } => CdtError::DelaunayGenerationFailed {
             vertex_count: total_vertices,
-            coordinate_range: (0.0, 1.0),
+            coordinate_range,
             attempt: 1,
             underlying_error,
         },
@@ -31,7 +33,7 @@ pub(super) fn remap_toroidal_generation_error(error: CdtError, total_vertices: u
     }
 }
 
-/// Rewrites explicit strip builder failures with CDT-level generation context.
+/// Rewrites Delaunay strip builder failures with CDT-level generation context.
 fn remap_strip_generation_error(
     error: CdtError,
     total_vertices: u32,
@@ -50,7 +52,7 @@ fn remap_strip_generation_error(
     }
 }
 
-/// Builds a CDT-level generation error for explicit strip construction failures.
+/// Builds a CDT-level generation error for Delaunay strip construction failures.
 const fn strip_generation_error(
     total_vertices: u32,
     coordinate_max: f64,
@@ -64,7 +66,7 @@ const fn strip_generation_error(
     }
 }
 
-/// Verifies that the explicit strip builder returned the requested mesh size.
+/// Verifies that the Delaunay strip builder returned the requested mesh size.
 #[expect(
     clippy::too_many_arguments,
     reason = "count mismatch diagnostics preserve both requested CDT parameters and expected builder counts"
@@ -84,7 +86,7 @@ pub(super) fn validate_strip_counts(
             total_vertices,
             coordinate_max,
             format!(
-                "build_delaunay2_from_cells()/from_cdt_strip() produced {} vertices, expected {} for vertices_per_slice={} and num_slices={}",
+                "build_delaunay2_with_data()/from_cdt_strip() produced {} vertices, expected {} for vertices_per_slice={} and num_slices={}",
                 backend.vertex_count(),
                 total_vertices,
                 vertices_per_slice,
@@ -97,7 +99,7 @@ pub(super) fn validate_strip_counts(
             total_vertices,
             coordinate_max,
             format!(
-                "build_delaunay2_from_cells()/from_cdt_strip() produced {} faces, expected {} for vertices_per_slice={} and num_slices={}",
+                "build_delaunay2_with_data()/from_cdt_strip() produced {} faces, expected {} for vertices_per_slice={} and num_slices={}",
                 backend.face_count(),
                 total_cells,
                 vertices_per_slice,
@@ -109,28 +111,34 @@ pub(super) fn validate_strip_counts(
     Ok(())
 }
 
-/// Builds a CDT-level generation error for explicit toroidal construction failures.
-const fn toroidal_generation_error(total_vertices: u32, underlying_error: String) -> CdtError {
+/// Builds a CDT-level generation error for periodic toroidal construction failures.
+const fn toroidal_generation_error(
+    total_vertices: u32,
+    coordinate_range: (f64, f64),
+    underlying_error: String,
+) -> CdtError {
     CdtError::DelaunayGenerationFailed {
         vertex_count: total_vertices,
-        coordinate_range: (0.0, 1.0),
+        coordinate_range,
         attempt: 1,
         underlying_error,
     }
 }
 
-/// Verifies that the explicit toroidal builder returned the requested mesh size.
+/// Verifies that the periodic toroidal builder returned the requested mesh size.
 pub(super) fn validate_toroidal_counts(
     backend: &DelaunayBackend2D,
     total_vertices: u32,
     expected_vertices: usize,
     expected_faces: usize,
+    coordinate_range: (f64, f64),
 ) -> CdtResult<()> {
     if backend.vertex_count() != expected_vertices || backend.face_count() != expected_faces {
         return Err(toroidal_generation_error(
             total_vertices,
+            coordinate_range,
             format!(
-                "explicit toroidal builder produced {} vertices and {} faces, expected {} vertices and {} faces",
+                "periodic toroidal builder produced {} vertices and {} faces, expected {} vertices and {} faces",
                 backend.vertex_count(),
                 backend.face_count(),
                 total_vertices,
@@ -286,6 +294,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Returns [`CdtError::UnsupportedDimension`] if `dimension != 2`.
     /// Returns [`CdtError::ValidationFailed`] if any vertex is unlabeled or
     /// has a time label outside `0..time_slices`, or if any time slice is empty.
+    /// Returns [`CdtError::DelaunayValidationFailed`] if the backend fails the
+    /// upstream Level 1-4 Delaunay validator. Returns topology, foliation,
+    /// causality, or classification errors if the labels do not form a strict
+    /// CDT mesh.
     ///
     /// # Examples
     ///
@@ -329,24 +341,27 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let mut tri = Self::try_new(backend, time_slices, dimension)?;
         tri.foliation = Some(foliation);
         tri.mark_foliation_synchronized();
+        tri.validate_initial_delaunay_cdt()?;
         Ok(tri)
     }
 
-    /// Construct a true 1+1 CDT strip by explicit layered connectivity.
+    /// Construct a Delaunay-backed true 1+1 CDT strip from layered points.
     ///
     /// Places `vertices_per_slice` vertices on each open spatial slice and
-    /// connects adjacent time slices into quads. Each quad is split into one
-    /// Up `(2,1)` triangle and one Down `(1,2)` triangle, so every finite face
-    /// is classifiable by construction.
+    /// builds a Delaunay triangulation from the labeled coordinates. The
+    /// resulting finite faces must all classify as Up `(2,1)` or Down `(1,2)`
+    /// triangles before the constructor succeeds.
     ///
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidGenerationParameters`] if `vertices_per_slice < 4`,
     /// `num_slices < 2`, or the derived vertex or cell count overflows `u32`.
     /// Returns [`CdtError::DelaunayGenerationFailed`] if constructor storage cannot
-    /// be reserved, if the underlying explicit builder rejects the mesh, or if
-    /// `build_delaunay2_from_cells()` returns a vertex or face count that does not
-    /// match the requested strip. Returns [`CdtError::Foliation`],
+    /// be reserved, if the underlying Delaunay builder rejects the points, if
+    /// `build_delaunay2_with_data()` returns a vertex or face count that does not
+    /// match the requested strip. Returns [`CdtError::DelaunayValidationFailed`]
+    /// if the constructed backend does not satisfy the Level 1-4 Delaunay
+    /// validator. Returns [`CdtError::Foliation`],
     /// [`CdtError::CausalityViolation`], or [`CdtError::ValidationFailed`] if the
     /// constructed strip fails CDT validation.
     ///
@@ -365,7 +380,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[expect(
         clippy::too_many_lines,
-        reason = "explicit strip construction includes fallible allocation handling and post-build validation"
+        reason = "Delaunay strip construction includes fallible allocation handling and post-build validation"
     )]
     pub fn from_cdt_strip(vertices_per_slice: u32, num_slices: u32) -> CdtResult<Self> {
         if vertices_per_slice < 4 {
@@ -409,7 +424,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     expected_range: "product ≤ u32::MAX".to_string(),
                 })?;
 
-        let coordinate_max = f64::from(num_slices - 1).max(1.0);
+        let coordinate_max = f64::from(num_slices).max(2.0);
         let generation_failed = |underlying_error: String| {
             strip_generation_error(total_vertices, coordinate_max, underlying_error)
         };
@@ -423,9 +438,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
             .map_err(|err| generation_failed(err.to_string()))?;
         let t_count =
             usize::try_from(num_slices).map_err(|err| generation_failed(err.to_string()))?;
-        let index = |i: usize, t: usize| -> usize { t * n + i };
 
         let spacing = 1.0_f64 / f64::from(vertices_per_slice - 1);
+        let side_jitter = spacing / 4.0;
+        let interior_jitter = spacing / (16.0 * f64::from(num_slices));
+        let vertical_jitter = 1.0_f64 / (64.0 * f64::from(num_slices));
         let mut vertex_specs: Vec<([f64; 2], u32)> = Vec::new();
         vertex_specs
             .try_reserve_exact(expected_vertices)
@@ -436,45 +453,38 @@ impl CdtTriangulation<DelaunayBackend2D> {
             })?;
         for t in 0..num_slices {
             for i in 0..vertices_per_slice {
-                vertex_specs.push(([f64::from(i) * spacing, f64::from(t)], t));
+                let temporal_index = f64::from(t);
+                let temporal_span = f64::from(num_slices - 1);
+                let side_arc = side_jitter * temporal_index * f64::from(num_slices - 1 - t)
+                    / temporal_span.powi(2);
+                let x = if i == 0 || i == vertices_per_slice - 1 {
+                    let boundary = f64::from(i).mul_add(spacing, side_jitter);
+                    if i == 0 {
+                        boundary - side_arc
+                    } else {
+                        boundary + side_arc
+                    }
+                } else {
+                    let sign = if (i + t).is_multiple_of(2) { 1.0 } else { -1.0 };
+                    f64::from(i).mul_add(spacing, side_jitter) + sign * interior_jitter
+                };
+                let spatial_index = f64::from(i);
+                let arc = vertical_jitter * spatial_index * f64::from(vertices_per_slice - 1 - i)
+                    / f64::from((vertices_per_slice - 1).pow(2));
+                let base_y = f64::from(t) + vertical_jitter;
+                let y = if t == 0 {
+                    base_y - arc
+                } else if t == num_slices - 1 {
+                    base_y + arc
+                } else {
+                    let sign = if (i + t).is_multiple_of(2) { 1.0 } else { -1.0 };
+                    (sign * arc).mul_add(0.5, base_y)
+                };
+                vertex_specs.push(([x, y], t));
             }
         }
 
-        let mut cells: Vec<[usize; 3]> = Vec::new();
-        cells.try_reserve_exact(expected_faces).map_err(|err| {
-            generation_failed(format!(
-                "from_cdt_strip() failed to reserve {expected_faces} triangle cells for vertices_per_slice={vertices_per_slice}, num_slices={num_slices}: {err}"
-            ))
-        })?;
-        for t in 0..(t_count - 1) {
-            let t_next = t + 1;
-            for i in 0..(n - 1) {
-                let i_next = i + 1;
-                cells.push([index(i, t), index(i_next, t), index(i, t_next)]);
-                cells.push([index(i_next, t), index(i_next, t_next), index(i, t_next)]);
-            }
-        }
-
-        // delaunay 0.7.6 accepts explicit cells as Vec-backed index lists.
-        // Keep the strip working set compact, then adapt fallibly at the API boundary.
-        let mut cell_specs: Vec<Vec<usize>> = Vec::new();
-        cell_specs.try_reserve_exact(expected_faces).map_err(|err| {
-            generation_failed(format!(
-                "from_cdt_strip() failed to reserve {expected_faces} builder cell specs for build_delaunay2_from_cells(): {err}"
-            ))
-        })?;
-        for cell in &cells {
-            let mut cell_spec = Vec::new();
-            cell_spec.try_reserve_exact(3).map_err(|err| {
-                generation_failed(format!(
-                    "from_cdt_strip() failed to reserve a build_delaunay2_from_cells() triangle cell spec: {err}"
-                ))
-            })?;
-            cell_spec.extend_from_slice(cell);
-            cell_specs.push(cell_spec);
-        }
-
-        let dt = build_delaunay2_from_cells(&vertex_specs, &cell_specs)
+        let dt = build_delaunay2_with_data(&vertex_specs)
             .map_err(|err| remap_strip_generation_error(err, total_vertices, coordinate_max))?;
 
         let backend = DelaunayBackend2D::from_triangulation(dt);
@@ -488,7 +498,6 @@ impl CdtTriangulation<DelaunayBackend2D> {
             num_slices,
             coordinate_max,
         )?;
-
         let slice_sizes = vec![n; t_count];
         let foliation =
             Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
@@ -496,26 +505,22 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let mut tri = Self::try_new(backend, num_slices, 2)?;
         tri.foliation = Some(foliation);
         tri.mark_foliation_synchronized();
-
-        tri.validate_foliation()?;
-        tri.validate_causality_delaunay()?;
-        tri.validate_topology()?;
-        tri.classify_all_cells()?;
+        tri.validate_initial_delaunay_cdt()?;
 
         Ok(tri)
     }
 
     /// Construct a foliated 1+1 CDT on a torus (S¹×S¹).
     ///
-    /// Places `vertices_per_slice` vertices per time slice, uniformly spaced
-    /// on S¹ (spatial coordinate periodic in `[0, 1)`).  Time slices wrap:
-    /// slice `num_slices - 1` connects back to slice `0`.  Each quad between
-    /// adjacent slices is split into one Up (2,1) and one Down (1,2) triangle.
+    /// Places `vertices_per_slice` vertices per time slice on a unit lattice
+    /// in an `N × T` toroidal domain.  Time slices wrap: slice
+    /// `num_slices - 1` connects back to slice `0`.
     ///
-    /// The triangulation is built by explicit combinatorial connectivity via
-    /// [`crate::geometry::generators::build_toroidal_delaunay2`],
-    /// which sets `TopologyGuarantee::Pseudomanifold` and
-    /// `GlobalTopology::Toroidal` so the underlying validator expects χ = 0.
+    /// The triangulation is built through
+    /// [`crate::geometry::generators::build_periodic_toroidal_delaunay2`],
+    /// which uses the upstream periodic image-point constructor and then
+    /// requires full Delaunay Level 1-4 validation before the CDT wrapper is
+    /// returned.
     ///
     /// # Mesh structure
     ///
@@ -523,9 +528,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// has `N · T` vertices, `3 · N · T` edges, and `2 · N · T` triangles
     /// (`V − E + F = 0`, the Euler characteristic of the torus).  Each pair of
     /// adjacent slices `(t, t+1) mod T` and each spatial pair `(i, i+1) mod N`
-    /// contribute exactly one Up `(i, t), (i+1, t), (i, t+1)` and one Down
-    /// `(i+1, t), (i+1, t+1), (i, t+1)` triangle, so every triangle has
-    /// exactly one spacelike edge and two timelike edges by construction.
+    /// contribute two Delaunay triangles, and every triangle must classify as
+    /// Up `(2,1)` or Down `(1,2)`, with exactly one spacelike edge and two
+    /// timelike edges.
     ///
     /// # Arguments
     ///
@@ -537,10 +542,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// Returns [`CdtError::InvalidGenerationParameters`] if `vertices_per_slice < 3`
     /// or `num_slices < 3`, or if the derived vertex or face count overflows `u32`.
-    /// Returns [`CdtError::DelaunayGenerationFailed`] if the underlying explicit
-    /// builder rejects the mesh, if constructor storage cannot be reserved, or if
-    /// the builder returns a vertex or face count that does not match the requested
-    /// toroidal CDT. Returns [`CdtError::Foliation`],
+    /// Returns [`CdtError::DelaunayGenerationFailed`] if upstream periodic
+    /// Delaunay construction rejects the mesh, if constructor storage cannot be
+    /// reserved, or if the builder returns a vertex or face count that does not
+    /// match the requested toroidal CDT. Returns
+    /// [`CdtError::DelaunayValidationFailed`] if full Delaunay validation fails.
+    /// Returns [`CdtError::Foliation`],
     /// [`CdtError::CausalityViolation`], or [`CdtError::ValidationFailed`] if the
     /// constructed triangulation fails CDT validation.
     ///
@@ -557,10 +564,6 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///     Ok(())
     /// }
     /// ```
-    #[expect(
-        clippy::too_many_lines,
-        reason = "explicit toroidal construction includes fallible allocation handling and post-build validation"
-    )]
     pub fn from_toroidal_cdt(vertices_per_slice: u32, num_slices: u32) -> CdtResult<Self> {
         if vertices_per_slice < 3 {
             return Err(CdtError::InvalidGenerationParameters {
@@ -596,8 +599,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     expected_range: "product ≤ u32::MAX".to_string(),
                 })?;
 
-        let generation_failed =
-            |underlying_error: String| toroidal_generation_error(total_vertices, underlying_error);
+        let generation_failed = |underlying_error: String| {
+            let coordinate_max = f64::from(vertices_per_slice.max(num_slices) - 1);
+            toroidal_generation_error(total_vertices, (0.0, coordinate_max), underlying_error)
+        };
 
         let expected_vertices =
             usize::try_from(total_vertices).map_err(|err| generation_failed(err.to_string()))?;
@@ -609,14 +614,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let t_count =
             usize::try_from(num_slices).map_err(|err| generation_failed(err.to_string()))?;
 
-        // Index helper: vertex (i, t) → i + t * N. Both axes are periodic.
-        let index = |i: usize, t: usize| -> usize { (t % t_count) * n + (i % n) };
-
         // --- Vertex coordinates (S¹ × S¹) ---
         //
-        // Spatial coordinate: x_i = i / N is periodic in [0, 1).
-        // Time coordinate: t_t = t / T is periodic in [0, 1) so the metadata
-        // domain matches what we pass to GlobalTopology::Toroidal.
+        // Use a unit square lattice in a toroidal domain of size N × T. This
+        // keeps neighboring spatial and temporal lattice spacings comparable for
+        // the periodic Delaunay constructor, independent of the requested aspect
+        // ratio.
         let n_f = f64::from(vertices_per_slice);
         let t_f = f64::from(num_slices);
         let mut vertex_specs: Vec<([f64; 2], u32)> = Vec::new();
@@ -629,55 +632,24 @@ impl CdtTriangulation<DelaunayBackend2D> {
             })?;
         for t in 0..num_slices {
             for i in 0..vertices_per_slice {
-                let x = f64::from(i) / n_f;
-                let y = f64::from(t) / t_f;
+                let x = f64::from(i);
+                let y = f64::from(t);
                 vertex_specs.push(([x, y], t));
             }
         }
 
-        // --- Explicit cells (Up + Down per (i, t) quad) ---
-        let mut cells: Vec<[usize; 3]> = Vec::new();
-        cells.try_reserve_exact(expected_faces).map_err(|err| {
-            generation_failed(format!(
-                "from_toroidal_cdt() failed to reserve {expected_faces} triangle cells for vertices_per_slice={vertices_per_slice}, num_slices={num_slices}: {err}"
-            ))
-        })?;
-        for t in 0..t_count {
-            let t_next = (t + 1) % t_count;
-            for i in 0..n {
-                let i_next = (i + 1) % n;
-                // Up (2,1): two vertices on slice t, one on slice t+1.
-                cells.push([index(i, t), index(i_next, t), index(i, t_next)]);
-                // Down (1,2): one vertex on slice t, two on slice t+1.
-                cells.push([index(i_next, t), index(i_next, t_next), index(i, t_next)]);
-            }
-        }
-
-        // delaunay 0.7.6 accepts explicit cells as Vec-backed index lists.
-        // Keep the toroidal working set compact, then adapt fallibly at the API boundary.
-        let mut cell_specs: Vec<Vec<usize>> = Vec::new();
-        cell_specs.try_reserve_exact(expected_faces).map_err(|err| {
-            generation_failed(format!(
-                "from_toroidal_cdt() failed to reserve {expected_faces} builder cell specs for build_toroidal_delaunay2(): {err}"
-            ))
-        })?;
-        for cell in &cells {
-            let mut cell_spec = Vec::new();
-            cell_spec.try_reserve_exact(3).map_err(|err| {
-                generation_failed(format!(
-                    "from_toroidal_cdt() failed to reserve a build_toroidal_delaunay2() triangle cell spec: {err}"
-                ))
-            })?;
-            cell_spec.extend_from_slice(cell);
-            cell_specs.push(cell_spec);
-        }
-
-        let domain = [1.0_f64, 1.0_f64];
-        let dt = build_toroidal_delaunay2(&vertex_specs, &cell_specs, domain)
+        let domain = [n_f, t_f];
+        let dt = build_periodic_toroidal_delaunay2(&vertex_specs, domain)
             .map_err(|e| remap_toroidal_generation_error(e, total_vertices))?;
 
         let backend = DelaunayBackend2D::from_triangulation(dt);
-        validate_toroidal_counts(&backend, total_vertices, expected_vertices, expected_faces)?;
+        validate_toroidal_counts(
+            &backend,
+            total_vertices,
+            expected_vertices,
+            expected_faces,
+            (0.0, n_f.max(t_f) - 1.0),
+        )?;
 
         let slice_sizes = vec![n; t_count];
         let foliation =
@@ -686,15 +658,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let mut tri = Self::with_topology(backend, num_slices, 2, CdtTopology::Toroidal)?;
         tri.foliation = Some(foliation);
         tri.mark_foliation_synchronized();
-
-        // Propagate inner errors as-is so callers can pattern-match on the
-        // typed variant (e.g. `FoliationError::SpacelikeNonClosedRing` or
-        // `CausalityViolation`) instead of parsing a wrapped string.  Each
-        // inner validator already produces a precise, structured error.
-        tri.validate_foliation()?;
-        tri.validate_causality_delaunay()?;
-        tri.validate_topology()?;
-        tri.classify_all_cells()?;
+        tri.validate_initial_delaunay_cdt()?;
 
         Ok(tri)
     }
@@ -704,7 +668,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 mod tests {
     use super::*;
     use crate::cdt::foliation::{CellType, EdgeType, FoliationError};
-    use crate::geometry::generators::build_delaunay2_with_data;
+    use crate::geometry::generators::{build_delaunay2_from_cells, build_delaunay2_with_data};
 
     /// Builds a minimal labeled Delaunay backend for constructor tests.
     fn labeled_triangle_backend(labels: [u32; 3]) -> DelaunayBackend2D {
@@ -717,13 +681,13 @@ mod tests {
         DelaunayBackend2D::from_triangulation(dt)
     }
 
-    /// Builds an explicit strip and verifies it is a strict CDT mesh.
+    /// Builds a Delaunay strip and verifies it is a strict CDT mesh.
     fn strict_strip(
         vertices_per_slice: u32,
         num_slices: u32,
     ) -> CdtTriangulation<DelaunayBackend2D> {
         let tri = CdtTriangulation::from_cdt_strip(vertices_per_slice, num_slices)
-            .expect("explicit strip construction should succeed");
+            .expect("Delaunay strip construction should succeed");
         assert_eq!(
             tri.vertex_count(),
             vertices_per_slice as usize * num_slices as usize
@@ -737,13 +701,16 @@ mod tests {
             vec![vertices_per_slice as usize; num_slices as usize].as_slice()
         );
         tri.validate_foliation()
-            .expect("explicit strip foliation should validate");
+            .expect("Delaunay strip foliation should validate");
         tri.validate_causality_delaunay()
-            .expect("explicit strip causality should validate");
+            .expect("Delaunay strip causality should validate");
         tri.validate_topology()
-            .expect("explicit strip topology should validate");
+            .expect("Delaunay strip topology should validate");
+        tri.geometry()
+            .validate_delaunay()
+            .expect("Delaunay strip should pass upstream Level 1-4 validation");
         tri.validate_cell_classification()
-            .expect("all explicit strip cells should classify");
+            .expect("all Delaunay strip cells should classify");
         for face in tri.geometry().faces() {
             assert!(tri.cell_type(&face).is_some());
             assert!(tri.cell_type_from_data(&face).is_some());
@@ -767,7 +734,7 @@ mod tests {
             remapped,
             CdtError::DelaunayGenerationFailed {
                 vertex_count: 12,
-                coordinate_range: (0.0, 1.0),
+                coordinate_range: (-1.0, 1.0),
                 attempt: 1,
                 ref underlying_error,
             } if underlying_error == "builder failed"
@@ -971,6 +938,7 @@ mod tests {
         assert!(tri.has_foliation());
         assert_eq!(tri.slice_sizes(), &[2, 1]);
         assert!(tri.validate_foliation().is_ok());
+        assert!(tri.validate_cell_classification().is_ok());
 
         for vh in tri.geometry().vertices() {
             assert!(tri.time_label(&vh).is_some());
@@ -1030,6 +998,57 @@ mod tests {
         assert!(matches!(
             result,
             Err(CdtError::Foliation(FoliationError::EmptySlice { slice: 1 }))
+        ));
+    }
+
+    #[test]
+    fn test_from_labeled_delaunay_rejects_non_cdt_cells() {
+        let dt = build_delaunay2_from_cells(
+            &[
+                ([0.0, 0.0], 0),
+                ([1.0, 0.0], 0),
+                ([0.0, 1.0], 0),
+                ([1.0, 1.0], 1),
+            ],
+            &[vec![0, 1, 2], vec![1, 3, 2]],
+        )
+        .expect("explicit cells should build before constructor validation");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+
+        let result = CdtTriangulation::from_labeled_delaunay(backend, 2, 2);
+
+        assert!(matches!(
+            result,
+            Err(CdtError::ValidationFailed {
+                ref check,
+                ref detail,
+            }) if *check == crate::CdtValidationCheck::Causality
+                && detail.contains("invalid CDT triangle")
+        ));
+    }
+
+    #[test]
+    fn test_from_labeled_delaunay_rejects_explicit_non_delaunay_cells() {
+        let dt = build_delaunay2_from_cells(
+            &[
+                ([0.0, 0.0], 0),
+                ([1.0, 0.0], 0),
+                ([0.0, 1.0], 1),
+                ([0.2, 0.2], 1),
+            ],
+            &[vec![0, 1, 2], vec![1, 3, 2]],
+        )
+        .expect("explicit cells should build before constructor validation");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+
+        let result = CdtTriangulation::from_labeled_delaunay(backend, 2, 2);
+
+        assert!(matches!(
+            result,
+            Err(CdtError::DelaunayValidationFailed {
+                level,
+                ..
+            }) if level == crate::DelaunayValidationLevel::Four
         ));
     }
 
@@ -1097,9 +1116,10 @@ mod tests {
 
     #[test]
     fn test_from_cdt_strip_builds_valid_mesh() {
-        let tri = CdtTriangulation::from_cdt_strip(4, 2).expect("explicit strip should build");
+        let tri = CdtTriangulation::from_cdt_strip(4, 2).expect("Delaunay strip should build");
         assert_eq!(tri.vertex_count(), 8);
         assert_eq!(tri.face_count(), 6);
+        assert!(tri.geometry().validate_delaunay().is_ok());
         assert!(tri.validate_topology().is_ok());
         assert!(tri.validate_foliation().is_ok());
         assert!(tri.validate_causality_delaunay().is_ok());
@@ -1108,7 +1128,7 @@ mod tests {
 
     #[test]
     fn test_explicit_strip_count_validation_rejects_face_mismatch() {
-        let tri = CdtTriangulation::from_cdt_strip(4, 2).expect("explicit strip should build");
+        let tri = CdtTriangulation::from_cdt_strip(4, 2).expect("Delaunay strip should build");
         let result = validate_strip_counts(tri.geometry(), 8, 7, 8, 7, 4, 2, 1.0);
 
         assert!(matches!(
@@ -1118,7 +1138,7 @@ mod tests {
                 coordinate_range: (0.0, 1.0),
                 attempt: 1,
                 ref underlying_error,
-            }) if underlying_error.contains("build_delaunay2_from_cells()/from_cdt_strip()")
+            }) if underlying_error.contains("build_delaunay2_with_data()/from_cdt_strip()")
                 && underlying_error.contains("produced 6 faces, expected 7")
                 && underlying_error.contains("vertices_per_slice=4")
                 && underlying_error.contains("num_slices=2")
@@ -1179,25 +1199,58 @@ mod tests {
     }
 
     #[test]
-    fn test_from_toroidal_cdt_validate_passes() {
+    fn test_from_toroidal_cdt_initializes_delaunay_pl_manifold() {
         let tri = CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
-        assert!(tri.validate_topology().is_ok());
-        assert!(tri.validate_foliation().is_ok());
-        assert!(tri.validate_causality().is_ok());
+        assert_eq!(tri.vertex_count(), 12);
+        assert_eq!(tri.face_count(), 24);
+        assert_eq!(tri.geometry().periodic_domain(), Some([4.0, 3.0]));
+        tri.geometry()
+            .validate_delaunay()
+            .expect("initial toroidal CDT must pass upstream Level 1-4 validation");
+        tri.validate_topology()
+            .expect("initial toroidal CDT must satisfy torus topology");
+        tri.validate_foliation()
+            .expect("initial toroidal CDT must have valid time-slice foliation");
+        tri.validate_causality()
+            .expect("initial toroidal CDT must only contain adjacent-slice edges");
+        tri.validate_cell_classification()
+            .expect("initial toroidal CDT must classify every face as an Up or Down CDT cell");
     }
 
     #[test]
     fn test_from_toroidal_cdt_each_slice_is_closed_s1() {
         let tri = CdtTriangulation::from_toroidal_cdt(6, 4).expect("build toroidal CDT");
         tri.validate_foliation()
-            .expect("explicit toroidal CDT must satisfy closed-S¹ per-slice invariant");
+            .expect("periodic toroidal CDT must satisfy closed-S¹ per-slice invariant");
     }
 
     #[test]
     fn test_from_toroidal_cdt_invalid_params() {
-        assert!(CdtTriangulation::from_toroidal_cdt(2, 3).is_err());
-        assert!(CdtTriangulation::from_toroidal_cdt(4, 1).is_err());
-        assert!(CdtTriangulation::from_toroidal_cdt(4, 2).is_err());
+        let few_vertices = CdtTriangulation::from_toroidal_cdt(2, 3);
+        assert!(matches!(
+            few_vertices,
+            Err(CdtError::InvalidGenerationParameters {
+                ref issue,
+                ref provided_value,
+                ref expected_range,
+            }) if issue == "Insufficient vertices per slice"
+                && provided_value == "2"
+                && expected_range == "≥ 3"
+        ));
+
+        for slices in [1, 2] {
+            let few_slices = CdtTriangulation::from_toroidal_cdt(4, slices);
+            assert!(matches!(
+                few_slices,
+                Err(CdtError::InvalidGenerationParameters {
+                    ref issue,
+                    ref provided_value,
+                    ref expected_range,
+                }) if issue == "Insufficient number of time slices"
+                    && provided_value == &slices.to_string()
+                    && expected_range == "≥ 3"
+            ));
+        }
     }
 
     #[test]
@@ -1217,18 +1270,18 @@ mod tests {
     }
 
     #[test]
-    fn test_explicit_toroidal_count_validation_rejects_face_mismatch() {
+    fn test_periodic_toroidal_count_validation_rejects_face_mismatch() {
         let tri = CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
-        let result = validate_toroidal_counts(tri.geometry(), 12, 12, 23);
+        let result = validate_toroidal_counts(tri.geometry(), 12, 12, 23, (0.0, 3.0));
 
         assert!(matches!(
             result,
             Err(CdtError::DelaunayGenerationFailed {
                 vertex_count: 12,
-                coordinate_range: (0.0, 1.0),
+                coordinate_range: (0.0, 3.0),
                 attempt: 1,
                 ref underlying_error,
-            }) if underlying_error.contains("explicit toroidal builder")
+            }) if underlying_error.contains("periodic toroidal builder")
                 && underlying_error.contains("produced 12 vertices and 24 faces")
                 && underlying_error.contains("expected 12 vertices and 23 faces")
         ));

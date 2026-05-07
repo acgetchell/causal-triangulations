@@ -2,7 +2,148 @@
 
 //! Error types for the CDT library.
 
+use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::FoliationError;
+use crate::config::CdtTopology;
+use std::fmt;
+
+/// Highest cumulative upstream Delaunay validation level being enforced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum DelaunayValidationLevel {
+    /// Validate Level 1 only.
+    One,
+    /// Validate Levels 1 through 2.
+    Two,
+    /// Validate Levels 1 through 3.
+    Three,
+    /// Validate Levels 1 through 4.
+    Four,
+}
+
+impl fmt::Display for DelaunayValidationLevel {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::One => formatter.write_str("Level 1"),
+            Self::Two => formatter.write_str("Level 1-2"),
+            Self::Three => formatter.write_str("Level 1-3"),
+            Self::Four => formatter.write_str("Level 1-4"),
+        }
+    }
+}
+
+/// CDT validation check that failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CdtValidationCheck {
+    /// Generic backend geometry validation.
+    Geometry,
+    /// Foliation assignment from coordinates failed.
+    FoliationAssignment,
+    /// Causality validation failed.
+    Causality,
+    /// Strict CDT cell classification failed.
+    CellClassification,
+    /// Local ergodic move candidate geometry could not be interpreted.
+    ErgodicMoveCandidateGeometry,
+}
+
+impl fmt::Display for CdtValidationCheck {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Geometry => formatter.write_str("geometry"),
+            Self::FoliationAssignment => formatter.write_str("foliation_assignment"),
+            Self::Causality => formatter.write_str("causality"),
+            Self::CellClassification => formatter.write_str("cell_classification"),
+            Self::ErgodicMoveCandidateGeometry => {
+                formatter.write_str("ergodic_move_candidate_geometry")
+            }
+        }
+    }
+}
+
+/// Category explaining why a checkpoint could not be resumed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CheckpointResumeReason {
+    /// Resumed step count would overflow.
+    StepCountOverflow,
+    /// Checkpoint target reconstruction failed.
+    CheckpointTargetConfiguration,
+    /// Generic MCMC chain restoration failed.
+    McmcChainRestore,
+    /// Restored triangulation failed invariant validation.
+    TriangulationInvariants,
+    /// Stored action disagrees with recomputed action.
+    ActionMismatch,
+    /// Action configuration differs from the checkpoint.
+    IncompatibleActionConfiguration,
+    /// Temperature differs from the checkpoint.
+    IncompatibleTemperature,
+    /// Thermalization schedule differs from the checkpoint.
+    IncompatibleThermalizationSchedule,
+    /// Measurement frequency differs from the checkpoint.
+    IncompatibleMeasurementFrequency,
+    /// Checkpoint simulation configuration failed validation.
+    CheckpointConfiguration,
+    /// Checkpoint action configuration failed validation.
+    CheckpointActionConfiguration,
+    /// Generic MCMC chain counters disagree with CDT move statistics.
+    ChainCounterMismatch,
+    /// Generic MCMC chain step count disagrees with checkpoint step.
+    ChainStepMismatch,
+    /// Step telemetry is internally inconsistent.
+    StepTelemetryMismatch,
+    /// Step telemetry index conversion overflowed.
+    StepTelemetryOverflow,
+    /// Measurement telemetry count or step conversion overflowed.
+    MeasurementTelemetryOverflow,
+    /// Measurement telemetry is internally inconsistent.
+    MeasurementTelemetryMismatch,
+    /// Move statistics violate internal accounting invariants.
+    MoveStatisticsInvariant,
+    /// Accepted or rejected counter conversion overflowed.
+    CounterConversionOverflow,
+}
+
+impl fmt::Display for CheckpointResumeReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::StepCountOverflow => formatter.write_str("step count overflow"),
+            Self::CheckpointTargetConfiguration => {
+                formatter.write_str("checkpoint target configuration")
+            }
+            Self::McmcChainRestore => formatter.write_str("mcmc chain restore"),
+            Self::TriangulationInvariants => formatter.write_str("triangulation invariants"),
+            Self::ActionMismatch => formatter.write_str("action mismatch"),
+            Self::IncompatibleActionConfiguration => {
+                formatter.write_str("incompatible action configuration")
+            }
+            Self::IncompatibleTemperature => formatter.write_str("incompatible temperature"),
+            Self::IncompatibleThermalizationSchedule => {
+                formatter.write_str("incompatible thermalization schedule")
+            }
+            Self::IncompatibleMeasurementFrequency => {
+                formatter.write_str("incompatible measurement frequency")
+            }
+            Self::CheckpointConfiguration => formatter.write_str("checkpoint configuration"),
+            Self::CheckpointActionConfiguration => {
+                formatter.write_str("checkpoint action configuration")
+            }
+            Self::ChainCounterMismatch => formatter.write_str("chain counter mismatch"),
+            Self::ChainStepMismatch => formatter.write_str("chain step mismatch"),
+            Self::StepTelemetryMismatch => formatter.write_str("step telemetry mismatch"),
+            Self::StepTelemetryOverflow => formatter.write_str("step telemetry overflow"),
+            Self::MeasurementTelemetryOverflow => {
+                formatter.write_str("measurement telemetry overflow")
+            }
+            Self::MeasurementTelemetryMismatch => {
+                formatter.write_str("measurement telemetry mismatch")
+            }
+            Self::MoveStatisticsInvariant => formatter.write_str("move statistics invariant"),
+            Self::CounterConversionOverflow => formatter.write_str("counter conversion overflow"),
+        }
+    }
+}
 
 /// Main error type for CDT operations.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
@@ -26,6 +167,14 @@ pub enum CdtError {
         attempt: u32,
         /// Description of the underlying error that caused the failure
         underlying_error: String,
+    },
+    /// Upstream Delaunay validation rejected a geometry backend.
+    #[error("Delaunay validation failed [{level}]: {detail}")]
+    DelaunayValidationFailed {
+        /// Cumulative upstream validation level being enforced.
+        level: DelaunayValidationLevel,
+        /// Upstream validation diagnostic.
+        detail: String,
     },
     /// Invalid generation parameters detected before attempting triangulation
     #[error(
@@ -63,13 +212,13 @@ pub enum CdtError {
     },
     /// Metropolis accepted a move, but a hard backend or invariant failure stopped application.
     #[error(
-        "Metropolis accepted {move_type} at step {step}, but applying it failed after {attempts} attempts; last failure: {last_failure}"
+        "Metropolis accepted {move_type:?} at step {step}, but applying it failed after {attempts} attempts; last failure: {last_failure}"
     )]
     MetropolisMoveApplicationFailed {
         /// Monte Carlo step whose accepted move could not be applied.
         step: u32,
         /// Accepted move type being applied.
-        move_type: String,
+        move_type: MoveType,
         /// Number of application attempts made before failing.
         attempts: usize,
         /// Most specific lower-level rejection or failure observed.
@@ -83,7 +232,7 @@ pub enum CdtError {
         /// Name of the invalid metadata field.
         field: String,
         /// Topology whose invariant was violated.
-        topology: String,
+        topology: CdtTopology,
         /// Value stored in the triangulation metadata.
         provided_value: String,
         /// Expected constraint for the metadata field.
@@ -92,8 +241,8 @@ pub enum CdtError {
     /// Validation of a constructed triangulation failed
     #[error("Validation failed [{check}]: {detail}")]
     ValidationFailed {
-        /// Name of the validation check that failed (e.g. "geometry", "topology", "Delaunay")
-        check: String,
+        /// Validation check that failed.
+        check: CdtValidationCheck,
         /// Human-readable description of the failure
         detail: String,
     },
@@ -103,7 +252,7 @@ pub enum CdtError {
     )]
     TopologyMismatch {
         /// Topology requested by CDT metadata.
-        topology: String,
+        topology: CdtTopology,
         /// Observed Euler characteristic from the backend.
         euler_characteristic: i32,
         /// Accepted Euler characteristics for the requested topology.
@@ -228,7 +377,7 @@ pub enum CdtError {
     #[error("Failed to resume MCMC checkpoint [{reason}]: {detail}")]
     CheckpointResumeFailed {
         /// Structured reason category for the resume failure.
-        reason: String,
+        reason: CheckpointResumeReason,
         /// Human-readable reason resume could not proceed.
         detail: String,
     },
@@ -299,7 +448,7 @@ mod tests {
     fn test_invalid_triangulation_metadata_error() {
         let error = CdtError::InvalidTriangulationMetadata {
             field: "timeslices".to_string(),
-            topology: "toroidal".to_string(),
+            topology: CdtTopology::Toroidal,
             provided_value: "2".to_string(),
             expected: "≥ 3".to_string(),
         };
@@ -323,6 +472,128 @@ mod tests {
             display,
             "Delaunay triangulation generation failed: 10 vertices, range [-1, 1], attempt 5: Too many duplicate points"
         );
+    }
+
+    #[test]
+    fn test_delaunay_validation_failed_error() {
+        let error = CdtError::DelaunayValidationFailed {
+            level: DelaunayValidationLevel::Four,
+            detail: "upstream validation failed".to_string(),
+        };
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "Delaunay validation failed [Level 1-4]: upstream validation failed"
+        );
+    }
+
+    #[test]
+    fn validation_level_display_covers_all_levels() {
+        assert_eq!(DelaunayValidationLevel::One.to_string(), "Level 1");
+        assert_eq!(DelaunayValidationLevel::Two.to_string(), "Level 1-2");
+        assert_eq!(DelaunayValidationLevel::Three.to_string(), "Level 1-3");
+        assert_eq!(DelaunayValidationLevel::Four.to_string(), "Level 1-4");
+    }
+
+    #[test]
+    fn validation_check_display_covers_all_categories() {
+        assert_eq!(CdtValidationCheck::Geometry.to_string(), "geometry");
+        assert_eq!(
+            CdtValidationCheck::FoliationAssignment.to_string(),
+            "foliation_assignment"
+        );
+        assert_eq!(CdtValidationCheck::Causality.to_string(), "causality");
+        assert_eq!(
+            CdtValidationCheck::CellClassification.to_string(),
+            "cell_classification"
+        );
+        assert_eq!(
+            CdtValidationCheck::ErgodicMoveCandidateGeometry.to_string(),
+            "ergodic_move_candidate_geometry"
+        );
+    }
+
+    #[test]
+    fn checkpoint_resume_reason_display_covers_all_categories() {
+        let cases = [
+            (
+                CheckpointResumeReason::StepCountOverflow,
+                "step count overflow",
+            ),
+            (
+                CheckpointResumeReason::CheckpointTargetConfiguration,
+                "checkpoint target configuration",
+            ),
+            (
+                CheckpointResumeReason::McmcChainRestore,
+                "mcmc chain restore",
+            ),
+            (
+                CheckpointResumeReason::TriangulationInvariants,
+                "triangulation invariants",
+            ),
+            (CheckpointResumeReason::ActionMismatch, "action mismatch"),
+            (
+                CheckpointResumeReason::IncompatibleActionConfiguration,
+                "incompatible action configuration",
+            ),
+            (
+                CheckpointResumeReason::IncompatibleTemperature,
+                "incompatible temperature",
+            ),
+            (
+                CheckpointResumeReason::IncompatibleThermalizationSchedule,
+                "incompatible thermalization schedule",
+            ),
+            (
+                CheckpointResumeReason::IncompatibleMeasurementFrequency,
+                "incompatible measurement frequency",
+            ),
+            (
+                CheckpointResumeReason::CheckpointConfiguration,
+                "checkpoint configuration",
+            ),
+            (
+                CheckpointResumeReason::CheckpointActionConfiguration,
+                "checkpoint action configuration",
+            ),
+            (
+                CheckpointResumeReason::ChainCounterMismatch,
+                "chain counter mismatch",
+            ),
+            (
+                CheckpointResumeReason::ChainStepMismatch,
+                "chain step mismatch",
+            ),
+            (
+                CheckpointResumeReason::StepTelemetryMismatch,
+                "step telemetry mismatch",
+            ),
+            (
+                CheckpointResumeReason::StepTelemetryOverflow,
+                "step telemetry overflow",
+            ),
+            (
+                CheckpointResumeReason::MeasurementTelemetryOverflow,
+                "measurement telemetry overflow",
+            ),
+            (
+                CheckpointResumeReason::MeasurementTelemetryMismatch,
+                "measurement telemetry mismatch",
+            ),
+            (
+                CheckpointResumeReason::MoveStatisticsInvariant,
+                "move statistics invariant",
+            ),
+            (
+                CheckpointResumeReason::CounterConversionOverflow,
+                "counter conversion overflow",
+            ),
+        ];
+
+        for (reason, expected) in cases {
+            assert_eq!(reason.to_string(), expected);
+        }
     }
 
     #[test]
@@ -352,7 +623,7 @@ mod tests {
     #[test]
     fn test_validation_failed_error() {
         let error = CdtError::ValidationFailed {
-            check: "geometry".to_string(),
+            check: CdtValidationCheck::Geometry,
             detail: "backend reported invalid triangulation structure".to_string(),
         };
         let display = format!("{error}");
@@ -365,7 +636,7 @@ mod tests {
     #[test]
     fn test_topology_mismatch_error() {
         let error = CdtError::TopologyMismatch {
-            topology: "toroidal".to_string(),
+            topology: CdtTopology::Toroidal,
             euler_characteristic: 1,
             expected_euler_characteristics: vec![0],
             vertices: 3,
@@ -449,7 +720,7 @@ mod tests {
     fn test_metropolis_move_application_failed_error() {
         let error = CdtError::MetropolisMoveApplicationFailed {
             step: 17,
-            move_type: "Move31Remove".to_string(),
+            move_type: MoveType::Move31Remove,
             attempts: 8,
             last_failure: "no geometrically valid candidate site found".to_string(),
         };
@@ -630,13 +901,13 @@ mod tests {
     #[test]
     fn test_checkpoint_resume_failed_error() {
         let error = CdtError::CheckpointResumeFailed {
-            reason: "incompatible temperature".to_string(),
+            reason: CheckpointResumeReason::IncompatibleTemperature,
             detail: "temperature differs from checkpoint".to_string(),
         };
         let CdtError::CheckpointResumeFailed { reason, detail } = &error else {
             panic!("expected CheckpointResumeFailed variant");
         };
-        assert_eq!(reason, "incompatible temperature");
+        assert_eq!(*reason, CheckpointResumeReason::IncompatibleTemperature);
         assert_eq!(detail, "temperature differs from checkpoint");
         assert_eq!(
             format!("{error}"),

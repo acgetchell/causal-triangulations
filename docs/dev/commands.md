@@ -288,6 +288,7 @@ just test-python       # pytest
 | Run lints             | `just check`             |
 | Run unit tests        | `just test`              |
 | Run integration tests | `just test-integration`  |
+| Run slow tests        | `just test-slow`         |
 | Run all tests         | `just test-all`          |
 | Run Python tests      | `just test-python`       |
 | Run examples          | `just examples`          |

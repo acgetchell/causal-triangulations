@@ -226,6 +226,7 @@ help-workflows:
     @echo "Testing:"
     @echo "  just test              # Lib and doc tests only (fast, used by CI)"
     @echo "  just test-integration  # Integration tests (tests/)"
+    @echo "  just test-slow         # Feature-gated slow integration tests"
     @echo "  just test-all          # All tests (lib + doc + integration + Python)"
     @echo "  just test-python       # Python tests only (pytest)"
     @echo "  just test-release      # All tests in release mode"
@@ -635,6 +636,9 @@ test-doc:
 
 test-integration:
     cargo test --tests --verbose
+
+test-slow:
+    cargo test --tests --features slow-tests --verbose
 
 test-examples:
     cargo test --examples --verbose
