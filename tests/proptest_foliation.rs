@@ -1,8 +1,67 @@
 #![forbid(unsafe_code)]
 //! Property-based tests for CDT foliation construction and validation.
 
+use causal_triangulations::geometry::DelaunayBackend2D;
+use causal_triangulations::geometry::traits::GeometryBackend;
 use causal_triangulations::prelude::triangulation::*;
 use proptest::prelude::*;
+
+#[derive(Debug, PartialEq, Eq)]
+struct StripFingerprint {
+    vertices: Vec<VertexFingerprint>,
+    faces: Vec<Vec<VertexFingerprint>>,
+    slice_sizes: Vec<usize>,
+}
+
+type VertexFingerprint = (Vec<u64>, Option<u32>);
+
+/// Captures a vertex by exact coordinate bits and time label for deterministic comparisons.
+fn vertex_fingerprint(
+    tri: &CdtTriangulation2D,
+    vertex: &<DelaunayBackend2D as GeometryBackend>::VertexHandle,
+) -> VertexFingerprint {
+    let coords = tri
+        .geometry()
+        .vertex_coordinates(vertex)
+        .expect("strip vertex coordinates should resolve")
+        .into_iter()
+        .map(f64::to_bits)
+        .collect();
+    (coords, tri.time_label(vertex))
+}
+
+/// Builds a canonical strip mesh fingerprint that is stable across handle allocation order.
+fn strip_fingerprint(tri: &CdtTriangulation2D) -> StripFingerprint {
+    let mut vertices = tri
+        .geometry()
+        .vertices()
+        .map(|vertex| vertex_fingerprint(tri, &vertex))
+        .collect::<Vec<_>>();
+    vertices.sort();
+
+    let mut faces = tri
+        .geometry()
+        .faces()
+        .map(|face| {
+            let mut face_vertices = tri
+                .geometry()
+                .face_vertices(&face)
+                .expect("strip face vertices should resolve")
+                .into_iter()
+                .map(|vertex| vertex_fingerprint(tri, &vertex))
+                .collect::<Vec<_>>();
+            face_vertices.sort();
+            face_vertices
+        })
+        .collect::<Vec<_>>();
+    faces.sort();
+
+    StripFingerprint {
+        vertices,
+        faces,
+        slice_sizes: tri.slice_sizes().to_vec(),
+    }
+}
 
 #[test]
 fn cdt_strip_builds_delaunay_mesh() {
@@ -90,6 +149,7 @@ proptest! {
         prop_assert!(tri.validate_topology().is_ok());
         prop_assert!(tri.validate_foliation().is_ok());
         prop_assert!(tri.validate_causality().is_ok());
+        prop_assert!(tri.validate_cell_classification().is_ok());
     }
 }
 
@@ -184,9 +244,6 @@ proptest! {
         let t2 = CdtTriangulation::from_cdt_strip(vertices_per_slice, num_slices)
             .expect("valid Delaunay strip construction should pass");
 
-        prop_assert_eq!(t1.vertex_count(), t2.vertex_count());
-        prop_assert_eq!(t1.edge_count(), t2.edge_count());
-        prop_assert_eq!(t1.face_count(), t2.face_count());
-        prop_assert_eq!(t1.slice_sizes(), t2.slice_sizes());
+        prop_assert_eq!(strip_fingerprint(&t1), strip_fingerprint(&t2));
     }
 }

@@ -488,6 +488,115 @@ mod tests {
     }
 
     #[test]
+    fn validation_level_display_covers_all_levels() {
+        assert_eq!(DelaunayValidationLevel::One.to_string(), "Level 1");
+        assert_eq!(DelaunayValidationLevel::Two.to_string(), "Level 1-2");
+        assert_eq!(DelaunayValidationLevel::Three.to_string(), "Level 1-3");
+        assert_eq!(DelaunayValidationLevel::Four.to_string(), "Level 1-4");
+    }
+
+    #[test]
+    fn validation_check_display_covers_all_categories() {
+        assert_eq!(CdtValidationCheck::Geometry.to_string(), "geometry");
+        assert_eq!(
+            CdtValidationCheck::FoliationAssignment.to_string(),
+            "foliation_assignment"
+        );
+        assert_eq!(CdtValidationCheck::Causality.to_string(), "causality");
+        assert_eq!(
+            CdtValidationCheck::CellClassification.to_string(),
+            "cell_classification"
+        );
+        assert_eq!(
+            CdtValidationCheck::ErgodicMoveCandidateGeometry.to_string(),
+            "ergodic move candidate geometry"
+        );
+    }
+
+    #[test]
+    fn checkpoint_resume_reason_display_covers_all_categories() {
+        let cases = [
+            (
+                CheckpointResumeReason::StepCountOverflow,
+                "step count overflow",
+            ),
+            (
+                CheckpointResumeReason::CheckpointTargetConfiguration,
+                "checkpoint target configuration",
+            ),
+            (
+                CheckpointResumeReason::McmcChainRestore,
+                "mcmc chain restore",
+            ),
+            (
+                CheckpointResumeReason::TriangulationInvariants,
+                "triangulation invariants",
+            ),
+            (CheckpointResumeReason::ActionMismatch, "action mismatch"),
+            (
+                CheckpointResumeReason::IncompatibleActionConfiguration,
+                "incompatible action configuration",
+            ),
+            (
+                CheckpointResumeReason::IncompatibleTemperature,
+                "incompatible temperature",
+            ),
+            (
+                CheckpointResumeReason::IncompatibleThermalizationSchedule,
+                "incompatible thermalization schedule",
+            ),
+            (
+                CheckpointResumeReason::IncompatibleMeasurementFrequency,
+                "incompatible measurement frequency",
+            ),
+            (
+                CheckpointResumeReason::CheckpointConfiguration,
+                "checkpoint configuration",
+            ),
+            (
+                CheckpointResumeReason::CheckpointActionConfiguration,
+                "checkpoint action configuration",
+            ),
+            (
+                CheckpointResumeReason::ChainCounterMismatch,
+                "chain counter mismatch",
+            ),
+            (
+                CheckpointResumeReason::ChainStepMismatch,
+                "chain step mismatch",
+            ),
+            (
+                CheckpointResumeReason::StepTelemetryMismatch,
+                "step telemetry mismatch",
+            ),
+            (
+                CheckpointResumeReason::StepTelemetryOverflow,
+                "step telemetry overflow",
+            ),
+            (
+                CheckpointResumeReason::MeasurementTelemetryOverflow,
+                "measurement telemetry overflow",
+            ),
+            (
+                CheckpointResumeReason::MeasurementTelemetryMismatch,
+                "measurement telemetry mismatch",
+            ),
+            (
+                CheckpointResumeReason::MoveStatisticsInvariant,
+                "move statistics invariant",
+            ),
+            (
+                CheckpointResumeReason::CounterConversionOverflow,
+                "counter conversion overflow",
+            ),
+        ];
+
+        for (reason, expected) in cases {
+            assert_eq!(reason.to_string(), expected);
+        }
+    }
+
+    #[test]
     fn test_unsupported_dimension_error() {
         let error = CdtError::UnsupportedDimension(3);
         let display = format!("{error}");

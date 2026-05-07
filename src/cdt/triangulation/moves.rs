@@ -57,6 +57,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::CdtTriangulation2D;
+    use crate::geometry::generators::build_delaunay2_from_cells;
     use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
 
     /// Computes the centroid of a live triangular face.
@@ -81,6 +83,22 @@ mod tests {
             centroid[1] += coords[1] / 3.0;
         }
         centroid
+    }
+
+    /// Builds a two-triangle CDT fixture with a shared edge that can flip cleanly.
+    fn square_two_triangles() -> CdtTriangulation2D {
+        let dt = build_delaunay2_from_cells(
+            &[
+                ([0.0, 0.0], 0),
+                ([1.0, 0.0], 0),
+                ([0.0, 1.0], 1),
+                ([1.0, 1.0], 1),
+            ],
+            &[vec![0, 1, 2], vec![1, 3, 2]],
+        )
+        .expect("build square CDT");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+        CdtTriangulation2D::from_labeled_delaunay(backend, 2, 2).expect("wrap square CDT")
     }
 
     #[test]
@@ -162,8 +180,7 @@ mod tests {
 
     #[test]
     fn flip_edge_invalidates_cached_counts_when_backend_accepts_flip() {
-        let mut tri =
-            CdtTriangulation::from_seeded_points(8, 1, 2, 53).expect("build triangulation");
+        let mut tri = square_two_triangles();
         let edge = tri
             .geometry()
             .edges()

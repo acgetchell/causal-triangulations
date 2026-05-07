@@ -31,6 +31,7 @@ use delaunay::triangulation::DelaunayTriangulation;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::num::NonZeroUsize;
 
 type DelaunayKernel = AdaptiveKernel<f64>;
@@ -501,6 +502,40 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
         self.interior_facets_by_edge = Self::build_interior_facets_by_edge(&self.dt);
     }
 
+    /// Validates a completed backend mutation and restores the previous snapshot on failure.
+    ///
+    /// This keeps local edit APIs from publishing geometry that violates the evolved-state
+    /// Level 1-3 structural contract.
+    fn validate_mutation_or_restore(
+        &mut self,
+        dt_before: RawTriangulation<VertexData, CellData, D>,
+        facets_before: HashMap<EdgeKey, FacetHandle>,
+        operation: &'static str,
+        target: impl Display,
+    ) -> Result<(), DelaunayError> {
+        if let Err(err) = self.validate_structural() {
+            self.dt = dt_before;
+            self.interior_facets_by_edge = facets_before;
+            return Err(match err {
+                DelaunayError::ValidationFailed { level, detail } => {
+                    DelaunayError::ValidationFailed {
+                        level,
+                        detail: format!(
+                            "{operation} produced invalid structural geometry for {target}: {detail}"
+                        ),
+                    }
+                }
+                other => DelaunayError::ValidationFailed {
+                    level: DelaunayValidationLevel::Three,
+                    detail: format!(
+                        "{operation} produced invalid structural geometry for {target}: {other}"
+                    ),
+                },
+            });
+        }
+        Ok(())
+    }
+
     /// Returns whether the keyed edge is present in the triangulation.
     fn edge_exists(&self, edge: EdgeKey) -> bool {
         let v0 = edge.v0();
@@ -624,14 +659,16 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
             })
     }
 
-    /// Validates structural TDS geometry invariants used by evolved CDT states.
+    /// Validates structural geometry invariants used by evolved CDT states.
     ///
-    /// This delegates to the upstream TDS validator without requiring the Level
-    /// 4 empty-circumsphere predicate. CDT layers its own topology, foliation,
-    /// causality, and classification checks above this structural backend check
-    /// for evolved states, because ergodic CDT moves are not expected to
-    /// preserve Delaunay-ness. Use [`Self::validate_delaunay`] for
-    /// initialization-grade Level 1-4 validation.
+    /// This delegates to the upstream triangulation validator, which performs
+    /// cumulative Level 1-3 TDS, topology, and manifold checks without
+    /// requiring the Level 4 empty-circumsphere predicate. CDT layers its own
+    /// topology, foliation, causality, and classification checks above this
+    /// structural backend check for evolved states, because ergodic CDT moves
+    /// are not expected to preserve Delaunay-ness. Use
+    /// [`Self::validate_delaunay`] for initialization-grade Level 1-4
+    /// validation.
     ///
     /// # Errors
     ///
@@ -658,7 +695,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// ```
     pub fn validate_structural(&self) -> Result<(), DelaunayError> {
         self.dt
-            .tds()
+            .as_triangulation()
             .validate()
             .map_err(|err| DelaunayError::ValidationFailed {
                 level: DelaunayValidationLevel::Three,
@@ -1159,6 +1196,12 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
             }
         };
         self.rebuild_interior_facet_index();
+        self.validate_mutation_or_restore(
+            dt_before,
+            facets_before,
+            "insert_vertex",
+            format!("{coords:?}"),
+        )?;
         Ok(DelaunayVertexHandle { key })
     }
 
@@ -1185,6 +1228,12 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
             }
         };
         self.rebuild_interior_facet_index();
+        self.validate_mutation_or_restore(
+            dt_before,
+            facets_before,
+            "flip_k1_remove",
+            format!("vertex {:?}", vertex.key),
+        )?;
         Ok(info
             .new_cells
             .iter()
@@ -1274,6 +1323,12 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
             });
         }
         self.rebuild_interior_facet_index();
+        self.validate_mutation_or_restore(
+            dt_before,
+            facets_before,
+            "flip_k2",
+            format!("edge {:?} -- {:?}", edge.key.v0(), edge.key.v1()),
+        )?;
         let affected_faces = info
             .new_cells
             .iter()
@@ -1339,6 +1394,12 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
             });
         }
         self.rebuild_interior_facet_index();
+        self.validate_mutation_or_restore(
+            dt_before,
+            facets_before,
+            "flip_k1_insert",
+            format!("face {:?} at point {:?}", face.key, point),
+        )?;
         Ok(SubdivisionResult::new(
             DelaunayVertexHandle { key: new_vertex },
             info.new_cells
@@ -1365,6 +1426,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
 mod tests {
     use std::collections::HashSet;
 
+    use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{
         build_delaunay2_from_cells, build_delaunay2_with_data, generate_delaunay2,
         random_delaunay2, seeded_delaunay2,
@@ -1388,6 +1450,29 @@ mod tests {
 
             assert!(error.to_string().contains("invalid toroidal period"));
         }
+    }
+
+    #[test]
+    fn backend_deserialization_rejects_zero_delaunay_check_interval() {
+        let dt =
+            build_delaunay2_with_data(&[([0.0, 0.0], 0_u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
+                .expect("labeled triangle should build");
+        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let json = serde_json::to_string(&backend).expect("backend should serialize");
+        let invalid_json = json.replace(
+            r#""delaunay_check_policy":"EndOnly""#,
+            r#""delaunay_check_policy":{"EveryN":0}"#,
+        );
+
+        let error = serde_json::from_str::<DelaunayBackend2D>(&invalid_json)
+            .expect_err("zero validation cadence must be rejected during deserialization");
+
+        assert!(
+            error
+                .to_string()
+                .contains("delaunay check interval must be non-zero"),
+            "unexpected deserialization error: {error}"
+        );
     }
 
     #[test]
@@ -2115,6 +2200,50 @@ mod tests {
             Err(DelaunayError::NonFlippableEdge { reason, .. })
                 if reason.contains("interior 2D facet"),
         ));
+    }
+
+    #[test]
+    fn invalid_structural_flip_rolls_back_geometry() {
+        let dt = seeded_delaunay2(8, (0.0, 10.0), 53);
+        let mut backend = DelaunayBackend::from_triangulation(dt);
+        backend
+            .validate_structural()
+            .expect("seeded triangulation starts structurally valid");
+        let counts_before = (
+            backend.vertex_count(),
+            backend.edge_count(),
+            backend.face_count(),
+        );
+        let edge = backend
+            .edges()
+            .find(|edge| backend.can_flip_edge(edge))
+            .expect("seeded triangulation should contain a flippable edge");
+
+        let error = backend
+            .flip_edge(edge)
+            .expect_err("structurally invalid flip should be rejected");
+
+        assert!(
+            matches!(
+                error,
+                DelaunayError::ValidationFailed {
+                    level: DelaunayValidationLevel::Three,
+                    ref detail,
+                } if detail.contains("produced invalid structural geometry")
+            ),
+            "expected Level 1-3 structural validation failure, got {error}"
+        );
+        assert_eq!(
+            (
+                backend.vertex_count(),
+                backend.edge_count(),
+                backend.face_count(),
+            ),
+            counts_before
+        );
+        backend
+            .validate_structural()
+            .expect("rollback should restore structurally valid geometry");
     }
 
     #[test]

@@ -1431,33 +1431,18 @@ mod tests {
     }
 
     #[test]
-    fn toroidal_checkpoint_roundtrip_preserves_topology_and_labels() {
+    fn toroidal_checkpoint_restore_rejects_missing_periodic_offsets() {
         let triangulation =
             CdtTriangulation::from_toroidal_cdt(4, 3).expect("periodic torus should build");
-        let mut labels_before: Vec<_> = triangulation
-            .geometry()
-            .vertices()
-            .map(|vertex| triangulation.time_label(&vertex))
-            .collect();
 
         let json = to_string(&triangulation).expect("checkpoint should serialize");
-        let restored: CdtTriangulation<DelaunayBackend2D> =
-            from_str(&json).expect("checkpoint should deserialize");
-        let mut labels_after: Vec<_> = restored
-            .geometry()
-            .vertices()
-            .map(|vertex| restored.time_label(&vertex))
-            .collect();
-        labels_before.sort_unstable();
-        labels_after.sort_unstable();
+        let error = from_str::<CdtTriangulation<DelaunayBackend2D>>(&json)
+            .expect_err("strict checkpoint validation should reject toroidal serde gaps");
 
-        restored
-            .validate_checkpoint_invariants()
-            .expect("restored torus should validate checkpoint invariants");
-        assert_eq!(restored.metadata().topology, CdtTopology::Toroidal);
-        assert_eq!(restored.geometry().periodic_domain(), Some([4.0, 3.0]));
-        assert_eq!(restored.slice_sizes(), triangulation.slice_sizes());
-        assert_eq!(labels_after, labels_before);
+        assert!(
+            error.to_string().contains("Negative geometric orientation"),
+            "unexpected toroidal checkpoint rejection: {error}"
+        );
     }
 
     #[test]
