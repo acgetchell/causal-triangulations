@@ -188,6 +188,13 @@ pub enum FoliationError {
         /// Live count observed from backend vertex labels.
         actual: usize,
     },
+    /// Stored foliation bookkeeping no longer matches the current triangulation revision.
+    StaleBookkeeping {
+        /// Modification count when foliation bookkeeping was last synchronized.
+        synced_at_modification: Option<u64>,
+        /// Current triangulation modification count.
+        current_modification_count: u64,
+    },
     /// A time slice contains no vertices.
     EmptySlice {
         /// The index of the empty slice.
@@ -288,6 +295,14 @@ impl fmt::Display for FoliationError {
             } => write!(
                 f,
                 "time slice {slice} has stored count {expected}, but live labels report {actual}"
+            ),
+            Self::StaleBookkeeping {
+                synced_at_modification,
+                current_modification_count,
+            } => write!(
+                f,
+                "stored foliation bookkeeping is stale: synchronized at modification \
+                 {synced_at_modification:?}, current modification {current_modification_count}"
             ),
             Self::EmptySlice { slice } => write!(f, "time slice {slice} is empty"),
             Self::SliceSizeSumMismatch { sum, labeled } => write!(

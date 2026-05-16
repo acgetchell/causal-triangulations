@@ -84,12 +84,12 @@ fn cdt_cli_invalid_args() {
     cmd.arg("5");
 
     cmd.assert().failure().stderr(predicate::str::contains(
-        "error: invalid value '5' for '--dimension <DIMENSION>': 5 is not in 2..4",
+        "error: invalid value '5' for '--dimension <DIMENSION>': 5 is not in 2..3",
     ));
 }
 
 #[test]
-fn cdt_cli_out_of_range_args() {
+fn cdt_cli_rejects_unimplemented_dimension_at_parse_time() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
 
     cmd.arg("-v");
@@ -99,9 +99,9 @@ fn cdt_cli_out_of_range_args() {
     cmd.arg("-d");
     cmd.arg("3");
 
-    cmd.assert()
-        .failure()
-        .stderr(predicate::str::contains("Unsupported dimension: 3"));
+    cmd.assert().failure().stderr(predicate::str::contains(
+        "error: invalid value '3' for '--dimension <DIMENSION>': 3 is not in 2..3",
+    ));
 }
 
 #[test]

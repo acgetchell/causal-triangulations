@@ -5,10 +5,11 @@
 use super::CdtTriangulation;
 use crate::cdt::foliation::{Foliation, FoliationError};
 use crate::config::CdtTopology;
-use crate::errors::{CdtError, CdtResult};
+use crate::errors::{CdtError, CdtResult, DelaunayValidationLevel};
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::generators::{
-    build_delaunay2_with_data, build_periodic_toroidal_delaunay2, generate_delaunay2,
+    DelaunayTriangulation2D, build_delaunay2_with_data, build_periodic_toroidal_delaunay2,
+    generate_delaunay2,
 };
 use crate::geometry::traits::TriangulationQuery;
 
@@ -31,6 +32,14 @@ pub(super) fn remap_toroidal_generation_error(error: CdtError, total_vertices: u
         },
         other => other,
     }
+}
+
+/// Validates a generated Delaunay triangulation before wrapping it in CDT state.
+fn validated_backend(dt: DelaunayTriangulation2D) -> CdtResult<DelaunayBackend2D> {
+    DelaunayBackend2D::from_triangulation(dt).map_err(|err| CdtError::DelaunayValidationFailed {
+        level: DelaunayValidationLevel::Four,
+        detail: err.to_string(),
+    })
 }
 
 /// Rewrites Delaunay strip builder failures with CDT-level generation context.
@@ -227,7 +236,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
 
         let dt = generate_delaunay2(vertices, (0.0, 10.0), None)?;
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = validated_backend(dt)?;
 
         Self::try_new(backend, time_slices, dimension)
     }
@@ -280,7 +289,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
 
         let dt = generate_delaunay2(vertices, (0.0, 10.0), Some(seed))?;
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = validated_backend(dt)?;
 
         Self::try_new(backend, time_slices, dimension)
     }
@@ -311,7 +320,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///         ([1.0, 0.0], 0),
     ///         ([0.5, 1.0], 1),
     ///     ])?;
-    ///     let backend = DelaunayBackend2D::from_triangulation(dt);
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt)
+    ///         .expect("three non-collinear labeled points should validate");
     ///     let tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
     ///
     ///     assert!(tri.has_foliation());
@@ -487,7 +497,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let dt = build_delaunay2_with_data(&vertex_specs)
             .map_err(|err| remap_strip_generation_error(err, total_vertices, coordinate_max))?;
 
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = validated_backend(dt)?;
         validate_strip_counts(
             &backend,
             total_vertices,
@@ -642,7 +652,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let dt = build_periodic_toroidal_delaunay2(&vertex_specs, domain)
             .map_err(|e| remap_toroidal_generation_error(e, total_vertices))?;
 
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = validated_backend(dt)?;
         validate_toroidal_counts(
             &backend,
             total_vertices,
@@ -678,7 +688,7 @@ mod tests {
             ([0.5, 1.0], labels[2]),
         ])
         .expect("Should build labeled triangle");
-        DelaunayBackend2D::from_triangulation(dt)
+        DelaunayBackend2D::from_triangulation(dt).expect("test Delaunay triangle should validate")
     }
 
     /// Builds a Delaunay strip and verifies it is a strict CDT mesh.
@@ -975,7 +985,8 @@ mod tests {
     fn test_from_labeled_delaunay_rejects_out_of_range_labels() {
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 5)])
             .expect("Should build labeled triangle");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("test Delaunay triangle should validate");
 
         let result = CdtTriangulation::from_labeled_delaunay(backend, 2, 2);
         assert!(matches!(
@@ -992,7 +1003,8 @@ mod tests {
     fn test_from_labeled_delaunay_rejects_empty_intermediate_slice() {
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 2), ([0.5, 1.0], 2)])
             .expect("Should build labeled triangle");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("test Delaunay triangle should validate");
 
         let result = CdtTriangulation::from_labeled_delaunay(backend, 3, 2);
         assert!(matches!(
@@ -1013,7 +1025,8 @@ mod tests {
             &[vec![0, 1, 2], vec![1, 3, 2]],
         )
         .expect("explicit cells should build before constructor validation");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("test Delaunay square should validate");
 
         let result = CdtTriangulation::from_labeled_delaunay(backend, 2, 2);
 
@@ -1028,8 +1041,8 @@ mod tests {
     }
 
     #[test]
-    fn test_from_labeled_delaunay_rejects_explicit_non_delaunay_cells() {
-        let dt = build_delaunay2_from_cells(
+    fn test_builder_rejects_non_delaunay_cells() {
+        let result = build_delaunay2_from_cells(
             &[
                 ([0.0, 0.0], 0),
                 ([1.0, 0.0], 0),
@@ -1037,18 +1050,14 @@ mod tests {
                 ([0.2, 0.2], 1),
             ],
             &[vec![0, 1, 2], vec![1, 3, 2]],
-        )
-        .expect("explicit cells should build before constructor validation");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
-
-        let result = CdtTriangulation::from_labeled_delaunay(backend, 2, 2);
+        );
 
         assert!(matches!(
             result,
-            Err(CdtError::DelaunayValidationFailed {
-                level,
+            Err(CdtError::DelaunayGenerationFailed {
+                ref underlying_error,
                 ..
-            }) if level == crate::DelaunayValidationLevel::Four
+            }) if underlying_error.contains("Delaunay repair postcondition failed")
         ));
     }
 
@@ -1159,7 +1168,7 @@ mod tests {
     #[test]
     fn test_from_toroidal_cdt_basic() {
         let tri = CdtTriangulation::from_toroidal_cdt(4, 3)
-            .expect("toroidal CDT should build with delaunay v0.7.6");
+            .expect("toroidal CDT should build with delaunay v0.7.7");
 
         // V = N*T = 12, F = 2*N*T = 24, E = 3*N*T = 36, χ = 0.
         assert_eq!(tri.vertex_count(), 12);

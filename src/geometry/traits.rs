@@ -5,7 +5,6 @@
 //! This module defines the trait-based interface that completely isolates
 //! CDT algorithms from specific geometry implementations.
 
-use crate::util::saturating_usize_to_i32;
 use num_traits::Float;
 use std::error::Error as StdError;
 use std::fmt::Debug;
@@ -99,7 +98,7 @@ pub trait TriangulationQuery: GeometryBackend {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::testing::*;
     ///
     /// let backend = MockBackend::create_triangle();
     /// let edge = backend.edges().next().expect("triangle should have an edge");
@@ -152,12 +151,15 @@ pub trait TriangulationQuery: GeometryBackend {
     /// Check if the triangulation is valid
     fn is_valid(&self) -> bool;
 
-    /// Calculate the Euler characteristic (V - E + F)
-    fn euler_characteristic(&self) -> i32 {
-        let v = saturating_usize_to_i32(self.vertex_count());
-        let e = saturating_usize_to_i32(self.edge_count());
-        let f = saturating_usize_to_i32(self.face_count());
-        v.saturating_sub(e).saturating_add(f)
+    /// Calculates the Euler characteristic `V - E + F`.
+    ///
+    /// Counts are widened before arithmetic so large triangulations cannot
+    /// silently clamp the topological invariant used by CDT validation.
+    fn euler_characteristic(&self) -> i128 {
+        let vertices = self.vertex_count() as i128;
+        let edges = self.edge_count() as i128;
+        let faces = self.face_count() as i128;
+        vertices - edges + faces
     }
 }
 
@@ -322,9 +324,7 @@ pub trait TriangulationMut: TriangulationQuery {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::{
-    ///     MockBackend, MockError, TriangulationMut, TriangulationQuery,
-    /// };
+    /// use causal_triangulations::prelude::testing::*;
     ///
     /// fn main() -> Result<(), MockError> {
     ///     let mut backend = MockBackend::create_triangle();
@@ -355,9 +355,7 @@ pub trait TriangulationMut: TriangulationQuery {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::{
-    ///     MockBackend, MockError, TriangulationMut, TriangulationQuery,
-    /// };
+    /// use causal_triangulations::prelude::testing::*;
     ///
     /// fn main() -> Result<(), MockError> {
     ///     let mut backend = MockBackend::create_triangle();

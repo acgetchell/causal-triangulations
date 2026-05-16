@@ -36,15 +36,15 @@ mod integration_tests {
         let results = algorithm
             .run(triangulation)
             .expect("simulation should execute real move loop");
-        assert_eq!(results.steps.len(), 10);
+        assert_eq!(results.steps().len(), 10);
         assert!(
             results.acceptance_rate() > 0.0,
             "real move loop should accept at least one move"
         );
-        assert!(!results.measurements.is_empty());
+        assert!(!results.measurements().is_empty());
         assert!(results.average_action().is_finite());
         assert!(
-            results.steps.iter().any(|step| {
+            results.steps().iter().any(|step| {
                 step.action_after.is_some_and(|action_after| {
                     !abs_diff_eq!(action_after, step.action_before, epsilon = f64::EPSILON)
                 })
@@ -53,7 +53,7 @@ mod integration_tests {
         );
         assert!(
             results
-                .triangulation
+                .triangulation()
                 .geometry()
                 .triangulation()
                 .tds()
@@ -83,27 +83,27 @@ mod integration_tests {
             .run(triangulation)
             .expect("toroidal simulation should preserve move invariants");
 
-        assert_eq!(results.steps.len(), STEPS as usize);
-        assert_eq!(results.move_stats.total_attempted(), u64::from(STEPS));
+        assert_eq!(results.steps().len(), STEPS as usize);
+        assert_eq!(results.move_stats().total_attempted(), u64::from(STEPS));
         assert_eq!(
-            results.triangulation.metadata().topology,
+            results.triangulation().metadata().topology,
             CdtTopology::Toroidal
         );
-        assert_eq!(results.triangulation.geometry().euler_characteristic(), 0);
+        assert_eq!(results.triangulation().geometry().euler_characteristic(), 0);
         results
-            .triangulation
+            .triangulation()
             .validate_topology()
             .expect("final toroidal topology remains valid");
         results
-            .triangulation
+            .triangulation()
             .validate_foliation()
             .expect("final toroidal foliation remains closed S1 rings");
         results
-            .triangulation
+            .triangulation()
             .validate_causality()
             .expect("final toroidal causality remains valid");
         results
-            .triangulation
+            .triangulation()
             .validate_cell_classification()
             .expect("final toroidal cell classification remains valid");
     }
@@ -244,8 +244,8 @@ mod integration_tests {
             .run(triangulation2)
             .expect("Run 2 should succeed");
 
-        assert_eq!(results1.steps.len(), results2.steps.len());
-        for (left, right) in results1.steps.iter().zip(results2.steps.iter()) {
+        assert_eq!(results1.steps().len(), results2.steps().len());
+        for (left, right) in results1.steps().iter().zip(results2.steps().iter()) {
             assert_eq!(left.move_type, right.move_type);
             assert_eq!(left.accepted, right.accepted);
         }

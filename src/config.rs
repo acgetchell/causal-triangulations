@@ -62,7 +62,7 @@ impl fmt::Display for CdtTopology {
 #[command(author, version, about, long_about = None)]
 pub struct CdtConfig {
     /// Dimensionality of the triangulation
-    #[arg(short, long, value_parser = clap::value_parser!(u8).range(2..4))]
+    #[arg(short, long, value_parser = clap::value_parser!(u8).range(2..3))]
     pub dimension: Option<u8>,
 
     /// Number of vertices in the initial triangulation
@@ -616,9 +616,9 @@ impl CdtConfig {
         }
 
         if let Some(dim) = self.dimension
-            && !(2..=3).contains(&dim)
+            && dim != 2
         {
-            return Err(invalid_config("dimension", &dim, &"2 or 3"));
+            return Err(invalid_config("dimension", &dim, &"2"));
         }
 
         validate_coupling("coupling_0", self.coupling_0)?;
@@ -911,7 +911,7 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "dimension" && provided_value == "4" && expected == "2 or 3"
+            }) if setting == "dimension" && provided_value == "4" && expected == "2"
         ));
 
         for (setting, value) in [
@@ -1243,7 +1243,7 @@ mod tests {
     fn test_merge_with_override_updates_specified_fields() {
         let base = CdtConfig::new(10, 2);
         let overrides = CdtConfigOverrides {
-            dimension: Some(DimensionOverride::Value(3)),
+            dimension: Some(DimensionOverride::Clear),
             vertices: Some(42),
             temperature: Some(2.5),
             simulate: Some(false),
@@ -1252,7 +1252,8 @@ mod tests {
 
         let merged = base.merge_with_override(&overrides);
 
-        assert_eq!(merged.dimension(), 3);
+        assert_eq!(merged.dimension, None);
+        assert_eq!(merged.dimension(), 2);
         assert_eq!(merged.vertices, 42);
         assert_relative_eq!(merged.temperature, 2.5);
         assert!(!merged.simulate);

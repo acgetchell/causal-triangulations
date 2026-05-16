@@ -200,7 +200,8 @@ fn bench_ergodic_moves(c: &mut Criterion) {
             &[vec![4, 0, 1], vec![4, 1, 2], vec![4, 2, 0], vec![1, 3, 2]],
         )
         .expect("build subdivided square CDT benchmark fixture");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("benchmark Delaunay mesh should validate");
         CdtTriangulation2D::from_labeled_delaunay(backend, 2, 2)
             .expect("wrap subdivided square CDT benchmark fixture")
     };
@@ -301,11 +302,11 @@ fn bench_simulation_analysis(c: &mut Criterion) {
 
     let config = MetropolisConfig::new(1.0, 100, 10, 5);
     let action_config = ActionConfig::default();
-    let results = SimulationResultsBackend {
+    let results = SimulationResultsBackend::new(
         config,
         action_config,
-        move_stats: MoveStatistics::new(),
-        steps: vec![
+        MoveStatistics::new(),
+        vec![
             MonteCarloStep {
                 step: 1,
                 move_type: MoveType::Move22,
@@ -331,14 +332,15 @@ fn bench_simulation_analysis(c: &mut Criterion) {
                 delta_action: Some(0.3),
             },
         ],
-        measurements: vec![
+        vec![
             Measurement::new(0, 12.5, 15, 32, 18).with_volume_profile(vec![9, 9, 0]),
             Measurement::new(10, 11.8, 16, 34, 19).with_volume_profile(vec![9, 10, 0]),
             Measurement::new(20, 12.1, 15, 31, 17).with_volume_profile(vec![8, 9, 0]),
         ],
-        elapsed_time: Duration::from_millis(37),
+        Duration::from_millis(37),
         triangulation,
-    };
+    )
+    .expect("benchmark result fixture should validate");
 
     group.bench_function("acceptance_rate", |b| {
         b.iter(|| {

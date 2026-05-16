@@ -37,7 +37,7 @@ slow-tests = [  ]
 
 [dependencies]
 clap = { version = "4.6.1", features = [ "derive" ] }
-delaunay = "0.7.6"
+delaunay = "0.7.7"
 markov-chain-monte-carlo = { version = "0.3.0", features = [ "serde" ] }
 dirs = "6.0.0"
 env_logger = "0.11.10"

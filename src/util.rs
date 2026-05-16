@@ -8,12 +8,6 @@ use rand::random;
 // Safe numeric conversions
 // ---------------------------------------------------------------------------
 
-/// Converts a `usize` to `i32`, saturating at `i32::MAX`.
-#[must_use]
-pub(crate) fn saturating_usize_to_i32(n: usize) -> i32 {
-    i32::try_from(n).unwrap_or(i32::MAX)
-}
-
 /// Converts a `usize` to `u32`, saturating at `u32::MAX`.
 #[must_use]
 pub(crate) fn saturating_usize_to_u32(n: usize) -> u32 {
@@ -111,24 +105,6 @@ mod tests {
     // =========================================================================
     // Safe numeric conversion tests
     // =========================================================================
-
-    #[test]
-    fn test_saturating_usize_to_i32_normal() {
-        assert_eq!(saturating_usize_to_i32(0), 0);
-        assert_eq!(saturating_usize_to_i32(1), 1);
-        assert_eq!(saturating_usize_to_i32(42), 42);
-    }
-
-    #[test]
-    fn test_saturating_usize_to_i32_boundary() {
-        assert_eq!(saturating_usize_to_i32(i32::MAX as usize), i32::MAX);
-    }
-
-    #[test]
-    fn test_saturating_usize_to_i32_overflow() {
-        assert_eq!(saturating_usize_to_i32(i32::MAX as usize + 1), i32::MAX);
-        assert_eq!(saturating_usize_to_i32(usize::MAX), i32::MAX);
-    }
 
     #[test]
     fn test_saturating_usize_to_u32_normal() {

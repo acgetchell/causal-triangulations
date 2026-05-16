@@ -59,7 +59,7 @@ fn main() -> CdtResult<()> {
     // Display results
     info!("Simulation completed!");
     info!("Results:");
-    info!("  Steps executed: {}", results.steps.len());
+    info!("  Steps executed: {}", results.steps().len());
     info!(
         "  Acceptance rate: {:.2}%",
         results.acceptance_rate() * 100.0
@@ -67,16 +67,16 @@ fn main() -> CdtResult<()> {
     info!("  Average action: {:.3}", results.average_action());
 
     // Final triangulation statistics
-    let final_triangulation = &results.triangulation;
+    let final_triangulation = results.triangulation();
     info!("Final triangulation:");
     info!("  Vertices: {}", final_triangulation.vertex_count());
     info!("  Edges: {}", final_triangulation.edge_count());
     info!("  Faces: {}", final_triangulation.face_count());
 
     // Display some measurements
-    if !results.measurements.is_empty() {
+    if !results.measurements().is_empty() {
         info!("Sample measurements:");
-        for measurement in results.measurements.iter().take(5) {
+        for measurement in results.measurements().iter().take(5) {
             info!(
                 "  Step {}: Action={:.3}, V={}, E={}, T={}",
                 measurement.step,
@@ -87,10 +87,10 @@ fn main() -> CdtResult<()> {
             );
         }
 
-        if results.measurements.len() > 5 {
+        if results.measurements().len() > 5 {
             info!(
                 "  ... ({} more measurements)",
-                results.measurements.len() - 5
+                results.measurements().len() - 5
             );
         }
     }

@@ -141,7 +141,8 @@ pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimen
 pub use cdt::results::{Measurement, SimulationResultsBackend};
 pub use config::{CdtConfig, CdtTopology, TestConfig};
 pub use errors::{
-    CdtError, CdtResult, CdtValidationCheck, CheckpointResumeReason, DelaunayValidationLevel,
+    BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CheckpointOperation,
+    CheckpointResumeReason, DelaunayValidationLevel, OutputFormat,
 };
 
 use crate::util::saturating_usize_to_u32;
@@ -206,8 +207,8 @@ pub mod prelude {
     /// ```
     pub mod errors {
         pub use crate::errors::{
-            CdtError, CdtResult, CdtValidationCheck, CheckpointResumeReason,
-            DelaunayValidationLevel,
+            BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CheckpointOperation,
+            CheckpointResumeReason, DelaunayValidationLevel, OutputFormat,
         };
     }
 
@@ -333,7 +334,8 @@ pub mod prelude {
     ///         ([0.5, 1.0], 1),
     ///     ])?;
     ///
-    ///     let mut backend = DelaunayBackend2D::from_triangulation(dt);
+    ///     let mut backend = DelaunayBackend2D::from_triangulation(dt)
+    ///         .expect("Delaunay input should validate");
     ///     assert!(backend.is_valid());
     ///
     ///     let topology: GlobalTopology<2> = GlobalTopology::Toroidal {
@@ -351,13 +353,32 @@ pub mod prelude {
         pub use crate::geometry::DelaunayBackend2D;
         pub use crate::geometry::backends::delaunay::{
             DelaunayBackend, DelaunayEdgeHandle, DelaunayError, DelaunayFaceHandle,
-            DelaunayVertexHandle,
+            DelaunayOperation, DelaunayVertexHandle, NonFlippableEdgeReason,
         };
-        pub use crate::geometry::backends::mock::{MockBackend, MockError};
         pub use crate::geometry::generators::{
             GlobalTopology, TopologyGuarantee, ToroidalConstructionMode,
             build_delaunay2_from_cells, build_delaunay2_with_data, build_delaunay2_with_topology,
             build_periodic_toroidal_delaunay2, build_toroidal_delaunay2, generate_delaunay2,
+        };
+        pub use crate::geometry::operations::TriangulationOps;
+        pub use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
+    }
+
+    /// Focused exports for tests and documentation fixtures.
+    ///
+    /// This prelude exposes the mock geometry backend and the traits commonly
+    /// exercised by downstream tests without mixing fixture-only types into the
+    /// production geometry prelude.
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::testing::*;
+    ///
+    /// let backend = MockBackend::create_triangle();
+    /// assert_eq!(backend.vertex_count(), 3);
+    /// ```
+    pub mod testing {
+        pub use crate::geometry::backends::mock::{
+            MockBackend, MockError, MockNonFlippableReason, MockOperation, MockStorageTarget,
         };
         pub use crate::geometry::operations::TriangulationOps;
         pub use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
@@ -414,7 +435,7 @@ pub mod prelude {
 ///         ..CdtConfig::new(8, 2)
 ///     };
 ///     let results = run_simulation(&config)?;
-///     assert_eq!(results.measurements.len(), 1);
+///     assert_eq!(results.measurements().len(), 1);
 ///     Ok(())
 /// }
 /// ```
@@ -487,12 +508,12 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
             .to_action_config()
             .calculate_action(vertices, edges, triangles);
 
-        SimulationResultsBackend {
-            config: config.to_metropolis_config(),
-            action_config: config.to_action_config(),
-            move_stats: MoveStatistics::new(),
-            steps: vec![],
-            measurements: vec![Measurement {
+        SimulationResultsBackend::from_parts(
+            config.to_metropolis_config(),
+            config.to_action_config(),
+            MoveStatistics::new(),
+            vec![],
+            vec![Measurement {
                 step: 0,
                 action: initial_action,
                 vertices,
@@ -500,9 +521,9 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
                 triangles,
                 volume_profile: triangulation.volume_profile(),
             }],
-            elapsed_time: Duration::from_millis(0),
+            Duration::from_millis(0),
             triangulation,
-        }
+        )
     };
 
     write_configured_outputs(config, &results)?;
@@ -614,23 +635,23 @@ mod tests {
         let config = create_test_config();
         assert!(config.dimension.is_some());
         let results = run_simulation(&config).expect("Failed to run triangulation");
-        assert!(results.triangulation.face_count() > 0);
-        assert!(results.triangulation.has_foliation());
-        assert_eq!(results.triangulation.slice_sizes(), &[12, 12, 12]);
-        assert!(!results.triangulation.volume_profile().is_empty());
+        assert!(results.triangulation().face_count() > 0);
+        assert!(results.triangulation().has_foliation());
+        assert_eq!(results.triangulation().slice_sizes(), &[12, 12, 12]);
+        assert!(!results.triangulation().volume_profile().is_empty());
         results
-            .triangulation
+            .triangulation()
             .validate_foliation()
             .expect("open-boundary run should build a valid foliation");
         results
-            .triangulation
+            .triangulation()
             .validate_causality()
             .expect("open-boundary run should preserve adjacent-slice causality");
         results
-            .triangulation
+            .triangulation()
             .validate_cell_classification()
             .expect("open-boundary run should classify CDT cells");
-        assert!(!results.measurements.is_empty());
+        assert!(!results.measurements().is_empty());
     }
 
     #[test]
@@ -638,7 +659,7 @@ mod tests {
         let config = create_test_config();
         let results = run_simulation(&config).expect("Failed to run triangulation");
         // Check that we have some triangles
-        assert!(results.triangulation.face_count() > 0);
+        assert!(results.triangulation().face_count() > 0);
     }
 
     #[test]
@@ -784,21 +805,24 @@ mod tests {
         config.simulate = true;
 
         let results = run_simulation(&config).expect("simulation should run with real moves");
-        assert_eq!(results.steps.len(), usize::try_from(config.steps).unwrap());
-        assert!(results.triangulation.has_foliation());
+        assert_eq!(
+            results.steps().len(),
+            usize::try_from(config.steps).unwrap()
+        );
+        assert!(results.triangulation().has_foliation());
         results
-            .triangulation
+            .triangulation()
             .validate_foliation()
             .expect("simulated open-boundary run should keep valid foliation");
         results
-            .triangulation
+            .triangulation()
             .validate_causality()
             .expect("simulated open-boundary run should keep adjacent-slice causality");
         results
-            .triangulation
+            .triangulation()
             .validate_cell_classification()
             .expect("simulated open-boundary run should keep CDT cell classification");
-        assert!(!results.measurements.is_empty());
+        assert!(!results.measurements().is_empty());
     }
 
     #[test]
@@ -841,17 +865,17 @@ mod tests {
 
         let results = run_simulation(&config).expect("toroidal simulation should run");
         assert_eq!(
-            results.triangulation.vertex_count(),
+            results.triangulation().vertex_count(),
             12,
             "Toroidal run_simulation must treat config.vertices as the TOTAL vertex count"
         );
         assert_eq!(
-            results.triangulation.time_slices(),
+            results.triangulation().time_slices(),
             3,
             "Toroidal run_simulation must preserve the configured timeslice count"
         );
         assert!(matches!(
-            results.triangulation.metadata().topology,
+            results.triangulation().metadata().topology,
             CdtTopology::Toroidal
         ));
     }

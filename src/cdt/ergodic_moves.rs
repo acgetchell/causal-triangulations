@@ -9,7 +9,7 @@
 //! - edge flips: retained as an API-compatible alias for the 2D (2,2) move
 
 use crate::config::CdtTopology;
-use crate::errors::{CdtError, CdtValidationCheck};
+use crate::errors::{BackendMutationOperation, CdtError};
 use crate::geometry::CdtTriangulation2D;
 use crate::geometry::backends::delaunay::{DelaunayFaceHandle, DelaunayVertexHandle};
 use crate::geometry::traits::{EdgeAdjacentFaces, TriangulationQuery};
@@ -330,7 +330,8 @@ impl ErgodicsSystem {
     ///     &[vec![0, 1, 2], vec![1, 3, 2]],
     /// )
     /// .expect("build square CDT");
-    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// let backend = DelaunayBackend2D::from_triangulation(dt)
+    ///     .expect("Delaunay input should validate");
     /// let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
     ///     .expect("wrap labeled square");
     /// let mut system = ErgodicsSystem::new();
@@ -365,7 +366,8 @@ impl ErgodicsSystem {
     ///     ([0.5, 1.0], 1),
     /// ])
     /// .expect("build labeled triangle");
-    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// let backend = DelaunayBackend2D::from_triangulation(dt)
+    ///     .expect("Delaunay input should validate");
     /// let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
     ///     .expect("wrap labeled triangle");
     /// let mut system = ErgodicsSystem::new();
@@ -385,39 +387,36 @@ impl ErgodicsSystem {
     /// every early return must pass a `MoveResult` through `rollback_if_failed`
     /// or restore state itself.
     fn attempt_13_move_mutating(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
-        let geometric_candidates: Vec<_> = triangulation
-            .geometry()
-            .faces()
-            .filter(|face| centroid(triangulation, face).is_some())
-            .collect();
-        if geometric_candidates.is_empty() {
-            return MoveResult::GeometricViolation;
+        let mut geometric_candidate_seen = false;
+        let mut causal_candidate_count = 0;
+        let mut selected_candidate = None;
+
+        for face in triangulation.geometry().faces() {
+            let Some(point) = centroid(triangulation, &face) else {
+                continue;
+            };
+            geometric_candidate_seen = true;
+
+            let Some(label) = insertion_label(triangulation, &face) else {
+                continue;
+            };
+
+            causal_candidate_count += 1;
+            if self.rng.random_range(0..causal_candidate_count) == 0 {
+                selected_candidate = Some((face, point, label));
+            }
         }
 
-        let candidates: Vec<_> = geometric_candidates
-            .into_iter()
-            .filter(|face| insertion_label(triangulation, face).is_some())
-            .collect();
-        let Some(face) =
-            pick(&mut self.rng, candidates.len()).map(|index| candidates[index].clone())
-        else {
+        let Some((face, point, label)) = selected_candidate else {
+            if !geometric_candidate_seen {
+                return MoveResult::GeometricViolation;
+            }
             return if triangulation.has_foliation() {
                 MoveResult::CausalityViolation
             } else {
                 MoveResult::GeometricViolation
             };
         };
-
-        let Some(point) = centroid(triangulation, &face) else {
-            return MoveResult::Rejected(CdtError::ValidationFailed {
-                check: CdtValidationCheck::ErgodicMoveCandidateGeometry,
-                detail: format!(
-                    "face {:?} could not be converted to a 2D centroid",
-                    face.cell_key()
-                ),
-            });
-        };
-        let label = insertion_label(triangulation, &face);
 
         let subdivision_target = format!("face {:?}", face.cell_key());
         let snapshot = triangulation.clone();
@@ -426,16 +425,20 @@ impl ErgodicsSystem {
         let subdivision = match subdivision {
             Ok(subdivision) => subdivision,
             Err(err) => {
-                let result = reject_backend("subdivide_face", subdivision_target, &err);
+                let result = reject_backend(
+                    BackendMutationOperation::SubdivideFace,
+                    subdivision_target,
+                    &err,
+                );
                 return rollback_if_failed(triangulation, snapshot, result);
             }
         };
 
-        if let Some(InsertionLabel::Label(label)) = label {
+        if let InsertionLabel::Label(label) = label {
             let set_label = triangulation.set_vertex_data(&subdivision.new_vertex, Some(label));
             if let Err(err) = set_label {
                 let result = MoveResult::HardFailure(CdtError::BackendMutationFailed {
-                    operation: "set_vertex_data_by_key".to_string(),
+                    operation: BackendMutationOperation::SetVertexDataByKey,
                     target: format!("vertex {:?}", subdivision.new_vertex.vertex_key()),
                     detail: err.to_string(),
                 });
@@ -466,7 +469,8 @@ impl ErgodicsSystem {
     ///     ([0.5, 1.0], 1),
     /// ])
     /// .expect("build labeled triangle");
-    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// let backend = DelaunayBackend2D::from_triangulation(dt)
+    ///     .expect("Delaunay input should validate");
     /// let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
     ///     .expect("wrap labeled triangle");
     /// let mut system = ErgodicsSystem::new();
@@ -489,22 +493,30 @@ impl ErgodicsSystem {
     /// bookkeeping. Once the snapshot exists, every early return must pass a
     /// `MoveResult` through `rollback_if_failed` or restore state itself.
     fn attempt_31_move_mutating(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
-        let geometric_candidates: Vec<_> = triangulation
-            .geometry()
-            .vertices()
-            .filter(|vertex| neighbors3(triangulation, vertex).is_some())
-            .collect();
-        if geometric_candidates.is_empty() {
-            return MoveResult::GeometricViolation;
+        let mut geometric_candidate_seen = false;
+        let mut causal_candidate_count = 0;
+        let mut selected_vertex = None;
+
+        for vertex in triangulation.geometry().vertices() {
+            let Some(neighbors) = neighbors3(triangulation, &vertex) else {
+                continue;
+            };
+            geometric_candidate_seen = true;
+
+            if !removal_candidate_is_causal(triangulation, &vertex, &neighbors) {
+                continue;
+            }
+
+            causal_candidate_count += 1;
+            if self.rng.random_range(0..causal_candidate_count) == 0 {
+                selected_vertex = Some(vertex);
+            }
         }
 
-        let candidates: Vec<_> = geometric_candidates
-            .into_iter()
-            .filter(|vertex| removal_is_causal(triangulation, vertex))
-            .collect();
-        let Some(vertex) =
-            pick(&mut self.rng, candidates.len()).map(|index| candidates[index].clone())
-        else {
+        let Some(vertex) = selected_vertex else {
+            if !geometric_candidate_seen {
+                return MoveResult::GeometricViolation;
+            }
             return if triangulation.has_foliation() {
                 MoveResult::CausalityViolation
             } else {
@@ -518,7 +530,9 @@ impl ErgodicsSystem {
 
         let result = match removal {
             Ok(_) => self.finish_mutated_move(triangulation, MoveType::Move31Remove),
-            Err(err) => reject_backend("remove_vertex", removal_target, &err),
+            Err(err) => {
+                reject_backend(BackendMutationOperation::RemoveVertex, removal_target, &err)
+            }
         };
         rollback_if_failed(triangulation, snapshot, result)
     }
@@ -541,7 +555,8 @@ impl ErgodicsSystem {
     ///     &[vec![0, 1, 2], vec![1, 3, 2]],
     /// )
     /// .expect("build square CDT");
-    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// let backend = DelaunayBackend2D::from_triangulation(dt)
+    ///     .expect("Delaunay input should validate");
     /// let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
     ///     .expect("wrap labeled square");
     /// let mut system = ErgodicsSystem::new();
@@ -572,7 +587,8 @@ impl ErgodicsSystem {
     ///     ([0.5, 1.0], 1),
     /// ])
     /// .expect("build labeled triangle");
-    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// let backend = DelaunayBackend2D::from_triangulation(dt)
+    ///     .expect("Delaunay input should validate");
     /// let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
     ///     .expect("wrap labeled triangle");
     /// let mut system = ErgodicsSystem::new();
@@ -631,7 +647,7 @@ impl ErgodicsSystem {
 
         let result = match flip_result {
             Ok(_) => self.finish_mutated_move(triangulation, move_type),
-            Err(err) => reject_backend("flip_edge", flip_target, &err),
+            Err(err) => reject_backend(BackendMutationOperation::FlipEdge, flip_target, &err),
         };
         rollback_if_failed(triangulation, snapshot, result)
     }
@@ -657,14 +673,6 @@ impl Default for ErgodicsSystem {
     }
 }
 
-/// Selects a random candidate index without borrowing the candidate list.
-fn pick(rng: &mut Xoshiro256PlusPlus, len: usize) -> Option<usize> {
-    if len == 0 {
-        return None;
-    }
-    Some(rng.random_range(0..len))
-}
-
 /// Restores the triangulation when a public move attempt does not complete successfully.
 fn rollback_if_failed(
     triangulation: &mut CdtTriangulation2D,
@@ -686,12 +694,12 @@ fn rollback_if_failed(
 /// a selected site or returned an operation-specific error that should remain
 /// visible to callers.
 fn reject_backend(
-    operation: impl Into<String>,
+    operation: BackendMutationOperation,
     target: impl Into<String>,
     err: &impl ToString,
 ) -> MoveResult {
     MoveResult::Rejected(CdtError::BackendMutationFailed {
-        operation: operation.into(),
+        operation,
         target: target.into(),
         detail: err.to_string(),
     })
@@ -711,27 +719,6 @@ fn time_dist(triangulation: &CdtTriangulation2D, t0: u32, t1: u32) -> u32 {
         }
     }
     raw
-}
-
-/// Reads time labels for a vertex tuple when the triangulation is foliated.
-///
-/// Missing labels make a move site invalid because subsequent foliation
-/// resynchronization would fail after mutation.
-fn labels(
-    triangulation: &CdtTriangulation2D,
-    vertices: &[DelaunayVertexHandle],
-) -> Option<Vec<u32>> {
-    if !triangulation.has_foliation() {
-        return None;
-    }
-    vertices
-        .iter()
-        .map(|vertex| {
-            triangulation
-                .geometry()
-                .vertex_data_by_key(vertex.vertex_key())
-        })
-        .collect()
 }
 
 /// Checks whether three time labels form one valid 2D CDT triangle.
@@ -765,13 +752,26 @@ fn cdt_vertices(triangulation: &CdtTriangulation2D, vertices: &[DelaunayVertexHa
     if !triangulation.has_foliation() {
         return true;
     }
-    let Some(labels) = labels(triangulation, vertices) else {
+    let [v0, v1, v2] = vertices else {
         return false;
     };
-    let [t0, t1, t2] = labels.as_slice() else {
-        return false;
+    cdt_vertex_triple(triangulation, [v0, v1, v2])
+}
+
+/// Reads three live backend vertex labels without allocating.
+fn vertex_labels3(
+    triangulation: &CdtTriangulation2D,
+    vertices: [&DelaunayVertexHandle; 3],
+) -> Option<[u32; 3]> {
+    let labels = vertices.map(|vertex| {
+        triangulation
+            .geometry()
+            .vertex_data_by_key(vertex.vertex_key())
+    });
+    let [Some(t0), Some(t1), Some(t2)] = labels else {
+        return None;
     };
-    cdt_labels(triangulation, [*t0, *t1, *t2])
+    Some([t0, t1, t2])
 }
 
 /// Checks the CDT triangle rule for three live backend vertices without allocation.
@@ -783,15 +783,7 @@ fn cdt_vertex_triple(
         return true;
     }
 
-    let labels = vertices.map(|vertex| {
-        triangulation
-            .geometry()
-            .vertex_data_by_key(vertex.vertex_key())
-    });
-    let [Some(t0), Some(t1), Some(t2)] = labels else {
-        return false;
-    };
-    cdt_labels(triangulation, [t0, t1, t2])
+    vertex_labels3(triangulation, vertices).is_some_and(|labels| cdt_labels(triangulation, labels))
 }
 
 /// Checks whether flipping an edge would preserve CDT triangle causality.
@@ -822,20 +814,36 @@ fn insertion_label(
     }
 
     let vertices = triangulation.geometry().face_vertices(face).ok()?;
-    let labels = labels(triangulation, &vertices)?;
-    let [t0, t1, t2] = labels.as_slice() else {
+    let [v0, v1, v2] = vertices.as_slice() else {
         return None;
     };
-    let mut candidates = vec![*t0, *t1, *t2];
-    candidates.sort_unstable();
-    candidates.dedup();
+    let [t0, t1, t2] = vertex_labels3(triangulation, [v0, v1, v2])?;
 
-    candidates.into_iter().find_map(|candidate| {
-        let valid = cdt_labels(triangulation, [candidate, *t0, *t1])
-            && cdt_labels(triangulation, [candidate, *t1, *t2])
-            && cdt_labels(triangulation, [candidate, *t2, *t0]);
-        valid.then_some(InsertionLabel::Label(candidate))
-    })
+    let candidates = [t0, t1, t2];
+    for (index, candidate) in candidates.into_iter().enumerate() {
+        if candidates[..index].contains(&candidate) {
+            continue;
+        }
+        let valid = cdt_labels(triangulation, [candidate, t0, t1])
+            && cdt_labels(triangulation, [candidate, t1, t2])
+            && cdt_labels(triangulation, [candidate, t2, t0]);
+        if valid {
+            return Some(InsertionLabel::Label(candidate));
+        }
+    }
+    None
+}
+
+/// Reads a 2D vertex coordinate from the backend.
+fn vertex_point_2d(
+    triangulation: &CdtTriangulation2D,
+    vertex: &DelaunayVertexHandle,
+) -> Option<[f64; 2]> {
+    let coords = triangulation.geometry().vertex_coordinates(vertex).ok()?;
+    let [x, y] = coords.as_slice() else {
+        return None;
+    };
+    Some([*x, *y])
 }
 
 /// Computes a 2D face centroid for the `(1,3)` insertion point.
@@ -844,31 +852,23 @@ fn insertion_label(
 /// path instead of relying on the backend to reject them later.
 fn centroid(triangulation: &CdtTriangulation2D, face: &DelaunayFaceHandle) -> Option<[f64; 2]> {
     let vertices = triangulation.geometry().face_vertices(face).ok()?;
-    if vertices.len() != 3 {
+    let [v0, v1, v2] = vertices.as_slice() else {
         return None;
-    }
-
-    let mut coords = Vec::with_capacity(3);
-    for vertex in vertices {
-        let vertex_coords = triangulation.geometry().vertex_coordinates(&vertex).ok()?;
-        let [x, y] = vertex_coords.as_slice() else {
-            return None;
-        };
-        coords.push([*x, *y]);
-    }
+    };
+    let coords = [
+        vertex_point_2d(triangulation, v0)?,
+        vertex_point_2d(triangulation, v1)?,
+        vertex_point_2d(triangulation, v2)?,
+    ];
 
     if matches!(triangulation.metadata().topology, CdtTopology::Toroidal) {
         return toroidal_centroid(&coords, triangulation.geometry().periodic_domain()?);
     }
 
-    let mut centroid = [0.0, 0.0];
-    for [x, y] in coords {
-        centroid[0] += x;
-        centroid[1] += y;
-    }
-    centroid[0] /= 3.0;
-    centroid[1] /= 3.0;
-    Some(centroid)
+    Some([
+        (coords[0][0] + coords[1][0] + coords[2][0]) / 3.0,
+        (coords[0][1] + coords[1][1] + coords[2][1]) / 3.0,
+    ])
 }
 
 /// Computes a centroid in one periodic image, then wraps it back into the domain.
@@ -905,23 +905,6 @@ fn toroidal_centroid(coords: &[[f64; 2]], domain: [f64; 2]) -> Option<[f64; 2]> 
     Some(centroid)
 }
 
-/// Counts live vertices carrying a given time label.
-///
-/// `(3,1)` removal uses this to avoid emptying a time slice after deleting a
-/// labeled vertex.
-fn label_count(triangulation: &CdtTriangulation2D, label: u32) -> usize {
-    triangulation
-        .geometry()
-        .vertices()
-        .filter(|vertex| {
-            triangulation
-                .geometry()
-                .vertex_data_by_key(vertex.vertex_key())
-                == Some(label)
-        })
-        .count()
-}
-
 /// Collects the three distinct neighboring vertices around a removable vertex.
 ///
 /// A `(3,1)` move is geometrically available only at a degree-3 vertex whose
@@ -929,33 +912,46 @@ fn label_count(triangulation: &CdtTriangulation2D, label: u32) -> usize {
 fn neighbors3(
     triangulation: &CdtTriangulation2D,
     vertex: &DelaunayVertexHandle,
-) -> Option<Vec<DelaunayVertexHandle>> {
+) -> Option<[DelaunayVertexHandle; 3]> {
     let adjacent_faces = triangulation.geometry().adjacent_faces(vertex).ok()?;
     if adjacent_faces.len() != 3 {
         return None;
     }
 
-    let mut neighbors = Vec::with_capacity(3);
+    let mut neighbors = [None, None, None];
+    let mut neighbor_count = 0;
     for face in adjacent_faces {
         for candidate in triangulation.geometry().face_vertices(&face).ok()? {
-            if &candidate != vertex && !neighbors.iter().any(|seen| seen == &candidate) {
-                neighbors.push(candidate);
+            if &candidate == vertex
+                || neighbors[..neighbor_count]
+                    .iter()
+                    .flatten()
+                    .any(|seen| seen == &candidate)
+            {
+                continue;
             }
+            let slot = neighbors.get_mut(neighbor_count)?;
+            if slot.is_some() {
+                return None;
+            }
+            *slot = Some(candidate);
+            neighbor_count += 1;
         }
     }
 
-    (neighbors.len() == 3).then_some(neighbors)
+    let [Some(v0), Some(v1), Some(v2)] = neighbors else {
+        return None;
+    };
+    Some([v0, v1, v2])
 }
 
-/// Checks CDT-specific preconditions for a `(3,1)` removal.
-///
-/// The replacement triangle must be causal, and in foliated triangulations the
-/// removed vertex must not be the last live vertex in its time slice.
-fn removal_is_causal(triangulation: &CdtTriangulation2D, vertex: &DelaunayVertexHandle) -> bool {
-    let Some(neighbors) = neighbors3(triangulation, vertex) else {
-        return false;
-    };
-    if !cdt_vertices(triangulation, &neighbors) {
+/// Checks CDT-specific preconditions for a geometric `(3,1)` removal candidate.
+fn removal_candidate_is_causal(
+    triangulation: &CdtTriangulation2D,
+    vertex: &DelaunayVertexHandle,
+    neighbors: &[DelaunayVertexHandle; 3],
+) -> bool {
+    if !cdt_vertices(triangulation, neighbors) {
         return false;
     }
     if !triangulation.has_foliation() {
@@ -968,12 +964,19 @@ fn removal_is_causal(triangulation: &CdtTriangulation2D, vertex: &DelaunayVertex
     else {
         return false;
     };
-    label_count(triangulation, label) > 1
+    let Ok(slice) = usize::try_from(label) else {
+        return false;
+    };
+    triangulation
+        .slice_sizes()
+        .get(slice)
+        .is_some_and(|&count| count > 1)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::CdtValidationCheck;
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{build_delaunay2_from_cells, build_delaunay2_with_data};
     use approx::assert_relative_eq;
@@ -983,7 +986,8 @@ mod tests {
     fn single_triangle() -> CdtTriangulation2D {
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
             .expect("build labeled triangle");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("test Delaunay triangle should validate");
         CdtTriangulation2D::from_labeled_delaunay(backend, 2, 2).expect("wrap labeled triangle")
     }
 
@@ -999,7 +1003,8 @@ mod tests {
             &[vec![0, 1, 2], vec![1, 3, 2]],
         )
         .expect("build square CDT");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("test Delaunay square should validate");
         CdtTriangulation2D::from_labeled_delaunay(backend, 2, 2).expect("wrap square CDT")
     }
 
@@ -1166,10 +1171,29 @@ mod tests {
     }
 
     #[test]
+    fn toroidal_centroid_wraps_across_both_periodic_seams() {
+        let point = toroidal_centroid(&[[3.9, 2.9], [0.1, 2.8], [0.2, 0.1]], [4.0, 3.0])
+            .expect("toroidal centroid across both seams");
+
+        assert_relative_eq!(point[0], 0.066_666_666_666_666_43, epsilon = 1e-12);
+        assert_relative_eq!(point[1], 2.933_333_333_333_333, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn toroidal_centroid_handles_half_period_ties_deterministically() {
+        let point = toroidal_centroid(&[[0.0, 0.0], [2.0, 0.0], [2.0, 1.5]], [4.0, 3.0])
+            .expect("half-period centroid should remain defined");
+
+        assert_relative_eq!(point[0], 4.0 / 3.0, epsilon = 1e-12);
+        assert_relative_eq!(point[1], 0.5, epsilon = 1e-12);
+    }
+
+    #[test]
     fn checked_toroidal_wrapper_rejects_topology_mismatch() {
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
             .expect("build labeled triangle");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("test Delaunay triangle should validate");
         let result = CdtTriangulation2D::with_topology(backend, 3, 2, CdtTopology::Toroidal);
 
         assert!(matches!(
@@ -1252,7 +1276,7 @@ mod tests {
                     ref operation,
                     ref detail,
                     ..
-                }) if operation == "subdivide_face"
+                }) if *operation == BackendMutationOperation::SubdivideFace
                     && detail.contains("periodic external cell")
                     && detail.contains("aligned periodic offsets")
             ),

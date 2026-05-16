@@ -97,7 +97,8 @@ mod tests {
             &[vec![0, 1, 2], vec![1, 3, 2]],
         )
         .expect("build square CDT");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("test Delaunay square should validate");
         CdtTriangulation2D::from_labeled_delaunay(backend, 2, 2).expect("wrap square CDT")
     }
 

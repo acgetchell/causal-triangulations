@@ -5,7 +5,7 @@
 use super::CdtTriangulation;
 use crate::cdt::foliation::{CellType, EdgeType, Foliation, FoliationError, classify_cell};
 use crate::config::CdtTopology;
-use crate::errors::{CdtError, CdtResult, CdtValidationCheck};
+use crate::errors::{BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck};
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
@@ -25,7 +25,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// # Errors
     ///
-    /// Returns error if foliation structure is invalid.
+    /// Returns [`FoliationError::StaleBookkeeping`] if stored foliation
+    /// bookkeeping belongs to an older geometry revision. Returns the relevant
+    /// [`FoliationError`] variant if live vertex labels are missing, out of
+    /// range, inconsistent with stored slice sizes, or violate toroidal
+    /// spacelike-ring invariants.
     ///
     /// # Examples
     ///
@@ -43,6 +47,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let Some(foliation) = &self.foliation else {
             return Ok(());
         };
+        if !self.has_current_foliation() {
+            return Err(self.stale_foliation_error());
+        }
 
         let vertex_count = self.geometry.vertex_count();
         if foliation.labeled_vertex_count() != vertex_count {
@@ -388,7 +395,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         for &key in &face_keys {
             if let Err(err) = self.geometry.set_cell_data_by_key(key, None) {
-                let operation = "set_cell_data_by_key".to_string();
+                let operation = BackendMutationOperation::SetCellDataByKey;
                 let target = format!("face {key:?}");
                 let detail = err.to_string();
                 let rollback_errors = rollback_payloads(&mut self.geometry);
@@ -411,7 +418,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         for (vertex_key, t) in assignments {
             if let Err(err) = self.geometry.set_vertex_data_by_key(vertex_key, Some(t)) {
-                let operation = "set_vertex_data_by_key".to_string();
+                let operation = BackendMutationOperation::SetVertexDataByKey;
                 let target = format!("vertex {vertex_key:?}");
                 let detail = format!("failed while assigning time label {t}: {err}");
                 let rollback_errors = rollback_payloads(&mut self.geometry);
@@ -482,8 +489,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
     }
 
-    /// Returns the time slice label for a vertex, or `None` if no foliation
-    /// is present or the vertex is unlabeled.
+    /// Returns the time slice label for a vertex, or `None` if no current
+    /// foliation is present, the stored foliation is stale, or the vertex is
+    /// unlabeled.
     ///
     /// # Examples
     ///
@@ -498,11 +506,15 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn time_label(&self, vertex: &DelaunayVertexHandle) -> Option<u32> {
-        self.foliation.as_ref()?;
+        self.foliation()?;
         self.geometry.vertex_data_by_key(vertex.vertex_key())
     }
 
     /// Returns all vertex handles that belong to time slice `t`.
+    ///
+    /// Returns an empty vector when no current foliation exists. That includes
+    /// the stale-bookkeeping case after geometry mutation but before foliation
+    /// resynchronization.
     ///
     /// # Examples
     ///
@@ -518,7 +530,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn vertices_at_time(&self, t: u32) -> Vec<DelaunayVertexHandle> {
-        if self.foliation.is_none() {
+        if !self.has_current_foliation() {
             return vec![];
         }
         self.geometry
@@ -711,7 +723,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn edge_type(&self, edge: &DelaunayEdgeHandle) -> Option<EdgeType> {
-        self.foliation.as_ref()?;
+        self.foliation()?;
 
         let (v0, v1) = self.geometry.edge_endpoints(edge)?;
         let t0 = self.geometry.vertex_data_by_key(v0.vertex_key())?;
@@ -739,7 +751,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn cell_type(&self, face: &DelaunayFaceHandle) -> Option<CellType> {
-        self.foliation.as_ref()?;
+        self.foliation()?;
         let verts = self.geometry.face_vertices(face).ok()?;
         if verts.len() != 3 {
             return None;
@@ -793,7 +805,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn face_edge_types(&self, face: &DelaunayFaceHandle) -> Option<[EdgeType; 3]> {
-        self.foliation.as_ref()?;
+        self.foliation()?;
 
         let verts = self.geometry.face_vertices(face).ok()?;
         if verts.len() != 3 {
@@ -825,7 +837,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::ValidationFailed`] if any face in a foliated
+    /// Returns [`FoliationError::StaleBookkeeping`] if stored foliation
+    /// bookkeeping belongs to an older geometry revision. Returns
+    /// [`CdtError::ValidationFailed`] if any face in a current foliated
     /// triangulation cannot be classified as a strict Up or Down CDT cell.
     ///
     /// # Examples
@@ -842,6 +856,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
     pub fn validate_cell_classification(&self) -> CdtResult<()> {
         if self.foliation.is_none() {
             return Ok(());
+        }
+        if !self.has_current_foliation() {
+            return Err(self.stale_foliation_error());
         }
 
         for face in self.geometry.faces() {
@@ -863,9 +880,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::ValidationFailed`] if a foliated face is not an Up
-    /// or Down CDT cell. Returns [`CdtError::BackendMutationFailed`] if writing
-    /// cell payloads fails, or [`CdtError::BackendRollbackFailed`] if restoring
+    /// Returns [`FoliationError::StaleBookkeeping`] if stored foliation
+    /// bookkeeping belongs to an older geometry revision. Returns
+    /// [`CdtError::ValidationFailed`] if a current foliated face is not an Up or
+    /// Down CDT cell. Returns [`CdtError::BackendMutationFailed`] if writing cell
+    /// payloads fails, or [`CdtError::BackendRollbackFailed`] if restoring
     /// previous payloads also fails.
     ///
     /// # Examples
@@ -882,6 +901,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
     pub fn classify_all_cells(&mut self) -> CdtResult<Option<usize>> {
         if self.foliation.is_none() {
             return Ok(None);
+        }
+        if !self.has_current_foliation() {
+            return Err(self.stale_foliation_error());
         }
 
         let faces: Vec<_> = self.geometry.faces().collect();
@@ -922,7 +944,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         for face in &faces {
             let key = face.cell_key();
             if let Err(err) = self.geometry.set_cell_data_by_key(key, None) {
-                let operation = "set_cell_data_by_key".to_string();
+                let operation = BackendMutationOperation::SetCellDataByKey;
                 let target = format!("face {key:?}");
                 let detail =
                     format!("failed to clear existing cell payload before classification: {err}");
@@ -945,7 +967,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
         for (key, ct) in classifications {
             if let Err(err) = self.geometry.set_cell_data_by_key(key, Some(ct.to_i32())) {
-                let operation = "set_cell_data_by_key".to_string();
+                let operation = BackendMutationOperation::SetCellDataByKey;
                 let target = format!("face {key:?}");
                 let detail = format!(
                     "failed to store classified cell payload {}: {err}",
@@ -983,11 +1005,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
             .map_err(CdtError::from)?;
 
         self.foliation = Some(foliation);
+        self.mark_foliation_synchronized();
         match self.classify_all_cells() {
-            Ok(_) => {
-                self.mark_foliation_synchronized();
-                Ok(())
-            }
+            Ok(_) => Ok(()),
             Err(err) => {
                 self.foliation = None;
                 self.foliation_synced_at_modification = None;
@@ -1012,7 +1032,7 @@ mod tests {
             ([0.5, 1.0], labels[2]),
         ])
         .expect("Should build labeled triangle");
-        DelaunayBackend2D::from_triangulation(dt)
+        DelaunayBackend2D::from_triangulation(dt).expect("test Delaunay triangle should validate")
     }
 
     /// Builds a Delaunay strip and verifies it is a strict CDT mesh.
@@ -1054,7 +1074,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_foliation_detects_missing_out_of_range_and_mismatched_labels() {
+    fn validate_foliation_rejects_stale_bookkeeping_before_live_labels() {
         let backend = labeled_triangle_backend([0, 0, 1]);
         let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
             .expect("Should preserve labels as foliation");
@@ -1068,6 +1088,25 @@ mod tests {
             .expect("Expected valid vertex handle while clearing label");
         assert!(matches!(
             tri.validate_foliation(),
+            Err(CdtError::Foliation(FoliationError::StaleBookkeeping { .. }))
+        ));
+    }
+
+    #[test]
+    fn synchronizing_foliation_detects_missing_and_out_of_range_live_labels() {
+        let backend = labeled_triangle_backend([0, 0, 1]);
+        let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
+            .expect("Should preserve labels as foliation");
+        let first_vertex = tri
+            .geometry()
+            .vertices()
+            .next()
+            .expect("Triangle should contain a vertex");
+
+        tri.set_vertex_data(&first_vertex, None)
+            .expect("Expected valid vertex handle while clearing label");
+        assert!(matches!(
+            tri.synchronize_foliation_from_live_labels(),
             Err(CdtError::Foliation(FoliationError::MissingVertexLabel {
                 vertex: 0
             }))
@@ -1085,28 +1124,12 @@ mod tests {
         tri.set_vertex_data(&first_vertex, Some(7))
             .expect("Expected valid vertex handle while mutating label");
         assert!(matches!(
-            tri.validate_foliation(),
+            tri.synchronize_foliation_from_live_labels(),
             Err(CdtError::Foliation(FoliationError::OutOfRangeVertexLabel {
                 vertex: 0,
                 label: 7,
                 expected_range_end: 2,
             }))
-        ));
-
-        let backend = labeled_triangle_backend([0, 0, 1]);
-        let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
-            .expect("Should preserve labels as foliation");
-        let slice_zero_vertex = tri
-            .geometry()
-            .vertices()
-            .find(|vh| tri.geometry().vertex_data_by_key(vh.vertex_key()) == Some(0))
-            .expect("Triangle should contain a vertex in slice 0");
-
-        tri.set_vertex_data(&slice_zero_vertex, Some(1))
-            .expect("Expected valid vertex handle while mutating label");
-        assert!(matches!(
-            tri.validate_foliation(),
-            Err(CdtError::Foliation(FoliationError::LabelMismatch { .. }))
         ));
     }
 
@@ -1239,6 +1262,53 @@ mod tests {
         assert!(tri.vertices_at_time(999).is_empty());
         for vh in tri.geometry().vertices() {
             assert_eq!(tri.time_label(&vh), Some(0));
+        }
+    }
+
+    #[test]
+    fn stale_foliation_hides_public_queries_and_fails_validation() {
+        let mut tri = strict_strip(4, 2);
+        let vertex = tri
+            .geometry()
+            .vertices()
+            .next()
+            .expect("strip should contain vertices");
+        let label = tri
+            .geometry()
+            .vertex_data_by_key(vertex.vertex_key())
+            .expect("strip vertices should be labeled");
+        let edge = tri
+            .geometry()
+            .edges()
+            .next()
+            .expect("strip should contain edges");
+        let face = tri
+            .geometry()
+            .faces()
+            .next()
+            .expect("strip should contain faces");
+
+        tri.set_vertex_data(&vertex, Some(label))
+            .expect("label rewrite should stale foliation bookkeeping");
+
+        assert!(!tri.has_foliation());
+        assert!(tri.foliation().is_none());
+        assert_eq!(tri.time_label(&vertex), None);
+        assert!(tri.vertices_at_time(label).is_empty());
+        assert_eq!(tri.edge_type(&edge), None);
+        assert_eq!(tri.cell_type(&face), None);
+        assert_eq!(tri.face_edge_types(&face), None);
+        assert_eq!(tri.cell_type_from_data(&face), None);
+
+        for result in [
+            tri.validate_foliation(),
+            tri.validate_causality(),
+            tri.validate_cell_classification(),
+        ] {
+            assert!(matches!(
+                result,
+                Err(CdtError::Foliation(FoliationError::StaleBookkeeping { .. }))
+            ));
         }
     }
 

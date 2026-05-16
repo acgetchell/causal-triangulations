@@ -213,6 +213,7 @@ Focused preludes under `prelude::` must remain small, orthogonal, and purpose-sp
 - `prelude::errors` for crate error types and typed error-category enums needed to pattern-match failures
 - `prelude::simulation` for Metropolis/action simulation workflows, proposal types, simulation result types, and telemetry needed to inspect or debug simulations
 - `prelude::observables` for user-facing analysis APIs that measure triangulations or derived physical observables, such as volume profiles, Hausdorff-dimension estimators, and spectral-dimension estimators
+- `prelude::testing` for fixture-only helpers such as the mock backend and its typed error categories
 
 Keep the simulation and observables boundaries crisp:
 

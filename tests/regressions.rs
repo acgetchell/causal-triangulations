@@ -47,23 +47,23 @@ fn toroidal_observables_remain_static_until_periodic_move_support_lands() {
         MetropolisAlgorithm::new(metropolis_config, ActionConfig::default()).run(triangulation);
     let results = results.expect("toroidal observables regression run should complete");
 
-    assert_eq!(results.move_stats.total_attempted(), 80);
+    assert_eq!(results.move_stats().total_attempted(), 80);
     assert_eq!(
-        results.move_stats.total_accepted(),
+        results.move_stats().total_accepted(),
         0,
         "delaunay#337 / causal-triangulations#122 currently block successful periodic toroidal moves"
     );
     assert_relative_eq!(results.acceptance_rate(), 0.0, epsilon = f64::EPSILON);
     assert_eq!(
         (
-            results.triangulation.vertex_count(),
-            results.triangulation.edge_count(),
-            results.triangulation.face_count(),
+            results.triangulation().vertex_count(),
+            results.triangulation().edge_count(),
+            results.triangulation().face_count(),
         ),
         initial_counts,
         "toroidal geometry should stay unchanged until periodic move support lands"
     );
-    assert_eq!(results.triangulation.volume_profile(), initial_profile);
+    assert_eq!(results.triangulation().volume_profile(), initial_profile);
     assert_observable_unchanged(
         "Hausdorff dimension",
         initial_hausdorff,

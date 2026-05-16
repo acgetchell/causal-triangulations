@@ -221,6 +221,7 @@ The implementation is split into child modules under `src/cdt/triangulation/`:
 - `TriangulationQuery` is the read-only surface used by CDT logic for counts, handles, adjacency, coordinates, face vertices, and validation
 - `TriangulationMut` is the narrow mutation surface used by CDT-owned move kernels through wrapper methods, not broad mutable backend exposure
 - Result structs such as `FlipResult`, `EdgeAdjacentFaces`, and `SubdivisionResult` keep local topology operations backend-neutral
+- Use `prelude::geometry` for real backend construction and geometry traits; use `prelude::testing` for mock-backend doctests or downstream fixture code
 
 ### `geometry/backends/delaunay.rs` — Delaunay adapter
 
@@ -233,8 +234,8 @@ The implementation is split into child modules under `src/cdt/triangulation/`:
 
 - `generate_delaunay2` — builds a 2D Delaunay triangulation with optional seed
 - `build_delaunay2_with_data` — builds from coordinate + vertex-data pairs
-- `build_delaunay2_from_cells` / `build_delaunay2_with_topology` — builds from explicit cell connectivity (no Delaunay point insertion); the latter also accepts `TopologyGuarantee` and `GlobalTopology` metadata so non-sphere Euler characteristics validate correctly
-- `build_toroidal_delaunay2` — convenience wrapper for explicit toroidal meshes (χ = 0; no point-insertion Delaunay guarantee)
+- `build_delaunay2_from_cells` / `build_delaunay2_with_topology` — builds from explicit cell connectivity (no Delaunay point insertion); the latter also accepts `TopologyGuarantee` and `GlobalTopology` metadata for supported explicit topologies
+- `build_toroidal_delaunay2` — API-compatibility wrapper for explicit toroidal meshes; with `delaunay` v0.7.7 it validates the domain and reports the upstream explicit-toroidal topology limitation
 - `build_periodic_toroidal_delaunay2` — builds true periodic toroidal Delaunay meshes through the upstream image-point constructor
 - `random_delaunay2`, `seeded_delaunay2` — convenience wrappers
 - `DelaunayTriangulation2D` — type alias for the concrete 2D triangulation type
@@ -252,6 +253,6 @@ The toroidal CDT constructor builds from labeled lattice vertices and delegates 
 
 ## Key Dependencies
 
-- `delaunay` (v0.7.6) — geometry backend (Delaunay triangulations, vertex data for time labels, `set_vertex_data_by_key` for O(1) label mutation)
+- `delaunay` (v0.7.7) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context, `set_vertex_data_by_key` for O(1) label mutation)
 - `markov-chain-monte-carlo` (v0.3) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, `Target`)
 - `num-traits` — `ToPrimitive` and `NumCast` for checked or saturating numeric conversions

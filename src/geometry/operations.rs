@@ -137,7 +137,7 @@ pub trait TriangulationOps: TriangulationQuery + Sized {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::testing::*;
     ///
     /// let backend = MockBackend::create_triangle();
     /// assert!(backend.is_delaunay());
@@ -161,7 +161,7 @@ pub trait TriangulationOps: TriangulationQuery + Sized {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::testing::*;
     ///
     /// let backend = MockBackend::create_triangle();
     /// let hull = backend.convex_hull();
@@ -190,7 +190,7 @@ pub trait TriangulationOps: TriangulationQuery + Sized {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::testing::*;
     ///
     /// let backend = MockBackend::create_triangle();
     /// let boundary = backend.boundary_edges();

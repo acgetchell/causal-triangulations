@@ -235,9 +235,12 @@ pub fn build_delaunay2_with_data(
 /// assembled combinatorially — **no Delaunay point-insertion** is performed.
 ///
 /// Topology defaults to [`TopologyGuarantee::DEFAULT`] (PL-manifold) and
-/// [`GlobalTopology::Euclidean`].  For non-spherical meshes (e.g. torus with
-/// χ = 0), use [`build_delaunay2_with_topology`] or the convenience wrapper
-/// [`build_toroidal_delaunay2`] instead.
+/// [`GlobalTopology::Euclidean`].  For explicit meshes that need non-default
+/// topology metadata, use [`build_delaunay2_with_topology`].  For toroidal CDT
+/// meshes, prefer [`build_periodic_toroidal_delaunay2`] or
+/// [`CdtTriangulation::from_toroidal_cdt`](crate::CdtTriangulation::from_toroidal_cdt):
+/// `delaunay` v0.7.7 rejects explicit non-Euclidean connectivity for toroidal
+/// construction.
 ///
 /// This is one of the only call sites for
 /// [`DelaunayTriangulationBuilder::from_vertices_and_cells`], maintaining
@@ -280,11 +283,13 @@ pub fn build_delaunay2_from_cells(
 /// Like [`build_delaunay2_from_cells`] but with explicit [`TopologyGuarantee`] and
 /// [`GlobalTopology`] metadata.
 ///
-/// Use [`TopologyGuarantee::Pseudomanifold`] for meshes whose Euler characteristic
-/// differs from the default closed-sphere expectation, and pair it with the
-/// matching [`GlobalTopology`] (e.g., [`GlobalTopology::Toroidal`] with
-/// [`ToroidalConstructionMode::Explicit`]) so the builder validates against the
-/// correct expected χ.
+/// Use [`TopologyGuarantee::Pseudomanifold`] for supported explicit meshes whose
+/// Euler characteristic differs from the default closed-sphere expectation, and
+/// pair it with the matching [`GlobalTopology`] so the builder validates against
+/// the correct expected χ.  For toroidal CDT meshes, use
+/// [`build_periodic_toroidal_delaunay2`]; `delaunay` v0.7.7 rejects
+/// [`GlobalTopology::Toroidal`] explicit cell connectivity pending upstream
+/// quotient-validation support.
 ///
 /// # Errors
 ///
@@ -356,30 +361,36 @@ pub fn build_delaunay2_with_topology(
         })
 }
 
-/// Convenience wrapper for building a 2D toroidal explicit triangulation.
+/// Attempts to build a 2D toroidal explicit triangulation.
 ///
 /// Sets [`TopologyGuarantee::Pseudomanifold`] and
 /// [`GlobalTopology::Toroidal`] with [`ToroidalConstructionMode::Explicit`]
 /// so the builder validates the mesh against χ = 0 instead of the default
 /// closed-sphere expectation.
 ///
-/// In practice, most callers use the higher-level
+/// `delaunay` v0.7.7 rejects explicit non-Euclidean connectivity for toroidal
+/// topology before quotient validation can run.  This helper remains as the
+/// stable explicit-topology entry point, but callers that need an actual
+/// toroidal CDT mesh should use [`build_periodic_toroidal_delaunay2`] or the
+/// higher-level
 /// [`CdtTriangulation::from_toroidal_cdt`](crate::CdtTriangulation::from_toroidal_cdt)
-/// constructor, which assembles the vertex/cell layout for an `N × T` torus and
-/// then delegates here.
+/// constructor.
 ///
 /// # Errors
 ///
 /// Returns [`crate::CdtError::InvalidGenerationParameters`] if either toroidal
 /// period in `domain` is NaN, infinite, or non-positive. Otherwise the error
-/// behavior is the same as [`build_delaunay2_with_topology`].
+/// behavior is the same as [`build_delaunay2_with_topology`], including the
+/// upstream explicit-toroidal rejection described above.
 ///
 /// # Examples
 ///
-/// Build a 3 × 3 toroidal mesh by hand (V = 9, E = 27, F = 18, χ = 0):
+/// The helper validates the toroidal domain before forwarding explicit cell
+/// connectivity to `delaunay`:
 ///
 /// ```
 /// use causal_triangulations::prelude::geometry::*;
+/// use causal_triangulations::CdtError;
 ///
 /// const N: usize = 3;
 /// const T: usize = 3;
@@ -406,10 +417,12 @@ pub fn build_delaunay2_with_topology(
 ///     }
 /// }
 ///
-/// let dt = build_toroidal_delaunay2(&vertices, &cells, [1.0, 1.0])
-///     .expect("explicit 3×3 toroidal mesh");
-/// assert_eq!(dt.number_of_vertices(), N * T);
-/// assert_eq!(dt.number_of_cells(), 2 * N * T);
+/// let result = build_toroidal_delaunay2(&vertices, &cells, [1.0, 1.0]);
+/// assert!(matches!(
+///     result,
+///     Err(CdtError::DelaunayGenerationFailed { ref underlying_error, .. })
+///         if underlying_error.contains("Explicit non-Euclidean connectivity")
+/// ));
 /// ```
 pub fn build_toroidal_delaunay2(
     coords_with_data: &[([f64; 2], u32)],
@@ -473,7 +486,8 @@ pub fn build_toroidal_delaunay2(
 ///     assert_eq!(dt.number_of_vertices(), N * T);
 ///     assert_eq!(dt.number_of_cells(), 2 * N * T);
 ///
-///     let backend = DelaunayBackend2D::from_triangulation(dt);
+///     let backend = DelaunayBackend2D::from_triangulation(dt)
+///         .expect("Delaunay input should validate");
 ///     backend
 ///         .validate_delaunay()
 ///         .expect("periodic toroidal mesh passes Level 1-4 validation");
@@ -658,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_toroidal_delaunay2_3x3_chi_zero() {
+    fn test_explicit_toroidal_cells_are_rejected() {
         // A real 3×3 toroidal mesh: V=9, F=18, E=27, χ=0.
         const N: usize = 3;
         const T: usize = 3;
@@ -684,10 +698,21 @@ mod tests {
             }
         }
 
-        let dt = build_toroidal_delaunay2(&vertices, &cells, [1.0, 1.0])
-            .expect("3×3 toroidal mesh should build");
-        assert_eq!(dt.number_of_vertices(), N * T);
-        assert_eq!(dt.number_of_cells(), 2 * N * T);
+        let error = build_toroidal_delaunay2(&vertices, &cells, [1.0, 1.0])
+            .expect_err("explicit toroidal topology should report upstream limitation");
+        assert!(
+            matches!(
+                error,
+                CdtError::DelaunayGenerationFailed {
+                    vertex_count: 9,
+                    ref underlying_error,
+                    ..
+                } if underlying_error.contains(
+                    "Explicit non-Euclidean connectivity is not supported for Toroidal"
+                )
+            ),
+            "explicit toroidal mesh should fail with the upstream topology limitation, got {error:?}"
+        );
     }
 
     #[test]
@@ -713,7 +738,8 @@ mod tests {
         assert_eq!(dt.number_of_vertices(), N * T);
         assert_eq!(dt.number_of_cells(), 2 * N * T);
 
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("periodic toroidal mesh should validate");
         backend
             .validate_delaunay()
             .expect("periodic toroidal mesh must pass upstream Level 1-4 validation");
@@ -1175,12 +1201,14 @@ mod tests {
 
     #[test]
     fn test_coordinate_range_bounds() {
-        // Test extreme coordinate ranges
+        // Test representative finite coordinate ranges.  Astronomical f64
+        // spans can violate robust predicate preconditions before they are
+        // meaningful geometry fixtures.
         let ranges = [
-            (f64::MIN / 1e10, f64::MAX / 1e10), // Very large range (scaled down to avoid overflow)
-            (-1000.0, 1000.0),                  // Large symmetric range
-            (0.001, 0.002),                     // Very small range
-            (-0.5, 0.5),                        // Small symmetric range
+            (-1.0e6, 1.0e6), // Broad symmetric range
+            (-1000.0, 1000.0),
+            (0.001, 0.002),
+            (-0.5, 0.5),
         ];
 
         for range in ranges {
