@@ -294,7 +294,6 @@ impl DelaunayFaceHandle {
     }
 }
 
-/// Error type for Delaunay backend operations
 /// Backend operation category carried by [`DelaunayError`] variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -569,7 +568,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
         &mut self,
         dt_before: RawTriangulation<VertexData, CellData, D>,
         facets_before: HashMap<EdgeKey, FacetHandle>,
-        operation: &'static str,
+        operation: DelaunayOperation,
         target: impl Display,
     ) -> Result<(), DelaunayError> {
         if let Err(err) = self.validate_structural() {
@@ -1288,7 +1287,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
         self.validate_mutation_or_restore(
             dt_before,
             facets_before,
-            "insert_vertex",
+            DelaunayOperation::InsertVertex,
             format!("{coords:?}"),
         )?;
         Ok(DelaunayVertexHandle { key })
@@ -1320,7 +1319,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
         self.validate_mutation_or_restore(
             dt_before,
             facets_before,
-            "flip_k1_remove",
+            DelaunayOperation::FlipK1Remove,
             format!("vertex {:?}", vertex.key),
         )?;
         Ok(info
@@ -1415,7 +1414,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
         self.validate_mutation_or_restore(
             dt_before,
             facets_before,
-            "flip_k2",
+            DelaunayOperation::FlipK2,
             format!("edge {:?} -- {:?}", edge.key.v0(), edge.key.v1()),
         )?;
         let affected_faces = info
@@ -1486,7 +1485,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
         self.validate_mutation_or_restore(
             dt_before,
             facets_before,
-            "flip_k1_insert",
+            DelaunayOperation::FlipK1Insert,
             format!("face {:?} at point {:?}", face.key, point),
         )?;
         Ok(SubdivisionResult::new(
@@ -1515,22 +1514,48 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
-    use serde_json::Value;
-    use slotmap::KeyData;
-
     use super::*;
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{
         DelaunayTriangulation2D, build_delaunay2_from_cells, build_delaunay2_with_data,
         generate_delaunay2, random_delaunay2, seeded_delaunay2,
     };
+    use serde_json::{Value, error::Category};
+    use slotmap::KeyData;
+    use std::collections::HashSet;
 
     /// Wraps generated test fixtures through the public checked constructor.
     fn validated_backend(dt: DelaunayTriangulation2D) -> DelaunayBackend2D {
         DelaunayBackend2D::from_triangulation(dt)
             .expect("test Delaunay triangulation should validate")
+    }
+
+    /// `serde_json` wraps custom visitor failures as data errors; assert that
+    /// structured category first, then keep detail matching in one place.
+    fn assert_json_data_error(error: &serde_json::Error, expected_details: &[&str]) {
+        assert_eq!(error.classify(), Category::Data);
+        let message = error.to_string();
+        for expected_detail in expected_details {
+            assert!(
+                message.contains(expected_detail),
+                "deserialization error {message:?} did not contain {expected_detail:?}"
+            );
+        }
+    }
+
+    /// `serde::de::value::Error` does not expose categories, so centralize the
+    /// remaining custom-message assertions for direct conversion tests.
+    fn assert_value_deserialization_error(
+        error: &serde::de::value::Error,
+        expected_details: &[&str],
+    ) {
+        let message = error.to_string();
+        for expected_detail in expected_details {
+            assert!(
+                message.contains(expected_detail),
+                "value deserialization error {message:?} did not contain {expected_detail:?}"
+            );
+        }
     }
 
     /// Rewrites a serialized convex-quad TDS to use the non-Delaunay diagonal so
@@ -1612,8 +1637,25 @@ mod tests {
                 .into_global_topology::<2, serde::de::value::Error>()
                 .expect_err("invalid toroidal period should fail deserialization");
 
-            assert!(error.to_string().contains("invalid toroidal period"));
+            assert_value_deserialization_error(&error, &["invalid toroidal period"]);
         }
+    }
+
+    #[test]
+    fn toroidal_topology_deserialization_rejects_domain_length_mismatch() {
+        let topology = SerializableGlobalTopology::Toroidal {
+            domain: vec![1.0],
+            mode: SerializableToroidalConstructionMode::Explicit,
+        };
+
+        let error = topology
+            .into_global_topology::<2, serde::de::value::Error>()
+            .expect_err("wrong-dimensional toroidal domain should fail deserialization");
+
+        assert_value_deserialization_error(
+            &error,
+            &["toroidal domain length mismatch", "got 1", "expected 2"],
+        );
     }
 
     #[test]
@@ -1631,12 +1673,7 @@ mod tests {
         let error = serde_json::from_str::<DelaunayBackend2D>(&invalid_json)
             .expect_err("zero validation cadence must be rejected during deserialization");
 
-        assert!(
-            error
-                .to_string()
-                .contains("delaunay check interval must be non-zero"),
-            "unexpected deserialization error: {error}"
-        );
+        assert_json_data_error(&error, &["delaunay check interval must be non-zero"]);
     }
 
     #[test]

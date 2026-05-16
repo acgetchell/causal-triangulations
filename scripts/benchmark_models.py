@@ -15,7 +15,7 @@ from dataclasses import dataclass
 class BenchmarkData:
     """Represents benchmark data for a single test case."""
 
-    points: int
+    points: int | None
     dimension: str
     time_low: float = 0.0
     time_mean: float = 0.0
@@ -25,6 +25,29 @@ class BenchmarkData:
     throughput_mean: float | None = None
     throughput_high: float | None = None
     throughput_unit: str | None = None
+    benchmark_id: str = ""
+    simplices: int | None = None
+
+    @property
+    def comparison_key(self) -> str:
+        """Return the stable key used for baseline/regression matching."""
+        if self.benchmark_id:
+            return self.benchmark_id
+        if self.points is None:
+            msg = "Unsized benchmarks require benchmark_id for comparison matching"
+            raise ValueError(msg)
+        return f"{self.points}_{self.dimension}"
+
+    @property
+    def points_label(self) -> str:
+        """Return a display label for the benchmark input size."""
+        return str(self.points) if self.points is not None else "n/a"
+
+    def header_line(self) -> str:
+        """Return the baseline/comparison section header for this benchmark."""
+        if self.points is None:
+            return f"=== Unsized Workload ({self.dimension}) ==="
+        return f"=== {self.points} Points ({self.dimension}) ==="
 
     def with_timing(self, low: float, mean: float, high: float, unit: str) -> "BenchmarkData":
         """Set timing data (fluent interface)."""
@@ -42,12 +65,19 @@ class BenchmarkData:
         self.throughput_unit = unit
         return self
 
+    def with_simplices(self, count: int | None) -> "BenchmarkData":
+        """Set the number of generated maximal simplices."""
+        self.simplices = count
+        return self
+
     def to_baseline_format(self) -> str:
         """Convert to baseline file format."""
         lines = [
-            f"=== {self.points} Points ({self.dimension}) ===",
-            f"Time: [{self.time_low}, {self.time_mean}, {self.time_high}] {self.time_unit}",
+            self.header_line(),
         ]
+        if self.benchmark_id:
+            lines.append(f"Benchmark ID: {self.benchmark_id}")
+        lines.append(f"Time: [{self.time_low}, {self.time_mean}, {self.time_high}] {self.time_unit}")
 
         if self.throughput_low is not None and self.throughput_mean is not None and self.throughput_high is not None and self.throughput_unit:
             lines.append(f"Throughput: [{self.throughput_low}, {self.throughput_mean}, {self.throughput_high}] {self.throughput_unit}")
@@ -135,10 +165,10 @@ def parse_benchmark_header(line: str) -> BenchmarkData | None:
     Returns:
         BenchmarkData object or None if no match
     """
-    # Match pattern like "=== 1000 Points (2D) ==="
-    match = re.match(r"^=== (\d+) Points \((.+)\) ===$", line.strip())
+    # Match patterns like "=== 1000 Points (2D) ===" or "=== Unsized Workload (4D) ==="
+    match = re.match(r"^=== (?:(\d+) Points|Unsized Workload) \((.+)\) ===$", line.strip())
     if match:
-        points = int(match.group(1))
+        points = int(match.group(1)) if match.group(1) is not None else None
         dimension = match.group(2)
         return BenchmarkData(points=points, dimension=dimension)
     return None
@@ -177,6 +207,15 @@ def parse_time_data(benchmark: BenchmarkData, line: str) -> bool:
                 return True
         except ValueError:
             pass
+    return False
+
+
+def _parse_benchmark_id_data(benchmark: BenchmarkData, line: str) -> bool:
+    """Parse optional baseline benchmark identifier metadata."""
+    match = re.match(r"^Benchmark ID:\s*(.+)$", line.strip())
+    if match:
+        benchmark.benchmark_id = match.group(1).strip()
+        return True
     return False
 
 
@@ -219,7 +258,7 @@ def _append_complete_benchmark(benchmarks: list[BenchmarkData], benchmark: Bench
         return
 
     print(
-        f"Warning: skipping incomplete benchmark section for {benchmark.points} Points ({benchmark.dimension}): missing valid Time line",
+        f"Warning: skipping incomplete benchmark section for {benchmark.points_label} Points ({benchmark.dimension}): missing valid Time line",
         file=sys.stderr,
     )
 
@@ -248,6 +287,9 @@ def extract_benchmark_data(baseline_content: str) -> list[BenchmarkData]:
             continue
 
         if current_benchmark:
+            if _parse_benchmark_id_data(current_benchmark, line):
+                continue
+
             # Try to parse time data
             if parse_time_data(current_benchmark, line):
                 continue
@@ -317,12 +359,35 @@ def format_throughput_value(value: float | None, unit: str | None) -> str:
     return f"{value:.2f} {unit}"
 
 
-def format_benchmark_tables(benchmarks: list[BenchmarkData]) -> list[str]:
+def format_count_value(value: int | None) -> str:
+    """
+    Format a count value for benchmark tables.
+
+    Args:
+        value: Count value to format (can be None)
+
+    Returns:
+        Formatted count string
+    """
+    if value is None:
+        return "N/A"
+    return f"{value:,}"
+
+
+def format_benchmark_tables(
+    benchmarks: list[BenchmarkData],
+    *,
+    input_label: str = "Points",
+    include_simplices: bool = False,
+) -> list[str]:
     """
     Format benchmark data as markdown tables grouped by dimension.
 
     Args:
         benchmarks: List of BenchmarkData objects to format
+        input_label: Display label for the benchmark input-size column
+        include_simplices: When true, replace the scaling column with generated
+            maximal simplex counts.
 
     Returns:
         List of markdown lines containing formatted tables
@@ -344,19 +409,34 @@ def format_benchmark_tables(benchmarks: list[BenchmarkData]) -> list[str]:
         return (int(m.group(1)) if m else 1_000_000, d)
 
     for dimension in sorted(by_dimension.keys(), key=_dim_key):
-        dim_benchmarks = sorted(by_dimension[dimension], key=lambda b: b.points)
-
-        lines.extend(
-            [
-                f"### {dimension} Triangulation Performance",
-                "",
-                "| Points | Time (mean) | Throughput (mean) | Scaling |",
-                "|--------|-------------|-------------------|----------|",
-            ],
+        dim_benchmarks = sorted(
+            by_dimension[dimension],
+            key=lambda b: (b.points is None, b.points or 0, b.comparison_key),
         )
+        include_benchmark_id = any(bench.benchmark_id for bench in dim_benchmarks)
 
-        # Calculate scaling relative to smallest benchmark
-        first_nonzero = next((b for b in dim_benchmarks if b.time_mean and b.time_mean > 0), None)
+        lines.extend([f"### {dimension} Triangulation Performance", ""])
+        final_column_label = "Simplices Generated" if include_simplices else "Scaling"
+        final_column_separator = "---------------------" if include_simplices else "----------"
+        if include_benchmark_id:
+            lines.extend(
+                [
+                    f"| Benchmark ID | {input_label} | Time (mean) | Throughput (mean) | {final_column_label} |",
+                    f"|--------------|--------|-------------|-------------------|{final_column_separator}|",
+                ],
+            )
+        else:
+            lines.extend(
+                [
+                    f"| {input_label} | Time (mean) | Throughput (mean) | {final_column_label} |",
+                    f"|--------|-------------|-------------------|{final_column_separator}|",
+                ],
+            )
+
+        # Calculate scaling relative to the smallest numeric workload only for
+        # legacy homogeneous tables. Expanded benchmark IDs mix different API
+        # surfaces, so a single per-dimension scaling baseline is misleading.
+        first_nonzero = None if include_benchmark_id else next((b for b in dim_benchmarks if b.time_mean and b.time_mean > 0), None)
         baseline_time = first_nonzero.time_mean if first_nonzero else None
 
         for bench in dim_benchmarks:
@@ -368,14 +448,18 @@ def format_benchmark_tables(benchmarks: list[BenchmarkData]) -> list[str]:
                 else "N/A"
             )
 
-            # Calculate scaling factor
-            if bench.time_mean > 0 and baseline_time and baseline_time > 0:
+            if include_simplices:
+                final_column_str = format_count_value(bench.simplices)
+            elif bench.time_mean > 0 and baseline_time and baseline_time > 0:
                 scaling = bench.time_mean / baseline_time
-                scaling_str = f"{scaling:.1f}x"
+                final_column_str = f"{scaling:.1f}x"
             else:
-                scaling_str = "N/A"
+                final_column_str = "N/A"
 
-            lines.append(f"| {bench.points} | {time_str} | {throughput_str} | {scaling_str} |")
+            if include_benchmark_id:
+                lines.append(f"| `{bench.comparison_key}` | {bench.points_label} | {time_str} | {throughput_str} | {final_column_str} |")
+            else:
+                lines.append(f"| {bench.points_label} | {time_str} | {throughput_str} | {final_column_str} |")
 
         lines.append("")  # Empty line between tables
 

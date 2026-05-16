@@ -30,6 +30,15 @@ _ensure-cargo-llvm-cov:
         exit 1
     fi
 
+_ensure-cargo-machete:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! cargo machete --version >/dev/null 2>&1; then
+        echo "❌ 'cargo-machete' not found. Install with:"
+        echo "   cargo install --locked cargo-machete"
+        exit 1
+    fi
+
 _ensure-jq:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -48,6 +57,18 @@ _ensure-dprint:
     #!/usr/bin/env bash
     set -euo pipefail
     command -v dprint >/dev/null || { echo "❌ 'dprint' not found. See 'just setup' or install: cargo install dprint"; exit 1; }
+
+_ensure-prettier-or-npx:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v prettier >/dev/null; then
+        exit 0
+    fi
+    command -v npx >/dev/null || {
+        echo "❌ Neither 'prettier' nor 'npx' found. Install via npm (recommended): npm i -g prettier"
+        echo "   Or install Node.js (for npx): https://nodejs.org"
+        exit 1
+    }
 
 _ensure-shellcheck:
     #!/usr/bin/env bash
@@ -100,11 +121,19 @@ action-lint: _ensure-actionlint
 bench:
     cargo bench --workspace
 
+# Smoke-test benchmark harnesses with minimal samples; not for performance data.
+bench-smoke:
+    cargo bench --workspace --bench cdt_benchmarks -- --sample-size 10 --measurement-time 1 --warm-up-time 1 --noplot
+
 # Compile benchmarks without running them, treating warnings as errors.
 # This catches bench/release-profile-only warnings (e.g. debug_assertions-gated unused vars)
 # that won't show up in normal debug-profile `cargo test` / `cargo clippy` runs.
 bench-compile:
     RUSTFLAGS='-D warnings' cargo bench --workspace --no-run
+
+# Compile benchmarks and release-profile integration tests without running.
+bench-test-compile: bench-compile
+    cargo test --tests --release --no-run
 
 # Build commands
 build:
@@ -159,6 +188,10 @@ ci: check bench-compile test-all examples-validate
 ci-baseline tag="ci":
     just ci
     just perf-baseline {{tag}}
+
+# CI + feature-gated slow/stress tests.
+ci-slow: ci test-slow
+    @echo "✅ CI + slow tests passed!"
 
 # Clean build artifacts
 clean:
@@ -221,6 +254,7 @@ help-workflows:
     @echo "  just check-fast        # Fast compile check (cargo check)"
     @echo "  just ci                # Full CI run (checks + all tests + examples + bench compile)"
     @echo "  just ci-baseline       # CI + save performance baseline"
+    @echo "  just ci-slow           # CI + feature-gated slow/stress tests"
     @echo "  just commit-check      # Comprehensive pre-commit validation"
     @echo ""
     @echo "Testing:"
@@ -245,7 +279,9 @@ help-workflows:
     @echo ""
     @echo "Benchmark System:"
     @echo "  just bench              # Run all benchmarks"
+    @echo "  just bench-smoke        # Smoke-test benchmark harnesses with minimal samples"
     @echo "  just bench-compile      # Compile benchmarks without running"
+    @echo "  just bench-test-compile # Compile benches + release integration tests without running"
     @echo ""
     @echo "Performance Analysis:"
     @echo "  just perf-help     # Show performance analysis commands"
@@ -260,6 +296,8 @@ help-workflows:
     @echo "Static Analysis:"
     @echo "  just semgrep             # Run repository-owned Semgrep rules"
     @echo "  just semgrep-test        # Test repository-owned Semgrep rules"
+    @echo "  just unused-deps         # Check for unused direct Cargo dependencies"
+    @echo "  just publish-check       # Validate crates.io metadata and dry-run publish"
     @echo ""
     @echo "Running:"
     @echo "  just run -- <args>  # Run with custom arguments"
@@ -288,6 +326,64 @@ markdown-fix: _ensure-dprint
     dprint fmt
 
 markdown-lint: markdown-check
+
+publish-check: _ensure-jq
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "🔍 Validating crates.io metadata..."
+    errors=0
+
+    keywords=$(cargo metadata --no-deps --format-version=1 2>/dev/null \
+        | jq -r '.packages[0].keywords[]')
+    count=0
+    while IFS= read -r kw; do
+        [[ -z "$kw" ]] && continue
+        count=$((count + 1))
+        if (( ${#kw} > 20 )); then
+            echo "  ❌ keyword '${kw}' exceeds 20-char limit (${#kw} chars)"
+            errors=1
+        fi
+        if ! [[ "$kw" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+            echo "  ❌ keyword '${kw}' contains invalid characters"
+            errors=1
+        fi
+    done <<< "$keywords"
+    if (( count > 5 )); then
+        echo "  ❌ too many keywords ($count > 5)"
+        errors=1
+    fi
+    echo "  ✓ keywords ($count): $keywords"
+
+    cat_count=$(cargo metadata --no-deps --format-version=1 2>/dev/null \
+        | jq '.packages[0].categories | length')
+    if (( cat_count > 5 )); then
+        echo "  ❌ too many categories ($cat_count > 5)"
+        errors=1
+    fi
+    echo "  ✓ categories ($cat_count)"
+
+    desc=$(cargo metadata --no-deps --format-version=1 2>/dev/null \
+        | jq -r '.packages[0].description // ""')
+    if [[ -z "$desc" ]]; then
+        echo "  ❌ description is missing"
+        errors=1
+    elif (( ${#desc} > 1000 )); then
+        echo "  ❌ description exceeds 1000-char limit (${#desc} chars)"
+        errors=1
+    fi
+    echo "  ✓ description (${#desc} chars)"
+
+    if (( errors )); then
+        echo ""
+        echo "❌ Metadata validation failed. Fix Cargo.toml before publishing."
+        exit 1
+    fi
+
+    echo ""
+    echo "📦 Running cargo publish --dry-run..."
+    cargo publish --locked --allow-dirty --dry-run
+    echo ""
+    echo "✅ Publish check passed!"
 
 perf-baseline tag="": _ensure-uv
     #!/usr/bin/env bash
@@ -448,7 +544,7 @@ setup-tools:
         else
             echo "Install required tools via your system package manager, or ensure they are on PATH."
         fi
-        echo "Required tools: uv, jq, taplo, yamllint, shfmt, shellcheck, actionlint, git-cliff, dprint, typos, cargo-llvm-cov"
+        echo "Required tools: uv, jq, taplo, yamllint, shfmt, shellcheck, actionlint, git-cliff, dprint, typos, cargo-llvm-cov, cargo-machete"
         echo ""
     fi
 
@@ -508,6 +604,13 @@ setup-tools:
         echo "  ✓ cargo-llvm-cov ${cargo_llvm_cov_version}"
     fi
 
+    if ! cargo machete --version >/dev/null 2>&1; then
+        echo "  ⏳ Installing cargo-machete (cargo)..."
+        cargo install --locked cargo-machete
+    else
+        echo "  ✓ cargo-machete"
+    fi
+
     echo ""
     echo "Verifying required commands are available..."
     missing=0
@@ -531,6 +634,12 @@ setup-tools:
             missing=1
         fi
     done
+    if cargo machete --version >/dev/null 2>&1; then
+        echo "  ✓ cargo machete"
+    else
+        echo "  ✗ cargo machete"
+        missing=1
+    fi
     if [ "$missing" -ne 0 ]; then
         echo ""
         echo "❌ Some required tools are still missing."
@@ -590,9 +699,8 @@ spell-check: _ensure-typos
     # Use -z for NUL-delimited output to handle filenames with spaces.
     #
     # Note: For renames/copies, `git status --porcelain -z` emits *two* NUL-separated paths.
-    # The field order is deterministic: the first path (filename) is the destination/new path
-    # and the second path (other_path) is the source/old path. We prefer whichever exists on
-    # disk (typically the destination) to avoid passing stale paths to typos.
+    # The ordering can differ depending on the porcelain output, so we read both and
+    # spell-check whichever one exists on disk.
     while IFS= read -r -d '' status_line; do
         status="${status_line:0:2}"
         filename="${status_line:3}"
@@ -708,7 +816,10 @@ toml-lint: _ensure-taplo
         echo "No TOML files found to lint."
     fi
 
-yaml-fix:
+unused-deps: _ensure-cargo-machete
+    cargo machete
+
+yaml-fix: _ensure-prettier-or-npx
     #!/usr/bin/env bash
     set -euo pipefail
     files=()
@@ -716,20 +827,23 @@ yaml-fix:
         files+=("$file")
     done < <(git ls-files -z '*.yml' '*.yaml')
     if [ "${#files[@]}" -gt 0 ]; then
+        echo "📝 prettier --write (YAML, ${#files[@]} files)"
+
         cmd=()
-        if command -v prettier >/dev/null 2>&1; then
+        if command -v prettier >/dev/null; then
             cmd=(prettier --write --print-width 120)
-        elif command -v npx >/dev/null 2>&1; then
+        elif command -v npx >/dev/null; then
             cmd=(npx)
             if npx --help 2>&1 | grep -q -- '--yes'; then
                 cmd+=(--yes)
             fi
             cmd+=(prettier --write --print-width 120)
-    else
-            echo "❌ Neither 'prettier' nor 'npx' found. Install prettier (npm install -g prettier) or ensure npx is available."
+        else
+            echo "❌ 'prettier' not found. Install via npm (recommended): npm i -g prettier"
+            echo "   Or install Node.js (for npx): https://nodejs.org"
             exit 1
         fi
-        echo "📝 prettier --write (YAML, ${#files[@]} files)"
+
         printf '%s\0' "${files[@]}" | xargs -0 -n100 "${cmd[@]}"
     else
         echo "No YAML files found to format."

@@ -112,7 +112,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// # Errors
     ///
-    /// Returns error if any edge spans more than one time slice (`|Δt| > 1`).
+    /// Returns [`CdtError::Foliation`] with
+    /// [`FoliationError::StaleBookkeeping`](crate::cdt::foliation::FoliationError::StaleBookkeeping)
+    /// when stored foliation bookkeeping is stale. Returns
+    /// [`CdtError::ValidationFailed`] when face vertices or labels cannot be
+    /// resolved, and returns [`CdtError::CausalityViolation`] if any edge spans
+    /// more than one time slice (`|Δt| > 1`).
     ///
     /// # Examples
     ///
@@ -147,8 +152,14 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// # Errors
     ///
-    /// Returns error if any triangle spans more than one time slice, if a face
-    /// cannot be resolved to three vertices, or if any face vertex is unlabeled.
+    /// Returns [`CdtError::Foliation`] with
+    /// [`FoliationError::StaleBookkeeping`](crate::cdt::foliation::FoliationError::StaleBookkeeping)
+    /// when stored foliation bookkeeping is stale (`has_current_foliation()` is
+    /// false). Returns [`CdtError::ValidationFailed`] when a face cannot be
+    /// resolved to three vertices, any face vertex is unlabeled, or a triangle
+    /// lacks exactly one spacelike and two timelike edges. Returns
+    /// [`CdtError::CausalityViolation`] if any triangle spans more than one time
+    /// slice. Callers should handle or propagate all three categories.
     ///
     /// # Examples
     ///

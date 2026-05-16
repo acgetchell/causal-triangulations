@@ -15,6 +15,7 @@ use crate::geometry::backends::delaunay::{DelaunayFaceHandle, DelaunayVertexHand
 use crate::geometry::traits::{EdgeAdjacentFaces, TriangulationQuery};
 use rand::{RngExt, SeedableRng, rngs::Xoshiro256PlusPlus};
 use serde::{Deserialize, Serialize};
+use std::fmt::Display;
 
 /// Types of ergodic moves available in 2D CDT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -695,12 +696,12 @@ fn rollback_if_failed(
 /// visible to callers.
 fn reject_backend(
     operation: BackendMutationOperation,
-    target: impl Into<String>,
-    err: &impl ToString,
+    target: String,
+    err: impl Display,
 ) -> MoveResult {
     MoveResult::Rejected(CdtError::BackendMutationFailed {
         operation,
-        target: target.into(),
+        target,
         detail: err.to_string(),
     })
 }
@@ -914,6 +915,9 @@ fn neighbors3(
     vertex: &DelaunayVertexHandle,
 ) -> Option<[DelaunayVertexHandle; 3]> {
     let adjacent_faces = triangulation.geometry().adjacent_faces(vertex).ok()?;
+    // `adjacent_faces` must return exactly three faces, and `face_vertices`
+    // should contribute one distinct non-self neighbor from each face. The
+    // slots, count, self-skip, and dedup checks enforce that degree-3 contract.
     if adjacent_faces.len() != 3 {
         return None;
     }

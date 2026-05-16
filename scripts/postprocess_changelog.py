@@ -158,6 +158,11 @@ def _is_isolated_body_heading(lines: list[str], idx: int) -> bool:
     return prev_is_blank and next_is_blank
 
 
+def _is_squash_heading_candidate(lines: list[str], idx: int) -> bool:
+    """Return true when an original body line will become bold prose."""
+    return _squash_heading_parts(lines[idx]) is not None and _is_isolated_body_heading(lines, idx)
+
+
 def _max_pr_number(entry: str) -> int:
     """
     Get the largest pull request number referenced in the given changelog entry.
@@ -174,18 +179,20 @@ def _compact_entry(line: str, *, strip_breaking: bool = False) -> str:
     Produce a compact summary of a changelog list item.
 
     Removes a trailing commit-hash link from the given line. If `strip_breaking` is True,
-    also removes a single leading "[**breaking**] " prefix.
+    also removes a single leading breaking marker.
 
     Parameters:
         line (str): The changelog list item to compact.
-        strip_breaking (bool): If True, strip a single leading "[**breaking**] " prefix.
+        strip_breaking (bool): If True, strip a single leading breaking marker.
 
     Returns:
         str: The compacted changelog entry with the commit-hash link (and optional breaking prefix) removed.
     """
     result = _COMMIT_LINK_RE.sub("", line).rstrip()
     if strip_breaking:
-        result = result.replace("[**breaking**] ", "", 1)
+        bullet = result[:2] if result.startswith(("- ", "* ")) else ""
+        body = result[2:] if bullet else result
+        result = bullet + _BREAKING_MARKER_RE.sub("", body, count=1)
     return result
 
 
@@ -202,8 +209,8 @@ def _extract_section_summaries(
     Extract summary lines for merged pull requests and breaking changes from a version section.
 
     Processes only top-level list items in the provided `section` (lines starting with "- " or
-    "* "), detects PR-linked entries and entries containing "[**breaking**]". Each matching line
-    is compacted (trailing commit-hash links removed; the "[**breaking**]" prefix is stripped when
+    "* "), detects PR-linked entries and entries containing a breaking marker. Each matching line
+    is compacted (trailing commit-hash links removed; the breaking marker is stripped when
     requested) before inclusion.
 
     Parameters:
@@ -221,7 +228,7 @@ def _extract_section_summaries(
         if not sline.startswith(("- ", "* ")):
             continue
 
-        is_breaking = "[**breaking**]" in sline
+        is_breaking = bool(_BREAKING_MARKER_RE.search(sline))
         has_pr = bool(_PR_LINK_RE.search(sline))
 
         if is_breaking:
@@ -369,6 +376,8 @@ def _deindent_orphan(line: str, lines: list[str], idx: int) -> str:
         if prev.startswith(" "):
             prev_stripped = prev.lstrip()
             if prev_stripped.startswith(("- ", "* ")):
+                if _is_squash_heading_candidate(lines, j):
+                    continue
                 parent_indent = len(prev) - len(prev_stripped)
                 if our_indent > parent_indent and nearest_parent_indent is None:
                     nearest_parent_indent = parent_indent
@@ -482,10 +491,8 @@ def _normalize_body_line(line: str, lines: list[str], idx: int, result: list[str
     return _reflow_line(line) if len(line) > MAX_LINE_WIDTH else line
 
 
-def postprocess(path: Path) -> None:
-    """Read *path*, apply hygiene fixes, and write it back."""
-    text = path.read_text(encoding="utf-8")
-
+def postprocess_text(text: str) -> str:
+    """Apply changelog markdown hygiene transforms to *text*."""
     # Inject PR / breaking-change summary sections before reflow.
     text = _inject_summary_sections(text)
 
@@ -535,7 +542,13 @@ def postprocess(path: Path) -> None:
 
     # 1. Reassemble and strip trailing blank lines.
     text = "\n".join(result)
-    text = text.rstrip("\n") + "\n"
+    return text.rstrip("\n") + "\n"
+
+
+def postprocess(path: Path) -> None:
+    """Read *path*, apply hygiene fixes, and write it back."""
+    text = path.read_text(encoding="utf-8")
+    text = postprocess_text(text)
 
     path.write_text(text, encoding="utf-8")
 

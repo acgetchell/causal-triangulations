@@ -569,7 +569,9 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///
     /// # Errors
     ///
-    /// Returns error if topology validation fails.
+    /// Returns [`CdtError::InvalidTriangulationMetadata`] if stored metadata is
+    /// inconsistent with the backend, or [`CdtError::TopologyMismatch`] when the
+    /// backend Euler characteristic does not match the configured topology.
     ///
     /// # Examples
     ///
@@ -723,10 +725,25 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
 mod tests {
     use super::*;
     use crate::geometry::generators::build_delaunay2_with_data;
+    use serde_json::error::Category;
     use serde_json::{from_str, to_string};
     use std::num::NonZeroUsize;
     use std::thread;
     use std::time::{Duration, Instant};
+
+    /// Serde custom deserialization errors expose only a data/error category,
+    /// so keep message checks behind one helper while still asserting the
+    /// structured classification that `serde_json` provides.
+    fn assert_checkpoint_data_error(error: &serde_json::Error, expected_details: &[&str]) {
+        assert_eq!(error.classify(), Category::Data);
+        let message = error.to_string();
+        for expected_detail in expected_details {
+            assert!(
+                message.contains(expected_detail),
+                "checkpoint deserialization error {message:?} did not contain {expected_detail:?}"
+            );
+        }
+    }
 
     /// Builds a minimal labeled Delaunay backend for foliation and causality tests.
     fn labeled_triangle_backend(labels: [u32; 3]) -> DelaunayBackend2D {
@@ -1438,10 +1455,7 @@ mod tests {
         );
         let error = from_str::<CdtTriangulation<DelaunayBackend2D>>(&invalid_json)
             .expect_err("backend serde should reject invalid toroidal period");
-        assert!(
-            error.to_string().contains("invalid toroidal period"),
-            "unexpected invalid checkpoint deserialization error: {error}"
-        );
+        assert_checkpoint_data_error(&error, &["invalid toroidal period"]);
     }
 
     #[test]
@@ -1453,10 +1467,7 @@ mod tests {
         let error = from_str::<CdtTriangulation<DelaunayBackend2D>>(&json)
             .expect_err("strict checkpoint validation should reject toroidal serde gaps");
 
-        assert!(
-            error.to_string().contains("Negative geometric orientation"),
-            "unexpected toroidal checkpoint rejection: {error}"
-        );
+        assert_checkpoint_data_error(&error, &["Negative geometric orientation"]);
     }
 
     #[test]
@@ -1521,28 +1532,23 @@ mod prop_tests {
     use proptest::prelude::*;
 
     proptest! {
-        // NOTE: Commented out due to extreme edge cases in random triangulation generation
-        // Property-based testing found Euler characteristics as extreme as χ = -13
-        // This indicates the random point generation can create very complex topologies
-        // TODO: Either constrain generation or develop better validation
-        //
-        // #[test]
-        // fn triangulation_euler_characteristic_invariant(
-        //     vertices in 4u32..20,
-        //     timeslices in 1u32..5
-        // ) {
-        //     let triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
-        //     let v = triangulation.vertex_count() as i32;
-        //     let e = triangulation.edge_count() as i32;
-        //     let f = triangulation.face_count() as i32;
-        //     let euler = v - e + f;
-        //
-        //     prop_assert!(
-        //         (-20..=20).contains(&euler),
-        //         "Euler characteristic {} extremely out of range for random triangulation (V={}, E={}, F={})",
-        //         euler, v, e, f
-        //     );
-        // }
+        /// Property: deterministic CDT strips preserve the expected disk Euler characteristic.
+        #[test]
+        fn cdt_strip_euler_characteristic_matches_topology(
+            vertices_per_slice in 4u32..12,
+            num_slices in 2u32..8
+        ) {
+            let triangulation = CdtTriangulation::from_cdt_strip(vertices_per_slice, num_slices)?;
+
+            prop_assert_eq!(
+                triangulation.geometry().euler_characteristic(),
+                1,
+                "CDT strip should have disk Euler characteristic for N={}, T={}",
+                vertices_per_slice,
+                num_slices
+            );
+            prop_assert!(triangulation.validate_topology().is_ok());
+        }
 
         /// Property: Triangulation should have positive counts for all simplex types
         #[test]

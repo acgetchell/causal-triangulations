@@ -1594,63 +1594,11 @@ class PerformanceComparator:
     def _parse_baseline_file(self, baseline_content: str) -> dict[str, BenchmarkData]:
         """Parse baseline file content into benchmark data."""
         results = {}
-        lines = baseline_content.split("\n")
-        i = 0
-
-        while i < len(lines):
-            line = lines[i].strip()
-
-            # Look for benchmark sections
-            match = re.match(r"=== (\d+) Points \((\d+)D\) ===", line)
-            if match:
-                points = int(match.group(1))
-                dimension = f"{match.group(2)}D"
-
-                # Parse time line
-                if i + 1 < len(lines):
-                    time_line = lines[i + 1].strip()
-                    time_match = re.match(r"Time: \[([0-9.]+), ([0-9.]+), ([0-9.]+)\] (.+)", time_line)
-                    if time_match:
-                        time_low = float(time_match.group(1))
-                        time_mean = float(time_match.group(2))
-                        time_high = float(time_match.group(3))
-                        time_unit = time_match.group(4)
-
-                        # Parse throughput line if present
-                        throughput_low = throughput_mean = throughput_high = None
-                        throughput_unit = None
-
-                        if i + 2 < len(lines):
-                            thrpt_line = lines[i + 2].strip()
-                            thrpt_match = re.match(r"Throughput: \[([0-9.]+), ([0-9.]+), ([0-9.]+)\] (.+)", thrpt_line)
-                            if thrpt_match:
-                                throughput_low = float(thrpt_match.group(1))
-                                throughput_mean = float(thrpt_match.group(2))
-                                throughput_high = float(thrpt_match.group(3))
-                                throughput_unit = thrpt_match.group(4)
-
-                        key = f"{points}_{dimension}"
-                        benchmark = BenchmarkData(points, dimension).with_timing(time_low, time_mean, time_high, time_unit)
-                        if throughput_mean is not None and throughput_low is not None and throughput_high is not None and throughput_unit is not None:
-                            benchmark.with_throughput(
-                                throughput_low,
-                                throughput_mean,
-                                throughput_high,
-                                throughput_unit,
-                            )
-                        else:
-                            logger.debug(
-                                "Missing throughput data for %s: low=%s mean=%s high=%s unit=%s",
-                                key,
-                                throughput_low,
-                                throughput_mean,
-                                throughput_high,
-                                throughput_unit,
-                            )
-                        results[key] = benchmark
-
-            i += 1
-
+        for benchmark in extract_benchmark_data(baseline_content):
+            try:
+                results[benchmark.comparison_key] = benchmark
+            except ValueError as exc:
+                logger.debug("Skipping malformed baseline section %s: %s", benchmark.header_line(), exc)
         return results
 
     def parse_baseline_file(self, baseline_content: str) -> dict[str, BenchmarkData]:
@@ -1742,8 +1690,7 @@ class PerformanceComparator:
         individual_regressions = 0
 
         for current_benchmark in current_results:
-            key = f"{current_benchmark.points}_{current_benchmark.dimension}"
-            baseline_benchmark = baseline_results.get(key)
+            baseline_benchmark = self._matching_baseline(current_benchmark, baseline_results)
 
             self._write_benchmark_header(f, current_benchmark)
             self._write_current_benchmark_data(f, current_benchmark)
@@ -1831,9 +1778,24 @@ class PerformanceComparator:
 
         return False
 
+    @staticmethod
+    def _matching_baseline(current: BenchmarkData, baseline_results: dict[str, BenchmarkData]) -> BenchmarkData | None:
+        """Return the matching baseline entry, falling back to legacy keys for point-sized benchmarks."""
+        try:
+            baseline_benchmark = baseline_results.get(current.comparison_key)
+        except ValueError:
+            return None
+        if baseline_benchmark is not None or current.benchmark_id:
+            return baseline_benchmark
+        if current.points is None:
+            return None
+        return baseline_results.get(f"{current.points}_{current.dimension}")
+
     def _write_benchmark_header(self, f, benchmark: BenchmarkData) -> None:
         """Write benchmark section header."""
-        f.write(f"=== {benchmark.points} Points ({benchmark.dimension}) ===\n")
+        f.write(f"{benchmark.header_line()}\n")
+        if benchmark.benchmark_id:
+            f.write(f"Benchmark ID: {benchmark.benchmark_id}\n")
 
     def _write_current_benchmark_data(self, f, benchmark: BenchmarkData) -> None:
         """Write current benchmark data."""
@@ -2601,7 +2563,7 @@ def _parse_baseline_metadata(baseline_content: str) -> dict[str, str]:
 
 def _sorted_benchmark_list(results: Mapping[str, "BenchmarkData"]) -> list["BenchmarkData"]:
     """Return benchmarks sorted by (dimension, point count) for stable output."""
-    return sorted(results.values(), key=lambda b: (int(b.dimension.rstrip("D")), b.points))
+    return sorted(results.values(), key=lambda b: (int(b.dimension.rstrip("D")), b.points is None, b.points or 0))
 
 
 def _find_downloaded_baseline_file(download_dir: Path) -> Path:

@@ -139,7 +139,7 @@ pub use cdt::metropolis::{
 };
 pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
 pub use cdt::results::{Measurement, SimulationResultsBackend};
-pub use config::{CdtConfig, CdtTopology, TestConfig};
+pub use config::{CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, TestConfig};
 pub use errors::{
     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CheckpointOperation,
     CheckpointResumeReason, DelaunayValidationLevel, OutputFormat,
@@ -188,7 +188,9 @@ pub mod prelude {
 
     /// Focused exports for configuration parsing and presets.
     pub mod config {
-        pub use crate::config::{CdtConfig, CdtConfigOverrides, CdtTopology, TestConfig};
+        pub use crate::config::{
+            CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, TestConfig,
+        };
     }
 
     /// Focused exports for crate error handling.
@@ -352,8 +354,7 @@ pub mod prelude {
     pub mod geometry {
         pub use crate::geometry::DelaunayBackend2D;
         pub use crate::geometry::backends::delaunay::{
-            DelaunayBackend, DelaunayEdgeHandle, DelaunayError, DelaunayFaceHandle,
-            DelaunayOperation, DelaunayVertexHandle, NonFlippableEdgeReason,
+            DelaunayBackend, DelaunayError, DelaunayOperation, NonFlippableEdgeReason,
         };
         pub use crate::geometry::generators::{
             GlobalTopology, TopologyGuarantee, ToroidalConstructionMode,
@@ -361,7 +362,10 @@ pub mod prelude {
             build_periodic_toroidal_delaunay2, build_toroidal_delaunay2, generate_delaunay2,
         };
         pub use crate::geometry::operations::TriangulationOps;
-        pub use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
+        pub use crate::geometry::traits::{
+            EdgeAdjacentFaces, EdgeAdjacentFacesResult, FlipResult, GeometryBackend,
+            SubdivisionResult, TriangulationMut, TriangulationQuery,
+        };
     }
 
     /// Focused exports for tests and documentation fixtures.
@@ -401,7 +405,8 @@ pub mod prelude {
 ///
 /// # Returns
 ///
-/// A `SimulationResults` struct containing the results of the simulation.
+/// A [`SimulationResultsBackend`] value containing the simulation telemetry,
+/// measurements, and final triangulation snapshot.
 ///
 /// # Errors
 ///

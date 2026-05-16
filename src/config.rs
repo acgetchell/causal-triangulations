@@ -201,15 +201,19 @@ impl CdtConfig {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::config::{CdtConfig, CdtConfigOverrides};
+    /// use causal_triangulations::prelude::config::{
+    ///     CdtConfig, CdtConfigOverrides, DimensionOverride,
+    /// };
     ///
     /// let base = CdtConfig::new(10, 2);
     /// let overrides = CdtConfigOverrides {
+    ///     dimension: Some(DimensionOverride::Clear),
     ///     vertices: Some(24),
     ///     ..CdtConfigOverrides::default()
     /// };
     ///
     /// let merged = base.merge_with_override(&overrides);
+    /// assert_eq!(merged.dimension, None);
     /// assert_eq!(merged.vertices, 24);
     /// assert_eq!(merged.timeslices, 2);
     /// ```
@@ -488,6 +492,43 @@ impl CdtConfig {
         Self::parse()
     }
 
+    /// Parses a `CdtConfig` from an explicit argument iterator without exiting
+    /// the process on invalid input.
+    ///
+    /// Use this in tests, libraries, and other embedding contexts that need to
+    /// inspect CLI parse errors. The first item should be the binary name, just
+    /// like [`clap::Parser::try_parse_from`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`clap::Error`] when required arguments are missing or any value
+    /// fails Clap validation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::CdtConfig;
+    ///
+    /// let config = CdtConfig::try_from_args([
+    ///     "cdt",
+    ///     "--vertices",
+    ///     "16",
+    ///     "--timeslices",
+    ///     "4",
+    /// ])
+    /// .expect("valid CLI arguments");
+    ///
+    /// assert_eq!(config.vertices, 16);
+    /// assert_eq!(config.timeslices, 4);
+    /// ```
+    pub fn try_from_args<I, T>(args: I) -> Result<Self, clap::Error>
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<std::ffi::OsString> + Clone,
+    {
+        Self::try_parse_from(args)
+    }
+
     /// Creates a new `CdtConfig` with specified basic parameters and default action parameters.
     ///
     /// # Examples
@@ -591,7 +632,11 @@ impl CdtConfig {
     ///
     /// # Errors
     ///
-    /// Returns a structured error describing the invalid configuration entry.
+    /// Returns [`CdtError::InvalidConfiguration`] if the dimension is not 2, if
+    /// action couplings or temperature are non-finite, if the measurement
+    /// schedule cannot produce a post-thermalization measurement, or if topology
+    /// constraints on time slices, total vertices, or per-slice vertices are not
+    /// satisfied.
     /// Open-boundary topology additionally requires `timeslices ≥ 2`,
     /// `vertices ≥ 4 · timeslices`, and `vertices` evenly divisible by
     /// `timeslices` so each spatial slice carries the same `N ≥ 4` vertices.
@@ -796,6 +841,45 @@ mod tests {
         assert!(!config.simulate);
         assert_eq!(config.output_csv, None);
         assert_eq!(config.output_json, None);
+    }
+
+    #[test]
+    fn try_from_args_parses_valid_cli_values() {
+        let config = CdtConfig::try_from_args([
+            "cdt",
+            "--vertices",
+            "36",
+            "--timeslices",
+            "3",
+            "--simulate",
+            "--seed",
+            "42",
+        ])
+        .expect("valid CLI arguments should parse");
+
+        assert_eq!(config.vertices, 36);
+        assert_eq!(config.timeslices, 3);
+        assert!(config.simulate);
+        assert_eq!(config.seed, Some(42));
+    }
+
+    #[test]
+    fn try_from_args_returns_structured_error_without_exiting() {
+        let error = CdtConfig::try_from_args([
+            "cdt",
+            "--vertices",
+            "36",
+            "--timeslices",
+            "3",
+            "--dimension",
+            "3",
+        ])
+        .expect_err("unsupported dimension should be reported as a parse error");
+
+        assert!(matches!(
+            error.kind(),
+            clap::error::ErrorKind::ValueValidation | clap::error::ErrorKind::InvalidValue
+        ));
     }
 
     #[test]

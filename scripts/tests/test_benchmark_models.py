@@ -16,6 +16,7 @@ from benchmark_models import (
     VersionComparisonData,
     extract_benchmark_data,
     format_benchmark_tables,
+    format_count_value,
     format_throughput_value,
     format_time_value,
     parse_benchmark_header,
@@ -73,6 +74,24 @@ Time: [100.0, 110.0, 120.0] µs
 Throughput: [800.0, 900.0, 1000.0] Kelem/s
 """
         assert result == expected
+
+    def test_to_baseline_format_with_benchmark_id(self) -> None:
+        """Test baseline format output with optional benchmark ID metadata."""
+        data = BenchmarkData(None, "4D", benchmark_id="bulk_retry/4d").with_timing(100.0, 110.0, 120.0, "µs")
+
+        result = data.to_baseline_format()
+        expected = """=== Unsized Workload (4D) ===
+Benchmark ID: bulk_retry/4d
+Time: [100.0, 110.0, 120.0] µs
+"""
+        assert result == expected
+
+    def test_comparison_key_requires_id_for_unsized_workload(self) -> None:
+        """Test that unsized workloads need explicit IDs for matching."""
+        assert BenchmarkData(1000, "2D").comparison_key == "1000_2D"
+        assert BenchmarkData(None, "4D", benchmark_id="retry/4d").comparison_key == "retry/4d"
+        with pytest.raises(ValueError, match="Unsized benchmarks require benchmark_id"):
+            _ = BenchmarkData(None, "4D").comparison_key
 
 
 class TestCircumspherePerformanceData:
@@ -243,9 +262,29 @@ Time: [500.0, 550.0, 600.0] µs
         assert result.points == 1000
         assert result.dimension == "2D"
 
+        # Unsized workload
+        result = parse_benchmark_header("=== Unsized Workload (4D) ===")
+        assert result is not None
+        assert result.points is None
+        assert result.dimension == "4D"
+
         # Invalid header
         result = parse_benchmark_header("Invalid header")
         assert result is None
+
+    def test_extract_benchmark_data_parses_benchmark_id(self) -> None:
+        """Test extracting optional benchmark IDs from baseline content."""
+        baseline_content = """=== Unsized Workload (4D) ===
+Benchmark ID: bulk_retry/4d
+Time: [100.0, 110.0, 120.0] µs
+"""
+
+        benchmarks = extract_benchmark_data(baseline_content)
+
+        assert len(benchmarks) == 1
+        assert benchmarks[0].points is None
+        assert benchmarks[0].benchmark_id == "bulk_retry/4d"
+        assert benchmarks[0].comparison_key == "bulk_retry/4d"
 
     def test_parse_time_data(self):
         """Test parsing time data lines."""
@@ -370,6 +409,12 @@ class TestFormattingFunctions:
         assert format_throughput_value(None, "Kelem/s") == "N/A"
         assert format_throughput_value(110.0, None) == "N/A"
 
+    def test_format_count_value(self) -> None:
+        """Test formatting optional count values for benchmark tables."""
+        assert format_count_value(None) == "N/A"
+        assert format_count_value(0) == "0"
+        assert format_count_value(12345) == "12,345"
+
     def test_format_time_value_with_unit_aliases(self):
         """Test time value formatting with microsecond unit aliases."""
         # Test microsecond alias normalization
@@ -470,3 +515,31 @@ class TestFormattingFunctions:
         # Should not contain any numeric scaling values
         numeric_scaling_pattern = r"\| [^|]+ \| [^|]+ \| [^|]+ \| [0-9.]+x \|"
         assert not re.search(numeric_scaling_pattern, markdown_content)
+
+    def test_format_benchmark_tables_with_benchmark_ids(self) -> None:
+        """Test formatting ID-keyed benchmarks without misleading scaling."""
+        benchmarks = [
+            BenchmarkData(1000, "4D", benchmark_id="insert/4d").with_timing(100.0, 110.0, 120.0, "µs"),
+            BenchmarkData(None, "4D", benchmark_id="repair/4d").with_timing(200.0, 220.0, 240.0, "µs"),
+        ]
+
+        lines = format_benchmark_tables(benchmarks, input_label="Input")
+        markdown_content = "\n".join(lines)
+
+        assert "| Benchmark ID | Input | Time (mean) | Throughput (mean) | Scaling |" in markdown_content
+        assert "| `insert/4d` | 1000 | 110.00 µs | N/A | N/A |" in markdown_content
+        assert "| `repair/4d` | n/a | 220.00 µs | N/A | N/A |" in markdown_content
+
+    def test_format_benchmark_tables_include_simplices(self) -> None:
+        """Test optional simplex counts replace the scaling column."""
+        benchmarks = [
+            BenchmarkData(1000, "2D").with_timing(100.0, 110.0, 120.0, "µs").with_simplices(12345),
+            BenchmarkData(2000, "2D").with_timing(200.0, 220.0, 240.0, "µs"),
+        ]
+
+        lines = format_benchmark_tables(benchmarks, include_simplices=True)
+        markdown_content = "\n".join(lines)
+
+        assert "| Points | Time (mean) | Throughput (mean) | Simplices Generated |" in markdown_content
+        assert "| 1000 | 110.00 µs | N/A | 12,345 |" in markdown_content
+        assert "| 2000 | 220.00 µs | N/A | N/A |" in markdown_content

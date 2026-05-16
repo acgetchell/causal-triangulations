@@ -125,6 +125,152 @@ rules:
       - pattern: $VALUE.unwrap_or_else(|| std::f64::INFINITY)
       - pattern: $VALUE.unwrap_or_else(|| std::f64::NEG_INFINITY)
 
+  - id: causal-triangulations.rust.no-silent-conversion-fallbacks
+    languages:
+      - rust
+    severity: WARNING
+    message: "Handle numeric conversion failures explicitly instead of hiding them behind unwrap_or fallbacks."
+    metadata:
+      category: correctness
+      rationale: >-
+        CDT observable and topology calculations should preserve conversion
+        failure context or choose an explicit failure branch rather than
+        silently substituting sentinel values.
+      ported_from: "delaunay.rust.no-silent-conversion-fallbacks"
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+    patterns:
+      - pattern-either:
+          - pattern: NumCast::from($VALUE).unwrap_or($FALLBACK)
+          - pattern: NumCast::from($VALUE).unwrap_or_else($FALLBACK)
+          - pattern: num_traits::NumCast::from($VALUE).unwrap_or($FALLBACK)
+          - pattern: num_traits::NumCast::from($VALUE).unwrap_or_else($FALLBACK)
+          - pattern: cast::<$FROM, $TO>($VALUE).unwrap_or($FALLBACK)
+          - pattern: cast::<$FROM, $TO>($VALUE).unwrap_or_else($FALLBACK)
+          - pattern: num_traits::cast::<$FROM, $TO>($VALUE).unwrap_or($FALLBACK)
+          - pattern: num_traits::cast::<$FROM, $TO>($VALUE).unwrap_or_else($FALLBACK)
+          - patterns:
+              - pattern: $SAFE(...).unwrap_or($FALLBACK)
+              - metavariable-regex:
+                  metavariable: $SAFE
+                  regex: safe_[A-Za-z0-9_]+
+      - pattern-not-inside: |
+          mod tests {
+              ...
+          }
+      - pattern-not-inside: |
+          mod prop_tests {
+              ...
+          }
+      - pattern-not-inside: |
+          mod integration_tests {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          fn $FUNC(...) {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          fn $FUNC(...) {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          impl $TYPE {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          impl $TYPE {
+              ...
+          }
+
+  - id: causal-triangulations.rust.no-partial-cmp-ordering-defaults
+    languages:
+      - rust
+    severity: WARNING
+    message: "Handle incomparable partial_cmp results explicitly instead of defaulting to an Ordering."
+    metadata:
+      category: correctness
+      rationale: >-
+        Geometry and observable ordering code should document the impossible or
+        incomparable branch instead of silently folding it into Equal, Less, or
+        Greater.
+      ported_from: "delaunay.rust.no-partial-cmp-ordering-defaults"
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+    patterns:
+      - pattern-either:
+          - pattern: $LEFT.partial_cmp($RIGHT).unwrap_or(Ordering::$ORDER)
+          - pattern: $LEFT.partial_cmp($RIGHT).unwrap_or(std::cmp::Ordering::$ORDER)
+          - pattern: $LEFT.partial_cmp($RIGHT).unwrap_or_else($FALLBACK)
+      - pattern-not-inside: |
+          mod tests {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          mod $MOD {
+              ...
+          }
+
+  - id: causal-triangulations.rust.no-function-local-use-in-src
+    languages:
+      - rust
+    severity: WARNING
+    message: "Move source imports to module scope instead of declaring use items inside functions."
+    metadata:
+      category: maintainability
+      rationale: >-
+        Function-local imports obscure dependency shape and make it easier for
+        tests and production code to drift into different styles.
+      ported_from: "delaunay.rust.no-function-local-use-in-src"
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+    patterns:
+      - pattern: use $PATH;
+      - pattern-inside: |
+          fn $FUNC(...) {
+              ...
+          }
+      - pattern-not-inside: |
+          mod tests {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          mod $MOD {
+              ...
+          }
+
   - id: causal-triangulations.rust.no-bare-unwrap-in-src
     languages:
       - rust
@@ -293,6 +439,26 @@ rules:
       # attributes; multiline attributes remain a review concern.
       - pattern-regex: '^\s*#\s*\[\s*expect\s*\([^\]\n]*\)\s*\]'
       - pattern-not-regex: '\breason\s*='
+
+  - id: causal-triangulations.rust.no-clippy-allow-lints
+    languages:
+      - rust
+    severity: WARNING
+    message: "Use #[expect(..., reason = ...)] instead of #[allow(...)] for Clippy suppressions."
+    metadata:
+      category: maintainability
+      rationale: >-
+        Clippy suppressions should be checked by the compiler and carry a
+        stable reason so stale suppressions are noticed during linting.
+      ported_from: "delaunay.rust.no-clippy-allow-lints"
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/**/*.rs"
+        - "/benches/**/*.rs"
+      exclude:
+        - "/tests/semgrep/**"
+    pattern-regex: '^\s*#\s*\[\s*allow\s*\(\s*clippy::'
 
   - id: causal-triangulations.rust.no-box-dyn-error-in-src
     languages:

@@ -13,7 +13,7 @@ use crate::cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_di
 use crate::config::{CdtConfig, CdtTopology};
 use crate::errors::{CdtError, CdtResult, OutputFormat};
 use crate::geometry::CdtTriangulation2D;
-use num_traits::cast::NumCast;
+use crate::util::usize_to_f64;
 use serde::{Deserialize, Serialize};
 use serde_json::to_writer_pretty;
 use std::collections::HashMap;
@@ -474,7 +474,7 @@ impl SimulationResultsBackend {
     /// use std::time::Duration;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)?;
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
     ///     let config = MetropolisConfig::new(1.0, 1, 0, 1).with_seed(7);
     ///     let results = SimulationResultsBackend::new(
     ///         config,
@@ -498,8 +498,12 @@ impl SimulationResultsBackend {
         let accepted_count = self.steps.iter().filter(|step| step.accepted).count();
         let total_count = self.steps.len();
 
-        let accepted_f64 = NumCast::from(accepted_count).unwrap_or(0.0);
-        let total_f64 = NumCast::from(total_count).unwrap_or(1.0);
+        let Some(accepted_f64) = usize_to_f64(accepted_count) else {
+            return 0.0;
+        };
+        let Some(total_f64) = usize_to_f64(total_count) else {
+            return 0.0;
+        };
 
         accepted_f64 / total_f64
     }
@@ -516,7 +520,7 @@ impl SimulationResultsBackend {
     /// use std::time::Duration;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)?;
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
     ///     let config = MetropolisConfig::new(1.0, 1, 0, 1).with_seed(7);
     ///     let results = SimulationResultsBackend::new(
     ///         config,
@@ -540,7 +544,9 @@ impl SimulationResultsBackend {
         let sum: f64 = self.measurements.iter().map(|m| m.action).sum();
         let count = self.measurements.len();
 
-        let count_f64 = NumCast::from(count).unwrap_or(1.0);
+        let Some(count_f64) = usize_to_f64(count) else {
+            return 0.0;
+        };
 
         sum / count_f64
     }
@@ -603,7 +609,9 @@ impl SimulationResultsBackend {
             }
         }
 
-        let count = NumCast::from(measurement_count).unwrap_or(1.0);
+        let Some(count) = usize_to_f64(measurement_count) else {
+            return Vec::new();
+        };
         sums.into_iter().map(|sum| sum / count).collect()
     }
 
@@ -667,7 +675,9 @@ impl SimulationResultsBackend {
             }
         }
 
-        let denominator = NumCast::from(n - 1).unwrap_or(1.0);
+        let Some(denominator) = usize_to_f64(n - 1) else {
+            return Vec::new();
+        };
         variances
             .into_iter()
             .map(|variance| (variance / denominator).sqrt())
@@ -770,7 +780,7 @@ impl SimulationResultsBackend {
     /// use std::time::Duration;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)?;
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
     ///     let config = MetropolisConfig::new(1.0, 2, 1, 1).with_seed(7);
     ///     let results = SimulationResultsBackend::new(
     ///         config,
@@ -946,7 +956,9 @@ fn mean_measurement_action<'a>(measurements: impl IntoIterator<Item = &'a Measur
         return 0.0;
     }
 
-    let count = NumCast::from(count).unwrap_or(1.0);
+    let Some(count) = usize_to_f64(count) else {
+        return 0.0;
+    };
     sum / count
 }
 
@@ -1220,6 +1232,55 @@ mod tests {
         assert_eq!(parsed["aggregate"]["step_count"], 1);
         assert_eq!(parsed["final_triangulation"]["time_slices"], 3);
         assert_eq!(parsed["measurements"][0]["step"], 1);
+    }
+
+    #[test]
+    fn output_writers_reject_file_parent() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let results = results_with(
+            MetropolisConfig::new(1.0, 1, 0, 1),
+            vec![],
+            vec![],
+            triangulation,
+        );
+        let parent_file = temp_output_path("not-a-directory");
+        fs::write(&parent_file, b"not a directory").expect("parent fixture file should write");
+
+        let csv_path = parent_file.join("measurements.csv");
+        let csv_error = results
+            .write_measurements_csv(&csv_path)
+            .expect_err("CSV writer should reject a parent path that is a file");
+        let CdtError::OutputWriteFailed {
+            path,
+            format,
+            detail,
+        } = csv_error
+        else {
+            panic!("expected CSV output write failure, got {csv_error:?}");
+        };
+        assert_eq!(format, OutputFormat::Csv);
+        assert_eq!(path, csv_path.display().to_string());
+        assert!(!detail.is_empty());
+
+        let json_path = parent_file.join("summary.json");
+        let config = CdtConfig::new(12, 3);
+        let json_error = results
+            .write_summary_json(&config, &json_path)
+            .expect_err("JSON writer should reject a parent path that is a file");
+        let CdtError::OutputWriteFailed {
+            path,
+            format,
+            detail,
+        } = json_error
+        else {
+            panic!("expected JSON output write failure, got {json_error:?}");
+        };
+        assert_eq!(format, OutputFormat::Json);
+        assert_eq!(path, json_path.display().to_string());
+        assert!(!detail.is_empty());
+
+        fs::remove_file(&parent_file).expect("parent fixture file should be removable");
     }
 
     #[test]

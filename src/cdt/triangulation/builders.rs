@@ -678,6 +678,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 mod tests {
     use super::*;
     use crate::cdt::foliation::{CellType, EdgeType, FoliationError};
+    use crate::errors::CdtValidationCheck;
     use crate::geometry::generators::{build_delaunay2_from_cells, build_delaunay2_with_data};
 
     /// Builds a minimal labeled Delaunay backend for constructor tests.
@@ -1035,7 +1036,7 @@ mod tests {
             Err(CdtError::ValidationFailed {
                 ref check,
                 ref detail,
-            }) if *check == crate::CdtValidationCheck::Causality
+            }) if *check == CdtValidationCheck::Causality
                 && detail.contains("invalid CDT triangle")
         ));
     }

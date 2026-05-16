@@ -127,7 +127,10 @@ impl MetropolisConfig {
     ///
     /// # Errors
     ///
-    /// Returns a structured error describing the invalid simulation setting.
+    /// Returns [`CdtError::InvalidSimulationConfiguration`] if `temperature` is
+    /// not finite and positive, if `steps` or `measurement_frequency` is zero, if
+    /// thermalization exceeds the step count, or if the schedule cannot produce a
+    /// post-thermalization measurement.
     ///
     /// # Examples
     ///

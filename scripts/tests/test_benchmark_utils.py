@@ -321,6 +321,27 @@ Throughput: [4.167, 4.545, 5.0] Kelem/s
         assert bench_2d_1000.time_mean == 110.0
         assert bench_2d_1000.throughput_mean == 9.091
 
+    def test_parse_baseline_file_with_benchmark_id(self, comparator) -> None:
+        """Test parsing ID-keyed unsized benchmark sections."""
+        baseline_content = """=== Unsized Workload (4D) ===
+Benchmark ID: repair/4d
+Time: [100.0, 110.0, 120.0] µs
+"""
+
+        results = comparator._parse_baseline_file(baseline_content)
+
+        assert list(results) == ["repair/4d"]
+        assert results["repair/4d"].points is None
+        assert results["repair/4d"].dimension == "4D"
+        assert results["repair/4d"].time_mean == 110.0
+
+    def test_matching_baseline_uses_benchmark_id(self, comparator) -> None:
+        """Test matching current benchmarks to ID-keyed baselines."""
+        current = BenchmarkData(None, "4D", benchmark_id="repair/4d").with_timing(100.0, 115.0, 130.0, "µs")
+        baseline = BenchmarkData(None, "4D", benchmark_id="repair/4d").with_timing(95.0, 100.0, 105.0, "µs")
+
+        assert comparator._matching_baseline(current, {"repair/4d": baseline}) is baseline
+
     def test_write_time_comparison_no_regression(self, comparator):
         """Test time comparison writing with no regression."""
         current = BenchmarkData(1000, "2D").with_timing(100.0, 110.0, 120.0, "µs")

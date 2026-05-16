@@ -1,8 +1,7 @@
 #![forbid(unsafe_code)]
 //! Property-based tests for CDT foliation construction and validation.
 
-use causal_triangulations::geometry::DelaunayBackend2D;
-use causal_triangulations::geometry::traits::GeometryBackend;
+use causal_triangulations::prelude::geometry::{DelaunayBackend2D, GeometryBackend};
 use causal_triangulations::prelude::triangulation::*;
 use proptest::prelude::*;
 

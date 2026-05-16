@@ -728,6 +728,51 @@ mod tests {
     }
 
     #[test]
+    fn stale_bookkeeping_display() {
+        let err = FoliationError::StaleBookkeeping {
+            synced_at_modification: Some(123),
+            current_modification_count: 456,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("stale")
+                && msg.contains("synchronized at modification")
+                && msg.contains("Some(123)")
+                && msg.contains("current modification 456"),
+            "Display should describe stale bookkeeping and both modification counts: {msg}"
+        );
+    }
+
+    #[test]
+    fn stale_bookkeeping_equality() {
+        let err = FoliationError::StaleBookkeeping {
+            synced_at_modification: Some(123),
+            current_modification_count: 456,
+        };
+        assert_eq!(
+            err,
+            FoliationError::StaleBookkeeping {
+                synced_at_modification: Some(123),
+                current_modification_count: 456,
+            }
+        );
+        assert_ne!(
+            err,
+            FoliationError::StaleBookkeeping {
+                synced_at_modification: None,
+                current_modification_count: 456,
+            }
+        );
+        assert_ne!(
+            err,
+            FoliationError::StaleBookkeeping {
+                synced_at_modification: Some(123),
+                current_modification_count: 789,
+            }
+        );
+    }
+
+    #[test]
     fn test_foliation_error_equality() {
         assert_eq!(
             FoliationError::EmptySlice { slice: 0 },

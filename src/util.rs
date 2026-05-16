@@ -2,6 +2,7 @@
 
 //! Utility functions for random number generation and mathematical operations.
 
+use num_traits::cast::NumCast;
 use rand::random;
 
 // ---------------------------------------------------------------------------
@@ -12,6 +13,12 @@ use rand::random;
 #[must_use]
 pub(crate) fn saturating_usize_to_u32(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// Converts a `usize` to `f64`, preserving the checked conversion boundary.
+#[must_use]
+pub(crate) fn usize_to_f64(n: usize) -> Option<f64> {
+    NumCast::from(n)
 }
 
 /// Convert a y-coordinate to a time-slice index via `round()`, clamped to `[0, max_t]`.
