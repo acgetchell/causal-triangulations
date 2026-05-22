@@ -37,6 +37,8 @@ Examples:
 
 Direct tool invocation should only be used when a corresponding `just` command does not exist.
 
+Rust unit, integration, CLI, slow, example, and release test recipes run with `cargo nextest`. Documentation tests intentionally remain on `cargo test --doc` because nextest does not run rustdoc doctests.
+
 ---
 
 ## Formatting
@@ -164,6 +166,8 @@ Examples must:
 - demonstrate correct API usage
 
 `just examples-validate` additionally checks stable output markers for user-facing Cargo examples. Keep those markers semantic rather than exact numeric values so simulation output can evolve without making the example contract brittle.
+
+The example runner compiles all Cargo examples once with `cargo build --release --examples`, then executes the compiled binaries directly. This preserves example coverage while avoiding repeated Cargo invocations for each example.
 
 When adding or renaming a Cargo example, update `scripts/run_all_examples.sh` `validate_example_output()` with stable semantic output markers, or intentionally document why success-only validation is sufficient for that example.
 
