@@ -319,6 +319,32 @@ class TestCriterionParser:
             "cdt_move_attempts_2d/Move22/342",
         ]
 
+    def test_fallback_discovery_prefers_new_over_base_for_same_key(self, tmp_path: Path) -> None:
+        criterion_dir = tmp_path / "target" / "criterion"
+        for parent_name, mean in [("base", 30_000.0), ("new", 10_000.0)]:
+            estimates = criterion_dir / "cdt_generation_2d" / "open_strip_medium" / "200" / parent_name / "estimates.json"
+            estimates.parent.mkdir(parents=True)
+            estimates.write_text(
+                json.dumps(
+                    {
+                        "mean": {
+                            "point_estimate": mean,
+                            "confidence_interval": {
+                                "lower_bound": mean * 0.9,
+                                "upper_bound": mean * 1.1,
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+        results = CriterionParser._process_fallback_discovery(criterion_dir)
+
+        assert len(results) == 1
+        assert results[0].benchmark_id == "cdt_generation_2d/open_strip_medium/200"
+        assert results[0].time_mean == 10.0
+
 
 class TestPerformanceComparator:
     """Test cases for PerformanceComparator class."""

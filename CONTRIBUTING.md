@@ -1,6 +1,7 @@
 # Contributing to Causal Dynamical Triangulations
 
-Thank you for your interest in contributing to the [**causal-triangulations**][cdt-lib] library! This document provides comprehensive guidelines for contributors, from first-time contributors to experienced developers looking to contribute significant features.
+Thank you for your interest in contributing to the [**causal-triangulations**][cdt-lib] library! This document provides comprehensive guidelines for
+contributors, from first-time contributors to experienced developers looking to contribute significant features.
 
 ## Table of Contents
 
@@ -21,7 +22,8 @@ Thank you for your interest in contributing to the [**causal-triangulations**][c
 
 ## Code of Conduct
 
-This project and everyone participating in it is governed by our commitment to creating an inclusive and welcoming environment for quantum gravity research and computational physics development.
+This project and everyone participating in it is governed by our commitment to creating an inclusive and welcoming environment for quantum gravity research and
+computational physics development.
 
 Our community is built on the principles of:
 
@@ -148,7 +150,8 @@ This is normal and only happens once.
 
 ## Code Organization
 
-The source/module layout and architecture-sensitive boundaries live in [docs/code_organization.md](docs/code_organization.md). Keep that file current when adding, removing, or moving source files, examples, or architecture-significant modules.
+The source/module layout and architecture-sensitive boundaries live in [docs/code_organization.md](docs/code_organization.md). Keep that file current when
+adding, removing, or moving source files, examples, or architecture-significant modules.
 
 ## Development Workflow
 

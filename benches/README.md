@@ -4,7 +4,8 @@ This document describes the comprehensive benchmarking suite for the Causal Dyna
 
 ## Overview
 
-The benchmarking suite measures performance of key CDT operations using the [criterion](https://crates.io/crates/criterion) benchmarking framework. The benchmarks are designed to track performance across different system sizes and identify performance regressions.
+The benchmarking suite measures performance of key CDT operations using the [criterion](https://crates.io/crates/criterion) benchmarking framework. The
+benchmarks are designed to track performance across different system sizes and identify performance regressions.
 
 ## Running Benchmarks
 

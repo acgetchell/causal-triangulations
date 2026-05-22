@@ -414,6 +414,18 @@ class TestIndentedHeadingNormalization:
     def test_archives_heading_is_preserved(self) -> None:
         assert _normalize_entry_heading("## Archives") == "## Archives"
 
+    def test_bracketed_entry_heading_becomes_level_four(self) -> None:
+        assert _normalize_entry_heading("## [Notes]") == "#### [Notes]"
+
+    def test_bracketed_version_like_entry_heading_becomes_level_four(self) -> None:
+        assert _normalize_entry_heading("## [1.2.3 Notes]") == "#### [1.2.3 Notes]"
+
+    def test_release_heading_is_preserved(self) -> None:
+        assert _normalize_entry_heading("## [v1.2.3] - 2026-05-22") == "## [v1.2.3] - 2026-05-22"
+
+    def test_prerelease_heading_is_preserved(self) -> None:
+        assert _normalize_entry_heading("## [1.2.3-rc.1+build.7]") == "## [1.2.3-rc.1+build.7]"
+
     def test_contextual_category_heading_becomes_level_four(self) -> None:
         assert _normalize_entry_heading("### Fixed: Add rollback") == "#### Fixed: Add rollback"
 

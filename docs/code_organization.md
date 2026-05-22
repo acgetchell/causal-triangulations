@@ -163,16 +163,20 @@ causal-triangulations/
 
 The crate is split into two intentionally different layers:
 
-- `src/geometry/` is the backend interface layer. It is the only layer that talks directly to the `delaunay` crate, wrapping upstream types behind crate-owned traits, opaque handles, generators, and backend adapters.
-- `src/cdt/` is the CDT domain layer. It owns causal triangulation semantics: foliation, topology and causality checks, ergodic moves, Regge action, Metropolis sampling, measurements, and observables.
+- `src/geometry/` is the backend interface layer. It is the only layer that talks directly to the `delaunay` crate, wrapping upstream types behind crate-owned
+  traits, opaque handles, generators, and backend adapters.
+- `src/cdt/` is the CDT domain layer. It owns causal triangulation semantics: foliation, topology and causality checks, ergodic moves, Regge action, Metropolis
+  sampling, measurements, and observables.
 
-Code outside `src/geometry/` must not import `delaunay::` directly. CDT modules should depend on `TriangulationQuery` / `TriangulationMut`, crate-owned Delaunay handle wrappers, `DelaunayBackend2D`, and generator functions from `crate::geometry`.
+Code outside `src/geometry/` must not import `delaunay::` directly. CDT modules should depend on `TriangulationQuery` / `TriangulationMut`, crate-owned Delaunay
+handle wrappers, `DelaunayBackend2D`, and generator functions from `crate::geometry`.
 
 ## Key Modules
 
 ### `cdt/foliation.rs` — Foliation
 
-Assigns each vertex to a discrete time slice, enabling classification of edges as spacelike or timelike and triangles as up or down. See `docs/foliation.md` for design details.
+Assigns each vertex to a discrete time slice, enabling classification of edges as spacelike or timelike and triangles as up or down. See `docs/foliation.md` for
+design details.
 
 - `Foliation` — aggregate bookkeeping (per-slice vertex counts, total slices)
 - `EdgeType` — `Spacelike` (same slice) or `Timelike` (adjacent slices)
@@ -181,15 +185,21 @@ Assigns each vertex to a discrete time slice, enabling classification of edges a
 
 ### `cdt/triangulation.rs` — Foliation integration
 
-This is CDT domain logic layered over the geometry backend interface. It may use `DelaunayBackend2D` and crate-owned Delaunay handles, but it does not reach through to upstream `delaunay::` APIs directly.
+This is CDT domain logic layered over the geometry backend interface. It may use `DelaunayBackend2D` and crate-owned Delaunay handles, but it does not reach
+through to upstream `delaunay::` APIs directly.
 
-- Owns the `CdtTriangulation` wrapper, `CdtMetadata`, `SimulationEvent`, metadata validation, cached simplex-count accessors, and common backend-agnostic wrapper methods
-- `from_cdt_strip(vertices_per_slice, num_slices)` — Delaunay-built open-boundary 1+1 CDT strip with strict Up/Down simplex classification and upstream Level 1–4 Delaunay validation before wrapping
-- `from_toroidal_cdt(vertices_per_slice, num_slices)` — periodic Delaunay S¹×S¹ toroidal CDT (χ = 0) with upstream Level 1–4 validation before wrapping; requires `vertices_per_slice ≥ 3` and `num_slices ≥ 3`
+- Owns the `CdtTriangulation` wrapper, `CdtMetadata`, `SimulationEvent`, metadata validation, cached simplex-count accessors, and common backend-agnostic
+  wrapper methods
+- `from_cdt_strip(vertices_per_slice, num_slices)` — Delaunay-built open-boundary 1+1 CDT strip with strict Up/Down simplex classification and upstream Level
+  1–4 Delaunay validation before wrapping
+- `from_toroidal_cdt(vertices_per_slice, num_slices)` — periodic Delaunay S¹×S¹ toroidal CDT (χ = 0) with upstream Level 1–4 validation before wrapping;
+  requires `vertices_per_slice ≥ 3` and `num_slices ≥ 3`
 - `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`
-- Validation: constructors require upstream Delaunay Level 1–4 validation for initial meshes; `validate()` is the post-move/final-state contract and requires upstream structural validity plus CDT topology, foliation, causality, and strict Up/Down simplex classification
-- Mutable backend access is not exposed. CDT code mutates Delaunay state only through narrow crate-internal operations (`flip_edge`, `subdivide_face`, `remove_vertex`, `set_vertex_data`) that invalidate cached counts and foliation synchronization bookkeeping on success.
+- Validation: constructors require upstream Delaunay Level 1–4 validation for initial meshes; `validate()` is the post-move/final-state contract and requires
+  upstream structural validity plus CDT topology, foliation, causality, and strict Up/Down simplex classification
+- Mutable backend access is not exposed. CDT code mutates Delaunay state only through narrow crate-internal operations (`flip_edge`, `subdivide_face`,
+  `remove_vertex`, `set_vertex_data`) that invalidate cached counts and foliation synchronization bookkeeping on success.
 
 The implementation is split into child modules under `src/cdt/triangulation/`:
 
@@ -203,24 +213,33 @@ The implementation is split into child modules under `src/cdt/triangulation/`:
 - `OpenBoundary` (default) — finite strip with boundary, χ ∈ {1, 2}
 - `Toroidal` — periodic in space and time, S¹×S¹, χ = 0
 - Wired through `CdtConfig.topology`, `CdtConfigOverrides.topology`, the CLI `--topology` flag, and `CdtMetadata.topology`
-- `run_simulation()` dispatches on topology: `Toroidal` → `from_toroidal_cdt`, `OpenBoundary` → `from_cdt_strip`; `vertices` is the total vertex count and must divide evenly across `timeslices`
+- `run_simulation()` dispatches on topology: `Toroidal` → `from_toroidal_cdt`, `OpenBoundary` → `from_cdt_strip`; `vertices` is the total vertex count and must
+  divide evenly across `timeslices`
 
 ### `cdt/metropolis.rs` — Metropolis move ordering
 
-`MetropolisAlgorithm::run()` proposes a move type, computes `ΔS` from the move's simplex-count delta, accepts or rejects the proposal, and only mutates the triangulation after acceptance. Accepted applications that fail are rolled back from a triangulation snapshot and retried at another random local site; retry exhaustion is recorded as a rejection, while hard backend failures remain structured errors. Toroidal move finalization rejects and rolls back candidate sites that would violate χ = 0 or the closed-S¹ per-slice foliation invariant. See `docs/metropolis.md` for the detailed ordering.
+`MetropolisAlgorithm::run()` proposes a move type, computes `ΔS` from the move's simplex-count delta, accepts or rejects the proposal, and only mutates the
+triangulation after acceptance. Accepted applications that fail are rolled back from a triangulation snapshot and retried at another random local site; retry
+exhaustion is recorded as a rejection, while hard backend failures remain structured errors. Toroidal move finalization rejects and rolls back candidate sites
+that would violate χ = 0 or the closed-S¹ per-slice foliation invariant. See `docs/metropolis.md` for the detailed ordering.
 
 ### `cdt/results.rs` — Simulation outputs
 
 - `Measurement` records per-step action, simplex counts, and optional per-slice volume profiles.
 - `SimulationResultsBackend` owns the final triangulation, Monte Carlo step telemetry, move statistics, and measurement history.
-- Result methods summarize acceptance rate, average action, post-thermalization volume profiles, sample volume fluctuations, and final-state Hausdorff/spectral dimension estimates.
+- Result methods summarize acceptance rate, average action, post-thermalization volume profiles, sample volume fluctuations, and final-state Hausdorff/spectral
+  dimension estimates.
 
 ### `cdt/observables.rs` — User-facing estimators
 
-- `estimate_hausdorff_dimension` — estimates Hausdorff dimension from combinatorial dual-graph geodesic ball growth, returning `None` when the triangulation is too small or live face adjacency cannot be resolved
-- `estimate_spectral_dimension` — estimates spectral dimension from dual-graph diffusion return probability, returning `None` when the graph is too small or lacks enough positive return-probability samples for a fit
-- `CdtTriangulation::volume_profile` measures per-slice triangle counts on a triangulation; `SimulationResultsBackend` provides aggregate volume-profile summaries for simulation outputs
-- Import triangulation-focused analysis APIs through `prelude::observables`; use `prelude::simulation` when constructing or inspecting simulation result containers
+- `estimate_hausdorff_dimension` — estimates Hausdorff dimension from combinatorial dual-graph geodesic ball growth, returning `None` when the triangulation is
+  too small or live face adjacency cannot be resolved
+- `estimate_spectral_dimension` — estimates spectral dimension from dual-graph diffusion return probability, returning `None` when the graph is too small or
+  lacks enough positive return-probability samples for a fit
+- `CdtTriangulation::volume_profile` measures per-slice triangle counts on a triangulation; `SimulationResultsBackend` provides aggregate volume-profile
+  summaries for simulation outputs
+- Import triangulation-focused analysis APIs through `prelude::observables`; use `prelude::simulation` when constructing or inspecting simulation result
+  containers
 
 ### `geometry/traits.rs` — Backend-neutral interface
 
@@ -241,15 +260,18 @@ The implementation is split into child modules under `src/cdt/triangulation/`:
 
 - `generate_delaunay2` — builds a 2D Delaunay triangulation with optional seed
 - `build_delaunay2_with_data` — builds from coordinate + vertex-data pairs
-- `build_delaunay2_from_simplices` / `build_delaunay2_with_topology` — builds from explicit simplex connectivity (no Delaunay point insertion); the latter also accepts `TopologyGuarantee` and `GlobalTopology` metadata for supported explicit topologies
-- `build_toroidal_delaunay2` — API-compatibility wrapper for explicit toroidal meshes; with `delaunay` v0.7.8 it validates the domain and reports the upstream explicit-toroidal topology limitation
+- `build_delaunay2_from_simplices` / `build_delaunay2_with_topology` — builds from explicit simplex connectivity (no Delaunay point insertion); the latter also
+  accepts `TopologyGuarantee` and `GlobalTopology` metadata for supported explicit topologies
+- `build_toroidal_delaunay2` — API-compatibility wrapper for explicit toroidal meshes; with `delaunay` v0.7.8 it validates the domain and reports the upstream
+  explicit-toroidal topology limitation
 - `build_periodic_toroidal_delaunay2` — builds true periodic toroidal Delaunay meshes through the upstream image-point constructor
 - `random_delaunay2`, `seeded_delaunay2` — convenience wrappers
 - `DelaunayTriangulation2D` — type alias for the concrete 2D triangulation type
 
 Together with `backends/delaunay.rs`, this module is the only place that directly imports from the `delaunay` crate.
 
-The toroidal CDT constructor builds from labeled lattice vertices and delegates to the upstream periodic image-point constructor, then validates the resulting Delaunay triangulation before CDT foliation, causality, topology, and simplex-classification checks run.
+The toroidal CDT constructor builds from labeled lattice vertices and delegates to the upstream periodic image-point constructor, then validates the resulting
+Delaunay triangulation before CDT foliation, causality, topology, and simplex-classification checks run.
 
 ### `util.rs` — Numeric helpers
 
@@ -260,6 +282,7 @@ The toroidal CDT constructor builds from labeled lattice vertices and delegates 
 
 ## Key Dependencies
 
-- `delaunay` (v0.7.8) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context, `set_vertex_data_by_key` for O(1) label mutation)
+- `delaunay` (v0.7.8) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
+  `set_vertex_data_by_key` for O(1) label mutation)
 - `markov-chain-monte-carlo` (v0.3) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, `Target`)
 - `num-traits` — `ToPrimitive` and `NumCast` for checked or saturating numeric conversions

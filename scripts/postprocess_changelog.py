@@ -38,8 +38,11 @@ _TOKEN_RE = re.compile(
 )
 
 
-# Version section heading: ## [X.Y.Z] or ## [Unreleased]
-_VERSION_RE = re.compile(r"^## \[")
+# Version section heading: ## [X.Y.Z], ## [vX.Y.Z], or ## [Unreleased]
+_VERSION_RE = re.compile(
+    r"^## \[(?:v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?|Unreleased)\]"
+    r"(?:\s+-\s+\d{4}-\d{2}-\d{2})?\s*$"
+)
 
 # PR link: [#123](https://github.com/.../pull/123)
 _PR_LINK_RE = re.compile(r"\[#(\d+)\]\(https://github\.com/[^)]+/pull/\d+\)")

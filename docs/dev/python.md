@@ -2,7 +2,8 @@
 
 Guidance for Python automation under `scripts/`.
 
-The Rust library is the primary product, but the Python benchmark, changelog, hardware, coverage, and workflow utilities are part of the trusted development loop. Keep them typed and predictable so failures are visible in CI instead of being hidden behind loose mocks or broad exception handling.
+The Rust library is the primary product, but the Python benchmark, changelog, hardware, coverage, and workflow utilities are part of the trusted development
+loop. Keep them typed and predictable so failures are visible in CI instead of being hidden behind loose mocks or broad exception handling.
 
 ---
 
@@ -59,17 +60,21 @@ Structured results keep tests close to production behavior and give `ty` real at
 ## Exceptions
 
 - Catch specific recoverable error families in production code. Avoid `except Exception`.
-- In tests, raise concrete exceptions that match the production recovery path (`OSError`, `RuntimeError`, `subprocess.CalledProcessError`, `subprocess.TimeoutExpired`, etc.).
+- In tests, raise concrete exceptions that match the production recovery path (`OSError`, `RuntimeError`, `subprocess.CalledProcessError`,
+  `subprocess.TimeoutExpired`, etc.).
 - Do not use raw `Exception` in mocks just to force a fallback branch; doing so weakens the contract that the production code is meant to enforce.
 
 ---
 
 ## Test Helpers
 
-Put reusable typed test helpers near the top of the test module or in `scripts/tests/conftest.py` when they are shared. Prefer one helper that returns the real structured type over repeating partially configured mocks throughout a file.
+Put reusable typed test helpers near the top of the test module or in `scripts/tests/conftest.py` when they are shared. Prefer one helper that returns the real
+structured type over repeating partially configured mocks throughout a file.
 
 ## Parser and File-Format Contracts
 
-When a script both writes and parses a text format, add a focused round-trip test that writes representative records and parses them back. The test should cover stable identifiers, optional sections, units, and numeric forms such as scientific notation when those values can be emitted by production code.
+When a script both writes and parses a text format, add a focused round-trip test that writes representative records and parses them back. The test should cover
+stable identifiers, optional sections, units, and numeric forms such as scientific notation when those values can be emitted by production code.
 
-For parser refactors, keep malformed-input regression tests for behavior that callers depend on, such as skipping incomplete sections or failing loudly on invalid numerical data.
+For parser refactors, keep malformed-input regression tests for behavior that callers depend on, such as skipping incomplete sections or failing loudly on
+invalid numerical data.

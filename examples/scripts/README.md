@@ -2,7 +2,8 @@
 
 This directory contains shell scripts that demonstrate how to use the `cdt` command-line binary for simulation-oriented scenarios.
 
-> **Current simulation status:** scripts that pass `--simulate` run the Metropolis-Hastings loop over the 2D CDT move kernels. Remove `--simulate` only when you want triangulation construction without Monte Carlo steps.
+> **Current simulation status:** scripts that pass `--simulate` run the Metropolis-Hastings loop over the 2D CDT move kernels. Remove `--simulate` only when you
+> want triangulation construction without Monte Carlo steps.
 
 ## Available Scripts
 

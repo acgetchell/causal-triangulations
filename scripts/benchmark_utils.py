@@ -768,9 +768,7 @@ class PerformanceSummaryGenerator:
         sorted_dims = sorted(
             cases_by_dimension.keys(),
             key=lambda d: (
-                int(str(d).strip().removesuffix("D").removesuffix("d"))
-                if str(d).strip().removesuffix("D").removesuffix("d").isdigit()
-                else sys.maxsize
+                int(str(d).strip().removesuffix("D").removesuffix("d")) if str(d).strip().removesuffix("D").removesuffix("d").isdigit() else sys.maxsize
             ),
         )
 
@@ -1323,8 +1321,7 @@ class CriterionParser:
     @staticmethod
     def _process_fallback_discovery(criterion_dir: Path) -> list[BenchmarkData]:
         """Recursively discover estimates.json files when structured search fails."""
-        results = []
-        seen: set[str] = set()
+        results_by_key: dict[str, tuple[str, BenchmarkData]] = {}
 
         for estimates_file in criterion_dir.rglob("estimates.json"):
             parent_name = estimates_file.parent.name
@@ -1346,16 +1343,24 @@ class CriterionParser:
             benchmark_id = CriterionParser._benchmark_id_from_estimates_path(estimates_file, dim_dir, points_dir)
             key = benchmark_id or f"{points}_{dimension}"
 
-            # Prefer "new" over "base" when duplicates exist
-            if key in seen and parent_name == "base":
+            # Prefer "new" over "base" when duplicates exist.
+            existing = results_by_key.get(key)
+            if existing is not None and parent_name == "base":
                 continue
 
             bd = CriterionParser.parse_estimates_json(estimates_file, points, dimension, benchmark_id)
-            if bd:
-                seen.add(key)
-                results.append(bd)
+            if not bd:
+                continue
 
-        return results
+            if existing is not None:
+                existing_parent_name, _existing_bd = existing
+                if parent_name == "new" and existing_parent_name == "base":
+                    results_by_key[key] = (parent_name, bd)
+                continue
+
+            results_by_key[key] = (parent_name, bd)
+
+        return [bd for _parent_name, bd in results_by_key.values()]
 
     @staticmethod
     def _benchmark_id_from_estimates_path(estimates_file: Path, dim_dir: Path, points_dir: Path) -> str:
@@ -1783,8 +1788,7 @@ class PerformanceComparator:
             average_regression_found = average_change > self.regression_threshold
             if average_regression_found:
                 f.write(
-                    f"🚨 OVERALL REGRESSION: Average performance decreased by {average_change:.1f}% "
-                    f"(exceeds {self.regression_threshold}% threshold)\n",
+                    f"🚨 OVERALL REGRESSION: Average performance decreased by {average_change:.1f}% (exceeds {self.regression_threshold}% threshold)\n",
                 )
                 logger.warning(
                     "Average regression detected: average_change=%.2f%% threshold=%.2f%% benchmarks=%s",
@@ -1794,8 +1798,7 @@ class PerformanceComparator:
                 )
             elif average_change < -self.regression_threshold:
                 f.write(
-                    f"🎉 OVERALL IMPROVEMENT: Average performance improved by {abs(average_change):.1f}% "
-                    f"(exceeds {self.regression_threshold}% threshold)\n",
+                    f"🎉 OVERALL IMPROVEMENT: Average performance improved by {abs(average_change):.1f}% (exceeds {self.regression_threshold}% threshold)\n",
                 )
                 logger.info(
                     "Average improvement detected: average_change=%.2f%% threshold=%.2f%% benchmarks=%s",
@@ -1847,8 +1850,7 @@ class PerformanceComparator:
         f.write(f"Current Time: [{benchmark.time_low}, {benchmark.time_mean}, {benchmark.time_high}] {benchmark.time_unit}\n")
         if benchmark.throughput_mean is not None:
             f.write(
-                f"Current Throughput: [{benchmark.throughput_low}, {benchmark.throughput_mean}, "
-                f"{benchmark.throughput_high}] {benchmark.throughput_unit}\n",
+                f"Current Throughput: [{benchmark.throughput_low}, {benchmark.throughput_mean}, {benchmark.throughput_high}] {benchmark.throughput_unit}\n",
             )
 
     def _write_baseline_benchmark_data(self, f, benchmark: BenchmarkData) -> None:
@@ -1856,8 +1858,7 @@ class PerformanceComparator:
         f.write(f"Baseline Time: [{benchmark.time_low}, {benchmark.time_mean}, {benchmark.time_high}] {benchmark.time_unit}\n")
         if benchmark.throughput_mean is not None:
             f.write(
-                f"Baseline Throughput: [{benchmark.throughput_low}, {benchmark.throughput_mean}, "
-                f"{benchmark.throughput_high}] {benchmark.throughput_unit}\n",
+                f"Baseline Throughput: [{benchmark.throughput_low}, {benchmark.throughput_mean}, {benchmark.throughput_high}] {benchmark.throughput_unit}\n",
             )
 
     def _write_time_comparison(self, f, current: BenchmarkData, baseline: BenchmarkData) -> tuple[float | None, bool]:

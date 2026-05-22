@@ -1,6 +1,8 @@
 # Roadmap
 
-This roadmap records likely directions for the `causal-triangulations` crate. It is not a stability promise; release scope depends on scientific need, API maturity, and validation quality. Concrete implementation tasks should be tracked as GitHub issues; keep this document focused on release direction, candidate themes, and non-goals.
+This roadmap records likely directions for the `causal-triangulations` crate. It is not a stability promise; release scope depends on scientific need, API
+maturity, and validation quality. Concrete implementation tasks should be tracked as GitHub issues; keep this document focused on release direction, candidate
+themes, and non-goals.
 
 ## v0.1.0 CDT Foundations
 
@@ -32,8 +34,10 @@ Likely follow-up work before broadening the dimensional surface:
 
 The next CDT dimensions should advance as explicit topology tracks rather than a generic higher-dimensional bucket:
 
-- 2+1 CDT with spherical spatial slices (S²) and toroidal spatial slices (T²), including constructor fixtures, foliation validation, local move kernels, Metropolis sampling, and topology-specific regression tests
-- 3+1 CDT with spherical spatial slices (S³) and toroidal spatial slices (T³), following the same staged path after the required geometry-backend operations and invariants are available
+- 2+1 CDT with spherical spatial slices (S²) and toroidal spatial slices (T²), including constructor fixtures, foliation validation, local move kernels,
+  Metropolis sampling, and topology-specific regression tests
+- 3+1 CDT with spherical spatial slices (S³) and toroidal spatial slices (T³), following the same staged path after the required geometry-backend operations and
+  invariants are available
 - Periodic-time variants where the topology contract is well defined and the backend can validate the corresponding Euler/Poincaré-style invariants cleanly
 - Dimension-specific action terms, simplex-count bookkeeping, volume profiles, and acceptance diagnostics
 
@@ -45,7 +49,8 @@ CDT observables should remain user-facing analysis APIs and should grow in locks
 - Add geodesic-distance distributions, shell-volume curves, two-point functions, and finite-size scaling helpers
 - Add curvature-oriented Regge observables when the local simplex data is sufficiently validated
 - Keep the current Hausdorff- and spectral-dimension estimators available on combinatorial dual adjacency graphs
-- Reuse Voronoi tessellation support from the `delaunay` crate when it lands, so observables can opt into full dual/Voronoi regions rather than rebuilding only face- or simplex-adjacency graphs
+- Reuse Voronoi tessellation support from the `delaunay` crate when it lands, so observables can opt into full dual/Voronoi regions rather than rebuilding only
+  face- or simplex-adjacency graphs
 - Preserve a clear distinction between combinatorial dual graphs, geometric Voronoi tessellations, and visualization/export representations
 
 ## Visualization and Workflow Support
@@ -68,4 +73,6 @@ Exploratory directions:
 
 ## Non-Goals
 
-The crate should remain a focused CDT physics library layered over a geometry backend. General-purpose mesh editing, a replacement Delaunay implementation, publication plotting, broad MCMC diagnostics, and domain-specific downstream analyses belong in separate crates or tools unless they are needed to validate core CDT behavior.
+The crate should remain a focused CDT physics library layered over a geometry backend. General-purpose mesh editing, a replacement Delaunay implementation,
+publication plotting, broad MCMC diagnostics, and domain-specific downstream analyses belong in separate crates or tools unless they are needed to validate core
+CDT behavior.
