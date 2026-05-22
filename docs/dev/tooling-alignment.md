@@ -49,8 +49,24 @@ The useful updates ported from MCMC are:
 - production-only Rust Semgrep rules that reject bare `unwrap()` and explicit `panic!` in non-test `src/` code while preserving idiomatic fail-fast usage in tests, doctests, examples, and benchmark setup.
 - an `examples-validate` recipe that runs Cargo examples and verifies stable output markers for the user-facing example contracts.
 
+The useful Semgrep updates ported from the sibling `delaunay` repository are:
+
+- a silent numeric-conversion fallback rule, adapted to CDT `src/` paths and cleaned up in observable/result aggregation code so conversion failures use explicit branches instead of `unwrap_or` sentinels;
+- preventive Rust rules for `partial_cmp(...).unwrap_or(...)`, function-local imports in production source, and `#[allow(clippy::...)]` suppressions, each kept repository-owned with CDT rule IDs and fixtures.
+
+The useful `justfile` updates ported from `delaunay` are:
+
+- `ci-slow`, a named CI-plus-slow-tests workflow using CDT's existing `slow-tests` feature gate;
+- `bench-smoke`, adapted to CDT's `cdt_benchmarks` harness and Criterion's minimal sample settings so benchmark harnesses can be smoke-tested without producing baseline-quality numbers;
+- `bench-test-compile`, which layers release-profile integration-test compilation on top of the existing warning-denying benchmark compile check;
+- opt-in release hygiene recipes `unused-deps` and `publish-check`, kept outside the default `lint` and `ci` paths so they are available before releases without making routine validation slower or more tool-dependent;
+- a shared `_ensure-prettier-or-npx` helper for `yaml-fix` and a corrected rename/copy note in `spell-check`.
+
 ## Deferred Updates
 
 These were evaluated but not ported in this pass:
 
 - `codacy.yml`: defer until the repository has an intentional Codacy project token and a decision about whether Codacy should upload repository-owned OpenGrep/Semgrep findings in addition to `.github/workflows/semgrep-sarif.yml`.
+- Delaunay's hot-path `FastHashMap`/`FastHashSet` rule: defer because CDT does not currently define equivalent hash aliases or the same `src/core` hot-path layout.
+- Delaunay's `ci_performance_suite`, `profiling_suite`, `[profile.perf]`, and same-machine baseline recipes: defer because CDT currently has a single `cdt_benchmarks` harness plus the existing `performance-analysis` workflow, so porting those recipes would require a CDT-specific benchmark contract rather than a justfile-only change.
+- Delaunay's markdownlint/npx migration: defer because CDT intentionally uses `dprint.json`, project docs, and CI setup for Markdown, JSON, and YAML formatting.

@@ -26,20 +26,20 @@ fn assert_physics_pipeline(config: &CdtConfig) {
     );
 
     let first_action = results
-        .measurements
+        .measurements()
         .first()
         .expect("simulation should record measurements")
         .action;
     assert!(
         results
-            .measurements
+            .measurements()
             .iter()
             .any(|measurement| (measurement.action - first_action).abs() > 1e-6),
         "action never changed"
     );
 
     results
-        .triangulation
+        .triangulation()
         .validate()
         .expect("triangulation invalid after simulation");
 
@@ -57,7 +57,7 @@ fn assert_physics_pipeline(config: &CdtConfig) {
         "empty time slice detected: {profile:?}"
     );
 
-    let stats = &results.move_stats;
+    let stats = results.move_stats();
     assert!(stats.moves_22_attempted > 0);
     assert!(stats.total_acceptance_rate() > 0.0);
 }

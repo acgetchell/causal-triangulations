@@ -35,7 +35,7 @@ Vertex data is set at construction time via `VertexBuilder::data(t)`. For post-c
 
 ## Time Label Assignment
 
-For `from_cdt_strip()` and `from_toroidal_cdt()`, time labels are assigned directly while building vertices. Vertex `(i, t)` receives label `t`, so each slice starts with exactly `vertices_per_slice` vertices. The constructors require their Delaunay-built cells to span adjacent slices before returning.
+For `from_cdt_strip()` and `from_toroidal_cdt()`, time labels are assigned directly while building vertices. Vertex `(i, t)` receives label `t`, so each slice starts with exactly `vertices_per_slice` vertices. The constructors require their Delaunay-built simplices to span adjacent slices before returning.
 
 `assign_foliation_by_y()` uses band-based bucketing and writes labels through the same CDT-owned label-write path.
 
@@ -45,7 +45,7 @@ The open-boundary strip constructor places vertices in a lightly perturbed layer
 
 - **Spatial extent**: 1.0, with `vertices_per_slice` evenly spaced vertices per slice
 - **Temporal gap**: 1.0, with integer y-coordinates `0, 1, 2, ...`
-- **Connectivity**: produced by Delaunay point insertion, then checked for strict Up/Down cell classification
+- **Connectivity**: produced by Delaunay point insertion, then checked for strict Up/Down simplex classification
 
 Parameters: `vertices_per_slice ≥ 4`, `num_slices ≥ 2`.
 
@@ -56,7 +56,7 @@ The toroidal constructor places vertices on a unit lattice in an `N × T` period
 Initial CDT constructors are stricter than post-move validation:
 
 - **Initialization**: `from_cdt_strip()` and `from_toroidal_cdt()` must pass upstream Delaunay Level 1-4 validation before returning. This certifies the starting mesh as a valid, well-behaved PL-manifold and Delaunay triangulation.
-- **After ergodic moves / simulation completion**: `CdtTriangulation::validate()` requires upstream structural validity plus CDT topology, foliation, causality, and cell-classification invariants. It intentionally does not require Level 4 Delaunay-ness, because the CDT move kernels are not expected to preserve the Delaunay empty-circumsphere predicate.
+- **After ergodic moves / simulation completion**: `CdtTriangulation::validate()` requires upstream structural validity plus CDT topology, foliation, causality, and simplex-classification invariants. It intentionally does not require Level 4 Delaunay-ness, because the CDT move kernels are not expected to preserve the Delaunay empty-circumsphere predicate.
 
 If the move set is ever changed to preserve Delaunay-ness, final-state validation should be tightened to include Level 4 as well.
 
@@ -69,16 +69,16 @@ If the move set is ever changed to preserve Delaunay-ness, final-state validatio
 
 Classification is done by `classify_edge(t0, t1)`, which reads time labels from vertex data via `vertex_time_label()`.
 
-## Cell (Triangle) Classification
+## Simplex (Triangle) Classification
 
-`CellType` classifies triangles by how their vertices are distributed across adjacent time slices:
+`SimplexType` classifies triangles by how their vertices are distributed across adjacent time slices:
 
 - `Up` (2,1) — two vertices at time _t_, one at _t + 1_. The spacelike base is in the lower slice.
 - `Down` (1,2) — one vertex at time _t_, two at _t + 1_. The spacelike base is in the upper slice.
 
-Classification is done by `classify_cell(t0, t1, t2)`. Triangles that don’t span exactly one time slice (e.g., all vertices at the same time, or spanning >1 slice) return `None`.
+Classification is done by `classify_simplex(t0, t1, t2)`. Triangles that don’t span exactly one time slice (e.g., all vertices at the same time, or spanning >1 slice) return `None`.
 
-Cell types are encoded as `i32` cell data (`Up = 1`, `Down = -1`) and can be bulk-written via `classify_all_cells()` using `set_cell_data`. For foliated triangulations this bulk path is strict: every face must classify as `Up` or `Down`, otherwise `classify_all_cells()` and `validate_cell_classification()` return a validation error.
+Simplex types are encoded as `i32` simplex data (`Up = 1`, `Down = -1`) and can be bulk-written via `classify_all_simplices()` using `set_simplex_data`. For foliated triangulations this bulk path is strict: every face must classify as `Up` or `Down`, otherwise `classify_all_simplices()` and `validate_simplex_classification()` return a validation error.
 
 ## Validation
 
@@ -102,15 +102,15 @@ Face-level check reading time labels directly from vertex data:
 
 - Every triangle must contain exactly one spacelike edge and two timelike edges
 - Returns `CdtError::CausalityViolation { time_0, time_1 }` if any triangle spans >1 slice
-- Returns `CdtError::ValidationFailed { check: "causality", .. }` if a triangle is not a strict CDT cell
+- Returns `CdtError::ValidationFailed { check: "causality", .. }` if a triangle is not a strict CDT simplex
 
-### `validate_cell_classification()`
+### `validate_simplex_classification()`
 
-Strict cell-classification check:
+Strict simplex-classification check:
 
 - Succeeds vacuously when no foliation is present
 - Requires every foliated face to classify as `Up` or `Down`
-- Returns `CdtError::ValidationFailed { check: "cell_classification", .. }` for same-slice or otherwise unclassifiable triangles
+- Returns `CdtError::ValidationFailed { check: "simplex_classification", .. }` for same-slice or otherwise unclassifiable triangles
 
 ## Error Handling
 
@@ -121,4 +121,4 @@ Strict cell-classification check:
 
 ## Regression Coverage
 
-- `tests/integration_tests.rs::test_toroidal_metropolis_preserves_topology_after_many_accepted_moves` runs a seeded toroidal Metropolis simulation, requires at least 100 accepted moves, and checks final topology, foliation, causality, cell classification, and χ = 0.
+- `tests/integration_tests.rs::test_toroidal_metropolis_accepts_periodic_moves_and_preserves_topology` runs a seeded toroidal Metropolis simulation, requires at least one accepted periodic move, and checks final topology, foliation, causality, simplex classification, and χ = 0.

@@ -27,7 +27,7 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 ### Optional Simulation Parameters
 
-- `--dimension <D>`: Dimensionality (2-3, default: 2)
+- `--dimension <D>`: Dimensionality (currently only 2, default: 2)
 - `--temperature <T>`: Temperature for Metropolis algorithm (default: 1.0)
 - `--steps <N>`: Number of Monte Carlo steps (default: 1000)
 - `--thermalization-steps <N>`: Thermalization steps before measurements (default: 100)
@@ -246,7 +246,7 @@ RUST_LOG=warn ./target/release/cdt --vertices 50 --timeslices 10 --simulate
 
 4. **Parameter validation errors**
    - Check minimum values (vertices ≥ 3, timeslices ≥ 1)
-   - Verify dimension is 2 or 3
+   - Verify dimension is 2
 
 ## Integration with Other Tools
 

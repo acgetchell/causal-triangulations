@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 #![allow(dead_code, unused_imports)]
 
+use num_traits::cast::NumCast;
+
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 use delaunay::prelude::DelaunayTriangulation;
 
@@ -17,7 +19,7 @@ pub use delaunay::{core::edge::EdgeKey, core::tds::VertexKey};
 pub(crate) use delaunay::prelude::Tds;
 
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
-pub(super) use delaunay::{core::cell::CellKey, core::facet::Facet};
+pub(super) use delaunay::tds::{FacetHandle, SimplexKey};
 
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 use delaunay::{
@@ -58,6 +60,46 @@ fn nonfinite_conversion_default_fixture(value: Option<f64>) {
     let _ = value.unwrap_or(f64::MAX);
 }
 
+fn safe_f64(_value: u64) -> Option<f64> {
+    Some(1.0)
+}
+
+fn silent_conversion_fallback_fixture(value: u64) -> Option<f64> {
+    // ruleid: causal-triangulations.rust.no-silent-conversion-fallbacks
+    let _ = NumCast::from(value).unwrap_or(0.0);
+
+    // ruleid: causal-triangulations.rust.no-silent-conversion-fallbacks
+    let _ = num_traits::cast::<u64, f64>(value).unwrap_or_else(|| 0.0);
+
+    // ruleid: causal-triangulations.rust.no-silent-conversion-fallbacks
+    let _ = safe_f64(value).unwrap_or(0.0);
+
+    // ok: causal-triangulations.rust.no-silent-conversion-fallbacks
+    NumCast::from(value)
+}
+
+fn partial_cmp_ordering_default_fixture(left: f64, right: f64) -> std::cmp::Ordering {
+    // ruleid: causal-triangulations.rust.no-partial-cmp-ordering-defaults
+    left.partial_cmp(&right)
+        .unwrap_or(std::cmp::Ordering::Equal)
+}
+
+fn function_local_use_fixture() {
+    // ruleid: causal-triangulations.rust.no-function-local-use-in-src
+    use std::cmp::Ordering;
+
+    let _ = Ordering::Equal;
+}
+
+mod tests {
+    fn test_helper() {
+        // ok: causal-triangulations.rust.no-function-local-use-in-src
+        use std::cmp::Ordering;
+
+        let _ = Ordering::Equal;
+    }
+}
+
 fn production_unwrap_and_panic_fixture(result: Result<u32, &'static str>, value: Option<u32>) {
     // ruleid: causal-triangulations.rust.no-bare-unwrap-in-src
     let _ = result.unwrap();
@@ -91,6 +133,10 @@ mod prop_tests {
         panic!("tests may fail fast");
     }
 }
+
+// ruleid: causal-triangulations.rust.no-clippy-allow-lints
+#[allow(clippy::too_many_lines)]
+fn clippy_allow_fixture() {}
 
 // ruleid: causal-triangulations.rust.expect-requires-reason
 #[expect(clippy::too_many_lines)]

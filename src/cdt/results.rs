@@ -11,10 +11,11 @@ use crate::cdt::ergodic_moves::MoveStatistics;
 use crate::cdt::metropolis::{MetropolisConfig, MonteCarloStep};
 use crate::cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
 use crate::config::{CdtConfig, CdtTopology};
-use crate::errors::{CdtError, CdtResult};
+use crate::errors::{CdtError, CdtResult, OutputFormat};
 use crate::geometry::CdtTriangulation2D;
-use num_traits::cast::NumCast;
-use serde::{Deserialize, Serialize};
+use crate::util::usize_to_f64;
+use serde::de::Error as DeError;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::to_writer_pretty;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -108,23 +109,63 @@ impl Measurement {
 /// Serde serialization preserves the complete result object, including the
 /// final triangulation checkpoint. Use [`Self::write_summary_json`] when you
 /// want an analysis-friendly JSON report with configuration, aggregate
-/// statistics, step telemetry, and measurements.
-#[derive(Debug, Serialize, Deserialize)]
+/// statistics, step telemetry, and measurements. Deserialization validates the
+/// stored configuration, action parameters, and final evolved-CDT triangulation
+/// invariants, mapping any validation failure into the serde deserializer error.
+#[derive(Debug, Serialize)]
 pub struct SimulationResultsBackend {
     /// Configuration used for the simulation
-    pub config: MetropolisConfig,
+    config: MetropolisConfig,
     /// Action configuration used
-    pub action_config: ActionConfig,
+    action_config: ActionConfig,
     /// Metropolis-level ergodic move statistics
-    pub move_stats: MoveStatistics,
+    move_stats: MoveStatistics,
     /// All Monte Carlo steps performed
-    pub steps: Vec<MonteCarloStep>,
+    steps: Vec<MonteCarloStep>,
     /// Measurements taken during simulation
-    pub measurements: Vec<Measurement>,
+    measurements: Vec<Measurement>,
     /// Total simulation time
-    pub elapsed_time: Duration,
+    elapsed_time: Duration,
     /// Final triangulation state
-    pub triangulation: CdtTriangulation2D,
+    triangulation: CdtTriangulation2D,
+}
+
+#[derive(Deserialize)]
+struct SimulationResultsBackendWire {
+    config: MetropolisConfig,
+    action_config: ActionConfig,
+    move_stats: MoveStatistics,
+    steps: Vec<MonteCarloStep>,
+    measurements: Vec<Measurement>,
+    elapsed_time: Duration,
+    triangulation: CdtTriangulation2D,
+}
+
+impl TryFrom<SimulationResultsBackendWire> for SimulationResultsBackend {
+    type Error = CdtError;
+
+    fn try_from(wire: SimulationResultsBackendWire) -> Result<Self, Self::Error> {
+        Self::new(
+            wire.config,
+            wire.action_config,
+            wire.move_stats,
+            wire.steps,
+            wire.measurements,
+            wire.elapsed_time,
+            wire.triangulation,
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for SimulationResultsBackend {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        SimulationResultsBackendWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(DeError::custom)
+    }
 }
 
 #[derive(Serialize)]
@@ -160,6 +201,308 @@ struct TriangulationSummary {
 }
 
 impl SimulationResultsBackend {
+    /// Creates a validated simulation result snapshot.
+    ///
+    /// Use this constructor for externally assembled results. Simulation runs
+    /// produced by [`MetropolisAlgorithm`](crate::cdt::metropolis::MetropolisAlgorithm)
+    /// use the same data shape but avoid revalidating immediately after the run has
+    /// already checked its final CDT invariants.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidSimulationConfiguration`] if `config` is not a
+    /// runnable Metropolis configuration, or [`CdtError::InvalidConfiguration`] if
+    /// `action_config` contains non-finite couplings.
+    ///
+    /// The final triangulation is checked with the crate's evolved-CDT validation
+    /// path, so this can also return backend validation, topology, foliation,
+    /// causality, or simplex-classification errors, including
+    /// [`CdtError::DelaunayValidationFailed`], [`CdtError::TopologyMismatch`],
+    /// [`CdtError::Foliation`], [`CdtError::CausalityViolation`], and
+    /// [`CdtError::ValidationFailed`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::MoveStatistics;
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
+    /// };
+    /// use std::time::Duration;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    ///     let results = SimulationResultsBackend::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1),
+    ///         ActionConfig::default(),
+    ///         MoveStatistics::new(),
+    ///         vec![],
+    ///         vec![],
+    ///         Duration::from_millis(0),
+    ///         tri,
+    ///     )?;
+    ///     assert!(results.steps().is_empty());
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn new(
+        config: MetropolisConfig,
+        action_config: ActionConfig,
+        move_stats: MoveStatistics,
+        steps: Vec<MonteCarloStep>,
+        measurements: Vec<Measurement>,
+        elapsed_time: Duration,
+        triangulation: CdtTriangulation2D,
+    ) -> CdtResult<Self> {
+        config.validate()?;
+        action_config.validate()?;
+        triangulation.validate_evolved_cdt()?;
+        Ok(Self::from_parts(
+            config,
+            action_config,
+            move_stats,
+            steps,
+            measurements,
+            elapsed_time,
+            triangulation,
+        ))
+    }
+
+    /// Creates a result snapshot from components that were already validated by this crate.
+    pub(crate) const fn from_parts(
+        config: MetropolisConfig,
+        action_config: ActionConfig,
+        move_stats: MoveStatistics,
+        steps: Vec<MonteCarloStep>,
+        measurements: Vec<Measurement>,
+        elapsed_time: Duration,
+        triangulation: CdtTriangulation2D,
+    ) -> Self {
+        Self {
+            config,
+            action_config,
+            move_stats,
+            steps,
+            measurements,
+            elapsed_time,
+            triangulation,
+        }
+    }
+
+    /// Returns the Metropolis configuration used for this result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::MoveStatistics;
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
+    /// };
+    /// use std::time::Duration;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = MetropolisConfig::new(1.0, 1, 0, 1);
+    ///     let results = SimulationResultsBackend::new(
+    ///         config.clone(),
+    ///         ActionConfig::default(),
+    ///         MoveStatistics::new(),
+    ///         vec![],
+    ///         vec![],
+    ///         Duration::ZERO,
+    ///         CdtTriangulation::from_cdt_strip(4, 3)?,
+    ///     )?;
+    ///     assert_eq!(results.config(), &config);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn config(&self) -> &MetropolisConfig {
+        &self.config
+    }
+
+    /// Returns the action configuration used for this result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::MoveStatistics;
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
+    /// };
+    /// use std::time::Duration;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let action_config = ActionConfig::new(1.0, 0.0, 0.1);
+    ///     let results = SimulationResultsBackend::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1),
+    ///         action_config.clone(),
+    ///         MoveStatistics::new(),
+    ///         vec![],
+    ///         vec![],
+    ///         Duration::ZERO,
+    ///         CdtTriangulation::from_cdt_strip(4, 3)?,
+    ///     )?;
+    ///     assert_eq!(results.action_config(), &action_config);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn action_config(&self) -> &ActionConfig {
+        &self.action_config
+    }
+
+    /// Returns Metropolis-level ergodic move statistics.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::MoveStatistics;
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
+    /// };
+    /// use std::time::Duration;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let move_stats = MoveStatistics::new();
+    ///     let results = SimulationResultsBackend::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1),
+    ///         ActionConfig::default(),
+    ///         move_stats,
+    ///         vec![],
+    ///         vec![],
+    ///         Duration::ZERO,
+    ///         CdtTriangulation::from_cdt_strip(4, 3)?,
+    ///     )?;
+    ///     assert_eq!(results.move_stats().total_attempted(), 0);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn move_stats(&self) -> &MoveStatistics {
+        &self.move_stats
+    }
+
+    /// Returns recorded Monte Carlo step telemetry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::MoveStatistics;
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
+    /// };
+    /// use std::time::Duration;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let results = SimulationResultsBackend::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1),
+    ///         ActionConfig::default(),
+    ///         MoveStatistics::new(),
+    ///         vec![],
+    ///         vec![],
+    ///         Duration::ZERO,
+    ///         CdtTriangulation::from_cdt_strip(4, 3)?,
+    ///     )?;
+    ///     assert!(results.steps().is_empty());
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub fn steps(&self) -> &[MonteCarloStep] {
+        &self.steps
+    }
+
+    /// Returns recorded measurements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::MoveStatistics;
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
+    /// };
+    /// use std::time::Duration;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let results = SimulationResultsBackend::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1),
+    ///         ActionConfig::default(),
+    ///         MoveStatistics::new(),
+    ///         vec![],
+    ///         vec![],
+    ///         Duration::ZERO,
+    ///         CdtTriangulation::from_cdt_strip(4, 3)?,
+    ///     )?;
+    ///     assert!(results.measurements().is_empty());
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub fn measurements(&self) -> &[Measurement] {
+        &self.measurements
+    }
+
+    /// Returns total wall-clock time recorded for the run.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::MoveStatistics;
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
+    /// };
+    /// use std::time::Duration;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let elapsed = Duration::from_millis(25);
+    ///     let results = SimulationResultsBackend::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1),
+    ///         ActionConfig::default(),
+    ///         MoveStatistics::new(),
+    ///         vec![],
+    ///         vec![],
+    ///         elapsed,
+    ///         CdtTriangulation::from_cdt_strip(4, 3)?,
+    ///     )?;
+    ///     assert_eq!(results.elapsed_time(), elapsed);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn elapsed_time(&self) -> Duration {
+        self.elapsed_time
+    }
+
+    /// Returns the final triangulation state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::MoveStatistics;
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
+    /// };
+    /// use std::time::Duration;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let results = SimulationResultsBackend::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1),
+    ///         ActionConfig::default(),
+    ///         MoveStatistics::new(),
+    ///         vec![],
+    ///         vec![],
+    ///         Duration::ZERO,
+    ///         CdtTriangulation::from_cdt_strip(4, 3)?,
+    ///     )?;
+    ///     assert_eq!(results.triangulation().slice_sizes(), &[4, 4, 4]);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn triangulation(&self) -> &CdtTriangulation2D {
+        &self.triangulation
+    }
+
     /// Calculates the acceptance rate for the simulation.
     ///
     /// # Examples
@@ -172,17 +515,17 @@ impl SimulationResultsBackend {
     /// use std::time::Duration;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)?;
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
     ///     let config = MetropolisConfig::new(1.0, 1, 0, 1).with_seed(7);
-    ///     let results = SimulationResultsBackend {
+    ///     let results = SimulationResultsBackend::new(
     ///         config,
-    ///         action_config: ActionConfig::default(),
-    ///         move_stats: Default::default(),
-    ///         steps: vec![],
-    ///         measurements: vec![],
-    ///         elapsed_time: Duration::from_millis(0),
-    ///         triangulation: tri,
-    ///     };
+    ///         ActionConfig::default(),
+    ///         Default::default(),
+    ///         vec![],
+    ///         vec![],
+    ///         Duration::from_millis(0),
+    ///         tri,
+    ///     )?;
     ///     assert_relative_eq!(results.acceptance_rate(), 0.0);
     ///     Ok(())
     /// }
@@ -196,8 +539,12 @@ impl SimulationResultsBackend {
         let accepted_count = self.steps.iter().filter(|step| step.accepted).count();
         let total_count = self.steps.len();
 
-        let accepted_f64 = NumCast::from(accepted_count).unwrap_or(0.0);
-        let total_f64 = NumCast::from(total_count).unwrap_or(1.0);
+        let Some(accepted_f64) = usize_to_f64(accepted_count) else {
+            return 0.0;
+        };
+        let Some(total_f64) = usize_to_f64(total_count) else {
+            return 0.0;
+        };
 
         accepted_f64 / total_f64
     }
@@ -214,17 +561,17 @@ impl SimulationResultsBackend {
     /// use std::time::Duration;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)?;
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
     ///     let config = MetropolisConfig::new(1.0, 1, 0, 1).with_seed(7);
-    ///     let results = SimulationResultsBackend {
+    ///     let results = SimulationResultsBackend::new(
     ///         config,
-    ///         action_config: ActionConfig::default(),
-    ///         move_stats: Default::default(),
-    ///         steps: vec![],
-    ///         measurements: vec![],
-    ///         elapsed_time: Duration::from_millis(0),
-    ///         triangulation: tri,
-    ///     };
+    ///         ActionConfig::default(),
+    ///         Default::default(),
+    ///         vec![],
+    ///         vec![],
+    ///         Duration::from_millis(0),
+    ///         tri,
+    ///     )?;
     ///     assert_relative_eq!(results.average_action(), 0.0);
     ///     Ok(())
     /// }
@@ -238,7 +585,9 @@ impl SimulationResultsBackend {
         let sum: f64 = self.measurements.iter().map(|m| m.action).sum();
         let count = self.measurements.len();
 
-        let count_f64 = NumCast::from(count).unwrap_or(1.0);
+        let Some(count_f64) = usize_to_f64(count) else {
+            return 0.0;
+        };
 
         sum / count_f64
     }
@@ -262,20 +611,20 @@ impl SimulationResultsBackend {
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
     ///     let config = MetropolisConfig::new(1.0, 20, 10, 5).with_seed(7);
-    ///     let results = SimulationResultsBackend {
+    ///     let results = SimulationResultsBackend::new(
     ///         config,
-    ///         action_config: ActionConfig::default(),
-    ///         move_stats: Default::default(),
-    ///         steps: vec![],
-    ///         measurements: vec![
+    ///         ActionConfig::default(),
+    ///         Default::default(),
+    ///         vec![],
+    ///         vec![
     ///             Measurement::new(0, 1.0, 12, 26, 12)
     ///                 .with_volume_profile(vec![6, 6, 0]),
     ///             Measurement::new(10, 2.0, 12, 26, 12)
     ///                 .with_volume_profile(vec![4, 8, 0]),
     ///         ],
-    ///         elapsed_time: Duration::from_millis(0),
-    ///         triangulation: tri,
-    ///     };
+    ///         Duration::from_millis(0),
+    ///         tri,
+    ///     )?;
     ///     let profile = results.average_volume_profile();
     ///     assert_relative_eq!(profile[0], 4.0);
     ///     assert_relative_eq!(profile[1], 8.0);
@@ -284,24 +633,26 @@ impl SimulationResultsBackend {
     /// ```
     #[must_use]
     pub fn average_volume_profile(&self) -> Vec<f64> {
-        let measurements = self.equilibrium_measurements();
-        let profile_len = measurements
-            .iter()
-            .map(|measurement| measurement.volume_profile.len())
-            .max()
-            .unwrap_or(0);
-        if measurements.is_empty() || profile_len == 0 {
+        let mut measurement_count = 0_usize;
+        let mut profile_len = 0_usize;
+        for measurement in self.equilibrium_measurements_iter() {
+            measurement_count += 1;
+            profile_len = profile_len.max(measurement.volume_profile.len());
+        }
+        if measurement_count == 0 || profile_len == 0 {
             return Vec::new();
         }
 
         let mut sums = vec![0.0; profile_len];
-        for measurement in &measurements {
+        for measurement in self.equilibrium_measurements_iter() {
             for (index, &volume) in measurement.volume_profile.iter().enumerate() {
                 sums[index] += <f64 as From<u32>>::from(volume);
             }
         }
 
-        let count = NumCast::from(measurements.len()).unwrap_or(1.0);
+        let Some(count) = usize_to_f64(measurement_count) else {
+            return Vec::new();
+        };
         sums.into_iter().map(|sum| sum / count).collect()
     }
 
@@ -325,20 +676,20 @@ impl SimulationResultsBackend {
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
     ///     let config = MetropolisConfig::new(1.0, 20, 10, 5).with_seed(7);
-    ///     let results = SimulationResultsBackend {
+    ///     let results = SimulationResultsBackend::new(
     ///         config,
-    ///         action_config: ActionConfig::default(),
-    ///         move_stats: Default::default(),
-    ///         steps: vec![],
-    ///         measurements: vec![
+    ///         ActionConfig::default(),
+    ///         Default::default(),
+    ///         vec![],
+    ///         vec![
     ///             Measurement::new(10, 2.0, 12, 26, 12)
     ///                 .with_volume_profile(vec![4, 8, 0]),
     ///             Measurement::new(15, 3.0, 12, 26, 12)
     ///                 .with_volume_profile(vec![6, 6, 0]),
     ///         ],
-    ///         elapsed_time: Duration::from_millis(0),
-    ///         triangulation: tri,
-    ///     };
+    ///         Duration::from_millis(0),
+    ///         tri,
+    ///     )?;
     ///     let fluctuations = results.volume_fluctuations();
     ///     assert_relative_eq!(fluctuations[0], 2.0_f64.sqrt());
     ///     assert_relative_eq!(fluctuations[1], 2.0_f64.sqrt());
@@ -347,15 +698,14 @@ impl SimulationResultsBackend {
     /// ```
     #[must_use]
     pub fn volume_fluctuations(&self) -> Vec<f64> {
-        let measurements = self.equilibrium_measurements();
         let means = self.average_volume_profile();
-        let n = measurements.len();
+        let n = self.equilibrium_measurements_iter().count();
         if n < 2 || means.is_empty() {
             return Vec::new();
         }
 
         let mut variances = vec![0.0; means.len()];
-        for measurement in &measurements {
+        for measurement in self.equilibrium_measurements_iter() {
             for (index, mean) in means.iter().enumerate() {
                 let volume = measurement
                     .volume_profile
@@ -366,7 +716,9 @@ impl SimulationResultsBackend {
             }
         }
 
-        let denominator = NumCast::from(n - 1).unwrap_or(1.0);
+        let Some(denominator) = usize_to_f64(n - 1) else {
+            return Vec::new();
+        };
         variances
             .into_iter()
             .map(|variance| (variance / denominator).sqrt())
@@ -392,15 +744,15 @@ impl SimulationResultsBackend {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    ///     let results = SimulationResultsBackend {
-    ///         config: MetropolisConfig::new(1.0, 1, 0, 1),
-    ///         action_config: ActionConfig::default(),
-    ///         move_stats: Default::default(),
-    ///         steps: vec![],
-    ///         measurements: vec![],
-    ///         elapsed_time: Duration::from_millis(0),
-    ///         triangulation: tri,
-    ///     };
+    ///     let results = SimulationResultsBackend::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1),
+    ///         ActionConfig::default(),
+    ///         Default::default(),
+    ///         vec![],
+    ///         vec![],
+    ///         Duration::from_millis(0),
+    ///         tri,
+    ///     )?;
     ///     assert!(results
     ///         .hausdorff_dimension_estimate()
     ///         .is_some_and(f64::is_finite));
@@ -432,15 +784,15 @@ impl SimulationResultsBackend {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_toroidal_cdt(6, 6)?;
-    ///     let results = SimulationResultsBackend {
-    ///         config: MetropolisConfig::new(1.0, 1, 0, 1),
-    ///         action_config: ActionConfig::default(),
-    ///         move_stats: Default::default(),
-    ///         steps: vec![],
-    ///         measurements: vec![],
-    ///         elapsed_time: Duration::from_millis(0),
-    ///         triangulation: tri,
-    ///     };
+    ///     let results = SimulationResultsBackend::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1),
+    ///         ActionConfig::default(),
+    ///         Default::default(),
+    ///         vec![],
+    ///         vec![],
+    ///         Duration::from_millis(0),
+    ///         tri,
+    ///     )?;
     ///     assert!(results
     ///         .spectral_dimension_estimate()
     ///         .is_some_and(f64::is_finite));
@@ -469,17 +821,17 @@ impl SimulationResultsBackend {
     /// use std::time::Duration;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)?;
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
     ///     let config = MetropolisConfig::new(1.0, 2, 1, 1).with_seed(7);
-    ///     let results = SimulationResultsBackend {
+    ///     let results = SimulationResultsBackend::new(
     ///         config,
-    ///         action_config: ActionConfig::default(),
-    ///         move_stats: Default::default(),
-    ///         steps: vec![],
-    ///         measurements: vec![],
-    ///         elapsed_time: Duration::from_millis(0),
-    ///         triangulation: tri,
-    ///     };
+    ///         ActionConfig::default(),
+    ///         Default::default(),
+    ///         vec![],
+    ///         vec![],
+    ///         Duration::from_millis(0),
+    ///         tri,
+    ///     )?;
     ///     assert!(results.equilibrium_measurements().is_empty());
     ///     Ok(())
     /// }
@@ -526,14 +878,14 @@ impl SimulationResultsBackend {
     /// ```
     pub fn write_measurements_csv(&self, path: impl AsRef<Path>) -> CdtResult<()> {
         let path = path.as_ref();
-        ensure_parent_directory(path, "csv")?;
-        let file = File::create(path).map_err(|err| output_error(path, "csv", err))?;
+        ensure_parent_directory(path, OutputFormat::Csv)?;
+        let file = File::create(path).map_err(|err| output_error(path, OutputFormat::Csv, err))?;
         let mut writer = BufWriter::new(file);
         writeln!(
             writer,
             "step,action,vertices,edges,triangles,accepted,delta_action"
         )
-        .map_err(|err| output_error(path, "csv", err))?;
+        .map_err(|err| output_error(path, OutputFormat::Csv, err))?;
 
         let steps_by_number: HashMap<_, _> =
             self.steps.iter().map(|step| (step.step, step)).collect();
@@ -554,10 +906,12 @@ impl SimulationResultsBackend {
                 accepted,
                 delta_action,
             )
-            .map_err(|err| output_error(path, "csv", err))?;
+            .map_err(|err| output_error(path, OutputFormat::Csv, err))?;
         }
 
-        writer.flush().map_err(|err| output_error(path, "csv", err))
+        writer
+            .flush()
+            .map_err(|err| output_error(path, OutputFormat::Csv, err))
     }
 
     /// Writes a JSON summary for external analysis and run bookkeeping.
@@ -593,8 +947,8 @@ impl SimulationResultsBackend {
     /// ```
     pub fn write_summary_json(&self, config: &CdtConfig, path: impl AsRef<Path>) -> CdtResult<()> {
         let path = path.as_ref();
-        ensure_parent_directory(path, "json")?;
-        let file = File::create(path).map_err(|err| output_error(path, "json", err))?;
+        ensure_parent_directory(path, OutputFormat::Json)?;
+        let file = File::create(path).map_err(|err| output_error(path, OutputFormat::Json, err))?;
         let mut writer = BufWriter::new(file);
         let summary = SimulationSummary {
             config,
@@ -621,11 +975,12 @@ impl SimulationResultsBackend {
             measurements: &self.measurements,
         };
 
-        to_writer_pretty(&mut writer, &summary).map_err(|err| output_error(path, "json", err))?;
-        writeln!(writer).map_err(|err| output_error(path, "json", err))?;
+        to_writer_pretty(&mut writer, &summary)
+            .map_err(|err| output_error(path, OutputFormat::Json, err))?;
+        writeln!(writer).map_err(|err| output_error(path, OutputFormat::Json, err))?;
         writer
             .flush()
-            .map_err(|err| output_error(path, "json", err))
+            .map_err(|err| output_error(path, OutputFormat::Json, err))
     }
 }
 
@@ -642,12 +997,14 @@ fn mean_measurement_action<'a>(measurements: impl IntoIterator<Item = &'a Measur
         return 0.0;
     }
 
-    let count = NumCast::from(count).unwrap_or(1.0);
+    let Some(count) = usize_to_f64(count) else {
+        return 0.0;
+    };
     sum / count
 }
 
 /// Creates a parent directory for configured output paths when needed.
-fn ensure_parent_directory(path: &Path, format: &'static str) -> CdtResult<()> {
+fn ensure_parent_directory(path: &Path, format: OutputFormat) -> CdtResult<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -657,10 +1014,10 @@ fn ensure_parent_directory(path: &Path, format: &'static str) -> CdtResult<()> {
 }
 
 /// Builds a typed output error without exposing I/O dependencies in public APIs.
-fn output_error(path: &Path, format: &'static str, err: impl Display) -> CdtError {
+fn output_error(path: &Path, format: OutputFormat, err: impl Display) -> CdtError {
     CdtError::OutputWriteFailed {
         path: path.display().to_string(),
-        format: format.to_string(),
+        format,
         detail: err.to_string(),
     }
 }
@@ -669,7 +1026,9 @@ fn output_error(path: &Path, format: &'static str, err: impl Display) -> CdtErro
 mod tests {
     use super::*;
     use crate::cdt::ergodic_moves::MoveType;
+    use crate::cdt::foliation::FoliationError;
     use crate::cdt::triangulation::CdtTriangulation;
+    use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
     use serde_json::{Value, from_str};
     use std::env;
@@ -738,6 +1097,216 @@ mod tests {
                 ch => ch,
             })
             .collect()
+    }
+
+    #[test]
+    fn public_constructor_accepts_valid_components_and_preserves_accessors() {
+        let config = MetropolisConfig::new(1.5, 4, 1, 2).with_seed(23);
+        let action_config = ActionConfig::new(1.0, 0.5, 0.25);
+        let mut move_stats = MoveStatistics::new();
+        move_stats.record_attempt(MoveType::Move22);
+        move_stats.record_success(MoveType::Move22);
+        let step = MonteCarloStep {
+            step: 2,
+            move_type: MoveType::Move22,
+            accepted: true,
+            action_before: 4.0,
+            action_after: Some(3.5),
+            delta_action: Some(-0.5),
+        };
+        let measurement = Measurement::new(2, 3.5, 12, 26, 12).with_volume_profile(vec![4, 4, 4]);
+        let elapsed = Duration::from_millis(42);
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+
+        let results = SimulationResultsBackend::new(
+            config.clone(),
+            action_config.clone(),
+            move_stats,
+            vec![step],
+            vec![measurement],
+            elapsed,
+            triangulation,
+        )
+        .expect("valid result components should construct");
+
+        assert_eq!(results.config(), &config);
+        assert_eq!(results.action_config(), &action_config);
+        assert_eq!(results.move_stats().total_attempted(), 1);
+        assert_eq!(results.move_stats().total_accepted(), 1);
+        assert_eq!(results.steps()[0].step, 2);
+        assert_eq!(results.measurements()[0].volume_profile, vec![4, 4, 4]);
+        assert_eq!(results.elapsed_time(), elapsed);
+        assert_eq!(results.triangulation().slice_sizes(), &[4, 4, 4]);
+    }
+
+    #[test]
+    fn public_constructor_rejects_invalid_metropolis_config() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+
+        let error = SimulationResultsBackend::new(
+            MetropolisConfig::new(0.0, 1, 0, 1),
+            ActionConfig::default(),
+            MoveStatistics::new(),
+            vec![],
+            vec![],
+            Duration::ZERO,
+            triangulation,
+        )
+        .expect_err("zero temperature should be rejected");
+
+        assert!(matches!(
+            error,
+            CdtError::InvalidSimulationConfiguration {
+                ref setting,
+                ref provided_value,
+                ref expected,
+            } if setting == "temperature"
+                && provided_value == "0"
+                && expected == "finite and positive"
+        ));
+    }
+
+    #[test]
+    fn public_constructor_rejects_invalid_action_config() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+
+        let error = SimulationResultsBackend::new(
+            MetropolisConfig::new(1.0, 1, 0, 1),
+            ActionConfig::new(f64::NAN, 0.0, 0.0),
+            MoveStatistics::new(),
+            vec![],
+            vec![],
+            Duration::ZERO,
+            triangulation,
+        )
+        .expect_err("non-finite action coupling should be rejected");
+
+        assert!(matches!(
+            error,
+            CdtError::InvalidConfiguration {
+                ref setting,
+                ref provided_value,
+                ref expected,
+            } if setting == "coupling_0" && provided_value == "NaN" && expected == "finite"
+        ));
+    }
+
+    #[test]
+    fn public_constructor_rejects_stale_final_foliation() {
+        let mut triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let vertex = triangulation
+            .geometry()
+            .vertices()
+            .next()
+            .expect("strip should contain vertices");
+        let label = triangulation
+            .geometry()
+            .vertex_data_by_key(vertex.vertex_key())
+            .expect("strip vertices should be labeled");
+        triangulation
+            .set_vertex_data(&vertex, Some(label))
+            .expect("rewriting an existing label should mark foliation stale");
+
+        let error = SimulationResultsBackend::new(
+            MetropolisConfig::new(1.0, 1, 0, 1),
+            ActionConfig::default(),
+            MoveStatistics::new(),
+            vec![],
+            vec![],
+            Duration::ZERO,
+            triangulation,
+        )
+        .expect_err("stale foliation should be rejected");
+
+        assert!(matches!(
+            error,
+            CdtError::Foliation(FoliationError::StaleBookkeeping { .. })
+        ));
+    }
+
+    #[test]
+    fn deserialization_rejects_invalid_metropolis_config() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let results = SimulationResultsBackend::new(
+            MetropolisConfig::new(1.0, 1, 0, 1),
+            ActionConfig::default(),
+            MoveStatistics::new(),
+            vec![],
+            vec![],
+            Duration::ZERO,
+            triangulation,
+        )
+        .expect("valid result components should construct");
+        let json = serde_json::to_string(&results).expect("results should serialize");
+        let roundtrip: SimulationResultsBackend =
+            serde_json::from_str(&json).expect("valid serialized results should load");
+        assert_relative_eq!(roundtrip.config.temperature, 1.0);
+
+        let invalid_json = json.replacen("\"temperature\":1.0", "\"temperature\":0.0", 1);
+        assert_ne!(invalid_json, json);
+
+        let error = serde_json::from_str::<SimulationResultsBackend>(&invalid_json)
+            .expect_err("validated deserialization should reject zero temperature");
+        let message = error.to_string();
+        assert!(
+            message.contains("temperature") && message.contains("finite and positive"),
+            "serde error should preserve validation context, got {message}"
+        );
+    }
+
+    #[test]
+    fn result_wire_validation_rejects_invalid_metropolis_config() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let error = SimulationResultsBackend::try_from(SimulationResultsBackendWire {
+            config: MetropolisConfig::new(0.0, 1, 0, 1),
+            action_config: ActionConfig::default(),
+            move_stats: MoveStatistics::new(),
+            steps: vec![],
+            measurements: vec![],
+            elapsed_time: Duration::ZERO,
+            triangulation,
+        })
+        .expect_err("invalid wire Metropolis config should be rejected");
+
+        assert!(matches!(
+            error,
+            CdtError::InvalidSimulationConfiguration {
+                ref setting,
+                ref provided_value,
+                ref expected,
+            } if setting == "temperature" && provided_value == "0" && expected == "finite and positive"
+        ));
+    }
+
+    #[test]
+    fn result_wire_validation_rejects_invalid_action_config() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let error = SimulationResultsBackend::try_from(SimulationResultsBackendWire {
+            config: MetropolisConfig::new(1.0, 1, 0, 1),
+            action_config: ActionConfig::new(f64::NAN, 0.0, 0.0),
+            move_stats: MoveStatistics::new(),
+            steps: vec![],
+            measurements: vec![],
+            elapsed_time: Duration::ZERO,
+            triangulation,
+        })
+        .expect_err("invalid wire action config should be rejected");
+
+        assert!(matches!(
+            error,
+            CdtError::InvalidConfiguration {
+                ref setting,
+                ref provided_value,
+                ref expected,
+            } if setting == "coupling_0" && provided_value == "NaN" && expected == "finite"
+        ));
     }
 
     #[test]
@@ -826,6 +1395,55 @@ mod tests {
         assert_eq!(parsed["aggregate"]["step_count"], 1);
         assert_eq!(parsed["final_triangulation"]["time_slices"], 3);
         assert_eq!(parsed["measurements"][0]["step"], 1);
+    }
+
+    #[test]
+    fn output_writers_reject_file_parent() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let results = results_with(
+            MetropolisConfig::new(1.0, 1, 0, 1),
+            vec![],
+            vec![],
+            triangulation,
+        );
+        let parent_file = temp_output_path("not-a-directory");
+        fs::write(&parent_file, b"not a directory").expect("parent fixture file should write");
+
+        let csv_path = parent_file.join("measurements.csv");
+        let csv_error = results
+            .write_measurements_csv(&csv_path)
+            .expect_err("CSV writer should reject a parent path that is a file");
+        let CdtError::OutputWriteFailed {
+            path,
+            format,
+            detail,
+        } = csv_error
+        else {
+            panic!("expected CSV output write failure, got {csv_error:?}");
+        };
+        assert_eq!(format, OutputFormat::Csv);
+        assert_eq!(path, csv_path.display().to_string());
+        assert!(!detail.is_empty());
+
+        let json_path = parent_file.join("summary.json");
+        let config = CdtConfig::new(12, 3);
+        let json_error = results
+            .write_summary_json(&config, &json_path)
+            .expect_err("JSON writer should reject a parent path that is a file");
+        let CdtError::OutputWriteFailed {
+            path,
+            format,
+            detail,
+        } = json_error
+        else {
+            panic!("expected JSON output write failure, got {json_error:?}");
+        };
+        assert_eq!(format, OutputFormat::Json);
+        assert_eq!(path, json_path.display().to_string());
+        assert!(!detail.is_empty());
+
+        fs::remove_file(&parent_file).expect("parent fixture file should be removable");
     }
 
     #[test]
@@ -1003,11 +1621,11 @@ mod tests {
 
         assert_optional_relative_eq(
             results.hausdorff_dimension_estimate(),
-            estimate_hausdorff_dimension(&results.triangulation),
+            estimate_hausdorff_dimension(results.triangulation()),
         );
         assert_optional_relative_eq(
             results.spectral_dimension_estimate(),
-            estimate_spectral_dimension(&results.triangulation),
+            estimate_spectral_dimension(results.triangulation()),
         );
     }
 

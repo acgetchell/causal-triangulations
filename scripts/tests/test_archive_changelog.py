@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import pytest
@@ -129,6 +130,14 @@ class TestVersionSortKey:
             "unreleased",
         ]
 
+    def test_build_metadata_is_ignored_for_sorting(self) -> None:
+        labels = ["1.2.3-rc.1+build.7", "1.2.3+build.7", "1.2.3-alpha.1+build.7"]
+        assert sorted(labels, key=_version_sort_key) == [
+            "1.2.3-alpha.1+build.7",
+            "1.2.3-rc.1+build.7",
+            "1.2.3+build.7",
+        ]
+
 
 class TestParseChangelog:
     def test_splits_preamble_unreleased_versions(self) -> None:
@@ -226,6 +235,21 @@ class TestWriteArchive:
         assert "[0.7.2]:" not in content
         assert "[unreleased]:" not in content
         assert "[0.2.0]:" not in content
+
+    def test_postprocesses_archived_blocks(self, tmp_path: Path) -> None:
+        block = (
+            "## [0.5.0] - 2025-01-01\n\n"
+            "### Fixed\n\n"
+            "- Fix remove_vertex topology consistency [#124](https://github.com/acgetchell/delaunay/pull/124)\n"
+            "  [`da473c8`](https://github.com/acgetchell/delaunay/commit/da473c8deadbeef)\n\n"
+            "  This commit addresses three critical issues:\n\n"
+            "  1. **Fix remove_vertex to maintain topology consistency**\n\n"
+            "    - Added logic to clear dangling neighbor references\n"
+        )
+        path = write_archive(tmp_path, "0.5", [("0.5.0", block)])
+        content = path.read_text(encoding="utf-8")
+        assert "\n  - Added logic to clear dangling neighbor references\n" in content
+        assert "\n    - Added logic to clear dangling neighbor references\n" not in content
 
 
 class TestBuildRoot:
@@ -370,6 +394,53 @@ class TestArchiveChangelog:
         archive_changelog(changelog, archive_dir)
         assert changelog.read_text(encoding="utf-8") == first_root
         assert (archive_dir / "0.6.md").read_text(encoding="utf-8") == first_a06
+
+    def test_archive_dir_outside_changelog_tree_uses_relative_link(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        changelog_dir = tmp_path / "repo"
+        changelog_dir.mkdir()
+        changelog = changelog_dir / "CHANGELOG.md"
+        changelog.write_text(_full_changelog(), encoding="utf-8")
+        archive_dir = tmp_path / "outside" / "archive"
+
+        with caplog.at_level(logging.WARNING, logger="archive_changelog"):
+            archive_changelog(changelog, archive_dir)
+
+        root = changelog.read_text(encoding="utf-8")
+        assert "- [0.6.x](../outside/archive/0.6.md)" in root
+        assert str(archive_dir) in caplog.text
+        assert str(changelog_dir) in caplog.text
+
+    def test_archive_dir_relpath_value_error_uses_absolute_fallback(
+        self,
+        tmp_path: Path,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Archive splitting survives Windows-style relpath failures across drives."""
+        changelog_dir = tmp_path / "repo"
+        changelog_dir.mkdir()
+        changelog = changelog_dir / "CHANGELOG.md"
+        changelog.write_text(_full_changelog(), encoding="utf-8")
+        archive_dir = tmp_path / "outside" / "archive"
+
+        def raise_cross_drive_value_error(_path: Path, _start: Path) -> str:
+            msg = "path is on mount 'D:', start on mount 'C:'"
+            raise ValueError(msg)
+
+        monkeypatch.setattr("archive_changelog.os.path.relpath", raise_cross_drive_value_error)
+
+        with caplog.at_level(logging.WARNING, logger="archive_changelog"):
+            archive_changelog(changelog, archive_dir)
+
+        root = changelog.read_text(encoding="utf-8")
+        assert f"- [0.6.x]({archive_dir.as_posix()}/0.6.md)" in root
+        assert "path is on mount 'D:', start on mount 'C:'" in caplog.text
+        assert str(archive_dir) in caplog.text
+        assert str(changelog_dir) in caplog.text
 
 
 # ---------------------------------------------------------------------------

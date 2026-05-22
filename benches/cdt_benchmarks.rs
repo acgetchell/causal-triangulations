@@ -10,7 +10,6 @@
 //! - Ergodic move operations
 
 use causal_triangulations::prelude::action::ActionConfig;
-use causal_triangulations::prelude::geometry::{DelaunayBackend2D, build_delaunay2_from_cells};
 use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveStatistics, MoveType};
 use causal_triangulations::prelude::simulation::{
     Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep, SimulationResultsBackend,
@@ -188,22 +187,8 @@ fn bench_action_calculations(c: &mut Criterion) {
 fn bench_ergodic_moves(c: &mut Criterion) {
     let mut group = c.benchmark_group("ergodic_moves");
 
-    let seed_triangulation = || {
-        let dt = build_delaunay2_from_cells(
-            &[
-                ([0.0, 0.0], 0),
-                ([1.0, 0.0], 0),
-                ([0.0, 1.0], 1),
-                ([1.0, 1.0], 1),
-                ([1.0 / 3.0, 1.0 / 3.0], 1),
-            ],
-            &[vec![4, 0, 1], vec![4, 1, 2], vec![4, 2, 0], vec![1, 3, 2]],
-        )
-        .expect("build subdivided square CDT benchmark fixture");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
-        CdtTriangulation2D::from_labeled_delaunay(backend, 2, 2)
-            .expect("wrap subdivided square CDT benchmark fixture")
-    };
+    let seed_triangulation =
+        || CdtTriangulation2D::from_cdt_strip(4, 3).expect("build CDT benchmark strip");
 
     // Benchmark different move types
     let move_types = [
@@ -272,8 +257,8 @@ fn bench_metropolis_simulation(c: &mut Criterion) {
             &steps,
             |b, &steps| {
                 b.iter(|| {
-                    let triangulation = CdtTriangulation2D::from_seeded_points(20, 1, 2, 42)
-                        .expect("Failed to create triangulation");
+                    let triangulation = CdtTriangulation2D::from_cdt_strip(4, 5)
+                        .expect("Failed to create CDT strip");
 
                     let config = MetropolisConfig::new(1.0, steps, 5, 5).with_seed(42);
                     let action_config = ActionConfig::default();
@@ -297,15 +282,15 @@ fn bench_simulation_analysis(c: &mut Criterion) {
 
     // Create a sample simulation result
     let triangulation =
-        CdtTriangulation2D::from_random_points(15, 1, 2).expect("Failed to create triangulation");
+        CdtTriangulation2D::from_cdt_strip(5, 3).expect("Failed to create CDT strip");
 
     let config = MetropolisConfig::new(1.0, 100, 10, 5);
     let action_config = ActionConfig::default();
-    let results = SimulationResultsBackend {
+    let results = SimulationResultsBackend::new(
         config,
         action_config,
-        move_stats: MoveStatistics::new(),
-        steps: vec![
+        MoveStatistics::new(),
+        vec![
             MonteCarloStep {
                 step: 1,
                 move_type: MoveType::Move22,
@@ -331,14 +316,15 @@ fn bench_simulation_analysis(c: &mut Criterion) {
                 delta_action: Some(0.3),
             },
         ],
-        measurements: vec![
+        vec![
             Measurement::new(0, 12.5, 15, 32, 18).with_volume_profile(vec![9, 9, 0]),
             Measurement::new(10, 11.8, 16, 34, 19).with_volume_profile(vec![9, 10, 0]),
             Measurement::new(20, 12.1, 15, 31, 17).with_volume_profile(vec![8, 9, 0]),
         ],
-        elapsed_time: Duration::from_millis(37),
+        Duration::from_millis(37),
         triangulation,
-    };
+    )
+    .expect("benchmark result fixture should validate");
 
     group.bench_function("acceptance_rate", |b| {
         b.iter(|| {
@@ -398,8 +384,8 @@ fn bench_cache_operations(c: &mut Criterion) {
 
     group.bench_function("refresh_cache", |b| {
         b.iter(|| {
-            let mut triangulation = CdtTriangulation2D::from_random_points(50, 1, 2)
-                .expect("Failed to create triangulation");
+            let mut triangulation =
+                CdtTriangulation2D::from_cdt_strip(10, 5).expect("Failed to create CDT strip");
             triangulation.refresh_cache();
             black_box(triangulation)
         });
@@ -408,8 +394,8 @@ fn bench_cache_operations(c: &mut Criterion) {
     group.bench_function("metadata_cache_invalidation", |b| {
         b.iter_batched(
             || {
-                let mut triangulation = CdtTriangulation2D::from_random_points(50, 1, 2)
-                    .expect("Failed to create triangulation");
+                let mut triangulation =
+                    CdtTriangulation2D::from_cdt_strip(10, 5).expect("Failed to create CDT strip");
                 triangulation.refresh_cache();
                 triangulation
             },

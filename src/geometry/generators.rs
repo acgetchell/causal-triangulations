@@ -8,14 +8,14 @@
 //! `docs/dev/rust.md § Geometry Backend Isolation`).
 
 use crate::errors::{CdtError, CdtResult};
-pub use delaunay::core::triangulation::TopologyGuarantee;
+pub use delaunay::TopologyGuarantee;
 use delaunay::geometry::kernel::AdaptiveKernel;
 use delaunay::geometry::point::Point;
 use delaunay::geometry::traits::coordinate::Coordinate;
 use delaunay::geometry::util::{generate_random_points, generate_random_points_seeded};
 use delaunay::prelude::VertexBuilder;
-pub use delaunay::topology::traits::topological_space::{GlobalTopology, ToroidalConstructionMode};
-use delaunay::triangulation::{DelaunayTriangulation, DelaunayTriangulationBuilder};
+pub use delaunay::topology::traits::{GlobalTopology, ToroidalConstructionMode};
+use delaunay::{DelaunayTriangulation, DelaunayTriangulationBuilder};
 
 /// Type alias for the 2D Delaunay triangulation returned by this crate's generators.
 ///
@@ -228,19 +228,22 @@ pub fn build_delaunay2_with_data(
         })
 }
 
-/// Builds a 2D triangulation from explicit vertex coordinates, data, and cell connectivity.
+/// Builds a 2D triangulation from explicit vertex coordinates, data, and simplex connectivity.
 ///
-/// Each vertex is specified as `([x, y], data)`.  Each cell is a `Vec<usize>` of
+/// Each vertex is specified as `([x, y], data)`. Each simplex is a `Vec<usize>` of
 /// vertex indices (must contain exactly 3 indices for 2D).  The triangulation is
 /// assembled combinatorially — **no Delaunay point-insertion** is performed.
 ///
 /// Topology defaults to [`TopologyGuarantee::DEFAULT`] (PL-manifold) and
-/// [`GlobalTopology::Euclidean`].  For non-spherical meshes (e.g. torus with
-/// χ = 0), use [`build_delaunay2_with_topology`] or the convenience wrapper
-/// [`build_toroidal_delaunay2`] instead.
+/// [`GlobalTopology::Euclidean`].  For explicit meshes that need non-default
+/// topology metadata, use [`build_delaunay2_with_topology`].  For toroidal CDT
+/// meshes, prefer [`build_periodic_toroidal_delaunay2`] or
+/// [`CdtTriangulation::from_toroidal_cdt`](crate::CdtTriangulation::from_toroidal_cdt):
+/// `delaunay` v0.7.8 rejects explicit non-Euclidean connectivity for toroidal
+/// construction.
 ///
 /// This is one of the only call sites for
-/// [`DelaunayTriangulationBuilder::from_vertices_and_cells`], maintaining
+/// [`DelaunayTriangulationBuilder::from_vertices_and_simplices`], maintaining
 /// geometry backend isolation.
 ///
 /// # Errors
@@ -248,7 +251,7 @@ pub fn build_delaunay2_with_data(
 /// Returns [`crate::CdtError::InvalidGenerationParameters`] if any coordinate is
 /// NaN or infinite. Returns [`crate::CdtError::VertexBuildFailed`] if a vertex
 /// cannot be constructed, or [`crate::CdtError::DelaunayGenerationFailed`] if
-/// the explicit cell builder rejects the input (for example invalid cell arity,
+/// the explicit simplex builder rejects the input (for example invalid simplex arity,
 /// out-of-bounds indices, or topological validation failure).
 ///
 /// # Examples
@@ -258,38 +261,40 @@ pub fn build_delaunay2_with_data(
 ///
 /// // Single labeled triangle (PL-manifold-with-boundary, Euclidean):
 /// let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
-/// let cells = vec![vec![0, 1, 2]];
+/// let simplices = vec![vec![0, 1, 2]];
 ///
-/// let dt = build_delaunay2_from_cells(&vertices, &cells)
+/// let dt = build_delaunay2_from_simplices(&vertices, &simplices)
 ///     .expect("explicit single-triangle mesh");
 /// assert_eq!(dt.number_of_vertices(), 3);
-/// assert_eq!(dt.number_of_cells(), 1);
+/// assert_eq!(dt.number_of_simplices(), 1);
 /// ```
-pub fn build_delaunay2_from_cells(
+pub fn build_delaunay2_from_simplices(
     coords_with_data: &[([f64; 2], u32)],
-    cells: &[Vec<usize>],
+    simplices: &[Vec<usize>],
 ) -> CdtResult<DelaunayTriangulation2D> {
     build_delaunay2_with_topology(
         coords_with_data,
-        cells,
+        simplices,
         TopologyGuarantee::DEFAULT,
         GlobalTopology::Euclidean,
     )
 }
 
-/// Like [`build_delaunay2_from_cells`] but with explicit [`TopologyGuarantee`] and
+/// Like [`build_delaunay2_from_simplices`] but with explicit [`TopologyGuarantee`] and
 /// [`GlobalTopology`] metadata.
 ///
-/// Use [`TopologyGuarantee::Pseudomanifold`] for meshes whose Euler characteristic
-/// differs from the default closed-sphere expectation, and pair it with the
-/// matching [`GlobalTopology`] (e.g., [`GlobalTopology::Toroidal`] with
-/// [`ToroidalConstructionMode::Explicit`]) so the builder validates against the
-/// correct expected χ.
+/// Use [`TopologyGuarantee::Pseudomanifold`] for supported explicit meshes whose
+/// Euler characteristic differs from the default closed-sphere expectation, and
+/// pair it with the matching [`GlobalTopology`] so the builder validates against
+/// the correct expected χ.  For toroidal CDT meshes, use
+/// [`build_periodic_toroidal_delaunay2`]; `delaunay` v0.7.8 rejects
+/// [`GlobalTopology::Toroidal`] explicit simplex connectivity pending upstream
+/// quotient-validation support.
 ///
 /// # Errors
 ///
-/// Same as [`build_delaunay2_from_cells`]: coordinates must be finite, vertices
-/// must build successfully, and the explicit cells must satisfy the selected
+/// Same as [`build_delaunay2_from_simplices`]: coordinates must be finite, vertices
+/// must build successfully, and the explicit simplices must satisfy the selected
 /// topology guarantee and global topology.
 ///
 /// # Examples
@@ -301,21 +306,21 @@ pub fn build_delaunay2_from_cells(
 ///
 /// // Single labeled triangle, default PL-manifold guarantee, Euclidean global topology.
 /// let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
-/// let cells = vec![vec![0, 1, 2]];
+/// let simplices = vec![vec![0, 1, 2]];
 ///
 /// let dt = build_delaunay2_with_topology(
 ///     &vertices,
-///     &cells,
+///     &simplices,
 ///     TopologyGuarantee::DEFAULT,
 ///     GlobalTopology::Euclidean,
 /// )
 /// .expect("explicit single-triangle mesh");
 /// assert_eq!(dt.number_of_vertices(), 3);
-/// assert_eq!(dt.number_of_cells(), 1);
+/// assert_eq!(dt.number_of_simplices(), 1);
 /// ```
 pub fn build_delaunay2_with_topology(
     coords_with_data: &[([f64; 2], u32)],
-    cells: &[Vec<usize>],
+    simplices: &[Vec<usize>],
     topology_guarantee: TopologyGuarantee,
     global_topology: GlobalTopology<2>,
 ) -> CdtResult<DelaunayTriangulation2D> {
@@ -344,7 +349,7 @@ pub fn build_delaunay2_with_topology(
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
             (lo.min(v), hi.max(v))
         });
-    DelaunayTriangulationBuilder::from_vertices_and_cells(&vertices, cells)
+    DelaunayTriangulationBuilder::from_vertices_and_simplices(&vertices, simplices)
         .topology_guarantee(topology_guarantee)
         .global_topology(global_topology)
         .build::<i32>()
@@ -356,30 +361,36 @@ pub fn build_delaunay2_with_topology(
         })
 }
 
-/// Convenience wrapper for building a 2D toroidal explicit triangulation.
+/// Attempts to build a 2D toroidal explicit triangulation.
 ///
 /// Sets [`TopologyGuarantee::Pseudomanifold`] and
 /// [`GlobalTopology::Toroidal`] with [`ToroidalConstructionMode::Explicit`]
 /// so the builder validates the mesh against χ = 0 instead of the default
 /// closed-sphere expectation.
 ///
-/// In practice, most callers use the higher-level
+/// `delaunay` v0.7.8 rejects explicit non-Euclidean connectivity for toroidal
+/// topology before quotient validation can run.  This helper remains as the
+/// stable explicit-topology entry point, but callers that need an actual
+/// toroidal CDT mesh should use [`build_periodic_toroidal_delaunay2`] or the
+/// higher-level
 /// [`CdtTriangulation::from_toroidal_cdt`](crate::CdtTriangulation::from_toroidal_cdt)
-/// constructor, which assembles the vertex/cell layout for an `N × T` torus and
-/// then delegates here.
+/// constructor.
 ///
 /// # Errors
 ///
 /// Returns [`crate::CdtError::InvalidGenerationParameters`] if either toroidal
 /// period in `domain` is NaN, infinite, or non-positive. Otherwise the error
-/// behavior is the same as [`build_delaunay2_with_topology`].
+/// behavior is the same as [`build_delaunay2_with_topology`], including the
+/// upstream explicit-toroidal rejection described above.
 ///
 /// # Examples
 ///
-/// Build a 3 × 3 toroidal mesh by hand (V = 9, E = 27, F = 18, χ = 0):
+/// The helper validates the toroidal domain before forwarding explicit simplex
+/// connectivity to `delaunay`:
 ///
 /// ```
 /// use causal_triangulations::prelude::geometry::*;
+/// use causal_triangulations::CdtError;
 ///
 /// const N: usize = 3;
 /// const T: usize = 3;
@@ -396,31 +407,33 @@ pub fn build_delaunay2_with_topology(
 /// }
 ///
 /// // Each (i, t) quad contributes one Up and one Down triangle.
-/// let mut cells: Vec<Vec<usize>> = Vec::with_capacity(2 * N * T);
+/// let mut simplices: Vec<Vec<usize>> = Vec::with_capacity(2 * N * T);
 /// for t in 0..T {
 ///     let t_next = (t + 1) % T;
 ///     for i in 0..N {
 ///         let i_next = (i + 1) % N;
-///         cells.push(vec![i + t * N, i_next + t * N, i + t_next * N]);
-///         cells.push(vec![i_next + t * N, i_next + t_next * N, i + t_next * N]);
+///         simplices.push(vec![i + t * N, i_next + t * N, i + t_next * N]);
+///         simplices.push(vec![i_next + t * N, i_next + t_next * N, i + t_next * N]);
 ///     }
 /// }
 ///
-/// let dt = build_toroidal_delaunay2(&vertices, &cells, [1.0, 1.0])
-///     .expect("explicit 3×3 toroidal mesh");
-/// assert_eq!(dt.number_of_vertices(), N * T);
-/// assert_eq!(dt.number_of_cells(), 2 * N * T);
+/// let result = build_toroidal_delaunay2(&vertices, &simplices, [1.0, 1.0]);
+/// assert!(matches!(
+///     result,
+///     Err(CdtError::DelaunayGenerationFailed { ref underlying_error, .. })
+///         if underlying_error.contains("Explicit non-Euclidean connectivity")
+/// ));
 /// ```
 pub fn build_toroidal_delaunay2(
     coords_with_data: &[([f64; 2], u32)],
-    cells: &[Vec<usize>],
+    simplices: &[Vec<usize>],
     domain: [f64; 2],
 ) -> CdtResult<DelaunayTriangulation2D> {
     validate_toroidal_domain(domain)?;
 
     build_delaunay2_with_topology(
         coords_with_data,
-        cells,
+        simplices,
         TopologyGuarantee::Pseudomanifold,
         GlobalTopology::Toroidal {
             domain,
@@ -432,7 +445,7 @@ pub fn build_toroidal_delaunay2(
 /// Builds a periodic 2D toroidal Delaunay triangulation from coordinate-data pairs.
 ///
 /// This uses the upstream periodic image-point constructor rather than explicit
-/// cell assembly. The builder requests [`TopologyGuarantee::PLManifold`], so
+/// simplex assembly. The builder requests [`TopologyGuarantee::PLManifold`], so
 /// the resulting toroidal mesh is suitable for the full Delaunay Level 1-4
 /// validation path exposed by
 /// [`DelaunayBackend::validate_delaunay`](crate::geometry::backends::delaunay::DelaunayBackend::validate_delaunay).
@@ -471,9 +484,10 @@ pub fn build_toroidal_delaunay2(
 ///
 ///     let dt = build_periodic_toroidal_delaunay2(&vertices, [3.0, 3.0])?;
 ///     assert_eq!(dt.number_of_vertices(), N * T);
-///     assert_eq!(dt.number_of_cells(), 2 * N * T);
+///     assert_eq!(dt.number_of_simplices(), 2 * N * T);
 ///
-///     let backend = DelaunayBackend2D::from_triangulation(dt);
+///     let backend = DelaunayBackend2D::from_triangulation(dt)
+///         .expect("Delaunay input should validate");
 ///     backend
 ///         .validate_delaunay()
 ///         .expect("periodic toroidal mesh passes Level 1-4 validation");
@@ -565,7 +579,7 @@ mod tests {
     use crate::geometry::DelaunayBackend2D;
     use std::collections::HashMap;
 
-    /// Produces an order-independent snapshot of vertices and cell connectivity for seeded tests.
+    /// Produces an order-independent snapshot of vertices and simplex connectivity for seeded tests.
     fn triangulation_signature(dt: &DelaunayTriangulation2D) -> (Vec<String>, Vec<Vec<String>>) {
         let mut vertex_coords: Vec<_> = dt
             .vertices()
@@ -578,26 +592,26 @@ mod tests {
             .map(|(key, vertex)| (key, format!("{:?}", vertex.point().coords())))
             .collect();
 
-        let mut cells: Vec<_> = dt
-            .cells()
-            .map(|(_, cell)| {
-                let mut vertices: Vec<_> = cell
+        let mut simplices: Vec<_> = dt
+            .simplices()
+            .map(|(_, simplex)| {
+                let mut vertices: Vec<_> = simplex
                     .vertices()
                     .iter()
                     .map(|key| {
                         coord_by_key
                             .get(key)
                             .cloned()
-                            .expect("cell vertices should refer to live vertices")
+                            .expect("simplex vertices should refer to live vertices")
                     })
                     .collect();
                 vertices.sort();
                 vertices
             })
             .collect();
-        cells.sort();
+        simplices.sort();
 
-        (vertex_coords, cells)
+        (vertex_coords, simplices)
     }
 
     #[test]
@@ -615,25 +629,25 @@ mod tests {
     }
 
     #[test]
-    fn test_build_delaunay2_from_cells_single_triangle() {
+    fn test_build_delaunay2_from_simplices_single_triangle() {
         // Default topology (PL-manifold + Euclidean) should accept a single
         // triangle with the standard 0-1 strip labeling.
         let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
-        let cells = vec![vec![0, 1, 2]];
+        let simplices = vec![vec![0, 1, 2]];
 
-        let dt = build_delaunay2_from_cells(&vertices, &cells)
+        let dt = build_delaunay2_from_simplices(&vertices, &simplices)
             .expect("single-triangle explicit mesh should build with defaults");
         assert_eq!(dt.number_of_vertices(), 3);
-        assert_eq!(dt.number_of_cells(), 1);
+        assert_eq!(dt.number_of_simplices(), 1);
     }
 
     #[test]
-    fn test_build_delaunay2_from_cells_rejects_bad_index() {
-        // Cell references vertex 3 which doesn't exist (only indices 0..3 are valid).
+    fn test_build_delaunay2_from_simplices_rejects_bad_index() {
+        // Simplex references vertex 3 which doesn't exist (only indices 0..3 are valid).
         let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
-        let cells = vec![vec![0, 1, 3]];
+        let simplices = vec![vec![0, 1, 3]];
 
-        let result = build_delaunay2_from_cells(&vertices, &cells);
+        let result = build_delaunay2_from_simplices(&vertices, &simplices);
         assert!(
             matches!(result, Err(CdtError::DelaunayGenerationFailed { .. })),
             "explicit builder must reject out-of-bounds vertex indices, got {result:?}"
@@ -644,21 +658,21 @@ mod tests {
     fn test_build_delaunay2_with_topology_euclidean() {
         // Same single-triangle mesh, but with explicit topology metadata.
         let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
-        let cells = vec![vec![0, 1, 2]];
+        let simplices = vec![vec![0, 1, 2]];
 
         let dt = build_delaunay2_with_topology(
             &vertices,
-            &cells,
+            &simplices,
             TopologyGuarantee::DEFAULT,
             GlobalTopology::Euclidean,
         )
         .expect("single-triangle explicit mesh with explicit topology should build");
         assert_eq!(dt.number_of_vertices(), 3);
-        assert_eq!(dt.number_of_cells(), 1);
+        assert_eq!(dt.number_of_simplices(), 1);
     }
 
     #[test]
-    fn test_build_toroidal_delaunay2_3x3_chi_zero() {
+    fn test_explicit_toroidal_simplices_are_rejected() {
         // A real 3×3 toroidal mesh: V=9, F=18, E=27, χ=0.
         const N: usize = 3;
         const T: usize = 3;
@@ -674,20 +688,31 @@ mod tests {
                 vertices.push((coord, label));
             }
         }
-        let mut cells: Vec<Vec<usize>> = Vec::with_capacity(2 * N * T);
+        let mut simplices: Vec<Vec<usize>> = Vec::with_capacity(2 * N * T);
         for t in 0..T {
             let t_next = (t + 1) % T;
             for i in 0..N {
                 let i_next = (i + 1) % N;
-                cells.push(vec![i + t * N, i_next + t * N, i + t_next * N]);
-                cells.push(vec![i_next + t * N, i_next + t_next * N, i + t_next * N]);
+                simplices.push(vec![i + t * N, i_next + t * N, i + t_next * N]);
+                simplices.push(vec![i_next + t * N, i_next + t_next * N, i + t_next * N]);
             }
         }
 
-        let dt = build_toroidal_delaunay2(&vertices, &cells, [1.0, 1.0])
-            .expect("3×3 toroidal mesh should build");
-        assert_eq!(dt.number_of_vertices(), N * T);
-        assert_eq!(dt.number_of_cells(), 2 * N * T);
+        let error = build_toroidal_delaunay2(&vertices, &simplices, [1.0, 1.0])
+            .expect_err("explicit toroidal topology should report upstream limitation");
+        assert!(
+            matches!(
+                error,
+                CdtError::DelaunayGenerationFailed {
+                    vertex_count: 9,
+                    ref underlying_error,
+                    ..
+                } if underlying_error.contains(
+                    "Explicit non-Euclidean connectivity is not supported for Toroidal"
+                )
+            ),
+            "explicit toroidal mesh should fail with the upstream topology limitation, got {error:?}"
+        );
     }
 
     #[test]
@@ -711,9 +736,10 @@ mod tests {
         let dt = build_periodic_toroidal_delaunay2(&vertices, DOMAIN)
             .expect("periodic 3×3 toroidal mesh should build");
         assert_eq!(dt.number_of_vertices(), N * T);
-        assert_eq!(dt.number_of_cells(), 2 * N * T);
+        assert_eq!(dt.number_of_simplices(), 2 * N * T);
 
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("periodic toroidal mesh should validate");
         backend
             .validate_delaunay()
             .expect("periodic toroidal mesh must pass upstream Level 1-4 validation");
@@ -780,7 +806,10 @@ mod tests {
 
         let dt = result.unwrap();
         assert_eq!(dt.number_of_vertices(), 4, "Should have 4 vertices");
-        assert!(dt.number_of_cells() > 0, "Should have at least one cell");
+        assert!(
+            dt.number_of_simplices() > 0,
+            "Should have at least one simplex"
+        );
     }
 
     #[test]
@@ -802,14 +831,14 @@ mod tests {
             "Should have same vertex count"
         );
         assert_eq!(
-            dt1.number_of_cells(),
-            dt2.number_of_cells(),
-            "Should have same cell count"
+            dt1.number_of_simplices(),
+            dt2.number_of_simplices(),
+            "Should have same simplex count"
         );
         assert_eq!(
             triangulation_signature(&dt1),
             triangulation_signature(&dt2),
-            "Seeded generation should produce identical vertex coordinates and cell connectivity"
+            "Seeded generation should produce identical vertex coordinates and simplex connectivity"
         );
     }
 
@@ -904,15 +933,15 @@ mod tests {
     }
 
     #[test]
-    fn test_build_delaunay2_from_cells_rejects_non_finite_coordinate() {
+    fn test_build_delaunay2_from_simplices_rejects_non_finite_coordinate() {
         let vertices = [
             ([0.0, 0.0], 0u32),
             ([1.0, 0.0], 0),
             ([0.5, f64::NEG_INFINITY], 1),
         ];
-        let cells = vec![vec![0, 1, 2]];
+        let simplices = vec![vec![0, 1, 2]];
 
-        let result = build_delaunay2_from_cells(&vertices, &cells);
+        let result = build_delaunay2_from_simplices(&vertices, &simplices);
         assert!(
             matches!(
                 result,
@@ -924,7 +953,7 @@ mod tests {
                     && provided_value == "vertex 2 axis 1 = -inf"
                     && expected_range == "finite coordinate values"
             ),
-            "delegating explicit-cell builder should reject non-finite coordinates, got {result:?}"
+            "delegating explicit-simplex builder should reject non-finite coordinates, got {result:?}"
         );
     }
 
@@ -935,11 +964,11 @@ mod tests {
             ([f64::INFINITY, 0.0], 0),
             ([0.5, 1.0], 1),
         ];
-        let cells = vec![vec![0, 1, 2]];
+        let simplices = vec![vec![0, 1, 2]];
 
         let result = build_delaunay2_with_topology(
             &vertices,
-            &cells,
+            &simplices,
             TopologyGuarantee::DEFAULT,
             GlobalTopology::Euclidean,
         );
@@ -961,7 +990,7 @@ mod tests {
     #[test]
     fn test_build_toroidal_delaunay2_rejects_invalid_domain() {
         let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
-        let cells = vec![vec![0, 1, 2]];
+        let simplices = vec![vec![0, 1, 2]];
 
         for (domain, expected_value) in [
             ([0.0, 1.0], "axis 0 period 0"),
@@ -969,7 +998,7 @@ mod tests {
             ([1.0, f64::NAN], "axis 1 period NaN"),
             ([f64::INFINITY, 1.0], "axis 0 period inf"),
         ] {
-            let result = build_toroidal_delaunay2(&vertices, &cells, domain);
+            let result = build_toroidal_delaunay2(&vertices, &simplices, domain);
             assert!(
                 matches!(
                     result,
@@ -989,9 +1018,9 @@ mod tests {
     #[test]
     fn test_invalid_toroidal_domain_display_is_actionable() {
         let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
-        let cells = vec![vec![0, 1, 2]];
+        let simplices = vec![vec![0, 1, 2]];
 
-        let error = build_toroidal_delaunay2(&vertices, &cells, [-1.0, 1.0])
+        let error = build_toroidal_delaunay2(&vertices, &simplices, [-1.0, 1.0])
             .expect_err("negative toroidal period should be rejected");
         assert_eq!(
             error.to_string(),
@@ -1017,8 +1046,8 @@ mod tests {
                 "Should have {vertex_count} vertices for {description} triangulation"
             );
             assert!(
-                dt.number_of_cells() > 0,
-                "Should have at least one cell for {description} triangulation"
+                dt.number_of_simplices() > 0,
+                "Should have at least one simplex for {description} triangulation"
             );
         }
     }
@@ -1043,7 +1072,10 @@ mod tests {
     fn test_random_delaunay2_success() {
         let dt = random_delaunay2(5, (0.0, 10.0));
         assert_eq!(dt.number_of_vertices(), 5, "Should have 5 vertices");
-        assert!(dt.number_of_cells() > 0, "Should have at least one cell");
+        assert!(
+            dt.number_of_simplices() > 0,
+            "Should have at least one simplex"
+        );
     }
 
     #[test]
@@ -1058,8 +1090,8 @@ mod tests {
                 "Should have {size} vertices"
             );
             assert!(
-                dt.number_of_cells() > 0,
-                "Should have cells for size {size}"
+                dt.number_of_simplices() > 0,
+                "Should have simplices for size {size}"
             );
         }
     }
@@ -1089,14 +1121,14 @@ mod tests {
             "Should have same vertex count"
         );
         assert_eq!(
-            dt1.number_of_cells(),
-            dt2.number_of_cells(),
-            "Should have same cell count"
+            dt1.number_of_simplices(),
+            dt2.number_of_simplices(),
+            "Should have same simplex count"
         );
 
         // Verify expected properties
         assert_eq!(dt1.number_of_vertices(), 6, "Should have 6 vertices");
-        assert!(dt1.number_of_cells() > 0, "Should have cells");
+        assert!(dt1.number_of_simplices() > 0, "Should have simplices");
     }
 
     #[test]
@@ -1124,8 +1156,8 @@ mod tests {
                 "Should have 4 vertices with seed {seed}"
             );
             assert!(
-                dt.number_of_cells() > 0,
-                "Should have cells with seed {seed}"
+                dt.number_of_simplices() > 0,
+                "Should have simplices with seed {seed}"
             );
         }
     }
@@ -1162,11 +1194,11 @@ mod tests {
             clippy::cast_possible_wrap,
             reason = "test triangulation sizes are tiny and fit in i32"
         )]
-        let c = dt.number_of_cells() as i32; // faces in 2D
+        let c = dt.number_of_simplices() as i32; // faces in 2D
 
         // Basic sanity checks
         assert!(v >= 3, "Should have at least 3 vertices");
-        assert!(c >= 1, "Should have at least 1 cell/face");
+        assert!(c >= 1, "Should have at least 1 simplex/face");
 
         // For a 2D triangulation, we can estimate edge count
         // In a typical triangulation: E ≈ 3V - 6 for planar graphs
@@ -1175,12 +1207,14 @@ mod tests {
 
     #[test]
     fn test_coordinate_range_bounds() {
-        // Test extreme coordinate ranges
+        // Test representative finite coordinate ranges.  Astronomical f64
+        // spans can violate robust predicate preconditions before they are
+        // meaningful geometry fixtures.
         let ranges = [
-            (f64::MIN / 1e10, f64::MAX / 1e10), // Very large range (scaled down to avoid overflow)
-            (-1000.0, 1000.0),                  // Large symmetric range
-            (0.001, 0.002),                     // Very small range
-            (-0.5, 0.5),                        // Small symmetric range
+            (-1.0e6, 1.0e6), // Broad symmetric range
+            (-1000.0, 1000.0),
+            (0.001, 0.002),
+            (-0.5, 0.5),
         ];
 
         for range in ranges {
@@ -1227,7 +1261,7 @@ mod tests {
         let dt = build_delaunay2_with_data(&coords)
             .expect("Should build triangulation from 3 non-degenerate points");
         assert_eq!(dt.number_of_vertices(), 3);
-        assert!(dt.number_of_cells() >= 1);
+        assert!(dt.number_of_simplices() >= 1);
     }
 
     #[test]
@@ -1247,12 +1281,15 @@ mod tests {
                 7,
                 "Result {i} should have 7 vertices"
             );
-            assert!(dt.number_of_cells() > 0, "Result {i} should have cells");
+            assert!(
+                dt.number_of_simplices() > 0,
+                "Result {i} should have simplices"
+            );
         }
 
         // All results should be identical in structure
         let first_vertex_count = results[0].number_of_vertices();
-        let first_cell_count = results[0].number_of_cells();
+        let first_simplex_count = results[0].number_of_simplices();
 
         for (i, dt) in results.iter().enumerate().skip(1) {
             assert_eq!(
@@ -1261,9 +1298,9 @@ mod tests {
                 "Result {i} vertex count should match first result"
             );
             assert_eq!(
-                dt.number_of_cells(),
-                first_cell_count,
-                "Result {i} cell count should match first result"
+                dt.number_of_simplices(),
+                first_simplex_count,
+                "Result {i} simplex count should match first result"
             );
         }
     }

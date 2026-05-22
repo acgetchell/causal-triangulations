@@ -127,7 +127,10 @@ impl MetropolisConfig {
     ///
     /// # Errors
     ///
-    /// Returns a structured error describing the invalid simulation setting.
+    /// Returns [`CdtError::InvalidSimulationConfiguration`] if `temperature` is
+    /// not finite and positive, if `steps` or `measurement_frequency` is zero, if
+    /// thermalization exceeds the step count, or if the schedule cannot produce a
+    /// post-thermalization measurement.
     ///
     /// # Examples
     ///
@@ -418,14 +421,15 @@ impl Error for CdtProposalSiteRejection {
 /// ```
 /// use causal_triangulations::prelude::moves::MoveType;
 /// use causal_triangulations::prelude::simulation::CdtProposalError;
+/// use causal_triangulations::prelude::errors::BackendMutationOperation;
 /// use causal_triangulations::CdtError;
 ///
 /// let err = CdtProposalError::ApplicationFailed {
 ///     move_type: MoveType::Move13Add,
 ///     attempt: 2,
 ///     source: CdtError::BackendMutationFailed {
-///         operation: "insert_vertex".to_string(),
-///         target: "face FaceKey(3)".to_string(),
+///         operation: BackendMutationOperation::SetVertexDataByKey,
+///         target: "vertex VertexKey(7)".to_string(),
 ///         detail: "backend rejected mutation".to_string(),
 ///     },
 /// };
@@ -652,10 +656,11 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
 /// scientific continuation: action/config metadata, accumulated telemetry,
 /// both RNG streams, and the ergodic move system.
 ///
-/// Resuming a serialized checkpoint continues from the stored chain counters
-/// and RNG streams. The triangulation is restored through its invariant-checked
-/// serde representation, so callers should rely on CDT observables and
-/// validation contracts rather than byte-for-byte backend identity.
+/// In-memory checkpoints can be resumed directly with
+/// [`MetropolisAlgorithm::resume_from_checkpoint`]. Serialized checkpoints
+/// restore through the embedded [`CdtTriangulation2D`]'s checked serde path, so
+/// deserialization also requires the stored backend triangulation to satisfy the
+/// current Delaunay reconstruction invariants.
 ///
 /// # Examples
 ///
@@ -700,47 +705,198 @@ pub struct CdtMcmcCheckpoint {
 
 impl CdtMcmcCheckpoint {
     /// Returns the generic MCMC chain checkpoint.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let checkpoint = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1).with_seed(13),
+    ///         ActionConfig::default(),
+    ///     )
+    ///     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    ///
+    ///     assert_eq!(checkpoint.chain().total_steps(), 1);
+    ///     Ok(())
+    /// }
+    /// ```
     pub const fn chain(&self) -> &ChainCheckpoint<CdtTriangulation2D> {
         &self.chain
     }
 
     /// Returns the Metropolis configuration used when the checkpoint was made.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = MetropolisConfig::new(1.0, 1, 0, 1).with_seed(13);
+    ///     let checkpoint = MetropolisAlgorithm::new(config.clone(), ActionConfig::default())
+    ///         .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    ///
+    ///     assert_eq!(checkpoint.config(), &config);
+    ///     Ok(())
+    /// }
+    /// ```
     #[must_use]
     pub const fn config(&self) -> &MetropolisConfig {
         &self.config
     }
 
     /// Returns the action configuration used when the checkpoint was made.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let action_config = ActionConfig::new(1.0, 0.0, 0.1);
+    ///     let checkpoint = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1).with_seed(13),
+    ///         action_config.clone(),
+    ///     )
+    ///     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    ///
+    ///     assert_eq!(checkpoint.action_config(), &action_config);
+    ///     Ok(())
+    /// }
+    /// ```
     #[must_use]
     pub const fn action_config(&self) -> &ActionConfig {
         &self.action_config
     }
 
     /// Returns the last completed Monte Carlo step.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let checkpoint = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1).with_seed(13),
+    ///         ActionConfig::default(),
+    ///     )
+    ///     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    ///
+    ///     assert_eq!(checkpoint.current_step(), 1);
+    ///     Ok(())
+    /// }
+    /// ```
     #[must_use]
     pub const fn current_step(&self) -> u32 {
         self.current_step
     }
 
     /// Returns the action of the checkpointed triangulation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let checkpoint = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1).with_seed(13),
+    ///         ActionConfig::default(),
+    ///     )
+    ///     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    ///
+    ///     assert!(checkpoint.current_action().is_finite());
+    ///     Ok(())
+    /// }
+    /// ```
     #[must_use]
     pub const fn current_action(&self) -> f64 {
         self.current_action
     }
 
     /// Returns accumulated move statistics through the checkpoint step.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let checkpoint = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1).with_seed(13),
+    ///         ActionConfig::default(),
+    ///     )
+    ///     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    ///
+    ///     assert_eq!(checkpoint.move_stats().total_attempted(), 1);
+    ///     Ok(())
+    /// }
+    /// ```
     #[must_use]
     pub const fn move_stats(&self) -> &MoveStatistics {
         &self.move_stats
     }
 
     /// Returns accumulated step telemetry through the checkpoint step.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let checkpoint = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1).with_seed(13),
+    ///         ActionConfig::default(),
+    ///     )
+    ///     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    ///
+    ///     assert_eq!(checkpoint.steps().len(), 1);
+    ///     Ok(())
+    /// }
+    /// ```
     #[must_use]
     pub fn steps(&self) -> &[MonteCarloStep] {
         &self.steps
     }
 
     /// Returns accumulated measurements through the checkpoint step.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let checkpoint = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1).with_seed(13),
+    ///         ActionConfig::default(),
+    ///     )
+    ///     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    ///
+    ///     assert!(!checkpoint.measurements().is_empty());
+    ///     Ok(())
+    /// }
+    /// ```
     #[must_use]
     pub fn measurements(&self) -> &[Measurement] {
         &self.measurements
@@ -764,22 +920,22 @@ impl CdtMcmcCheckpoint {
     ///     .run_to_checkpoint(tri)?;
     ///
     ///     let results = checkpoint.into_results();
-    ///     assert_eq!(results.steps.len(), 2);
+    ///     assert_eq!(results.steps().len(), 2);
     ///     Ok(())
     /// }
     /// ```
     #[must_use]
     pub fn into_results(self) -> SimulationResultsBackend {
         let (triangulation, _, _) = self.chain.into_parts();
-        SimulationResultsBackend {
-            config: self.config,
-            action_config: self.action_config,
-            move_stats: self.move_stats,
-            steps: self.steps,
-            measurements: self.measurements,
-            elapsed_time: self.elapsed_time,
+        SimulationResultsBackend::from_parts(
+            self.config,
+            self.action_config,
+            self.move_stats,
+            self.steps,
+            self.measurements,
+            self.elapsed_time,
             triangulation,
-        }
+        )
     }
 }
 
@@ -856,7 +1012,7 @@ impl MetropolisAlgorithm {
     ///     let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)?;
     ///     let config = MetropolisConfig::new(1.0, 2, 1, 1).with_seed(7);
     ///     let results = MetropolisAlgorithm::new(config, ActionConfig::default()).run(tri)?;
-    ///     assert_eq!(results.steps.len(), 2);
+    ///     assert_eq!(results.steps().len(), 2);
     ///     Ok(())
     /// }
     /// ```
@@ -866,8 +1022,10 @@ impl MetropolisAlgorithm {
 
     /// Run the simulation and return both the final results and checkpoint.
     ///
-    /// The checkpoint can be serialized and later resumed with
-    /// [`Self::resume_from_checkpoint`] without losing the CDT RNG streams.
+    /// The returned checkpoint can be resumed in memory with
+    /// [`Self::resume_from_checkpoint`]. If callers serialize it, successful
+    /// deserialization also depends on the embedded triangulation passing the
+    /// backend's checked reconstruction.
     ///
     /// # Errors
     ///
@@ -893,7 +1051,7 @@ impl MetropolisAlgorithm {
     ///     );
     ///     let (results, checkpoint) = algorithm.run_with_checkpoint(tri)?;
     ///
-    ///     assert_eq!(results.steps.len(), checkpoint.steps().len());
+    ///     assert_eq!(results.steps().len(), checkpoint.steps().len());
     ///     assert_eq!(checkpoint.current_step(), 2);
     ///     Ok(())
     /// }
@@ -912,6 +1070,11 @@ impl MetropolisAlgorithm {
     /// The checkpoint embeds the current triangulation in the MCMC crate's
     /// [`ChainCheckpoint`] and stores CDT-specific proposal state, telemetry,
     /// and RNG streams beside it.
+    ///
+    /// Direct in-memory resume does not reserialize the triangulation. Serialized
+    /// restore uses checked backend reconstruction, so snapshots whose evolved
+    /// geometry is no longer Delaunay-valid may fail to deserialize even though
+    /// the in-memory checkpoint can still be resumed.
     ///
     /// # Errors
     ///
@@ -991,8 +1154,8 @@ impl MetropolisAlgorithm {
     ///     )
     ///     .resume_from_checkpoint(checkpoint)?;
     ///
-    ///     assert_eq!(resumed.steps.len(), 4);
-    ///     assert_eq!(resumed.config.steps, 4);
+    ///     assert_eq!(resumed.steps().len(), 4);
+    ///     assert_eq!(resumed.config().steps, 4);
     ///     Ok(())
     /// }
     /// ```
@@ -1709,6 +1872,7 @@ fn attempt_move(
 mod tests {
     use super::*;
     use crate::cdt::triangulation::CdtTriangulation;
+    use crate::errors::BackendMutationOperation;
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
     use markov_chain_monte_carlo::Chain;
@@ -1733,6 +1897,52 @@ mod tests {
         )
         .run_to_checkpoint(triangulation)
         .expect("short prefix run should checkpoint")
+    }
+
+    fn serializable_rejected_checkpoint(action_config: ActionConfig) -> CdtMcmcCheckpoint {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let config = MetropolisConfig::new(1.0, 1, 0, 1).with_seed(13);
+        let algorithm = MetropolisAlgorithm::new(config.clone(), action_config.clone());
+        let mut state = algorithm.initial_state(triangulation);
+        let move_type = state.ergodics.select_random_move();
+        let _acceptance_rng_marker: f64 = state.acceptance_rng.random();
+
+        state.move_stats.record_attempt(move_type);
+        state
+            .triangulation
+            .record_event(SimulationEvent::MoveAttempted {
+                move_type: format!("{move_type:?}"),
+                step: 1,
+            });
+        state.steps.push(MonteCarloStep {
+            step: 1,
+            move_type,
+            accepted: false,
+            action_before: state.current_action,
+            action_after: None,
+            delta_action: proposed_delta_action(
+                &action_config,
+                simplex_counts(&state.triangulation),
+                move_type,
+            ),
+        });
+        state.current_step = 1;
+        state.measurements.push(measurement_for(
+            1,
+            state.current_action,
+            &state.triangulation,
+        ));
+        state
+            .triangulation
+            .record_event(SimulationEvent::MeasurementTaken {
+                step: 1,
+                action: state.current_action,
+            });
+
+        state
+            .into_checkpoint(config, action_config)
+            .expect("synthetic rejected checkpoint should validate")
     }
 
     fn empty_run_state(triangulation: CdtTriangulation2D) -> MetropolisRunState {
@@ -1906,12 +2116,12 @@ mod tests {
             .run(triangulation)
             .expect("simulation should run with real move loop");
 
-        assert_eq!(results.steps.len(), 10);
+        assert_eq!(results.steps().len(), 10);
         assert_relative_eq!(
-            results.move_stats.total_acceptance_rate(),
+            results.move_stats().total_acceptance_rate(),
             results.acceptance_rate()
         );
-        assert!(results.measurements.iter().all(|measurement| {
+        assert!(results.measurements().iter().all(|measurement| {
             measurement.action.is_finite()
                 && measurement.vertices > 0
                 && measurement.edges > 0
@@ -1933,31 +2143,23 @@ mod tests {
             .expect("checkpointed run should complete");
 
         assert_eq!(checkpoint.current_step(), 3);
-        assert_eq!(results.steps.len(), checkpoint.steps().len());
-        assert_eq!(&results.config, checkpoint.config());
+        assert_eq!(results.steps().len(), checkpoint.steps().len());
+        assert_eq!(results.config(), checkpoint.config());
         let checkpoint_results = checkpoint.into_results();
         assert_eq!(
-            results.triangulation.vertex_count(),
-            checkpoint_results.triangulation.vertex_count()
+            results.triangulation().vertex_count(),
+            checkpoint_results.triangulation().vertex_count()
         );
         checkpoint_results
-            .triangulation
+            .triangulation()
             .validate()
             .expect("checkpoint triangulation should satisfy evolved invariants");
     }
 
     #[test]
     fn serialized_checkpoint_resumes_from_stored_rng_state() {
-        let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let action_config = ActionConfig::default();
-        let prefix = MetropolisAlgorithm::new(
-            MetropolisConfig::new(1.0, 4, 0, 1).with_seed(13),
-            action_config.clone(),
-        );
-        let checkpoint = prefix
-            .run_to_checkpoint(triangulation)
-            .expect("prefix run should checkpoint");
+        let checkpoint = serializable_rejected_checkpoint(action_config.clone());
         let checkpoint_json = to_string(&checkpoint).expect("checkpoint should serialize");
         let checkpoint: CdtMcmcCheckpoint =
             from_str(&checkpoint_json).expect("checkpoint should deserialize");
@@ -1978,52 +2180,52 @@ mod tests {
             .resume_from_checkpoint(alternate_checkpoint)
             .expect("resume should ignore fresh seed and use checkpoint RNG state");
 
-        assert_eq!(first_resumed.config.steps, 10);
-        assert_eq!(first_resumed.steps.len(), 10);
-        assert_eq!(first_resumed.steps[4].step, 5);
+        assert_eq!(first_resumed.config().steps, 7);
+        assert_eq!(first_resumed.steps().len(), 7);
+        assert_eq!(first_resumed.steps()[1].step, 2);
         first_resumed
-            .triangulation
+            .triangulation()
             .validate_topology()
             .expect("resumed triangulation should preserve topology");
         first_resumed
-            .triangulation
+            .triangulation()
             .validate_foliation()
             .expect("resumed triangulation should preserve foliation");
         first_resumed
-            .triangulation
+            .triangulation()
             .validate_causality()
             .expect("resumed triangulation should preserve causality");
         first_resumed
-            .triangulation
-            .validate_cell_classification()
-            .expect("resumed triangulation should preserve cell classification");
+            .triangulation()
+            .validate_simplex_classification()
+            .expect("resumed triangulation should preserve simplex classification");
         assert_eq!(
-            to_value(&first_resumed.steps).expect("steps should serialize"),
-            to_value(&second_resumed.steps).expect("steps should serialize")
+            to_value(first_resumed.steps()).expect("steps should serialize"),
+            to_value(second_resumed.steps()).expect("steps should serialize")
         );
         assert_eq!(
-            to_value(&first_resumed.measurements).expect("measurements should serialize"),
-            to_value(&second_resumed.measurements).expect("measurements should serialize")
+            to_value(first_resumed.measurements()).expect("measurements should serialize"),
+            to_value(second_resumed.measurements()).expect("measurements should serialize")
         );
         assert_eq!(
-            to_value(&first_resumed.move_stats).expect("stats should serialize"),
-            to_value(&second_resumed.move_stats).expect("stats should serialize")
+            to_value(first_resumed.move_stats()).expect("stats should serialize"),
+            to_value(second_resumed.move_stats()).expect("stats should serialize")
         );
         assert_eq!(
-            first_resumed.triangulation.vertex_count(),
-            second_resumed.triangulation.vertex_count()
+            first_resumed.triangulation().vertex_count(),
+            second_resumed.triangulation().vertex_count()
         );
         assert_eq!(
-            first_resumed.triangulation.edge_count(),
-            second_resumed.triangulation.edge_count()
+            first_resumed.triangulation().edge_count(),
+            second_resumed.triangulation().edge_count()
         );
         assert_eq!(
-            first_resumed.triangulation.face_count(),
-            second_resumed.triangulation.face_count()
+            first_resumed.triangulation().face_count(),
+            second_resumed.triangulation().face_count()
         );
         assert_eq!(
-            first_resumed.triangulation.slice_sizes(),
-            second_resumed.triangulation.slice_sizes()
+            first_resumed.triangulation().slice_sizes(),
+            second_resumed.triangulation().slice_sizes()
         );
     }
 
@@ -2234,8 +2436,8 @@ mod tests {
         let first = run(123);
         let second = run(123);
 
-        assert_eq!(first.steps.len(), second.steps.len());
-        for (first, second) in first.steps.iter().zip(second.steps.iter()) {
+        assert_eq!(first.steps().len(), second.steps().len());
+        for (first, second) in first.steps().iter().zip(second.steps().iter()) {
             assert_eq!(first.move_type, second.move_type);
             assert_eq!(first.accepted, second.accepted);
             assert_relative_eq!(first.action_before, second.action_before);
@@ -2448,10 +2650,10 @@ mod tests {
         let tri = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
 
         let results = algorithm.run(tri).expect("valid schedule should run");
-        assert_eq!(results.steps.len(), 20);
+        assert_eq!(results.steps().len(), 20);
         assert!(
             results
-                .measurements
+                .measurements()
                 .iter()
                 .any(|measurement| measurement.step >= 15)
         );
@@ -2656,7 +2858,7 @@ mod tests {
     #[test]
     fn cdt_proposal_error_preserves_typed_sources() {
         let source = CdtError::BackendMutationFailed {
-            operation: "set_vertex_data_by_key".to_string(),
+            operation: BackendMutationOperation::SetVertexDataByKey,
             target: "vertex VertexKey(7)".to_string(),
             detail: "missing vertex".to_string(),
         };

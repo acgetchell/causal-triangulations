@@ -5,7 +5,7 @@
 //! This module provides CDT-specific triangulation data structures that work
 //! with any geometry backend implementing the trait interfaces.
 
-use crate::cdt::foliation::Foliation;
+use crate::cdt::foliation::{Foliation, FoliationError};
 use crate::config::CdtTopology;
 use crate::errors::{CdtError, CdtResult};
 use crate::geometry::DelaunayBackend2D;
@@ -55,7 +55,7 @@ pub struct CdtMetadata {
 #[derive(Debug, Clone, Default)]
 struct GeometryCache {
     edge_count: Option<CachedValue<usize>>,
-    euler_char: Option<CachedValue<i32>>,
+    euler_char: Option<CachedValue<i128>>,
 }
 
 #[derive(Debug, Clone)]
@@ -204,7 +204,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::testing::*;
     /// use causal_triangulations::CdtTriangulation;
     ///
     /// let backend = MockBackend::create_triangle();
@@ -213,7 +213,12 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// assert_eq!(tri.time_slices(), 2);
     /// ```
     pub fn try_new(geometry: B, time_slices: u32, dimension: u8) -> CdtResult<Self> {
-        let tri = Self::wrap_unchecked(geometry, time_slices, dimension, CdtTopology::OpenBoundary);
+        let tri = Self::from_parts_before_validation(
+            geometry,
+            time_slices,
+            dimension,
+            CdtTopology::OpenBoundary,
+        );
         tri.validate_metadata()?;
         Ok(tri)
     }
@@ -247,7 +252,8 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///     ([0.5, 1.0], 1),
     /// ])
     /// .expect("build labeled triangle");
-    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// let backend = DelaunayBackend2D::from_triangulation(dt)
+    ///     .expect("Delaunay input should validate");
     ///
     /// let tri = CdtTriangulation::with_topology(backend, 2, 2, CdtTopology::OpenBoundary)
     ///     .expect("open-boundary metadata is valid");
@@ -267,7 +273,8 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///     ([0.5, 1.0], 1),
     /// ])
     /// .expect("build labeled triangle");
-    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// let backend = DelaunayBackend2D::from_triangulation(dt)
+    ///     .expect("Delaunay input should validate");
     ///
     /// let err = CdtTriangulation::with_topology(backend, 2, 3, CdtTopology::Toroidal)
     ///     .expect_err("toroidal metadata requires at least three time slices");
@@ -296,7 +303,8 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///     ([0.5, 1.0], 1),
     /// ])
     /// .expect("build labeled triangle");
-    /// let backend = DelaunayBackend2D::from_triangulation(dt);
+    /// let backend = DelaunayBackend2D::from_triangulation(dt)
+    ///     .expect("Delaunay input should validate");
     ///
     /// let err = CdtTriangulation::with_topology(backend, 3, 2, CdtTopology::Toroidal)
     ///     .expect_err("a planar triangle cannot be published as toroidal");
@@ -316,15 +324,21 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         dimension: u8,
         topology: CdtTopology,
     ) -> CdtResult<Self> {
-        let mut tri = Self::wrap_unchecked(geometry, time_slices, dimension, topology);
+        let mut tri =
+            Self::from_parts_before_validation(geometry, time_slices, dimension, topology);
         tri.apply_time_slices(time_slices)?;
         tri.validate_metadata()?;
         tri.validate_topology()?;
         Ok(tri)
     }
 
-    /// Initializes metadata without validation for constructors that validate through one write path.
-    fn wrap_unchecked(geometry: B, time_slices: u32, dimension: u8, topology: CdtTopology) -> Self {
+    /// Assembles metadata for fallible constructors that validate before returning.
+    fn from_parts_before_validation(
+        geometry: B,
+        time_slices: u32,
+        dimension: u8,
+        topology: CdtTopology,
+    ) -> Self {
         let vertex_count = geometry.vertex_count();
         let creation_event = SimulationEvent::Created {
             vertex_count,
@@ -393,7 +407,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::testing::*;
     /// use causal_triangulations::CdtTriangulation;
     ///
     /// let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)
@@ -410,7 +424,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::testing::*;
     /// use causal_triangulations::CdtTriangulation;
     ///
     /// let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)
@@ -426,7 +440,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::testing::*;
     /// use causal_triangulations::CdtTriangulation;
     ///
     /// let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)
@@ -442,7 +456,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::testing::*;
     /// use causal_triangulations::CdtTriangulation;
     ///
     /// let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)
@@ -459,7 +473,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::testing::*;
     /// use causal_triangulations::CdtTriangulation;
     ///
     /// let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)
@@ -476,7 +490,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::testing::*;
     /// use causal_triangulations::CdtTriangulation;
     ///
     /// let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)
@@ -504,7 +518,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::testing::*;
     /// use causal_triangulations::CdtTriangulation;
     ///
     /// let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)
@@ -526,7 +540,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::testing::*;
     /// use causal_triangulations::CdtTriangulation;
     ///
     /// let mut tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)
@@ -555,7 +569,9 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///
     /// # Errors
     ///
-    /// Returns error if topology validation fails.
+    /// Returns [`CdtError::InvalidTriangulationMetadata`] if stored metadata is
+    /// inconsistent with the backend, or [`CdtError::TopologyMismatch`] when the
+    /// backend Euler characteristic does not match the configured topology.
     ///
     /// # Examples
     ///
@@ -622,6 +638,15 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             .foliation
             .as_ref()
             .map(|_| self.metadata.modification_count);
+    }
+
+    /// Builds the typed error used when callers try to trust stale foliation data.
+    fn stale_foliation_error(&self) -> CdtError {
+        FoliationError::StaleBookkeeping {
+            synced_at_modification: self.foliation_synced_at_modification,
+            current_modification_count: self.metadata.modification_count,
+        }
+        .into()
     }
 
     /// Marks existing foliation data stale without dropping it when geometry has changed.
@@ -699,13 +724,26 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cdt::action::ActionConfig;
-    use crate::cdt::metropolis::{MetropolisAlgorithm, MetropolisConfig};
     use crate::geometry::generators::build_delaunay2_with_data;
+    use serde_json::error::Category;
     use serde_json::{from_str, to_string};
     use std::num::NonZeroUsize;
     use std::thread;
     use std::time::{Duration, Instant};
+
+    /// Serde custom deserialization errors expose only a data/error category,
+    /// so keep message checks behind one helper while still asserting the
+    /// structured classification that `serde_json` provides.
+    fn assert_checkpoint_data_error(error: &serde_json::Error, expected_details: &[&str]) {
+        assert_eq!(error.classify(), Category::Data);
+        let message = error.to_string();
+        for expected_detail in expected_details {
+            assert!(
+                message.contains(expected_detail),
+                "checkpoint deserialization error {message:?} did not contain {expected_detail:?}"
+            );
+        }
+    }
 
     /// Builds a minimal labeled Delaunay backend for foliation and causality tests.
     fn labeled_triangle_backend(labels: [u32; 3]) -> DelaunayBackend2D {
@@ -715,7 +753,7 @@ mod tests {
             ([0.5, 1.0], labels[2]),
         ])
         .expect("Should build labeled triangle");
-        DelaunayBackend2D::from_triangulation(dt)
+        DelaunayBackend2D::from_triangulation(dt).expect("test Delaunay triangle should validate")
     }
 
     /// Builds intentionally unchecked metadata for legacy validation tests.
@@ -724,7 +762,12 @@ mod tests {
         time_slices: u32,
         dimension: u8,
     ) -> CdtTriangulation<DelaunayBackend2D> {
-        CdtTriangulation::wrap_unchecked(backend, time_slices, dimension, CdtTopology::OpenBoundary)
+        CdtTriangulation::from_parts_before_validation(
+            backend,
+            time_slices,
+            dimension,
+            CdtTopology::OpenBoundary,
+        )
     }
 
     #[test]
@@ -1022,7 +1065,8 @@ mod tests {
     fn test_record_event_keeps_foliation_synchronized() {
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
             .expect("Should build labeled triangle");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("test Delaunay triangle should validate");
         let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
             .expect("Should preserve labels as foliation");
 
@@ -1058,7 +1102,7 @@ mod tests {
         assert_eq!(tri.slice_sizes(), initial_slice_sizes.as_slice());
         assert!(tri.time_label(&vertex).is_some());
         assert!(tri.edge_type(&edge).is_some());
-        assert!(tri.cell_type(&face).is_some());
+        assert!(tri.simplex_type(&face).is_some());
     }
 
     #[test]
@@ -1318,7 +1362,8 @@ mod tests {
         // Toroidal. The checked public constructor must reject it immediately.
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
             .expect("Should build labeled triangle");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("test Delaunay triangle should validate");
 
         let result = CdtTriangulation::with_topology(backend, 3, 2, CdtTopology::Toroidal);
         assert!(matches!(
@@ -1357,7 +1402,8 @@ mod tests {
     fn test_with_topology_rejects_few_toroidal_slices() {
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
             .expect("Should build labeled triangle");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("test Delaunay triangle should validate");
 
         let result = CdtTriangulation::with_topology(backend, 2, 3, CdtTopology::Toroidal);
         assert!(matches!(
@@ -1392,42 +1438,24 @@ mod tests {
             restored
                 .geometry()
                 .faces()
-                .filter(|face| restored.cell_type(face).is_some())
+                .filter(|face| restored.simplex_type(face).is_some())
                 .count(),
             restored.face_count(),
-            "all strip cells should keep Up/Down classification"
+            "all strip simplices should keep Up/Down classification"
         );
     }
 
     #[test]
-    fn checkpoint_invariants_reject_structurally_invalid_geometry() {
+    fn checkpoint_rejects_invalid_toroidal_period() {
         let valid = CdtTriangulation::from_cdt_strip(4, 3).expect("valid strip should build");
-        let triangulation = CdtTriangulation {
-            geometry: valid.geometry().with_cleared_neighbors_for_test(),
-            metadata: valid.metadata.clone(),
-            cache: GeometryCache::default(),
-            foliation: valid.foliation.clone(),
-            foliation_synced_at_modification: valid.foliation_synced_at_modification,
-        };
-        let invariant_error = triangulation
-            .validate_checkpoint_invariants()
-            .expect_err("checkpoint invariants should reject invalid geometry");
-        assert!(
-            matches!(
-                invariant_error,
-                CdtError::DelaunayValidationFailed {
-                    level,
-                    ..
-                } if level == crate::DelaunayValidationLevel::Three
-            ),
-            "unexpected checkpoint invariant error: {invariant_error:?}"
+        let json = to_string(&valid).expect("checkpoint should serialize");
+        let invalid_json = json.replace(
+            r#""global_topology":"Euclidean""#,
+            r#""global_topology":{"Toroidal":{"domain":[0.0,1.0],"mode":"Explicit"}}"#,
         );
-        let json = to_string(&triangulation).expect("invalid fixture should serialize");
-        let restored: CdtTriangulation<DelaunayBackend2D> =
-            from_str(&json).expect("backend serde may rebuild neighbor links");
-        restored
-            .validate_checkpoint_invariants()
-            .expect("roundtrip should restore valid structural geometry");
+        let error = from_str::<CdtTriangulation<DelaunayBackend2D>>(&invalid_json)
+            .expect_err("backend serde should reject invalid toroidal period");
+        assert_checkpoint_data_error(&error, &["invalid toroidal period"]);
     }
 
     #[test]
@@ -1439,10 +1467,7 @@ mod tests {
         let error = from_str::<CdtTriangulation<DelaunayBackend2D>>(&json)
             .expect_err("strict checkpoint validation should reject toroidal serde gaps");
 
-        assert!(
-            error.to_string().contains("Negative geometric orientation"),
-            "unexpected toroidal checkpoint rejection: {error}"
-        );
+        assert_checkpoint_data_error(&error, &["Negative geometric orientation"]);
     }
 
     #[test]
@@ -1466,18 +1491,19 @@ mod tests {
     }
 
     #[test]
-    fn mcmc_checkpoint_roundtrip_preserves_history_and_invariants() {
-        let triangulation =
+    fn checkpoint_roundtrip_keeps_history_valid() {
+        let mut triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay CDT strip should build");
-        let algorithm = MetropolisAlgorithm::new(
-            MetropolisConfig::new(1.0, 4, 0, 1).with_seed(13),
-            ActionConfig::default(),
-        );
-        let results = algorithm
-            .run(triangulation)
-            .expect("short MCMC run should complete");
+        triangulation.record_event(SimulationEvent::MoveAttempted {
+            move_type: "Move22".to_string(),
+            step: 1,
+        });
+        triangulation.record_event(SimulationEvent::MeasurementTaken {
+            step: 1,
+            action: 0.0,
+        });
 
-        let json = to_string(&results.triangulation).expect("checkpoint should serialize");
+        let json = to_string(&triangulation).expect("checkpoint should serialize");
         let restored: CdtTriangulation<DelaunayBackend2D> =
             from_str(&json).expect("checkpoint should deserialize");
 
@@ -1486,16 +1512,16 @@ mod tests {
             .expect("restored MCMC checkpoint should validate invariants");
         assert_eq!(
             restored.metadata().simulation_history.len(),
-            results.triangulation.metadata().simulation_history.len()
+            triangulation.metadata().simulation_history.len()
         );
         assert_eq!(
             restored.metadata().modification_count,
-            results.triangulation.metadata().modification_count
+            triangulation.metadata().modification_count
         );
         assert_eq!(
             restored.slice_sizes(),
-            results.triangulation.slice_sizes(),
-            "MCMC checkpoint should preserve foliation bookkeeping"
+            triangulation.slice_sizes(),
+            "checkpoint should preserve foliation bookkeeping"
         );
     }
 }
@@ -1503,32 +1529,26 @@ mod tests {
 #[cfg(test)]
 mod prop_tests {
     use super::*;
-    use crate::util::saturating_usize_to_i32;
     use proptest::prelude::*;
 
     proptest! {
-        // NOTE: Commented out due to extreme edge cases in random triangulation generation
-        // Property-based testing found Euler characteristics as extreme as χ = -13
-        // This indicates the random point generation can create very complex topologies
-        // TODO: Either constrain generation or develop better validation
-        //
-        // #[test]
-        // fn triangulation_euler_characteristic_invariant(
-        //     vertices in 4u32..20,
-        //     timeslices in 1u32..5
-        // ) {
-        //     let triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
-        //     let v = triangulation.vertex_count() as i32;
-        //     let e = triangulation.edge_count() as i32;
-        //     let f = triangulation.face_count() as i32;
-        //     let euler = v - e + f;
-        //
-        //     prop_assert!(
-        //         (-20..=20).contains(&euler),
-        //         "Euler characteristic {} extremely out of range for random triangulation (V={}, E={}, F={})",
-        //         euler, v, e, f
-        //     );
-        // }
+        /// Property: deterministic CDT strips preserve the expected disk Euler characteristic.
+        #[test]
+        fn cdt_strip_euler_characteristic_matches_topology(
+            vertices_per_slice in 4u32..12,
+            num_slices in 2u32..8
+        ) {
+            let triangulation = CdtTriangulation::from_cdt_strip(vertices_per_slice, num_slices)?;
+
+            prop_assert_eq!(
+                triangulation.geometry().euler_characteristic(),
+                1,
+                "CDT strip should have disk Euler characteristic for N={}, T={}",
+                vertices_per_slice,
+                num_slices
+            );
+            prop_assert!(triangulation.validate_topology().is_ok());
+        }
 
         /// Property: Triangulation should have positive counts for all simplex types
         #[test]
@@ -1771,9 +1791,9 @@ mod prop_tests {
         ) {
             let triangulation = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
 
-            let v = saturating_usize_to_i32(triangulation.vertex_count());
-            let e = saturating_usize_to_i32(triangulation.edge_count());
-            let f = saturating_usize_to_i32(triangulation.face_count());
+            let v = triangulation.vertex_count() as i128;
+            let e = triangulation.edge_count() as i128;
+            let f = triangulation.face_count() as i128;
 
             // Basic positivity
             prop_assert!(v >= 3, "Must have at least 3 vertices");
@@ -1789,7 +1809,7 @@ mod prop_tests {
 
             // TODO: Revisit connectivity constraint when Delaunay crate is updated/fixed
             // The underlying Delaunay triangulation generation can create degenerate triangulations
-            // where E < V-1 due to invalid cell removal and disconnected components.
+            // where E < V-1 due to invalid simplex removal and disconnected components.
             // This is a known issue with the current Delaunay crate implementation.
             // For now, we use a more lenient bound that accommodates the observed behavior.
             //

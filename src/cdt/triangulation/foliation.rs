@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
-//! Foliation assignment, queries, and CDT cell classification.
+//! Foliation assignment, queries, and CDT simplex classification.
 
 use super::CdtTriangulation;
-use crate::cdt::foliation::{CellType, EdgeType, Foliation, FoliationError, classify_cell};
+use crate::cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType, classify_simplex};
 use crate::config::CdtTopology;
-use crate::errors::{CdtError, CdtResult, CdtValidationCheck};
+use crate::errors::{BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck};
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
@@ -25,7 +25,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// # Errors
     ///
-    /// Returns error if foliation structure is invalid.
+    /// Returns [`FoliationError::StaleBookkeeping`] if stored foliation
+    /// bookkeeping belongs to an older geometry revision. Returns the relevant
+    /// [`FoliationError`] variant if live vertex labels are missing, out of
+    /// range, inconsistent with stored slice sizes, or violate toroidal
+    /// spacelike-ring invariants.
     ///
     /// # Examples
     ///
@@ -43,6 +47,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let Some(foliation) = &self.foliation else {
             return Ok(());
         };
+        if !self.has_current_foliation() {
+            return Err(self.stale_foliation_error());
+        }
 
         let vertex_count = self.geometry.vertex_count();
         if foliation.labeled_vertex_count() != vertex_count {
@@ -268,7 +275,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Returns error if `num_slices` is zero, if vertex coordinates cannot be
     /// read, if y-bucket assignment would leave any time slice empty, if the
     /// requested slice count violates the triangulation topology, or if writing
-    /// vertex labels or clearing stale cell labels in the backend fails.
+    /// vertex labels or clearing stale simplex labels in the backend fails.
     ///
     /// # Examples
     ///
@@ -358,10 +365,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let foliation =
             Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
 
-        let face_keys: Vec<_> = self.geometry.faces().map(|f| f.cell_key()).collect();
-        let previous_cell_data: Vec<_> = face_keys
+        let face_keys: Vec<_> = self.geometry.faces().map(|f| f.simplex_key()).collect();
+        let previous_simplex_data: Vec<_> = face_keys
             .iter()
-            .map(|&key| (key, self.geometry.cell_data_by_key(key)))
+            .map(|&key| (key, self.geometry.simplex_data_by_key(key)))
             .collect();
         let previous_vertex_data: Vec<_> = assignments
             .iter()
@@ -371,8 +378,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let rollback_payloads = |geometry: &mut DelaunayBackend2D| -> Vec<String> {
             let mut rollback_errors = Vec::new();
 
-            for &(key, data) in &previous_cell_data {
-                if let Err(err) = geometry.set_cell_data_by_key(key, data) {
+            for &(key, data) in &previous_simplex_data {
+                if let Err(err) = geometry.set_simplex_data_by_key(key, data) {
                     rollback_errors.push(format!("face {key:?}: {err}"));
                 }
             }
@@ -387,8 +394,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         };
 
         for &key in &face_keys {
-            if let Err(err) = self.geometry.set_cell_data_by_key(key, None) {
-                let operation = "set_cell_data_by_key".to_string();
+            if let Err(err) = self.geometry.set_simplex_data_by_key(key, None) {
+                let operation = BackendMutationOperation::SetSimplexDataByKey;
                 let target = format!("face {key:?}");
                 let detail = err.to_string();
                 let rollback_errors = rollback_payloads(&mut self.geometry);
@@ -411,7 +418,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         for (vertex_key, t) in assignments {
             if let Err(err) = self.geometry.set_vertex_data_by_key(vertex_key, Some(t)) {
-                let operation = "set_vertex_data_by_key".to_string();
+                let operation = BackendMutationOperation::SetVertexDataByKey;
                 let target = format!("vertex {vertex_key:?}");
                 let detail = format!("failed while assigning time label {t}: {err}");
                 let rollback_errors = rollback_payloads(&mut self.geometry);
@@ -482,8 +489,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
     }
 
-    /// Returns the time slice label for a vertex, or `None` if no foliation
-    /// is present or the vertex is unlabeled.
+    /// Returns the time slice label for a vertex, or `None` if no current
+    /// foliation is present, the stored foliation is stale, or the vertex is
+    /// unlabeled.
     ///
     /// # Examples
     ///
@@ -498,11 +506,15 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn time_label(&self, vertex: &DelaunayVertexHandle) -> Option<u32> {
-        self.foliation.as_ref()?;
+        self.foliation()?;
         self.geometry.vertex_data_by_key(vertex.vertex_key())
     }
 
     /// Returns all vertex handles that belong to time slice `t`.
+    ///
+    /// Returns an empty vector when no current foliation exists. That includes
+    /// the stale-bookkeeping case after geometry mutation but before foliation
+    /// resynchronization.
     ///
     /// # Examples
     ///
@@ -518,7 +530,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn vertices_at_time(&self, t: u32) -> Vec<DelaunayVertexHandle> {
-        if self.foliation.is_none() {
+        if !self.has_current_foliation() {
             return vec![];
         }
         self.geometry
@@ -602,8 +614,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         raw
     }
 
-    /// Topology-aware variant of [`crate::cdt::foliation::classify_cell`].
-    fn classify_cell_with_topology(&self, t0: u32, t1: u32, t2: u32) -> Option<CellType> {
+    /// Topology-aware variant of [`crate::cdt::foliation::classify_simplex`].
+    fn classify_simplex_with_topology(&self, t0: u32, t1: u32, t2: u32) -> Option<SimplexType> {
         let mut dists = [
             self.time_step_distance(t0, t1),
             self.time_step_distance(t1, t2),
@@ -641,9 +653,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
             base_slice.checked_sub(1)?
         };
         if apex_slice == up_apex {
-            Some(CellType::Up)
+            Some(SimplexType::Up)
         } else if apex_slice == down_apex {
-            Some(CellType::Down)
+            Some(SimplexType::Down)
         } else {
             None
         }
@@ -651,7 +663,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
     /// Returns the lower time-slab index assigned to a classifiable CDT face.
     fn face_time_slice(&self, face: &DelaunayFaceHandle) -> Option<u32> {
-        self.cell_type(face)?;
+        self.simplex_type(face)?;
 
         let vertices = self.geometry.face_vertices(face).ok()?;
         let [v0, v1, v2] = vertices.as_slice() else {
@@ -711,7 +723,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn edge_type(&self, edge: &DelaunayEdgeHandle) -> Option<EdgeType> {
-        self.foliation.as_ref()?;
+        self.foliation()?;
 
         let (v0, v1) = self.geometry.edge_endpoints(edge)?;
         let t0 = self.geometry.vertex_data_by_key(v0.vertex_key())?;
@@ -733,13 +745,13 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 2)?;
-    ///     assert!(tri.geometry().faces().all(|face| tri.cell_type(&face).is_some()));
+    ///     assert!(tri.geometry().faces().all(|face| tri.simplex_type(&face).is_some()));
     ///     Ok(())
     /// }
     /// ```
     #[must_use]
-    pub fn cell_type(&self, face: &DelaunayFaceHandle) -> Option<CellType> {
-        self.foliation.as_ref()?;
+    pub fn simplex_type(&self, face: &DelaunayFaceHandle) -> Option<SimplexType> {
+        self.foliation()?;
         let verts = self.geometry.face_vertices(face).ok()?;
         if verts.len() != 3 {
             return None;
@@ -748,12 +760,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let t1 = self.geometry.vertex_data_by_key(verts[1].vertex_key())?;
         let t2 = self.geometry.vertex_data_by_key(verts[2].vertex_key())?;
         match self.metadata.topology {
-            CdtTopology::Toroidal => self.classify_cell_with_topology(t0, t1, t2),
-            CdtTopology::OpenBoundary => classify_cell(Some(t0), Some(t1), Some(t2)),
+            CdtTopology::Toroidal => self.classify_simplex_with_topology(t0, t1, t2),
+            CdtTopology::OpenBoundary => classify_simplex(Some(t0), Some(t1), Some(t2)),
         }
     }
 
-    /// Reads the stored cell type from cell data, if previously classified.
+    /// Reads the stored simplex type from simplex data, if previously classified.
     ///
     /// # Examples
     ///
@@ -762,15 +774,15 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 2)?;
-    ///     assert!(tri.geometry().faces().all(|face| tri.cell_type_from_data(&face).is_some()));
+    ///     assert!(tri.geometry().faces().all(|face| tri.simplex_type_from_data(&face).is_some()));
     ///     Ok(())
     /// }
     /// ```
     #[must_use]
-    pub fn cell_type_from_data(&self, face: &DelaunayFaceHandle) -> Option<CellType> {
+    pub fn simplex_type_from_data(&self, face: &DelaunayFaceHandle) -> Option<SimplexType> {
         self.foliation()?;
-        let raw = self.geometry.cell_data_by_key(face.cell_key())?;
-        CellType::from_i32(raw)
+        let raw = self.geometry.simplex_data_by_key(face.simplex_key())?;
+        SimplexType::from_i32(raw)
     }
 
     /// Returns the edge classification for a triangular face.
@@ -793,7 +805,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     #[must_use]
     pub fn face_edge_types(&self, face: &DelaunayFaceHandle) -> Option<[EdgeType; 3]> {
-        self.foliation.as_ref()?;
+        self.foliation()?;
 
         let verts = self.geometry.face_vertices(face).ok()?;
         if verts.len() != 3 {
@@ -821,12 +833,14 @@ impl CdtTriangulation<DelaunayBackend2D> {
         ])
     }
 
-    /// Validates that every finite face has a strict CDT cell classification.
+    /// Validates that every finite face has a strict CDT simplex classification.
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::ValidationFailed`] if any face in a foliated
-    /// triangulation cannot be classified as a strict Up or Down CDT cell.
+    /// Returns [`FoliationError::StaleBookkeeping`] if stored foliation
+    /// bookkeeping belongs to an older geometry revision. Returns
+    /// [`CdtError::ValidationFailed`] if any face in a current foliated
+    /// triangulation cannot be classified as a strict Up or Down CDT simplex.
     ///
     /// # Examples
     ///
@@ -835,22 +849,25 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 2)?;
-    ///     tri.validate_cell_classification()?;
+    ///     tri.validate_simplex_classification()?;
     ///     Ok(())
     /// }
     /// ```
-    pub fn validate_cell_classification(&self) -> CdtResult<()> {
+    pub fn validate_simplex_classification(&self) -> CdtResult<()> {
         if self.foliation.is_none() {
             return Ok(());
         }
+        if !self.has_current_foliation() {
+            return Err(self.stale_foliation_error());
+        }
 
         for face in self.geometry.faces() {
-            if self.cell_type(&face).is_none() {
+            if self.simplex_type(&face).is_none() {
                 return Err(CdtError::ValidationFailed {
-                    check: CdtValidationCheck::CellClassification,
+                    check: CdtValidationCheck::SimplexClassification,
                     detail: format!(
-                        "face {:?} is not a strict CDT cell (expected Up or Down)",
-                        face.cell_key()
+                        "face {:?} is not a strict CDT simplex (expected Up or Down)",
+                        face.simplex_key()
                     ),
                 });
             }
@@ -859,13 +876,15 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(())
     }
 
-    /// Classifies every triangle and stores the result as cell data.
+    /// Classifies every triangle and stores the result as simplex data.
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::ValidationFailed`] if a foliated face is not an Up
-    /// or Down CDT cell. Returns [`CdtError::BackendMutationFailed`] if writing
-    /// cell payloads fails, or [`CdtError::BackendRollbackFailed`] if restoring
+    /// Returns [`FoliationError::StaleBookkeeping`] if stored foliation
+    /// bookkeeping belongs to an older geometry revision. Returns
+    /// [`CdtError::ValidationFailed`] if a current foliated face is not an Up or
+    /// Down CDT simplex. Returns [`CdtError::BackendMutationFailed`] if writing simplex
+    /// payloads fails, or [`CdtError::BackendRollbackFailed`] if restoring
     /// previous payloads also fails.
     ///
     /// # Examples
@@ -875,43 +894,46 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let mut tri = CdtTriangulation::from_cdt_strip(4, 2)?;
-    ///     assert_eq!(tri.classify_all_cells()?, Some(tri.face_count()));
+    ///     assert_eq!(tri.classify_all_simplices()?, Some(tri.face_count()));
     ///     Ok(())
     /// }
     /// ```
-    pub fn classify_all_cells(&mut self) -> CdtResult<Option<usize>> {
+    pub fn classify_all_simplices(&mut self) -> CdtResult<Option<usize>> {
         if self.foliation.is_none() {
             return Ok(None);
+        }
+        if !self.has_current_foliation() {
+            return Err(self.stale_foliation_error());
         }
 
         let faces: Vec<_> = self.geometry.faces().collect();
         let mut classifications = Vec::with_capacity(faces.len());
         for face in &faces {
-            let Some(ct) = self.cell_type(face) else {
+            let Some(ct) = self.simplex_type(face) else {
                 return Err(CdtError::ValidationFailed {
-                    check: CdtValidationCheck::CellClassification,
+                    check: CdtValidationCheck::SimplexClassification,
                     detail: format!(
-                        "face {:?} is not a strict CDT cell (expected Up or Down)",
-                        face.cell_key()
+                        "face {:?} is not a strict CDT simplex (expected Up or Down)",
+                        face.simplex_key()
                     ),
                 });
             };
-            classifications.push((face.cell_key(), ct));
+            classifications.push((face.simplex_key(), ct));
         }
 
         let count = classifications.len();
-        let previous_cell_data: Vec<_> = faces
+        let previous_simplex_data: Vec<_> = faces
             .iter()
             .map(|face| {
-                let key = face.cell_key();
-                (key, self.geometry.cell_data_by_key(key))
+                let key = face.simplex_key();
+                (key, self.geometry.simplex_data_by_key(key))
             })
             .collect();
-        let rollback_cell_payloads = |geometry: &mut DelaunayBackend2D| -> Vec<String> {
+        let rollback_simplex_payloads = |geometry: &mut DelaunayBackend2D| -> Vec<String> {
             let mut rollback_errors = Vec::new();
 
-            for &(key, data) in &previous_cell_data {
-                if let Err(err) = geometry.set_cell_data_by_key(key, data) {
+            for &(key, data) in &previous_simplex_data {
+                if let Err(err) = geometry.set_simplex_data_by_key(key, data) {
                     rollback_errors.push(format!("face {key:?}: {err}"));
                 }
             }
@@ -920,13 +942,14 @@ impl CdtTriangulation<DelaunayBackend2D> {
         };
 
         for face in &faces {
-            let key = face.cell_key();
-            if let Err(err) = self.geometry.set_cell_data_by_key(key, None) {
-                let operation = "set_cell_data_by_key".to_string();
+            let key = face.simplex_key();
+            if let Err(err) = self.geometry.set_simplex_data_by_key(key, None) {
+                let operation = BackendMutationOperation::SetSimplexDataByKey;
                 let target = format!("face {key:?}");
-                let detail =
-                    format!("failed to clear existing cell payload before classification: {err}");
-                let rollback_errors = rollback_cell_payloads(&mut self.geometry);
+                let detail = format!(
+                    "failed to clear existing simplex payload before classification: {err}"
+                );
+                let rollback_errors = rollback_simplex_payloads(&mut self.geometry);
                 return if rollback_errors.is_empty() {
                     Err(CdtError::BackendMutationFailed {
                         operation,
@@ -944,14 +967,17 @@ impl CdtTriangulation<DelaunayBackend2D> {
             }
         }
         for (key, ct) in classifications {
-            if let Err(err) = self.geometry.set_cell_data_by_key(key, Some(ct.to_i32())) {
-                let operation = "set_cell_data_by_key".to_string();
+            if let Err(err) = self
+                .geometry
+                .set_simplex_data_by_key(key, Some(ct.to_i32()))
+            {
+                let operation = BackendMutationOperation::SetSimplexDataByKey;
                 let target = format!("face {key:?}");
                 let detail = format!(
-                    "failed to store classified cell payload {}: {err}",
+                    "failed to store classified simplex payload {}: {err}",
                     ct.to_i32()
                 );
-                let rollback_errors = rollback_cell_payloads(&mut self.geometry);
+                let rollback_errors = rollback_simplex_payloads(&mut self.geometry);
                 return if rollback_errors.is_empty() {
                     Err(CdtError::BackendMutationFailed {
                         operation,
@@ -983,11 +1009,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
             .map_err(CdtError::from)?;
 
         self.foliation = Some(foliation);
-        match self.classify_all_cells() {
-            Ok(_) => {
-                self.mark_foliation_synchronized();
-                Ok(())
-            }
+        self.mark_foliation_synchronized();
+        match self.classify_all_simplices() {
+            Ok(_) => Ok(()),
             Err(err) => {
                 self.foliation = None;
                 self.foliation_synced_at_modification = None;
@@ -1012,7 +1036,7 @@ mod tests {
             ([0.5, 1.0], labels[2]),
         ])
         .expect("Should build labeled triangle");
-        DelaunayBackend2D::from_triangulation(dt)
+        DelaunayBackend2D::from_triangulation(dt).expect("test Delaunay triangle should validate")
     }
 
     /// Builds a Delaunay strip and verifies it is a strict CDT mesh.
@@ -1038,8 +1062,8 @@ mod tests {
             .expect("Delaunay strip foliation should validate");
         tri.validate_causality_delaunay()
             .expect("Delaunay strip causality should validate");
-        tri.validate_cell_classification()
-            .expect("all Delaunay strip cells should classify");
+        tri.validate_simplex_classification()
+            .expect("all Delaunay strip simplices should classify");
         tri
     }
 
@@ -1054,7 +1078,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_foliation_detects_missing_out_of_range_and_mismatched_labels() {
+    fn validate_foliation_rejects_stale_bookkeeping_before_live_labels() {
         let backend = labeled_triangle_backend([0, 0, 1]);
         let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
             .expect("Should preserve labels as foliation");
@@ -1068,6 +1092,25 @@ mod tests {
             .expect("Expected valid vertex handle while clearing label");
         assert!(matches!(
             tri.validate_foliation(),
+            Err(CdtError::Foliation(FoliationError::StaleBookkeeping { .. }))
+        ));
+    }
+
+    #[test]
+    fn synchronizing_foliation_detects_missing_and_out_of_range_live_labels() {
+        let backend = labeled_triangle_backend([0, 0, 1]);
+        let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
+            .expect("Should preserve labels as foliation");
+        let first_vertex = tri
+            .geometry()
+            .vertices()
+            .next()
+            .expect("Triangle should contain a vertex");
+
+        tri.set_vertex_data(&first_vertex, None)
+            .expect("Expected valid vertex handle while clearing label");
+        assert!(matches!(
+            tri.synchronize_foliation_from_live_labels(),
             Err(CdtError::Foliation(FoliationError::MissingVertexLabel {
                 vertex: 0
             }))
@@ -1085,28 +1128,12 @@ mod tests {
         tri.set_vertex_data(&first_vertex, Some(7))
             .expect("Expected valid vertex handle while mutating label");
         assert!(matches!(
-            tri.validate_foliation(),
+            tri.synchronize_foliation_from_live_labels(),
             Err(CdtError::Foliation(FoliationError::OutOfRangeVertexLabel {
                 vertex: 0,
                 label: 7,
                 expected_range_end: 2,
             }))
-        ));
-
-        let backend = labeled_triangle_backend([0, 0, 1]);
-        let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
-            .expect("Should preserve labels as foliation");
-        let slice_zero_vertex = tri
-            .geometry()
-            .vertices()
-            .find(|vh| tri.geometry().vertex_data_by_key(vh.vertex_key()) == Some(0))
-            .expect("Triangle should contain a vertex in slice 0");
-
-        tri.set_vertex_data(&slice_zero_vertex, Some(1))
-            .expect("Expected valid vertex handle while mutating label");
-        assert!(matches!(
-            tri.validate_foliation(),
-            Err(CdtError::Foliation(FoliationError::LabelMismatch { .. }))
         ));
     }
 
@@ -1243,14 +1270,61 @@ mod tests {
     }
 
     #[test]
-    fn face_and_cell_classification_cover_foliated_and_unfoliated_states() {
+    fn stale_foliation_hides_public_queries_and_fails_validation() {
+        let mut tri = strict_strip(4, 2);
+        let vertex = tri
+            .geometry()
+            .vertices()
+            .next()
+            .expect("strip should contain vertices");
+        let label = tri
+            .geometry()
+            .vertex_data_by_key(vertex.vertex_key())
+            .expect("strip vertices should be labeled");
+        let edge = tri
+            .geometry()
+            .edges()
+            .next()
+            .expect("strip should contain edges");
+        let face = tri
+            .geometry()
+            .faces()
+            .next()
+            .expect("strip should contain faces");
+
+        tri.set_vertex_data(&vertex, Some(label))
+            .expect("label rewrite should stale foliation bookkeeping");
+
+        assert!(!tri.has_foliation());
+        assert!(tri.foliation().is_none());
+        assert_eq!(tri.time_label(&vertex), None);
+        assert!(tri.vertices_at_time(label).is_empty());
+        assert_eq!(tri.edge_type(&edge), None);
+        assert_eq!(tri.simplex_type(&face), None);
+        assert_eq!(tri.face_edge_types(&face), None);
+        assert_eq!(tri.simplex_type_from_data(&face), None);
+
+        for result in [
+            tri.validate_foliation(),
+            tri.validate_causality(),
+            tri.validate_simplex_classification(),
+        ] {
+            assert!(matches!(
+                result,
+                Err(CdtError::Foliation(FoliationError::StaleBookkeeping { .. }))
+            ));
+        }
+    }
+
+    #[test]
+    fn face_and_simplex_classification_cover_foliated_and_unfoliated_states() {
         let tri = CdtTriangulation::from_random_points(5, 2, 2)
             .expect("create triangulation without foliation");
         for face in tri.geometry().faces() {
             assert!(tri.face_edge_types(&face).is_none());
-            assert_eq!(tri.cell_type(&face), None);
+            assert_eq!(tri.simplex_type(&face), None);
         }
-        tri.validate_cell_classification()
+        tri.validate_simplex_classification()
             .expect("missing foliation should validate vacuously");
 
         let mut tri = strict_strip(5, 3);
@@ -1275,8 +1349,8 @@ mod tests {
         }
 
         let classified = tri
-            .classify_all_cells()
-            .expect("strict strip cells should classify")
+            .classify_all_simplices()
+            .expect("strict strip simplices should classify")
             .expect("foliation is present");
         assert_eq!(classified, tri.face_count());
     }
@@ -1291,16 +1365,16 @@ mod tests {
             .faces()
             .next()
             .expect("Triangle should contain a face");
-        assert_eq!(tri.cell_type_from_data(&face), tri.cell_type(&face));
+        assert_eq!(tri.simplex_type_from_data(&face), tri.simplex_type(&face));
         let live_ct = tri
-            .cell_type(&face)
+            .simplex_type(&face)
             .expect("Single face should be classifiable");
-        assert!(matches!(live_ct, CellType::Up | CellType::Down));
+        assert!(matches!(live_ct, SimplexType::Up | SimplexType::Down));
 
-        tri.classify_all_cells()
-            .expect("Should classify cells with foliation")
+        tri.classify_all_simplices()
+            .expect("Should classify simplices with foliation")
             .expect("Foliation is present");
-        assert_eq!(tri.cell_type_from_data(&face), Some(live_ct));
+        assert_eq!(tri.simplex_type_from_data(&face), Some(live_ct));
 
         let vertex_to_mutate = tri
             .geometry()
@@ -1310,7 +1384,7 @@ mod tests {
         tri.set_vertex_data(&vertex_to_mutate, Some(7))
             .expect("Expected valid vertex handle while mutating label");
 
-        assert_eq!(tri.cell_type_from_data(&face), None);
+        assert_eq!(tri.simplex_type_from_data(&face), None);
     }
 
     #[test]
@@ -1328,14 +1402,14 @@ mod tests {
     }
 
     #[test]
-    fn reassigning_foliation_clears_stale_cell_payloads() {
+    fn reassigning_foliation_clears_stale_simplex_payloads() {
         let mut tri =
             CdtTriangulation::from_cdt_strip(5, 3).expect("Failed to create deterministic strip");
 
         tri.assign_foliation_by_y(3)
             .expect("First foliation assignment should succeed");
-        tri.classify_all_cells()
-            .expect("classify_all_cells should succeed")
+        tri.classify_all_simplices()
+            .expect("classify_all_simplices should succeed")
             .expect("foliation is present");
 
         tri.assign_foliation_by_y(2)
@@ -1345,7 +1419,7 @@ mod tests {
         assert_eq!(tri.slice_sizes().len(), 2);
         assert_eq!(tri.slice_sizes().iter().sum::<usize>(), tri.vertex_count());
         for face in tri.geometry().faces() {
-            assert_eq!(tri.cell_type_from_data(&face), None);
+            assert_eq!(tri.simplex_type_from_data(&face), None);
         }
         assert!(tri.validate_foliation().is_ok());
     }

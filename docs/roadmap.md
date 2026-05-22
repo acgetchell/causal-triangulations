@@ -9,10 +9,10 @@ The v0.1.0 foundation work focuses on making the crate a usable, validated 1+1 C
 - [x] Trait-based geometry backend boundary around the `delaunay` crate
 - [x] Explicit open-boundary CDT strip construction
 - [x] Explicit toroidal S¹×S¹ CDT construction with χ = 0 validation
-- [x] Per-vertex foliation labels, causality checks, and strict Up/Down cell classification
+- [x] Per-vertex foliation labels, causality checks, and strict Up/Down simplex classification
 - [x] Real 2D ergodic move kernels over Delaunay backend edit operations
 - [x] Proposal-before-mutation Metropolis loop with rollback and bounded local-site retries
-- [x] Toroidal Metropolis regression coverage requiring at least 100 accepted moves while preserving topology and foliation
+- [x] Toroidal Metropolis regression coverage requiring accepted periodic moves while preserving topology and foliation
 - [x] CLI and configuration support for open-boundary and toroidal topology selection
 - [x] Volume-profile, Hausdorff-dimension, and spectral-dimension observables on the combinatorial dual graph
 - [x] Repository validation loop covering Rust, Python support scripts, Semgrep rules, documentation, examples, and benchmarks
@@ -23,8 +23,8 @@ Likely follow-up work before broadening the dimensional surface:
 
 - Weight move-type selection by available application sites to reduce uniform-sampling bias
 - Weight or enumerate accepted move-site retries so proposals bind to concrete local moves before acceptance
-- Broaden per-kernel toroidal tests around spatial and temporal wrap-around cells
-- Accept fixed triangle cells directly in explicit-cell generator APIs to remove per-triangle `Vec` adaptation
+- Broaden per-kernel toroidal tests around spatial and temporal wrap-around simplices
+- Accept fixed triangle simplices directly in explicit-simplex generator APIs to remove per-triangle `Vec` adaptation
 - Add manual foliation assignment APIs with the same validation and synchronization guarantees as constructor-assigned labels
 - Add tutorial-style examples for open-boundary strips, toroidal runs, observables, and interpreting Metropolis acceptance behavior
 
@@ -45,7 +45,7 @@ CDT observables should remain user-facing analysis APIs and should grow in locks
 - Add geodesic-distance distributions, shell-volume curves, two-point functions, and finite-size scaling helpers
 - Add curvature-oriented Regge observables when the local simplex data is sufficiently validated
 - Keep the current Hausdorff- and spectral-dimension estimators available on combinatorial dual adjacency graphs
-- Reuse Voronoi tessellation support from the `delaunay` crate when it lands, so observables can opt into full dual/Voronoi cells rather than rebuilding only face- or cell-adjacency graphs
+- Reuse Voronoi tessellation support from the `delaunay` crate when it lands, so observables can opt into full dual/Voronoi regions rather than rebuilding only face- or simplex-adjacency graphs
 - Preserve a clear distinction between combinatorial dual graphs, geometric Voronoi tessellations, and visualization/export representations
 
 ## Visualization and Workflow Support

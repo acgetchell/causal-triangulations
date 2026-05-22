@@ -7,7 +7,7 @@
 
 use crate::geometry::CdtTriangulation2D;
 use crate::geometry::traits::TriangulationQuery;
-use num_traits::cast::NumCast;
+use crate::util::usize_to_f64;
 use std::collections::{HashMap, VecDeque};
 use std::mem;
 
@@ -143,13 +143,13 @@ fn dual_adjacency(triangulation: &CdtTriangulation2D) -> Option<Vec<Vec<usize>>>
 fn average_dual_ball_volumes(triangulation: &CdtTriangulation2D) -> Option<Vec<f64>> {
     dual_adjacency(triangulation)
         .as_deref()
-        .map(average_dual_ball_volumes_from_adjacency)
+        .and_then(average_dual_ball_volumes_from_adjacency)
 }
 
 /// Computes reachable-radius average ball volumes from a dual adjacency list.
-fn average_dual_ball_volumes_from_adjacency(adjacency: &[Vec<usize>]) -> Vec<f64> {
+fn average_dual_ball_volumes_from_adjacency(adjacency: &[Vec<usize>]) -> Option<Vec<f64>> {
     if adjacency.len() < 2 {
-        return Vec::new();
+        return Some(Vec::new());
     }
 
     let mut sums = Vec::new();
@@ -185,17 +185,14 @@ fn average_dual_ball_volumes_from_adjacency(adjacency: &[Vec<usize>]) -> Vec<f64
             .take(max_radius + 1)
         {
             ball_volume += shell_count;
-            sums[radius] += NumCast::from(ball_volume).unwrap_or(0.0);
+            sums[radius] += usize_to_f64(ball_volume)?;
             counts[radius] += 1;
         }
     }
 
     sums.into_iter()
         .zip(counts)
-        .map(|(sum, count)| {
-            let count_f64 = NumCast::from(count).unwrap_or(1.0);
-            sum / count_f64
-        })
+        .map(|(sum, count)| usize_to_f64(count).map(|count_f64| sum / count_f64))
         .collect()
 }
 
@@ -242,7 +239,7 @@ fn fit_log_log_slope(ball_volumes: &[f64]) -> Option<f64> {
             .filter_map(|(radius, &volume)| {
                 // Exclude root-only samples: ln(1.0) = 0 biases the slope toward zero.
                 if volume > 1.0 && volume.is_finite() {
-                    let radius_f64: f64 = NumCast::from(radius)?;
+                    let radius_f64 = usize_to_f64(radius)?;
                     Some((radius_f64.ln(), volume.ln()))
                 } else {
                     None
@@ -303,7 +300,9 @@ fn average_return_probabilities(adjacency: &[Vec<usize>], max_step: usize) -> Ve
                     continue;
                 }
 
-                let neighbor_count = NumCast::from(live_neighbor_count).unwrap_or(1.0);
+                let Some(neighbor_count) = usize_to_f64(live_neighbor_count) else {
+                    return Vec::new();
+                };
                 let share = move_probability / neighbor_count;
                 for neighbor in adjacency[index]
                     .iter()
@@ -319,7 +318,9 @@ fn average_return_probabilities(adjacency: &[Vec<usize>], max_step: usize) -> Ve
         }
     }
 
-    let node_count_f64 = NumCast::from(node_count).unwrap_or(1.0);
+    let Some(node_count_f64) = usize_to_f64(node_count) else {
+        return Vec::new();
+    };
     sums.into_iter().map(|sum| sum / node_count_f64).collect()
 }
 
@@ -332,7 +333,7 @@ fn fit_spectral_dimension(return_probabilities: &[f64]) -> Option<f64> {
             .skip(MIN_SPECTRAL_DIFFUSION_STEP)
             .filter_map(|(step, &probability)| {
                 if probability > 0.0 && probability < 1.0 && probability.is_finite() {
-                    let step_f64: f64 = NumCast::from(step)?;
+                    let step_f64 = usize_to_f64(step)?;
                     Some((step_f64.ln(), probability.ln()))
                 } else {
                     None
@@ -363,7 +364,7 @@ fn fit_linear_slope(samples: impl IntoIterator<Item = (f64, f64)>) -> Option<f64
         return None;
     }
 
-    let count_f64: f64 = NumCast::from(count).unwrap_or(1.0);
+    let count_f64 = usize_to_f64(count)?;
     let denominator = count_f64.mul_add(square_total, -x_total * x_total);
     if denominator <= f64::EPSILON {
         return None;
@@ -440,7 +441,8 @@ mod tests {
     fn dual_ball_averages_use_reachable_radius_convention() {
         let path_graph = vec![vec![1], vec![0, 2], vec![1]];
 
-        let ball_volumes = average_dual_ball_volumes_from_adjacency(&path_graph);
+        let ball_volumes = average_dual_ball_volumes_from_adjacency(&path_graph)
+            .expect("small graph ball-volume averages should convert to f64");
 
         assert_eq!(ball_volumes.len(), 3);
         assert_relative_eq!(ball_volumes[0], 1.0);

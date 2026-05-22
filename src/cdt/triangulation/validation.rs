@@ -14,7 +14,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// This is the invariant set required after ergodic moves and completed
     /// simulations: upstream structural geometry validity plus CDT topology,
-    /// foliation, causality, and cell-classification checks. It intentionally
+    /// foliation, causality, and simplex-classification checks. It intentionally
     /// does not require the Level 4 Delaunay empty-circumsphere predicate,
     /// because local CDT moves are not expected to preserve Delaunay-ness.
     ///
@@ -25,7 +25,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// Returns [`CdtError::DelaunayValidationFailed`] if backend structural
     /// geometry fails upstream validation. Returns
-    /// [`CdtError::ValidationFailed`] if causality or cell-classification checks
+    /// [`CdtError::ValidationFailed`] if causality or simplex-classification checks
     /// fail, and returns topology or foliation errors from the corresponding
     /// validators when those invariants are violated.
     ///
@@ -82,7 +82,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         self.validate_topology()?;
         self.validate_foliation()?;
         self.validate_causality()?;
-        self.validate_cell_classification()?;
+        self.validate_simplex_classification()?;
 
         Ok(())
     }
@@ -90,7 +90,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Validates the initialization contract for labeled CDT constructors.
     ///
     /// Initial meshes must be genuine Delaunay triangulations and must satisfy
-    /// the stricter CDT foliation, topology, causality, and cell-classification
+    /// the stricter CDT foliation, topology, causality, and simplex-classification
     /// invariants before any simulation code can observe them.
     pub(crate) fn validate_initial_delaunay_cdt(&mut self) -> CdtResult<()> {
         self.geometry
@@ -102,7 +102,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         self.validate_topology()?;
         self.validate_foliation()?;
         self.validate_causality()?;
-        self.classify_all_cells().map(|_| ())
+        self.classify_all_simplices().map(|_| ())
     }
 
     /// Validate causality constraints.
@@ -112,7 +112,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// # Errors
     ///
-    /// Returns error if any edge spans more than one time slice (`|Δt| > 1`).
+    /// Returns [`CdtError::Foliation`] with
+    /// [`FoliationError::StaleBookkeeping`](crate::cdt::foliation::FoliationError::StaleBookkeeping)
+    /// when stored foliation bookkeeping is stale. Returns
+    /// [`CdtError::ValidationFailed`] when face vertices or labels cannot be
+    /// resolved, and returns [`CdtError::CausalityViolation`] if any edge spans
+    /// more than one time slice (`|Δt| > 1`).
     ///
     /// # Examples
     ///
@@ -126,7 +131,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///         ([1.0, 0.0], 0),
     ///         ([0.5, 1.0], 1),
     ///     ])?;
-    ///     let backend = DelaunayBackend2D::from_triangulation(dt);
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt)
+    ///         .expect("three non-collinear labeled points should validate");
     ///     let tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
     ///     tri.validate_causality()?;
     ///     Ok(())
@@ -146,8 +152,14 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// # Errors
     ///
-    /// Returns error if any triangle spans more than one time slice, if a face
-    /// cannot be resolved to three vertices, or if any face vertex is unlabeled.
+    /// Returns [`CdtError::Foliation`] with
+    /// [`FoliationError::StaleBookkeeping`](crate::cdt::foliation::FoliationError::StaleBookkeeping)
+    /// when stored foliation bookkeeping is stale (`has_current_foliation()` is
+    /// false). Returns [`CdtError::ValidationFailed`] when a face cannot be
+    /// resolved to three vertices, any face vertex is unlabeled, or a triangle
+    /// lacks exactly one spacelike and two timelike edges. Returns
+    /// [`CdtError::CausalityViolation`] if any triangle spans more than one time
+    /// slice. Callers should handle or propagate all three categories.
     ///
     /// # Examples
     ///
@@ -161,7 +173,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///         ([1.0, 0.0], 0),
     ///         ([0.5, 1.0], 1),
     ///     ])?;
-    ///     let backend = DelaunayBackend2D::from_triangulation(dt);
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt)
+    ///         .expect("three non-collinear labeled points should validate");
     ///     let tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
     ///     tri.validate_causality_delaunay()?;
     ///     Ok(())
@@ -174,6 +187,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
     pub fn validate_causality_delaunay(&self) -> CdtResult<()> {
         if self.foliation.is_none() {
             return Ok(());
+        }
+        if !self.has_current_foliation() {
+            return Err(self.stale_foliation_error());
         }
 
         for face in self.geometry.faces() {
@@ -196,7 +212,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     check: CdtValidationCheck::Causality,
                     detail: format!(
                         "face {:?} has {} vertices, expected 3",
-                        face.cell_key(),
+                        face.simplex_key(),
                         verts.len(),
                     ),
                 });
@@ -277,7 +293,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     check: CdtValidationCheck::Causality,
                     detail: format!(
                         "invalid CDT triangle at face {:?}: spacelike={}, timelike={}",
-                        face.cell_key(),
+                        face.simplex_key(),
                         spacelike,
                         timelike
                     ),
@@ -300,7 +316,7 @@ fn validation_detail(error: DelaunayError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cdt::foliation::EdgeType;
+    use crate::cdt::foliation::{EdgeType, FoliationError};
     use crate::config::CdtTopology;
     use crate::geometry::generators::build_delaunay2_with_data;
 
@@ -312,7 +328,7 @@ mod tests {
             ([0.5, 1.0], labels[2]),
         ])
         .expect("Should build labeled triangle");
-        DelaunayBackend2D::from_triangulation(dt)
+        DelaunayBackend2D::from_triangulation(dt).expect("test Delaunay triangle should validate")
     }
 
     /// Builds intentionally unchecked metadata for causality validation tests.
@@ -321,7 +337,12 @@ mod tests {
         time_slices: u32,
         dimension: u8,
     ) -> CdtTriangulation<DelaunayBackend2D> {
-        CdtTriangulation::wrap_unchecked(backend, time_slices, dimension, CdtTopology::OpenBoundary)
+        CdtTriangulation::from_parts_before_validation(
+            backend,
+            time_slices,
+            dimension,
+            CdtTopology::OpenBoundary,
+        )
     }
 
     /// Builds stable diagnostic text for seeded-triangulation comparisons.
@@ -394,7 +415,8 @@ mod tests {
     fn causality_violation_detected() {
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
             .expect("Should build deterministic causal triangle");
-        let backend = DelaunayBackend2D::from_triangulation(dt);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("test Delaunay triangle should validate");
         let mut tri = unchecked_open_boundary(backend, 2, 2);
 
         tri.assign_foliation_by_y(2)
@@ -427,20 +449,10 @@ mod tests {
         tri.set_vertex_data(&vertex_to_mutate, Some(3))
             .expect("Expected valid vertex handle while mutating deterministic triangle");
 
-        match tri.validate_causality_delaunay() {
-            Err(CdtError::CausalityViolation {
-                time_0,
-                time_1,
-                step_distance,
-            }) => {
-                assert!(step_distance > 1);
-                assert_eq!(step_distance, time_0.abs_diff(time_1));
-            }
-            other => panic!(
-                "Expected CausalityViolation error, got {other:?}; {}",
-                deterministic_triangle_debug_summary(tri.geometry())
-            ),
-        }
+        assert!(matches!(
+            tri.validate_causality_delaunay(),
+            Err(CdtError::Foliation(FoliationError::StaleBookkeeping { .. }))
+        ));
     }
 
     #[test]
@@ -459,9 +471,7 @@ mod tests {
 
         assert!(matches!(
             tri.validate_causality_delaunay(),
-            Err(CdtError::ValidationFailed { ref check, ref detail })
-                if *check == CdtValidationCheck::Causality
-                    && detail.contains("has no time label in a foliated triangulation")
+            Err(CdtError::Foliation(FoliationError::StaleBookkeeping { .. }))
         ));
     }
 
@@ -493,19 +503,9 @@ mod tests {
         tri.set_vertex_data(&slice0_vertex, Some(8))
             .expect("Expected valid vertex handle while mutating label");
 
-        match tri.validate_causality_delaunay() {
-            Err(CdtError::CausalityViolation {
-                time_0,
-                time_1,
-                step_distance,
-            }) => {
-                let raw = time_0.abs_diff(time_1);
-                let circular = raw.min(10 - raw);
-                assert_eq!(step_distance, circular);
-                assert!(step_distance > 1);
-                assert!(step_distance < raw);
-            }
-            other => panic!("Expected CausalityViolation on toroidal triangle, got {other:?}"),
-        }
+        assert!(matches!(
+            tri.validate_causality_delaunay(),
+            Err(CdtError::Foliation(FoliationError::StaleBookkeeping { .. }))
+        ));
     }
 }

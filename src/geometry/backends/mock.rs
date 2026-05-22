@@ -10,6 +10,7 @@ use crate::geometry::traits::{
     TriangulationMut, TriangulationQuery,
 };
 use std::collections::HashMap;
+use std::fmt;
 
 /// Mock backend for testing
 #[derive(Debug, Clone)]
@@ -35,6 +36,88 @@ pub struct MockEdgeHandle(usize);
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MockFaceHandle(usize);
 
+/// Mock backend operation category used in typed errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MockOperation {
+    /// Insert a vertex.
+    InsertVertex,
+    /// Move an existing vertex.
+    MoveVertex,
+    /// Subdivide an existing face.
+    SubdivideFace,
+}
+
+impl fmt::Display for MockOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InsertVertex => formatter.write_str("insert_vertex"),
+            Self::MoveVertex => formatter.write_str("move_vertex"),
+            Self::SubdivideFace => formatter.write_str("subdivide_face"),
+        }
+    }
+}
+
+/// Mock backend storage target for reservation failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MockStorageTarget {
+    /// Vertex storage.
+    Vertices,
+    /// Face storage.
+    Faces,
+    /// Edge storage.
+    Edges,
+}
+
+impl fmt::Display for MockStorageTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Vertices => formatter.write_str("reserve_capacity(vertices)"),
+            Self::Faces => formatter.write_str("reserve_capacity(faces)"),
+            Self::Edges => formatter.write_str("reserve_capacity(edges)"),
+        }
+    }
+}
+
+/// Mock edge-flip precondition that failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MockNonFlippableReason {
+    /// The edge is not shared by exactly two faces.
+    EdgeSharedByTwoFaces,
+    /// One or both adjacent faces are not triangles.
+    AdjacentFacesMustBeTriangles,
+    /// An adjacent triangle does not contain an opposite vertex.
+    MissingOppositeVertex,
+    /// The two opposite vertices are the same.
+    OppositeVerticesMustBeDistinct,
+    /// The replacement edge already exists.
+    ReplacementEdgeAlreadyExists,
+}
+
+impl fmt::Display for MockNonFlippableReason {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EdgeSharedByTwoFaces => {
+                formatter.write_str("edge must be shared by exactly two faces")
+            }
+            Self::AdjacentFacesMustBeTriangles => {
+                formatter.write_str("adjacent faces must be triangles")
+            }
+            Self::MissingOppositeVertex => {
+                formatter.write_str("adjacent triangle is missing an opposite vertex")
+            }
+            Self::OppositeVerticesMustBeDistinct => {
+                formatter.write_str("opposite vertices must be distinct")
+            }
+            Self::ReplacementEdgeAlreadyExists => {
+                formatter.write_str("replacement edge already exists")
+            }
+        }
+    }
+}
+
 /// Mock backend errors
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -51,15 +134,11 @@ pub enum MockError {
     #[error("Invalid face handle: {0}")]
     Face(usize),
 
-    /// Invalid operation attempted
-    #[error("Invalid operation: {0}")]
-    Operation(String),
-
     /// Storage reservation failed.
     #[error("Reservation failed for {operation} requesting {requested_capacity} slots: {detail}")]
     ReservationFailed {
         /// Operation being attempted.
-        operation: &'static str,
+        operation: MockStorageTarget,
         /// Capacity requested for the targeted storage map.
         requested_capacity: usize,
         /// Allocation failure detail.
@@ -70,7 +149,7 @@ pub enum MockError {
     #[error("Invalid coordinate dimension for {operation}: got {actual}, expected {expected}")]
     InvalidCoordinateDimension {
         /// Mutation operation being attempted.
-        operation: &'static str,
+        operation: MockOperation,
         /// Expected coordinate arity.
         expected: usize,
         /// Actual coordinate arity supplied by the caller.
@@ -87,7 +166,7 @@ pub enum MockError {
         /// Number of faces incident to the edge.
         adjacent_faces: usize,
         /// Additional reason the edge cannot be flipped.
-        reason: &'static str,
+        reason: MockNonFlippableReason,
     },
 
     /// A face exists, but its local topology cannot be subdivided.
@@ -167,7 +246,7 @@ impl MockBackend {
     /// Centralizes coordinate arity checks so mock mutations fail before state changes.
     const fn validate_coordinate_dimension(
         &self,
-        operation: &'static str,
+        operation: MockOperation,
         coords: &[f64],
     ) -> Result<(), MockError> {
         if coords.len() == self.dimension {
@@ -227,7 +306,7 @@ impl MockBackend {
             return Err(MockError::NonFlippableEdge {
                 edge,
                 adjacent_faces: adjacent_faces.len(),
-                reason: "edge must be shared by exactly two faces",
+                reason: MockNonFlippableReason::EdgeSharedByTwoFaces,
             });
         }
 
@@ -238,7 +317,7 @@ impl MockBackend {
                 return Err(MockError::NonFlippableEdge {
                     edge,
                     adjacent_faces: adjacent_faces.len(),
-                    reason: "adjacent faces must be triangles",
+                    reason: MockNonFlippableReason::AdjacentFacesMustBeTriangles,
                 });
             }
             let opposite = vertices
@@ -248,7 +327,7 @@ impl MockBackend {
                 .ok_or(MockError::NonFlippableEdge {
                     edge,
                     adjacent_faces: adjacent_faces.len(),
-                    reason: "adjacent triangle is missing an opposite vertex",
+                    reason: MockNonFlippableReason::MissingOppositeVertex,
                 })?;
             opposites.push(opposite);
         }
@@ -260,7 +339,7 @@ impl MockBackend {
             return Err(MockError::NonFlippableEdge {
                 edge,
                 adjacent_faces: adjacent_faces.len(),
-                reason: "opposite vertices must be distinct",
+                reason: MockNonFlippableReason::OppositeVerticesMustBeDistinct,
             });
         }
 
@@ -268,7 +347,7 @@ impl MockBackend {
             return Err(MockError::NonFlippableEdge {
                 edge,
                 adjacent_faces: adjacent_faces.len(),
-                reason: "replacement edge already exists",
+                reason: MockNonFlippableReason::ReplacementEdgeAlreadyExists,
             });
         }
 
@@ -446,7 +525,7 @@ impl TriangulationMut for MockBackend {
         &mut self,
         coords: &[Self::Coordinate],
     ) -> Result<Self::VertexHandle, Self::Error> {
-        self.validate_coordinate_dimension("insert_vertex", coords)?;
+        self.validate_coordinate_dimension(MockOperation::InsertVertex, coords)?;
         let id = self.next_vertex_id;
         self.next_vertex_id += 1;
         self.vertices.insert(id, coords.to_vec());
@@ -468,7 +547,7 @@ impl TriangulationMut for MockBackend {
         vertex: Self::VertexHandle,
         new_coords: &[Self::Coordinate],
     ) -> Result<(), Self::Error> {
-        self.validate_coordinate_dimension("move_vertex", new_coords)?;
+        self.validate_coordinate_dimension(MockOperation::MoveVertex, new_coords)?;
         self.vertices
             .get_mut(&vertex.0)
             .map_or(Err(MockError::Vertex(vertex.0)), |coords| {
@@ -511,7 +590,7 @@ impl TriangulationMut for MockBackend {
         face: Self::FaceHandle,
         point: &[Self::Coordinate],
     ) -> Result<SubdivisionResult<Self::VertexHandle, Self::FaceHandle>, Self::Error> {
-        self.validate_coordinate_dimension("subdivide_face", point)?;
+        self.validate_coordinate_dimension(MockOperation::SubdivideFace, point)?;
         let vertices = self
             .faces
             .get(&face.0)
@@ -565,14 +644,14 @@ impl TriangulationMut for MockBackend {
         self.vertices
             .try_reserve(vertices)
             .map_err(|err| MockError::ReservationFailed {
-                operation: "reserve_capacity(vertices)",
+                operation: MockStorageTarget::Vertices,
                 requested_capacity: vertices,
                 detail: err.to_string(),
             })?;
         self.faces
             .try_reserve(faces)
             .map_err(|err| MockError::ReservationFailed {
-                operation: "reserve_capacity(faces)",
+                operation: MockStorageTarget::Faces,
                 requested_capacity: faces,
                 detail: err.to_string(),
             })?;
@@ -580,7 +659,7 @@ impl TriangulationMut for MockBackend {
         self.edges
             .try_reserve(edges)
             .map_err(|err| MockError::ReservationFailed {
-                operation: "reserve_capacity(edges)",
+                operation: MockStorageTarget::Edges,
                 requested_capacity: edges,
                 detail: err.to_string(),
             })?;
@@ -591,6 +670,59 @@ impl TriangulationMut for MockBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mock_operation_display_covers_all_operations() {
+        assert_eq!(MockOperation::InsertVertex.to_string(), "insert_vertex");
+        assert_eq!(MockOperation::MoveVertex.to_string(), "move_vertex");
+        assert_eq!(MockOperation::SubdivideFace.to_string(), "subdivide_face");
+    }
+
+    #[test]
+    fn mock_storage_target_display_covers_all_targets() {
+        assert_eq!(
+            MockStorageTarget::Vertices.to_string(),
+            "reserve_capacity(vertices)"
+        );
+        assert_eq!(
+            MockStorageTarget::Faces.to_string(),
+            "reserve_capacity(faces)"
+        );
+        assert_eq!(
+            MockStorageTarget::Edges.to_string(),
+            "reserve_capacity(edges)"
+        );
+    }
+
+    #[test]
+    fn mock_non_flippable_reason_display_covers_all_reasons() {
+        let cases = [
+            (
+                MockNonFlippableReason::EdgeSharedByTwoFaces,
+                "edge must be shared by exactly two faces",
+            ),
+            (
+                MockNonFlippableReason::AdjacentFacesMustBeTriangles,
+                "adjacent faces must be triangles",
+            ),
+            (
+                MockNonFlippableReason::MissingOppositeVertex,
+                "adjacent triangle is missing an opposite vertex",
+            ),
+            (
+                MockNonFlippableReason::OppositeVerticesMustBeDistinct,
+                "opposite vertices must be distinct",
+            ),
+            (
+                MockNonFlippableReason::ReplacementEdgeAlreadyExists,
+                "replacement edge already exists",
+            ),
+        ];
+
+        for (reason, expected) in cases {
+            assert_eq!(reason.to_string(), expected);
+        }
+    }
 
     #[test]
     fn test_mock_backend_creation() {
@@ -702,7 +834,7 @@ mod tests {
         assert!(matches!(
             backend.insert_vertex(&[1.0]),
             Err(MockError::InvalidCoordinateDimension {
-                operation: "insert_vertex",
+                operation: MockOperation::InsertVertex,
                 expected: 2,
                 actual: 1,
             })
@@ -710,7 +842,7 @@ mod tests {
         assert!(matches!(
             backend.move_vertex(MockVertexHandle(0), &[1.0, 2.0, 3.0]),
             Err(MockError::InvalidCoordinateDimension {
-                operation: "move_vertex",
+                operation: MockOperation::MoveVertex,
                 expected: 2,
                 actual: 3,
             })
@@ -718,7 +850,7 @@ mod tests {
         assert!(matches!(
             backend.subdivide_face(MockFaceHandle(0), &[0.25]),
             Err(MockError::InvalidCoordinateDimension {
-                operation: "subdivide_face",
+                operation: MockOperation::SubdivideFace,
                 expected: 2,
                 actual: 1,
             })
@@ -761,7 +893,7 @@ mod tests {
             Err(MockError::NonFlippableEdge {
                 edge: _,
                 adjacent_faces: 1,
-                reason: "edge must be shared by exactly two faces",
+                reason: MockNonFlippableReason::EdgeSharedByTwoFaces,
             })
         ));
         assert!(!backend.can_flip_edge(&edge));
@@ -809,7 +941,7 @@ mod tests {
         assert!(matches!(
             result,
             Err(MockError::ReservationFailed {
-                operation: "reserve_capacity(vertices)",
+                operation: MockStorageTarget::Vertices,
                 requested_capacity: usize::MAX,
                 detail,
             }) if !detail.is_empty()
@@ -912,7 +1044,7 @@ mod tests {
             Err(MockError::NonFlippableEdge {
                 edge: 0,
                 adjacent_faces: 2,
-                reason: "adjacent faces must be triangles",
+                reason: MockNonFlippableReason::AdjacentFacesMustBeTriangles,
             })
         ));
 
@@ -923,7 +1055,7 @@ mod tests {
             Err(MockError::NonFlippableEdge {
                 edge: 0,
                 adjacent_faces: 2,
-                reason: "opposite vertices must be distinct",
+                reason: MockNonFlippableReason::OppositeVerticesMustBeDistinct,
             })
         ));
 
@@ -934,7 +1066,7 @@ mod tests {
             Err(MockError::NonFlippableEdge {
                 edge: 0,
                 adjacent_faces: 2,
-                reason: "replacement edge already exists",
+                reason: MockNonFlippableReason::ReplacementEdgeAlreadyExists,
             })
         ));
     }

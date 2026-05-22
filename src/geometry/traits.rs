@@ -5,7 +5,6 @@
 //! This module defines the trait-based interface that completely isolates
 //! CDT algorithms from specific geometry implementations.
 
-use crate::util::saturating_usize_to_i32;
 use num_traits::Float;
 use std::error::Error as StdError;
 use std::fmt::Debug;
@@ -14,9 +13,9 @@ use std::hash::Hash;
 /// Core numeric trait for coordinates in geometric calculations.
 ///
 /// `num_traits::Float` already implies `Copy`, `Clone`, `PartialEq`, and `PartialOrd`.
-pub trait CoordinateScalar: Debug + Float {}
+pub trait CoordinateScalar: Float {}
 
-impl<T: Debug + Float> CoordinateScalar for T {}
+impl<T: Float> CoordinateScalar for T {}
 
 /// Handle types for geometry entities - completely opaque to prevent coupling
 pub trait GeometryHandle: Clone + Eq + Hash + Debug {}
@@ -73,19 +72,23 @@ pub trait TriangulationQuery: GeometryBackend {
     /// not require heap allocation or dynamic dispatch.
     fn faces(&self) -> impl Iterator<Item = Self::FaceHandle> + '_;
 
-    /// Get the coordinates of a vertex
+    /// Returns the coordinate vector for a vertex handle.
     ///
     /// # Errors
-    /// Returns error if the vertex handle is invalid
+    ///
+    /// Returns the backend error when the vertex handle is invalid or when the
+    /// backend cannot resolve the coordinate payload for that vertex.
     fn vertex_coordinates(
         &self,
         vertex: &Self::VertexHandle,
     ) -> Result<Vec<Self::Coordinate>, Self::Error>;
 
-    /// Get the vertices that form a face
+    /// Returns the vertices that form a face.
     ///
     /// # Errors
-    /// Returns error if the face handle is invalid
+    ///
+    /// Returns the backend error when the face handle is invalid or when the
+    /// backend cannot resolve the face connectivity.
     fn face_vertices(
         &self,
         face: &Self::FaceHandle,
@@ -99,7 +102,7 @@ pub trait TriangulationQuery: GeometryBackend {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::prelude::testing::*;
     ///
     /// let backend = MockBackend::create_triangle();
     /// let edge = backend.edges().next().expect("triangle should have an edge");
@@ -118,16 +121,24 @@ pub trait TriangulationQuery: GeometryBackend {
     /// local topology, and `Err` when the edge handle itself is invalid.
     ///
     /// # Errors
-    /// Returns error if the edge handle is invalid.
+    ///
+    /// Returns the backend error when the edge handle is invalid. Boundary edges
+    /// and non-flippable local topology should return `Ok(None)`.
     fn edge_adjacent_faces(
         &self,
         edge: &Self::EdgeHandle,
     ) -> EdgeAdjacentFacesResult<Self::VertexHandle, Self::FaceHandle, Self::Error>;
 
-    /// Get all faces adjacent to a vertex
+    /// Get all faces adjacent to a vertex.
+    ///
+    /// Backend implementations may build an adjacency index for this query.
+    /// The Delaunay backend currently rebuilds that index per call, so callers
+    /// should treat it as `O(F)` in the number of finite faces.
     ///
     /// # Errors
-    /// Returns error if the vertex handle is invalid
+    ///
+    /// Returns the backend error when the vertex handle is invalid or adjacency
+    /// information cannot be resolved.
     fn adjacent_faces(
         &self,
         vertex: &Self::VertexHandle,
@@ -136,7 +147,9 @@ pub trait TriangulationQuery: GeometryBackend {
     /// Get all edges incident to a vertex
     ///
     /// # Errors
-    /// Returns error if the vertex handle is invalid
+    ///
+    /// Returns the backend error when the vertex handle is invalid or incident
+    /// edge information cannot be resolved.
     fn incident_edges(
         &self,
         vertex: &Self::VertexHandle,
@@ -145,19 +158,24 @@ pub trait TriangulationQuery: GeometryBackend {
     /// Get all faces neighboring a given face
     ///
     /// # Errors
-    /// Returns error if the face handle is invalid
+    ///
+    /// Returns the backend error when the face handle is invalid or neighboring
+    /// face information cannot be resolved.
     fn face_neighbors(&self, face: &Self::FaceHandle)
     -> Result<Vec<Self::FaceHandle>, Self::Error>;
 
     /// Check if the triangulation is valid
     fn is_valid(&self) -> bool;
 
-    /// Calculate the Euler characteristic (V - E + F)
-    fn euler_characteristic(&self) -> i32 {
-        let v = saturating_usize_to_i32(self.vertex_count());
-        let e = saturating_usize_to_i32(self.edge_count());
-        let f = saturating_usize_to_i32(self.face_count());
-        v.saturating_sub(e).saturating_add(f)
+    /// Calculates the Euler characteristic `V - E + F`.
+    ///
+    /// Counts are widened before arithmetic so large triangulations cannot
+    /// silently clamp the topological invariant used by CDT validation.
+    fn euler_characteristic(&self) -> i128 {
+        let vertices = self.vertex_count() as i128;
+        let edges = self.edge_count() as i128;
+        let faces = self.face_count() as i128;
+        vertices - edges + faces
     }
 }
 
@@ -176,7 +194,7 @@ impl<E, F> FlipResult<E, F> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::traits::FlipResult;
+    /// use causal_triangulations::prelude::geometry::FlipResult;
     ///
     /// let result = FlipResult::new("new edge", vec!["left face", "right face"]);
     /// assert_eq!(result.new_edge, "new edge");
@@ -210,7 +228,7 @@ impl<V, F> EdgeAdjacentFaces<V, F> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::traits::EdgeAdjacentFaces;
+    /// use causal_triangulations::prelude::geometry::EdgeAdjacentFaces;
     ///
     /// let adjacency = EdgeAdjacentFaces::new(("a", "b"), ("left", "right"), ("c", "d"));
     /// assert_eq!(adjacency.endpoints, ("a", "b"));
@@ -241,7 +259,7 @@ impl<V, F> SubdivisionResult<V, F> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::traits::SubdivisionResult;
+    /// use causal_triangulations::prelude::geometry::SubdivisionResult;
     ///
     /// let result = SubdivisionResult::new("new vertex", vec!["f0", "f1", "f2"], "old face");
     /// assert_eq!(result.new_vertex, "new vertex");
@@ -261,7 +279,9 @@ pub trait TriangulationMut: TriangulationQuery {
     /// Insert a new vertex at the given coordinates
     ///
     /// # Errors
-    /// Returns error if the vertex cannot be inserted
+    ///
+    /// Returns the backend error when coordinate arity or values are invalid,
+    /// allocation fails, or the insertion would violate backend invariants.
     fn insert_vertex(
         &mut self,
         coords: &[Self::Coordinate],
@@ -270,7 +290,10 @@ pub trait TriangulationMut: TriangulationQuery {
     /// Remove a vertex from the triangulation
     ///
     /// # Errors
-    /// Returns error if the vertex cannot be removed
+    ///
+    /// Returns the backend error when the vertex handle is invalid, local
+    /// topology is not removable, or the removal would violate backend
+    /// invariants.
     fn remove_vertex(
         &mut self,
         vertex: Self::VertexHandle,
@@ -279,7 +302,9 @@ pub trait TriangulationMut: TriangulationQuery {
     /// Move a vertex to new coordinates
     ///
     /// # Errors
-    /// Returns error if the vertex cannot be moved
+    ///
+    /// Returns the backend error when the vertex handle is invalid, coordinate
+    /// arity or values are invalid, or the move would violate backend invariants.
     fn move_vertex(
         &mut self,
         vertex: Self::VertexHandle,
@@ -289,7 +314,10 @@ pub trait TriangulationMut: TriangulationQuery {
     /// Flip an edge in the triangulation
     ///
     /// # Errors
-    /// Returns error if the edge cannot be flipped
+    ///
+    /// Returns the backend error when the edge handle is invalid, the edge is not
+    /// flippable in the backend's local topology, or the flip would violate
+    /// backend invariants.
     fn flip_edge(
         &mut self,
         edge: Self::EdgeHandle,
@@ -301,7 +329,10 @@ pub trait TriangulationMut: TriangulationQuery {
     /// Subdivide a face by adding a vertex at the given point
     ///
     /// # Errors
-    /// Returns error if the face cannot be subdivided
+    ///
+    /// Returns the backend error when the face handle is invalid, the point has
+    /// invalid coordinate arity or values, allocation fails, or subdivision would
+    /// violate backend invariants.
     fn subdivide_face(
         &mut self,
         face: Self::FaceHandle,
@@ -322,9 +353,7 @@ pub trait TriangulationMut: TriangulationQuery {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::{
-    ///     MockBackend, MockError, TriangulationMut, TriangulationQuery,
-    /// };
+    /// use causal_triangulations::prelude::testing::*;
     ///
     /// fn main() -> Result<(), MockError> {
     ///     let mut backend = MockBackend::create_triangle();
@@ -355,9 +384,7 @@ pub trait TriangulationMut: TriangulationQuery {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::geometry::{
-    ///     MockBackend, MockError, TriangulationMut, TriangulationQuery,
-    /// };
+    /// use causal_triangulations::prelude::testing::*;
     ///
     /// fn main() -> Result<(), MockError> {
     ///     let mut backend = MockBackend::create_triangle();

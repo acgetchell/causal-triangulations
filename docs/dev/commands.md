@@ -107,6 +107,14 @@ This runs:
 - validated example runs
 - benchmark compilation
 
+For heavier stabilization work, run the slow-test wrapper:
+
+```bash
+just ci-slow
+```
+
+This runs the normal CI command and then feature-gated slow/stress tests.
+
 ## Semgrep
 
 Repository-owned Semgrep rules live in `semgrep.yaml`. They encode focused project invariants that are not already covered by Rust, Clippy, Ruff, or ShellCheck.
@@ -235,6 +243,8 @@ just yaml-lint         # Lint (non-mutating)
 just yaml-fix          # Format (mutating)
 ```
 
+`just yaml-fix` accepts either a globally installed `prettier` or `npx` fallback.
+
 ---
 
 ## JSON Validation
@@ -276,6 +286,27 @@ just python-lint       # ruff format + ruff check
 just python-fix        # ruff check --fix + ruff format
 just python-typecheck  # ty check (blocking)
 just test-python       # pytest
+```
+
+## Benchmark And Release Hygiene
+
+Benchmark harnesses can be smoke-tested without producing baseline-quality performance data:
+
+```bash
+just bench-smoke
+```
+
+To compile benchmarks and release-profile integration tests without running them:
+
+```bash
+just bench-test-compile
+```
+
+Before release preparation, optional Cargo hygiene checks are available:
+
+```bash
+just unused-deps
+just publish-check
 ```
 
 ---

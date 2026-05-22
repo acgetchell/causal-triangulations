@@ -17,6 +17,7 @@ from postprocess_changelog import (
     _reflow_line,
     _squash_heading_parts,
     postprocess,
+    postprocess_text,
 )
 
 if TYPE_CHECKING:
@@ -256,6 +257,12 @@ class TestSummarySections:
         assert "### Merged Pull Requests" in result
         # Breaking section appears before Merged PRs.
         assert result.index("### ⚠️ Breaking Changes") < result.index("### Merged Pull Requests")
+
+    def test_injects_breaking_summary_from_marker_variants(self) -> None:
+        content = self._changelog(f"- **BREAKING** Big change {_pr(5)} {_commit()}")
+        result = _inject_summary_sections(content)
+        assert "### ⚠️ Breaking Changes" in result
+        assert f"- Big change {_pr(5)}" in result
 
     def test_injects_summary_from_star_bullets(self) -> None:
         content = self._changelog(f"* [**breaking**] Star change {_pr(7)} {_commit()}")
@@ -528,6 +535,20 @@ class TestSquashHeadingNormalization:
         result = f.read_text(encoding="utf-8")
         assert "  - Added: `just help-workflows` references throughout" in result
         assert "**Added: `just help-workflows`" not in result
+
+    def test_full_pipeline_deindents_children_after_squash_heading(self) -> None:
+        content = (
+            "# Changelog\n\n"
+            "## [1.0.0]\n\n"
+            "### Added\n\n"
+            f"- Identity-based SoS perturbation {_pr(272)} {_commit('a125d98', 'a125d98deadbeef')}\n\n"
+            f"  - feat: Canonical vertex ordering details {_pr(266)}\n\n"
+            "    - Add canonical_points module with sorted_cell_points helpers\n"
+        )
+        result = postprocess_text(content)
+        assert f"  **Added: Canonical vertex ordering details {_pr(266)}**" in result
+        assert "\n  - Add canonical_points module with sorted_cell_points helpers\n" in result
+        assert "\n    - Add canonical_points module" not in result
 
 
 class TestCodeBlockLanguage:

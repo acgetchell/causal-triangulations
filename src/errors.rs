@@ -9,6 +9,7 @@ use std::fmt;
 
 /// Highest cumulative upstream Delaunay validation level being enforced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum DelaunayValidationLevel {
     /// Validate Level 1 only.
     One,
@@ -31,6 +32,75 @@ impl fmt::Display for DelaunayValidationLevel {
     }
 }
 
+/// Simulation output format for typed output read/write failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum OutputFormat {
+    /// Comma-separated measurement output.
+    Csv,
+    /// JSON simulation summary output.
+    Json,
+}
+
+impl fmt::Display for OutputFormat {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Csv => formatter.write_str("CSV"),
+            Self::Json => formatter.write_str("JSON"),
+        }
+    }
+}
+
+/// Checkpoint serialization operation that failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CheckpointOperation {
+    /// Serializing a checkpoint or checkpoint-like payload failed.
+    Serialize,
+    /// Deserializing a checkpoint or checkpoint-like payload failed.
+    Deserialize,
+}
+
+impl fmt::Display for CheckpointOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Serialize => formatter.write_str("serialize"),
+            Self::Deserialize => formatter.write_str("deserialize"),
+        }
+    }
+}
+
+/// Backend mutation operation that failed while editing a CDT triangulation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum BackendMutationOperation {
+    /// Write simplex payload by backend simplex key.
+    SetSimplexDataByKey,
+    /// Write vertex payload by backend vertex key.
+    SetVertexDataByKey,
+    /// Write vertex payload through a vertex handle.
+    SetVertexData,
+    /// Subdivide a face as part of a local move.
+    SubdivideFace,
+    /// Remove a vertex as part of a local move.
+    RemoveVertex,
+    /// Flip an edge as part of a local move.
+    FlipEdge,
+}
+
+impl fmt::Display for BackendMutationOperation {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SetSimplexDataByKey => formatter.write_str("set_simplex_data_by_key"),
+            Self::SetVertexDataByKey => formatter.write_str("set_vertex_data_by_key"),
+            Self::SetVertexData => formatter.write_str("set_vertex_data"),
+            Self::SubdivideFace => formatter.write_str("subdivide_face"),
+            Self::RemoveVertex => formatter.write_str("remove_vertex"),
+            Self::FlipEdge => formatter.write_str("flip_edge"),
+        }
+    }
+}
+
 /// CDT validation check that failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -41,8 +111,8 @@ pub enum CdtValidationCheck {
     FoliationAssignment,
     /// Causality validation failed.
     Causality,
-    /// Strict CDT cell classification failed.
-    CellClassification,
+    /// Strict CDT simplex classification failed.
+    SimplexClassification,
     /// Local ergodic move candidate geometry could not be interpreted.
     ErgodicMoveCandidateGeometry,
 }
@@ -53,7 +123,7 @@ impl fmt::Display for CdtValidationCheck {
             Self::Geometry => formatter.write_str("geometry"),
             Self::FoliationAssignment => formatter.write_str("foliation_assignment"),
             Self::Causality => formatter.write_str("causality"),
-            Self::CellClassification => formatter.write_str("cell_classification"),
+            Self::SimplexClassification => formatter.write_str("simplex_classification"),
             Self::ErgodicMoveCandidateGeometry => {
                 formatter.write_str("ergodic_move_candidate_geometry")
             }
@@ -254,9 +324,9 @@ pub enum CdtError {
         /// Topology requested by CDT metadata.
         topology: CdtTopology,
         /// Observed Euler characteristic from the backend.
-        euler_characteristic: i32,
+        euler_characteristic: i128,
         /// Accepted Euler characteristics for the requested topology.
-        expected_euler_characteristics: Vec<i32>,
+        expected_euler_characteristics: Vec<i128>,
         /// Backend vertex count at validation time.
         vertices: usize,
         /// Backend edge count at validation time.
@@ -279,7 +349,7 @@ pub enum CdtError {
     #[error("Backend mutation failed [{operation}] on {target}: {detail}")]
     BackendMutationFailed {
         /// Mutation operation being attempted.
-        operation: String,
+        operation: BackendMutationOperation,
         /// Human-readable target handle (e.g., "vertex `VertexKey`(..)").
         target: String,
         /// Additional failure detail.
@@ -291,21 +361,13 @@ pub enum CdtError {
     )]
     BackendRollbackFailed {
         /// Mutation operation being attempted when the first failure occurred.
-        operation: String,
+        operation: BackendMutationOperation,
         /// Human-readable target handle for the first failure.
         target: String,
         /// Primary mutation failure detail.
         detail: String,
         /// Rollback failure details for one or more payloads.
         rollback_errors: String,
-    },
-    /// Requested operation is part of the planned API surface but is not implemented yet.
-    #[error("Unsupported operation [{operation}]: {reason}")]
-    UnsupportedOperation {
-        /// Operation being requested.
-        operation: String,
-        /// Human-readable explanation and migration/status detail.
-        reason: String,
     },
     /// An edge violates the causal structure by spanning more than one time slice
     /// (or, on toroidal topology, more than one *circular* slice step).
@@ -333,7 +395,7 @@ pub enum CdtError {
         /// Target output path.
         path: String,
         /// Output format being written.
-        format: String,
+        format: OutputFormat,
         /// Lower-level I/O or serialization error.
         detail: String,
     },
@@ -359,7 +421,7 @@ pub enum CdtError {
         /// Source output path.
         path: String,
         /// Output format being read.
-        format: String,
+        format: OutputFormat,
         /// Lower-level I/O or decoding error.
         detail: String,
     },
@@ -367,7 +429,7 @@ pub enum CdtError {
     #[error("Failed to {operation} {target} checkpoint: {detail}")]
     CheckpointSerializationFailed {
         /// Checkpoint operation being attempted.
-        operation: String,
+        operation: CheckpointOperation,
         /// Human-readable checkpoint target, such as "final triangulation".
         target: String,
         /// Lower-level serialization error.
@@ -504,13 +566,47 @@ mod tests {
         );
         assert_eq!(CdtValidationCheck::Causality.to_string(), "causality");
         assert_eq!(
-            CdtValidationCheck::CellClassification.to_string(),
-            "cell_classification"
+            CdtValidationCheck::SimplexClassification.to_string(),
+            "simplex_classification"
         );
         assert_eq!(
             CdtValidationCheck::ErgodicMoveCandidateGeometry.to_string(),
             "ergodic_move_candidate_geometry"
         );
+    }
+
+    #[test]
+    fn output_format_display_covers_all_formats() {
+        assert_eq!(OutputFormat::Csv.to_string(), "CSV");
+        assert_eq!(OutputFormat::Json.to_string(), "JSON");
+    }
+
+    #[test]
+    fn checkpoint_operation_display_covers_all_operations() {
+        assert_eq!(CheckpointOperation::Serialize.to_string(), "serialize");
+        assert_eq!(CheckpointOperation::Deserialize.to_string(), "deserialize");
+    }
+
+    #[test]
+    fn backend_mutation_operation_display_covers_all_operations() {
+        let cases = [
+            (
+                BackendMutationOperation::SetSimplexDataByKey,
+                "set_simplex_data_by_key",
+            ),
+            (
+                BackendMutationOperation::SetVertexDataByKey,
+                "set_vertex_data_by_key",
+            ),
+            (BackendMutationOperation::SetVertexData, "set_vertex_data"),
+            (BackendMutationOperation::SubdivideFace, "subdivide_face"),
+            (BackendMutationOperation::RemoveVertex, "remove_vertex"),
+            (BackendMutationOperation::FlipEdge, "flip_edge"),
+        ];
+
+        for (operation, expected) in cases {
+            assert_eq!(operation.to_string(), expected);
+        }
     }
 
     #[test]
@@ -676,7 +772,7 @@ mod tests {
     #[test]
     fn test_backend_rollback_failed_error() {
         let error = CdtError::BackendRollbackFailed {
-            operation: "set_vertex_data_by_key".to_string(),
+            operation: BackendMutationOperation::SetVertexDataByKey,
             target: "vertex VertexKey(123v1)".to_string(),
             detail: "backend reported invalid vertex key".to_string(),
             rollback_errors: "vertex VertexKey(7v1): backend reported invalid vertex key"
@@ -692,7 +788,7 @@ mod tests {
     #[test]
     fn test_backend_mutation_failed_error() {
         let error = CdtError::BackendMutationFailed {
-            operation: "set_vertex_data".to_string(),
+            operation: BackendMutationOperation::SetVertexData,
             target: "vertex VertexKey(123v1)".to_string(),
             detail: "backend reported invalid vertex key".to_string(),
         };
@@ -700,19 +796,6 @@ mod tests {
         assert_eq!(
             display,
             "Backend mutation failed [set_vertex_data] on vertex VertexKey(123v1): backend reported invalid vertex key"
-        );
-    }
-
-    #[test]
-    fn test_unsupported_operation_error() {
-        let error = CdtError::UnsupportedOperation {
-            operation: "MetropolisAlgorithm::run".to_string(),
-            reason: "real CDT ergodic moves are not implemented yet".to_string(),
-        };
-        let display = format!("{error}");
-        assert_eq!(
-            display,
-            "Unsupported operation [MetropolisAlgorithm::run]: real CDT ergodic moves are not implemented yet"
         );
     }
 
@@ -788,7 +871,7 @@ mod tests {
     fn test_output_write_failed_error() {
         let error = CdtError::OutputWriteFailed {
             path: "measurements.csv".to_string(),
-            format: "CSV".to_string(),
+            format: OutputFormat::Csv,
             detail: "permission denied".to_string(),
         };
         let CdtError::OutputWriteFailed {
@@ -800,7 +883,7 @@ mod tests {
             panic!("expected OutputWriteFailed variant");
         };
         assert_eq!(path, "measurements.csv");
-        assert_eq!(format, "CSV");
+        assert_eq!(*format, OutputFormat::Csv);
         assert_eq!(detail, "permission denied");
         let display = format!("{error}");
         assert_eq!(
@@ -852,7 +935,7 @@ mod tests {
     fn test_output_read_failed_error() {
         let error = CdtError::OutputReadFailed {
             path: "summary.json".to_string(),
-            format: "JSON".to_string(),
+            format: OutputFormat::Json,
             detail: "expected value at line 1 column 1".to_string(),
         };
         let CdtError::OutputReadFailed {
@@ -864,7 +947,7 @@ mod tests {
             panic!("expected OutputReadFailed variant");
         };
         assert_eq!(path, "summary.json");
-        assert_eq!(format, "JSON");
+        assert_eq!(*format, OutputFormat::Json);
         assert_eq!(detail, "expected value at line 1 column 1");
         let display = format!("{error}");
         assert_eq!(
@@ -876,7 +959,7 @@ mod tests {
     #[test]
     fn test_checkpoint_serialization_failed_error() {
         let error = CdtError::CheckpointSerializationFailed {
-            operation: "deserialize".to_string(),
+            operation: CheckpointOperation::Deserialize,
             target: "final triangulation".to_string(),
             detail: "missing field `geometry`".to_string(),
         };
@@ -888,7 +971,7 @@ mod tests {
         else {
             panic!("expected CheckpointSerializationFailed variant");
         };
-        assert_eq!(operation, "deserialize");
+        assert_eq!(*operation, CheckpointOperation::Deserialize);
         assert_eq!(target, "final triangulation");
         assert_eq!(detail, "missing field `geometry`");
         let display = format!("{error}");
