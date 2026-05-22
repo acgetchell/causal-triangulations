@@ -66,7 +66,8 @@ success. The raw mutable backend is not exposed as part of the CDT API.
 Move validation follows a two-layer design:
 
 - **`delaunay` crate** — pure geometric operations (`flip_k2`, `flip_k1_insert`, `flip_k1_remove`) with no physics constraints
-- **Geometry backend interface layer (`src/geometry/`)** — wraps upstream Delaunay operations behind crate-owned traits and handles
+- **Geometry backend interface layer (`src/geometry/`)** — wraps upstream Delaunay operations behind crate-owned traits, handles conversion, validation, and
+  error translation between the upstream library and our internal geometry types
 - **CDT domain layer (`src/cdt/`)** — chooses candidate sites, checks causality and time-slice integrity, and resynchronizes foliation metadata after accepted
   moves
 
