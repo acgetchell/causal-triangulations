@@ -14,7 +14,8 @@ use crate::config::{CdtConfig, CdtTopology};
 use crate::errors::{CdtError, CdtResult, OutputFormat};
 use crate::geometry::CdtTriangulation2D;
 use crate::util::usize_to_f64;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as DeError;
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::to_writer_pretty;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -108,8 +109,10 @@ impl Measurement {
 /// Serde serialization preserves the complete result object, including the
 /// final triangulation checkpoint. Use [`Self::write_summary_json`] when you
 /// want an analysis-friendly JSON report with configuration, aggregate
-/// statistics, step telemetry, and measurements.
-#[derive(Debug, Serialize, Deserialize)]
+/// statistics, step telemetry, and measurements. Deserialization validates the
+/// stored configuration, action parameters, and final evolved-CDT triangulation
+/// invariants, mapping any validation failure into the serde deserializer error.
+#[derive(Debug, Serialize)]
 pub struct SimulationResultsBackend {
     /// Configuration used for the simulation
     config: MetropolisConfig,
@@ -125,6 +128,44 @@ pub struct SimulationResultsBackend {
     elapsed_time: Duration,
     /// Final triangulation state
     triangulation: CdtTriangulation2D,
+}
+
+#[derive(Deserialize)]
+struct SimulationResultsBackendWire {
+    config: MetropolisConfig,
+    action_config: ActionConfig,
+    move_stats: MoveStatistics,
+    steps: Vec<MonteCarloStep>,
+    measurements: Vec<Measurement>,
+    elapsed_time: Duration,
+    triangulation: CdtTriangulation2D,
+}
+
+impl TryFrom<SimulationResultsBackendWire> for SimulationResultsBackend {
+    type Error = CdtError;
+
+    fn try_from(wire: SimulationResultsBackendWire) -> Result<Self, Self::Error> {
+        Self::new(
+            wire.config,
+            wire.action_config,
+            wire.move_stats,
+            wire.steps,
+            wire.measurements,
+            wire.elapsed_time,
+            wire.triangulation,
+        )
+    }
+}
+
+impl<'de> Deserialize<'de> for SimulationResultsBackend {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        SimulationResultsBackendWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(DeError::custom)
+    }
 }
 
 #[derive(Serialize)]
@@ -1184,6 +1225,87 @@ mod tests {
         assert!(matches!(
             error,
             CdtError::Foliation(FoliationError::StaleBookkeeping { .. })
+        ));
+    }
+
+    #[test]
+    fn deserialization_rejects_invalid_metropolis_config() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let results = SimulationResultsBackend::new(
+            MetropolisConfig::new(1.0, 1, 0, 1),
+            ActionConfig::default(),
+            MoveStatistics::new(),
+            vec![],
+            vec![],
+            Duration::ZERO,
+            triangulation,
+        )
+        .expect("valid result components should construct");
+        let json = serde_json::to_string(&results).expect("results should serialize");
+        let roundtrip: SimulationResultsBackend =
+            serde_json::from_str(&json).expect("valid serialized results should load");
+        assert_relative_eq!(roundtrip.config.temperature, 1.0);
+
+        let invalid_json = json.replacen("\"temperature\":1.0", "\"temperature\":0.0", 1);
+        assert_ne!(invalid_json, json);
+
+        let error = serde_json::from_str::<SimulationResultsBackend>(&invalid_json)
+            .expect_err("validated deserialization should reject zero temperature");
+        let message = error.to_string();
+        assert!(
+            message.contains("temperature") && message.contains("finite and positive"),
+            "serde error should preserve validation context, got {message}"
+        );
+    }
+
+    #[test]
+    fn result_wire_validation_rejects_invalid_metropolis_config() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let error = SimulationResultsBackend::try_from(SimulationResultsBackendWire {
+            config: MetropolisConfig::new(0.0, 1, 0, 1),
+            action_config: ActionConfig::default(),
+            move_stats: MoveStatistics::new(),
+            steps: vec![],
+            measurements: vec![],
+            elapsed_time: Duration::ZERO,
+            triangulation,
+        })
+        .expect_err("invalid wire Metropolis config should be rejected");
+
+        assert!(matches!(
+            error,
+            CdtError::InvalidSimulationConfiguration {
+                ref setting,
+                ref provided_value,
+                ref expected,
+            } if setting == "temperature" && provided_value == "0" && expected == "finite and positive"
+        ));
+    }
+
+    #[test]
+    fn result_wire_validation_rejects_invalid_action_config() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let error = SimulationResultsBackend::try_from(SimulationResultsBackendWire {
+            config: MetropolisConfig::new(1.0, 1, 0, 1),
+            action_config: ActionConfig::new(f64::NAN, 0.0, 0.0),
+            move_stats: MoveStatistics::new(),
+            steps: vec![],
+            measurements: vec![],
+            elapsed_time: Duration::ZERO,
+            triangulation,
+        })
+        .expect_err("invalid wire action config should be rejected");
+
+        assert!(matches!(
+            error,
+            CdtError::InvalidConfiguration {
+                ref setting,
+                ref provided_value,
+                ref expected,
+            } if setting == "coupling_0" && provided_value == "NaN" && expected == "finite"
         ));
     }
 

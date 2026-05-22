@@ -129,7 +129,11 @@ pub trait TriangulationQuery: GeometryBackend {
         edge: &Self::EdgeHandle,
     ) -> EdgeAdjacentFacesResult<Self::VertexHandle, Self::FaceHandle, Self::Error>;
 
-    /// Get all faces adjacent to a vertex
+    /// Get all faces adjacent to a vertex.
+    ///
+    /// Backend implementations may build an adjacency index for this query.
+    /// The Delaunay backend currently rebuilds that index per call, so callers
+    /// should treat it as `O(F)` in the number of finite faces.
     ///
     /// # Errors
     ///

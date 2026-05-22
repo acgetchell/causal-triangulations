@@ -439,7 +439,7 @@ impl ErgodicsSystem {
             let set_label = triangulation.set_vertex_data(&subdivision.new_vertex, Some(label));
             if let Err(err) = set_label {
                 let result = MoveResult::HardFailure(CdtError::BackendMutationFailed {
-                    operation: BackendMutationOperation::SetVertexDataByKey,
+                    operation: BackendMutationOperation::SetVertexData,
                     target: format!("vertex {:?}", subdivision.new_vertex.vertex_key()),
                     detail: err.to_string(),
                 });
@@ -663,7 +663,7 @@ impl ErgodicsSystem {
             return MoveResult::HardFailure(err);
         }
         if let Err(err) = triangulation.validate_evolved_cdt() {
-            return MoveResult::Rejected(err);
+            return MoveResult::HardFailure(err);
         }
 
         self.stats.record_success(move_type);
@@ -809,6 +809,9 @@ fn flip_is_causal(
 ///
 /// The candidate label must keep all three replacement triangles valid CDT
 /// triangles; unfoliated triangulations return a marker that skips labeling.
+/// Toroidal triangulations reject `(1,3)` subdivisions before mutation because
+/// the local subdivision is not compatible with the closed spatial slice
+/// invariant.
 fn insertion_label(
     triangulation: &CdtTriangulation2D,
     face: &DelaunayFaceHandle,
@@ -816,7 +819,22 @@ fn insertion_label(
     if !triangulation.has_foliation() {
         return Some(InsertionLabel::Unfoliated);
     }
+    if matches!(triangulation.metadata().topology, CdtTopology::Toroidal) {
+        return None;
+    }
 
+    causal_insertion_label(triangulation, face)
+}
+
+/// Finds a CDT-valid inserted vertex label without topology-specific guards.
+///
+/// This keeps the raw causality check reusable for tests that intentionally
+/// build a local subdivision fixture before exercising the inverse `(3,1)`
+/// move, while production `(1,3)` proposals apply topology guards first.
+fn causal_insertion_label(
+    triangulation: &CdtTriangulation2D,
+    face: &DelaunayFaceHandle,
+) -> Option<InsertionLabel> {
     let vertices = triangulation.geometry().face_vertices(face).ok()?;
     let [v0, v1, v2] = vertices.as_slice() else {
         return None;
@@ -1270,7 +1288,7 @@ mod tests {
     fn subdivide_first_toroidal_candidate(triangulation: &mut CdtTriangulation2D) {
         let candidate = triangulation.geometry().faces().find_map(|face| {
             let point = centroid(triangulation, &face)?;
-            let label = insertion_label(triangulation, &face)?;
+            let label = causal_insertion_label(triangulation, &face)?;
             Some((face, point, label))
         });
         let Some((face, point, label)) = candidate else {
@@ -1291,7 +1309,7 @@ mod tests {
     }
 
     #[test]
-    fn periodic_toroidal_move_13_rolls_back_invalid_s1_subdivision_after_offset_support() {
+    fn periodic_toroidal_move_13_rejects_invalid_s1_subdivision_before_mutation() {
         let mut system = ErgodicsSystem::with_seed(7);
         let mut triangulation =
             CdtTriangulation2D::from_toroidal_cdt(8, 8).expect("build toroidal CDT");
@@ -1304,8 +1322,8 @@ mod tests {
         let result = system.attempt_13_move(&mut triangulation);
 
         assert!(
-            matches!(result, MoveResult::Rejected(CdtError::Foliation(_))),
-            "periodic toroidal Move13Add should reach the offset-aware backend, then reject the invalid closed-S1 subdivision, got {result:?}"
+            matches!(result, MoveResult::CausalityViolation),
+            "periodic toroidal Move13Add should reject closed-S1 subdivision candidates before mutation, got {result:?}"
         );
         assert_eq!(system.stats.moves_13_accepted, 0);
         assert_eq!(
@@ -1315,7 +1333,7 @@ mod tests {
                 triangulation.face_count(),
             ),
             counts_before,
-            "rejected periodic toroidal subdivision should roll back simplex counts"
+            "rejected periodic toroidal subdivision should leave simplex counts unchanged"
         );
         triangulation
             .validate()
