@@ -113,7 +113,8 @@ All Python tests should:
 
 ### Rust Test Runner
 
-Runnable Rust tests use `cargo nextest` through the repository `just` recipes. Rustdoc doctests remain on `cargo test --doc` because nextest does not execute doctests. Use the `just` recipes instead of calling Cargo directly so this split stays consistent locally and in CI.
+Runnable Rust tests use `cargo nextest` through the repository `just` recipes. Rustdoc doctests remain on `cargo test --doc` because nextest does not execute
+doctests. Use the `just` recipes instead of calling Cargo directly so this split stays consistent locally and in CI.
 
 ---
 

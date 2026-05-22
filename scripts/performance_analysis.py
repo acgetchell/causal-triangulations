@@ -195,7 +195,14 @@ class PerformanceAnalyzer:
         print("🏃 Running benchmarks...")
         try:
             result = run_cargo_command(
-                ["bench", "--message-format=json"],
+                [
+                    "bench",
+                    "--profile",
+                    "perf",
+                    "--bench",
+                    "ci_performance_suite",
+                    "--message-format=json",
+                ],
                 cwd=self.project_root,
                 check=False,
                 timeout=600,  # 10 minute timeout

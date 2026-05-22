@@ -2,7 +2,8 @@
 
 This document provides examples for using the `cdt` binary, the command-line interface for Causal Dynamical Triangulations simulations.
 
-> **Current simulation status:** examples that pass `--simulate` run the Metropolis-Hastings loop over the 2D CDT move kernels. Omit `--simulate` when you only want triangulation generation and the initial measurement.
+> **Current simulation status:** examples that pass `--simulate` run the Metropolis-Hastings loop over the 2D CDT move kernels. Omit `--simulate` when you only
+> want triangulation generation and the initial measurement.
 
 ## Basic Usage
 
@@ -276,4 +277,5 @@ make run-simulation:
 ./target/release/cdt --version
 ```
 
-This CLI interface provides a way to explore CDT triangulation construction, validate simulation parameters, and run short Monte Carlo simulations from the command line.
+This CLI interface provides a way to explore CDT triangulation construction, validate simulation parameters, and run short Monte Carlo simulations from the
+command line.

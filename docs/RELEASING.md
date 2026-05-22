@@ -1,6 +1,7 @@
 # Releasing causal-triangulations
 
-This guide documents the release flow for `vX.Y.Z`: prepare a dedicated release PR, merge it, create the final annotated tag from the generated changelog, publish to crates.io, and create the GitHub release.
+This guide documents the release flow for `vX.Y.Z`: prepare a dedicated release PR, merge it, create the final annotated tag from the generated changelog,
+publish to crates.io, and create the GitHub release.
 
 The release changelog is generated with `git-cliff --tag` through `just changelog-unreleased`, so no temporary local tag is needed.
 
@@ -67,7 +68,8 @@ rg -n "\bv?[0-9]+\.[0-9]+\.[0-9]+\b" README.md docs/ || true
 just changelog-unreleased "$TAG"
 ```
 
-`just changelog-unreleased` runs `GIT_CLIFF_OFFLINE=true git-cliff --tag "$TAG" -o CHANGELOG.md`, then `postprocess-changelog`, then `archive-changelog`. The root changelog keeps Unreleased plus the active minor series; older completed minor series live under `docs/archive/changelog/`.
+`just changelog-unreleased` runs `GIT_CLIFF_OFFLINE=true git-cliff --tag "$TAG" -o CHANGELOG.md`, then `postprocess-changelog`, then `archive-changelog`. The
+root changelog keeps Unreleased plus the active minor series; older completed minor series live under `docs/archive/changelog/`.
 
 4. Validate the release branch
 
@@ -155,8 +157,10 @@ cargo publish
 6. Create the GitHub release with notes from the tag annotation
 
 ```bash
-gh release create "$TAG" --notes-from-tag
+gh release create "$TAG" --title "$TAG" --notes-from-tag
 ```
+
+Always set the GitHub release title to the exact tag string, including the leading `v`.
 
 ---
 

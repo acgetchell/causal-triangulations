@@ -27,7 +27,8 @@ These commands ensure:
 
 This repository standardizes development tasks through the `justfile`.
 
-Agents should **prefer running `just` commands instead of invoking the underlying tools directly**. The justfile ensures the correct flags, configuration, and tool ordering are used.
+Agents should **prefer running `just` commands instead of invoking the underlying tools directly**. The justfile ensures the correct flags, configuration, and
+tool ordering are used.
 
 Examples:
 
@@ -37,7 +38,8 @@ Examples:
 
 Direct tool invocation should only be used when a corresponding `just` command does not exist.
 
-Rust unit, integration, CLI, slow, example, and release test recipes run with `cargo nextest`. Documentation tests intentionally remain on `cargo test --doc` because nextest does not run rustdoc doctests.
+Rust unit, integration, CLI, slow, example, and release test recipes run with `cargo nextest`. Documentation tests intentionally remain on `cargo test --doc`
+because nextest does not run rustdoc doctests.
 
 ---
 
@@ -121,7 +123,8 @@ This runs the normal CI command and then feature-gated slow/stress tests.
 
 Repository-owned Semgrep rules live in `semgrep.yaml`. They encode focused project invariants that are not already covered by Rust, Clippy, Ruff, or ShellCheck.
 
-When adding or changing a Semgrep rule, add a matching fixture under `tests/semgrep/` and keep `just semgrep-test` passing. Rules ported from `markov-chain-monte-carlo` must be adapted to CDT naming, paths, and architecture constraints rather than copied mechanically.
+When adding or changing a Semgrep rule, add a matching fixture under `tests/semgrep/` and keep `just semgrep-test` passing. Rules ported from
+`markov-chain-monte-carlo` must be adapted to CDT naming, paths, and architecture constraints rather than copied mechanically.
 
 Commands:
 
@@ -165,11 +168,14 @@ Examples must:
 - run successfully
 - demonstrate correct API usage
 
-`just examples-validate` additionally checks stable output markers for user-facing Cargo examples. Keep those markers semantic rather than exact numeric values so simulation output can evolve without making the example contract brittle.
+`just examples-validate` additionally checks stable output markers for user-facing Cargo examples. Keep those markers semantic rather than exact numeric values
+so simulation output can evolve without making the example contract brittle.
 
-The example runner compiles all Cargo examples once with `cargo build --release --examples`, then executes the compiled binaries directly. This preserves example coverage while avoiding repeated Cargo invocations for each example.
+The example runner compiles all Cargo examples once with `cargo build --release --examples`, then executes the compiled binaries directly. This preserves
+example coverage while avoiding repeated Cargo invocations for each example.
 
-When adding or renaming a Cargo example, update `scripts/run_all_examples.sh` `validate_example_output()` with stable semantic output markers, or intentionally document why success-only validation is sufficient for that example.
+When adding or renaming a Cargo example, update `scripts/run_all_examples.sh` `validate_example_output()` with stable semantic output markers, or intentionally
+document why success-only validation is sufficient for that example.
 
 ---
 
@@ -209,9 +215,9 @@ Compatibility aliases remain available as granular recipes:
 
 ## Markdown Formatting
 
-Markdown files are checked and fixed with `rumdl`. The current config keeps
-legacy long-line and generated-reference behavior out of the migration so the
-tooling change does not become a broad documentation rewrite.
+Markdown files are checked and fixed with `rumdl`. The repository uses a
+160-column Markdown width, and `just markdown-check` also runs a raw line-length
+guard so constructs that `rumdl` exempts from MD013 still respect that limit.
 
 Commands:
 
@@ -279,7 +285,8 @@ jq empty file.json
 
 Workflows must pass `actionlint`.
 
-The repository has separate workflows for full CI, dependency audit, Codecov coverage, repository-rule SARIF upload, Clippy SARIF, performance checks, and CodeQL analysis. Do not add another external analysis workflow unless it has a distinct signal and required secrets are configured for this repository.
+The repository has separate workflows for full CI, dependency audit, Codecov coverage, repository-rule SARIF upload, Clippy SARIF, performance checks, and
+CodeQL analysis. Do not add another external analysis workflow unless it has a distinct signal and required secrets are configured for this repository.
 
 External GitHub Actions must use full commit-SHA pins, stay within the
 repository-owned allowlist in `semgrep.yaml`, and keep a readable version
@@ -312,6 +319,12 @@ Benchmark harnesses can be smoke-tested without producing baseline-quality perfo
 
 ```bash
 just bench-smoke
+```
+
+The smaller CI regression benchmark contract runs through the `perf` Cargo profile:
+
+```bash
+just bench-ci
 ```
 
 To compile benchmarks and release-profile integration tests without running them:
@@ -388,7 +401,8 @@ Regenerate with:
 just changelog
 ```
 
-This runs `git-cliff`, applies the Python postprocessor, and archives completed minor release series under `docs/archive/changelog/`.
+This runs `git-cliff`, applies the Python postprocessor, archives completed minor release series under `docs/archive/changelog/`, and
+formats generated changelog files with `rumdl`.
 
 For release PRs, generate the changelog for a version before the final tag exists with:
 

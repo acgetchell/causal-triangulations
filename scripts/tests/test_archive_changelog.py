@@ -353,6 +353,30 @@ class TestArchiveChangelog:
         archive_changelog(changelog, tmp_path / "archive")
         assert changelog.read_text(encoding="utf-8") == "# Changelog\n\nNo versions yet.\n"
 
+    def test_existing_archives_are_postprocessed(self, tmp_path: Path) -> None:
+        """Older archive files are normalized even when they are not regenerated."""
+        changelog = tmp_path / "CHANGELOG.md"
+        changelog.write_text(_PREAMBLE + _UNRELEASED + _V072 + _V071, encoding="utf-8")
+        archive_dir = tmp_path / "docs" / "archive" / "changelog"
+        archive_dir.mkdir(parents=True)
+        archive = archive_dir / "0.5.md"
+        archive.write_text(
+            "# Changelog - 0.5.x\n\n"
+            "## [0.5.3] - 2025-10-31\n\n"
+            "### Fixed\n\n"
+            "- Handle degenerate configurations [#116](https://github.com/acgetchell/causal-triangulations/pull/116)\n"
+            "  [`a6ec3fa`](https://github.com/acgetchell/causal-triangulations/commit/a6ec3fadeadbeef)\n\n"
+            "## Duplicate Vertex Handling\n\n"
+            "- Add duplicate coordinate detection\n",
+            encoding="utf-8",
+        )
+
+        archive_changelog(changelog, archive_dir)
+
+        content = archive.read_text(encoding="utf-8")
+        assert "\n## Duplicate Vertex Handling" not in content
+        assert "#### Duplicate Vertex Handling" in content
+
     def test_distributes_link_defs(self, tmp_path: Path) -> None:
         """Reference-style link definitions are distributed to the correct files."""
         changelog = tmp_path / "CHANGELOG.md"

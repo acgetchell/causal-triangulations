@@ -30,8 +30,18 @@ path = "src/main.rs"
 name = "cdt_benchmarks"
 harness = false
 
+[[bench]]
+name = "ci_performance_suite"
+harness = false
+
 [features]
 slow-tests = [  ]
+
+[profile.perf]
+inherits = "release"
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

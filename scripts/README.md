@@ -1,6 +1,7 @@
 # Scripts Directory
 
-This directory contains Python and shell tooling used by the CDT repository. Where possible, we keep these scripts aligned with the newer versions in the `delaunay` repo so both projects can eventually share a single PyPI package (runnable via `uvx`).
+This directory contains Python and shell tooling used by the CDT repository. Where possible, we keep these scripts aligned with the newer versions in the
+`delaunay` repo so both projects can eventually share a single PyPI package (runnable via `uvx`).
 
 ## Prerequisites
 
@@ -28,11 +29,13 @@ uv run tag-release v0.1.0 --help
 just tag v0.1.0
 ```
 
-`just changelog` runs `git-cliff`, applies markdown hygiene, and archives completed minor release series under `docs/archive/changelog/`. Use `just changelog-unreleased vX.Y.Z` while preparing a release PR before the final tag exists.
+`just changelog` runs `git-cliff`, applies markdown hygiene, and archives completed minor release series under `docs/archive/changelog/`. Use
+`just changelog-unreleased vX.Y.Z` while preparing a release PR before the final tag exists.
 
 ### Benchmark utilities
 
-`benchmark-utils` is a shared baseline/compare tool (ported from `delaunay`). It’s safe to use in CDT, but some subcommands assume baseline formats and benchmark layouts that are still being unified across repos.
+`benchmark-utils` is a shared baseline/compare tool (ported from `delaunay`). It’s safe to use in CDT, but some subcommands assume baseline formats and
+benchmark layouts that are still being unified across repos.
 
 ```bash
 uv run benchmark-utils generate-baseline

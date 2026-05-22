@@ -1,12 +1,19 @@
 # causal-triangulations
 
-[![Crates.io](https://img.shields.io/crates/v/causal-triangulations.svg)](https://crates.io/crates/causal-triangulations) [![Downloads](https://img.shields.io/crates/d/causal-triangulations.svg)](https://crates.io/crates/causal-triangulations) [![Docs.rs](https://docs.rs/causal-triangulations/badge.svg)](https://docs.rs/causal-triangulations) [![CI](https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml) [![rust-clippy analyze](https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml) [![Codecov](https://codecov.io/gh/acgetchell/causal-triangulations/graph/badge.svg?token=CsbOJBypGC)](https://codecov.io/gh/acgetchell/causal-triangulations) [![Audit dependencies](https://github.com/acgetchell/causal-triangulations/actions/workflows/audit.yml/badge.svg)](https://github.com/acgetchell/causal-triangulations/actions/workflows/audit.yml)
+[![Crates.io](https://img.shields.io/crates/v/causal-triangulations.svg)](https://crates.io/crates/causal-triangulations)
+[![Downloads](https://img.shields.io/crates/d/causal-triangulations.svg)](https://crates.io/crates/causal-triangulations)
+[![Docs.rs](https://docs.rs/causal-triangulations/badge.svg)](https://docs.rs/causal-triangulations)
+[![CI][ci-badge]][ci-workflow]
+[![rust-clippy analyze][clippy-badge]][clippy-workflow]
+[![Codecov](https://codecov.io/gh/acgetchell/causal-triangulations/graph/badge.svg?token=CsbOJBypGC)](https://codecov.io/gh/acgetchell/causal-triangulations)
+[![Audit dependencies][audit-badge]][audit-workflow]
 
 Causal Dynamical Triangulations for quantum gravity in [Rust], built on fast Delaunay triangulation primitives.
 
 ## 🌌 Introduction
 
-This library implements **Causal Dynamical Triangulations (CDT)** in [Rust]. CDT is a non-perturbative approach to quantum gravity that constructs discrete spacetime as triangulated manifolds with causal structure, providing a computational framework for studying quantum gravity phenomenology.
+This library implements **Causal Dynamical Triangulations (CDT)** in [Rust]. CDT is a non-perturbative approach to quantum gravity that constructs discrete
+spacetime as triangulated manifolds with causal structure, providing a computational framework for studying quantum gravity phenomenology.
 
 For an introduction to Causal Dynamical Triangulations, see [this paper](https://arxiv.org/abs/hep-th/0105267).
 
@@ -30,9 +37,11 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## 🚧 Project Status
 
-🚧 **Pre-release (0.0.x)** — The 1+1 CDT foundation is implemented and tested, but this crate is still under active development and **not yet ready for production use**. APIs, data structures, and module boundaries may change before v0.1.0.
+🚧 **Pre-release (0.0.x)** — The 1+1 CDT foundation is implemented and tested, but this crate is still under active development and
+**not yet ready for production use**. APIs, data structures, and module boundaries may change before v0.1.0.
 
-The library currently supports validated 1+1 CDT construction, foliation checks, Metropolis sampling, and core observables. Higher-dimensional CDT support, full move-kernel maturity, visualization/export workflows, and advanced ensemble-analysis helpers remain roadmap work.
+The library currently supports validated 1+1 CDT construction, foliation checks, Metropolis sampling, and core observables. Higher-dimensional CDT support, full
+move-kernel maturity, visualization/export workflows, and advanced ensemble-analysis helpers remain roadmap work.
 
 See [`docs/roadmap.md`](docs/roadmap.md) for current direction, near-term candidates, and non-goals.
 
@@ -52,7 +61,8 @@ This crate is part of a broader Rust ecosystem for computational geometry and si
 
 - [`delaunay`](https://crates.io/crates/delaunay) — geometric primitives and triangulations
 - `la-stack` — linear algebra utilities
-- [`markov-chain-monte-carlo`](https://crates.io/crates/markov-chain-monte-carlo) — composable MCMC traits, including delayed-commit proposals for CDT move ordering
+- [`markov-chain-monte-carlo`](https://crates.io/crates/markov-chain-monte-carlo) — composable MCMC traits, including delayed-commit proposals for CDT move
+  ordering
 
 The long-term design separates:
 
@@ -88,7 +98,8 @@ just run-example     # Basic simulation
 ./examples/scripts/performance_test.sh      # Performance benchmarking across system sizes
 ```
 
-`just setup` prints a checklist of external tools used by repository workflows (for example: `uv`, `taplo`, `actionlint`, `shfmt`, `shellcheck`, `jq`) and how to install them.
+`just setup` prints a checklist of external tools used by repository workflows (for example: `uv`, `taplo`, `actionlint`, `shfmt`, `shellcheck`, `jq`) and how
+to install them.
 
 **Just Workflows:**
 
@@ -173,6 +184,9 @@ cargo bench triangulation_creation
 cargo bench metropolis_simulation
 cargo bench action_calculations
 
+# CI regression benchmark contract
+just bench-ci
+
 # Performance regression testing
 just perf-check          # Check for performance regressions
 just perf-baseline       # Save performance baseline
@@ -180,11 +194,13 @@ just perf-report         # Generate detailed performance report
 just perf-trends 7       # Analyze performance trends over 7 days
 ```
 
-See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/PERFORMANCE_TESTING.md`](docs/PERFORMANCE_TESTING.md) for comprehensive performance testing workflow documentation.
+See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/PERFORMANCE_TESTING.md`](docs/PERFORMANCE_TESTING.md) for comprehensive
+performance testing workflow documentation.
 
 ## 🛣️ Roadmap
 
-The high-level roadmap, including 1+1 maturity work, future 2+1 and 3+1 CDT topology tracks, observables, dual/Voronoi geometry, visualization, and non-goals, lives in [`docs/roadmap.md`](docs/roadmap.md).
+The high-level roadmap, including 1+1 maturity work, future 2+1 and 3+1 CDT topology tracks, observables, dual/Voronoi geometry, visualization, and non-goals,
+lives in [`docs/roadmap.md`](docs/roadmap.md).
 
 ## Design notes
 
@@ -222,3 +238,9 @@ This project's license is specified in [LICENSE](LICENSE).
 [Rust]: https://rust-lang.org
 [Delaunay triangulation]: https://crates.io/crates/delaunay
 [Criterion]: https://github.com/bheisler/criterion.rs
+[ci-badge]: https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml/badge.svg
+[ci-workflow]: https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml
+[clippy-badge]: https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml/badge.svg
+[clippy-workflow]: https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml
+[audit-badge]: https://github.com/acgetchell/causal-triangulations/actions/workflows/audit.yml/badge.svg
+[audit-workflow]: https://github.com/acgetchell/causal-triangulations/actions/workflows/audit.yml

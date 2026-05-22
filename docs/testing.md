@@ -1,18 +1,24 @@
 # Testing Overview
 
-This document summarizes the repository's current test coverage and the main gaps to keep in mind when adding features. Command details and CI expectations live in `docs/dev/testing.md` and `docs/dev/commands.md`.
+This document summarizes the repository's current test coverage and the main gaps to keep in mind when adding features. Command details and CI expectations live
+in `docs/dev/testing.md` and `docs/dev/commands.md`.
 
 ## Current Coverage
 
 - **Library unit tests**: `cargo test --lib` currently runs the core Rust test suite across CDT, geometry, configuration, and utility modules.
-- **Integration tests**: `tests/integration_tests.rs`, `tests/cli.rs`, `tests/proptest_foliation.rs`, and `tests/proptest_metropolis.rs` cover public workflows, CLI validation, foliation invariants, and Metropolis scoring.
+- **Integration tests**: `tests/integration_tests.rs`, `tests/cli.rs`, `tests/proptest_foliation.rs`, and `tests/proptest_metropolis.rs` cover public workflows,
+  CLI validation, foliation invariants, and Metropolis scoring.
 - **Python support-script tests**: `scripts/tests/` covers benchmark, changelog, coverage, hardware, tag, and subprocess utilities.
 - **Documentation tests**: public doctests run through `just test-doc` and as part of the broader CI path.
 - **Examples and benchmark compilation**: `just ci` compiles benchmarks and runs all example programs.
 
-The issue #105 toroidal regression is covered by `tests/integration_tests.rs::test_toroidal_metropolis_accepts_periodic_moves_and_preserves_topology`, which runs a seeded S¹×S¹ Metropolis simulation, requires at least one accepted periodic move, and verifies topology, foliation, causality, simplex classification, and χ = 0 at the end.
+The issue #105 toroidal regression is covered by `tests/integration_tests.rs::test_toroidal_metropolis_accepts_periodic_moves_and_preserves_topology`, which
+runs a seeded S¹×S¹ Metropolis simulation, requires at least one accepted periodic move, and verifies topology, foliation, causality, simplex classification,
+and χ = 0 at the end.
 
-Open-boundary simulation entrypoints are covered by crate-root tests that require `run_simulation()` to build a foliated regular CDT strip, preserve adjacent-slice causality, classify simplices, and report a non-empty volume profile. Configuration tests also reject open-boundary totals that cannot be split into equal-size spatial slices.
+Open-boundary simulation entrypoints are covered by crate-root tests that require `run_simulation()` to build a foliated regular CDT strip, preserve
+adjacent-slice causality, classify simplices, and report a non-empty volume profile. Configuration tests also reject open-boundary totals that cannot be split
+into equal-size spatial slices.
 
 ## Remaining Gaps
 

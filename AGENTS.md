@@ -2,7 +2,8 @@
 
 Essential guidance for AI assistants working in this repository.
 
-This file is the **entry point for all coding agents**. Detailed rules are split into additional documents under `docs/dev/`. Agents MUST read the referenced files before making changes.
+This file is the **entry point for all coding agents**. Detailed rules are split into additional documents under `docs/dev/`. Agents MUST read the referenced
+files before making changes.
 
 ---
 
@@ -14,7 +15,8 @@ Before modifying code, agents MUST read:
 - **All files in `docs/dev/*.md`** – repository development rules
 - `docs/code_organization.md` – module layout and architecture
 
-The `docs/dev/` directory contains the authoritative development guidance for this repository. Agents must load every file in that directory before making changes.
+The `docs/dev/` directory contains the authoritative development guidance for this repository. Agents must load every file in that directory before making
+changes.
 
 ---
 
@@ -26,7 +28,8 @@ The `docs/dev/` directory contains the authoritative development guidance for th
 - **ALLOWED**: read‑only git commands (`git --no-pager status`, `git --no-pager diff`, `git --no-pager log`, `git --no-pager show`, `git --no-pager blame`)
 - **ALWAYS** use `git --no-pager` when reading git output
 - Suggest git commands that modify version control state for the user to run manually
-- When suggesting branch names, prefer `{type}/{issue}-descriptor-or-two`, e.g. `fix/307-topology-validation`, `perf/315-bench-profile`, or `doc/329-branch-guidance`. If an environment requires an owner/tool prefix, keep this structure after the prefix, e.g. `codex/fix/307-topology-validation`.
+- When suggesting branch names, prefer `{type}/{issue}-descriptor-or-two`, e.g. `fix/307-topology-validation`, `perf/315-bench-profile`, or
+  `doc/329-branch-guidance`. If an environment requires an owner/tool prefix, keep this structure after the prefix, e.g. `codex/fix/307-topology-validation`.
 
 ### GitHub CLI (`gh`)
 
@@ -46,7 +49,8 @@ When using the `gh` CLI to view issues, PRs, or other GitHub objects:
 
 - **AVOID** plain `gh issue view N` — it may fail with `read:project` scope errors or open a pager.
 
-- To manage **issue dependencies** (Blocks / Is Blocked By), use the GitHub REST API via `gh api`. The endpoint requires the **internal issue ID** (not the issue number).
+- To manage **issue dependencies** (Blocks / Is Blocked By), use the GitHub REST API via `gh api`. The endpoint requires the **internal issue ID** (not the
+  issue number).
 
   To get an issue's internal ID:
 
@@ -70,7 +74,8 @@ When using the `gh` CLI to view issues, PRs, or other GitHub objects:
 
   **Note**: Use `-F` (not `-f`) for `issue_id` so it is sent as an integer. The API returns HTTP 422 if the dependency already exists.
 
-- When updating issues, use explicit `comment`/`edit` commands. For **arbitrary Markdown** (backticks, quotes, special characters), prefer `--body-file -` with a heredoc:
+- When updating issues, use explicit `comment`/`edit` commands. For **arbitrary Markdown** (backticks, quotes, special characters), prefer `--body-file -` with
+  a heredoc:
 
   ```bash
   gh issue comment 42 --repo acgetchell/causal-triangulations --body-file - <<'EOF'
@@ -94,9 +99,12 @@ When using the `gh` CLI to view issues, PRs, or other GitHub objects:
 
 ### Rust Error Handling
 
-- Do not introduce `Box<dyn std::error::Error>`, `Box<dyn Error>`, or `anyhow::Error` as fallible return types in production `src/` code, public doctests, examples, or benchmarks that demonstrate user-facing workflows
-- Prefer `CdtResult<T>` and narrow `CdtError` variants with structured context for distinct I/O, serialization, validation, backend, checkpoint, or output failure modes
-- `&dyn Error` is acceptable for `std::error::Error::source`, tests that verify standard error trait behavior, and lint fixtures that intentionally exercise forbidden generic-error patterns
+- Do not introduce `Box<dyn std::error::Error>`, `Box<dyn Error>`, or `anyhow::Error` as fallible return types in production `src/` code, public doctests,
+  examples, or benchmarks that demonstrate user-facing workflows
+- Prefer `CdtResult<T>` and narrow `CdtError` variants with structured context for distinct I/O, serialization, validation, backend, checkpoint, or output
+  failure modes
+- `&dyn Error` is acceptable for `std::error::Error::source`, tests that verify standard error trait behavior, and lint fixtures that intentionally exercise
+  forbidden generic-error patterns
 - Detailed error-type guidance lives in `docs/dev/rust.md`
 
 ### Rust Import Hygiene
@@ -109,7 +117,8 @@ When using the `gh` CLI to view issues, PRs, or other GitHub objects:
 - Keep `prelude::*` small and focused on common quick-start workflows.
 - Keep scoped preludes minimal and orthogonal; do not duplicate specialized APIs across scoped preludes unless the overlap is intentionally documented.
 - `prelude::observables` is the user-facing analysis surface for measuring triangulations and derived physical observables.
-- `prelude::simulation` is for running, inspecting, and debugging simulations; it may expose telemetry and proposal/result types, but should not become the home for user-facing observable estimators.
+- `prelude::simulation` is for running, inspecting, and debugging simulations; it may expose telemetry and proposal/result types, but should not become the home
+  for user-facing observable estimators.
 - Detailed prelude boundary guidance lives in `docs/dev/rust.md`.
 
 ### Commit Message Generation
@@ -127,14 +136,16 @@ When generating commit messages:
 Commit bodies appear **verbatim** in `CHANGELOG.md` (indented by git‑cliff's template). Write them as clean, readable prose:
 
 - Keep the **subject line** concise — it becomes the changelog entry.
-- The **type** determines the changelog section (`feat` → Added, `fix` → Fixed, `refactor`/`test`/`style` → Changed, `perf` → Performance, `docs` → Documentation, `build`/`chore`/`ci` → Maintenance).
+- The **type** determines the changelog section (`feat` → Added, `fix` → Fixed, `refactor`/`test`/`style` → Changed, `perf` → Performance, `docs` →
+  Documentation, `build`/`chore`/`ci` → Maintenance).
 - Include **PR references** as `(#N)` in the subject — cliff auto‑links them (e.g. `feat: add foo (#42)`).
 - **Avoid headings** `#`–`###` in the body — they conflict with changelog structure (`##` = release, `###` = section). Use `####` if a heading is truly needed.
 - Body text should be **plain prose or simple lists**. Numbered lists and sub‑items are fine but avoid deep nesting.
 
 #### Breaking Changes
 
-Breaking changes **must** use one of these conventional commit markers so that `git‑cliff` can detect them and generate the `### ⚠️ Breaking Changes` section in `CHANGELOG.md`:
+Breaking changes **must** use one of these conventional commit markers so that `git‑cliff` can detect them and generate the `### ⚠️ Breaking Changes` section in
+`CHANGELOG.md`:
 
 - **Bang notation**: `feat!: remove deprecated API` (append `!` after the type/scope)
 - **Footer trailer**: add `BREAKING CHANGE: <description>` as a [git trailer](https://git-scm.com/docs/git-interpret-trailers) at the end of the commit body
@@ -159,7 +170,8 @@ Refer to `docs/dev/commands.md` for full details.
 
 When adding or renaming Cargo examples, update `just examples-validate` markers as needed so CI keeps validating the user-facing example contracts.
 
-For tooling-alignment work, update `docs/dev/tooling-alignment.md` with the comparison and rationale before adding or changing config, workflow, or repository-rule files.
+For tooling-alignment work, update `docs/dev/tooling-alignment.md` with the comparison and rationale before adding or changing config, workflow, or
+repository-rule files.
 
 ---
 
@@ -184,10 +196,16 @@ Key principle:
 - **MSRV**: 1.95.0
 - **Edition**: 2024
 - **Unsafe code**: forbidden (`#![forbid(unsafe_code)]`)
-- **Architecture**: `src/geometry/` is the backend interface layer for the `delaunay` crate; `src/cdt/` is the CDT domain layer. Direct `use delaunay::` imports are restricted to `src/geometry/` (`backends/delaunay.rs` and `generators.rs`); CDT modules use the trait-based abstractions, crate-owned Delaunay handles, generator utilities, and `DelaunayBackend2D` type alias (see `docs/dev/rust.md § Geometry Backend Isolation`)
-- **Modules**: `src/cdt/` (CDT logic: moves, action, Metropolis, foliation, observables, results, triangulation child modules), `src/geometry/` (geometry abstractions and backends), `src/config.rs` (simulation configuration)
-- **Foliation**: `src/cdt/foliation.rs` defines foliation bookkeeping and edge/simplex classification. Time labels are stored as vertex data; `from_cdt_strip` and `from_toroidal_cdt` construct labeled CDT triangulations; `validate_causality` enforces adjacent-slice edges (with circular distance on toroidal time). Design documented in `docs/foliation.md`
-- **Ergodic moves**: `attempt_22_move`, `attempt_13_move`, `attempt_31_move`, `attempt_edge_flip` are Delaunay-backed, foliation-aware move kernels. They mutate through narrow CDT-owned edit operations, roll back failed finalized mutations, and preserve topology/foliation invariants
+- **Architecture**: `src/geometry/` is the backend interface layer for the `delaunay` crate; `src/cdt/` is the CDT domain layer. Direct `use delaunay::` imports
+  are restricted to `src/geometry/` (`backends/delaunay.rs` and `generators.rs`); CDT modules use the trait-based abstractions, crate-owned Delaunay handles,
+  generator utilities, and `DelaunayBackend2D` type alias (see `docs/dev/rust.md § Geometry Backend Isolation`)
+- **Modules**: `src/cdt/` (CDT logic: moves, action, Metropolis, foliation, observables, results, triangulation child modules), `src/geometry/` (geometry
+  abstractions and backends), `src/config.rs` (simulation configuration)
+- **Foliation**: `src/cdt/foliation.rs` defines foliation bookkeeping and edge/simplex classification. Time labels are stored as vertex data; `from_cdt_strip`
+  and `from_toroidal_cdt` construct labeled CDT triangulations; `validate_causality` enforces adjacent-slice edges (with circular distance on toroidal time).
+  Design documented in `docs/foliation.md`
+- **Ergodic moves**: `attempt_22_move`, `attempt_13_move`, `attempt_31_move`, `attempt_edge_flip` are Delaunay-backed, foliation-aware move kernels. They mutate
+  through narrow CDT-owned edit operations, roll back failed finalized mutations, and preserve topology/foliation invariants
 - **Python scripts**: `scripts/` contains benchmark, changelog, and hardware utilities; tests in `scripts/tests/` run via pytest
 - **When adding/removing files**: Update `docs/code_organization.md`
 

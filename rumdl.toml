@@ -1,6 +1,10 @@
 [global]
+line-length = 160
 disable = [
-    "MD013",
     "MD034",
     "MD057",
 ]
+
+[MD013]
+line-length = 160
+reflow = true

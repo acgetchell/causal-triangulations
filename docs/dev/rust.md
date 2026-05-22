@@ -70,7 +70,9 @@ Avoid unnecessary allocations and cloning in public APIs. Prefer returning refer
 
 Only return owned values (`Vec`, `String`, etc.) when necessary.
 
-Do not expose broad mutable access to invariant-heavy CDT wrappers. Prefer narrow mutation methods that perform one operation, invalidate derived caches/bookkeeping, and return a typed `Result`. Tests that need invalid legacy states should use local helpers inside the test module rather than test-only constructors or methods on production impl blocks.
+Do not expose broad mutable access to invariant-heavy CDT wrappers. Prefer narrow mutation methods that perform one operation, invalidate derived
+caches/bookkeeping, and return a typed `Result`. Tests that need invalid legacy states should use local helpers inside the test module rather than test-only
+constructors or methods on production impl blocks.
 
 ---
 
@@ -80,7 +82,9 @@ Public APIs must **not panic**.
 
 Use explicit error propagation.
 
-Production `src/` code must not use bare `unwrap()` or explicit `panic!`. Use `?`, typed errors, `Option`, or an intentional fallback instead. Tests, doctests, examples, and benchmark setup may fail fast when a broken fixture should stop execution immediately; prefer `expect("reason")` over bare `unwrap()` in user-facing examples so failures remain diagnosable.
+Production `src/` code must not use bare `unwrap()` or explicit `panic!`. Use `?`, typed errors, `Option`, or an intentional fallback instead. Tests, doctests,
+examples, and benchmark setup may fail fast when a broken fixture should stop execution immediately; prefer `expect("reason")` over bare `unwrap()` in
+user-facing examples so failures remain diagnosable.
 
 ### Fallible public functions
 
@@ -132,20 +136,28 @@ Errors should be defined **within the module where they are used**.
 
 Avoid large centralized error enums.
 
-Error variants must be narrow, orthogonal, and purpose-specific. Do not collapse distinct failure modes into one catch-all variant when callers, tests, or debugging would need to distinguish them. Prefer a new variant over stringly typed detail when the distinction is part of the recovery or diagnostic path.
+Error variants must be narrow, orthogonal, and purpose-specific. Do not collapse distinct failure modes into one catch-all variant when callers, tests, or
+debugging would need to distinguish them. Prefer a new variant over stringly typed detail when the distinction is part of the recovery or diagnostic path.
 
 Each variant should carry the structured context needed to debug the failure without parsing the `Display` string:
 
 - the operation being attempted, when the same error can occur from multiple operations
 - the relevant handle, key, index, coordinate, or configuration field
 - the expected invariant and the actual value when reporting validation failures
-- the source error as a typed source when possible, or as a string only at crate/backend boundaries where the upstream type is not part of this crate's public contract
+- the source error as a typed source when possible, or as a string only at crate/backend boundaries where the upstream type is not part of this crate's public
+  contract
 
-Keep error layers orthogonal. Invalid input or handles, unsupported operations, topology/causality violations, backend mutation failures, and internal postcondition failures should use different variants. Wrapping is appropriate only when crossing abstraction layers, and wrappers must preserve the lower-level detail.
+Keep error layers orthogonal. Invalid input or handles, unsupported operations, topology/causality violations, backend mutation failures, and internal
+postcondition failures should use different variants. Wrapping is appropriate only when crossing abstraction layers, and wrappers must preserve the lower-level
+detail.
 
 Public error enums must be `#[non_exhaustive]` so new variants remain additive.
 
-Do not use `Box<dyn std::error::Error>`, `Box<dyn Error>`, or `anyhow::Error` as fallible return types in production `src/` code, public doctests, examples, or benchmarks that demonstrate user-facing workflows. Prefer the crate's typed `CdtResult<T>` and add a narrow `CdtError` variant when a distinct I/O, serialization, validation, backend, or checkpoint failure mode is otherwise only representable as a generic error. `&dyn Error` is acceptable for implementing `std::error::Error::source`, for tests that explicitly verify the standard error trait implementation, and for lint fixtures that exercise the forbidden pattern.
+Do not use `Box<dyn std::error::Error>`, `Box<dyn Error>`, or `anyhow::Error` as fallible return types in production `src/` code, public doctests, examples, or
+benchmarks that demonstrate user-facing workflows. Prefer the crate's typed `CdtResult<T>` and add a narrow `CdtError` variant when a distinct I/O,
+serialization, validation, backend, or checkpoint failure mode is otherwise only representable as a generic error. `&dyn Error` is acceptable for implementing
+`std::error::Error::source`, for tests that explicitly verify the standard error trait implementation, and for lint fixtures that exercise the forbidden
+pattern.
 
 Example:
 
@@ -166,7 +178,8 @@ Always import types at the top of the module rather than using fully‑qualified
 
 Group imports from the same module into a single `use` statement with braces.
 
-Do not put test-only imports in the production module preamble. Move `#[cfg(test)]` imports into the relevant `tests` module so normal builds do not carry test-only style noise at the top of implementation files.
+Do not put test-only imports in the production module preamble. Move `#[cfg(test)]` imports into the relevant `tests` module so normal builds do not carry
+test-only style noise at the top of implementation files.
 
 If a test module already has `use super::*;`, do not re‑import items that are already brought into scope by the parent module's imports.
 
@@ -184,9 +197,11 @@ Modules are declared from `src/lib.rs` (and `src/main.rs` for binaries), includi
 
 All public items must have documentation.
 
-Public functions and methods should include a `# Examples` section with a runnable doctest demonstrating basic usage. Doctests serve as both documentation and regression tests.
+Public functions and methods should include a `# Examples` section with a runnable doctest demonstrating basic usage. Doctests serve as both documentation and
+regression tests.
 
-Private helper functions should have a `///` doc comment that explains why the helper exists, especially when it encodes an invariant, isolates validation, or keeps a mutation path consistent.
+Private helper functions should have a `///` doc comment that explains why the helper exists, especially when it encodes an invariant, isolates validation, or
+keeps a mutation path consistent.
 
 After Rust changes, verify documentation builds:
 
@@ -198,27 +213,34 @@ just doc-check
 
 ## Re-exports
 
-Types that are part of the crate's **stable public API** (documented, intended for external consumption) should be re-exported from the crate root (`src/lib.rs`). Internal-use public types (e.g., backend-specific handles) should not be re-exported to avoid API bloat.
+Types that are part of the crate's **stable public API** (documented, intended for external consumption) should be re-exported from the crate root
+(`src/lib.rs`). Internal-use public types (e.g., backend-specific handles) should not be re-exported to avoid API bloat.
 
 When adding a new public API type, add a corresponding `pub use` line in the re-export block at the top of `lib.rs`.
 
-The broad `prelude::*` must stay small. It should cover common quick-start workflows such as CDT construction, basic configuration, simulation startup, query traits, and error handling. Do not use it as a dumping ground for every public type.
+The broad `prelude::*` must stay small. It should cover common quick-start workflows such as CDT construction, basic configuration, simulation startup, query
+traits, and error handling. Do not use it as a dumping ground for every public type.
 
-Focused preludes under `prelude::` must remain small, orthogonal, and purpose-specific. Use them in doctests, integration tests, examples, and benchmarks instead of deep module paths when demonstrating public workflows. Avoid duplicating specialized APIs across scoped preludes unless the overlap is deliberate and documented:
+Focused preludes under `prelude::` must remain small, orthogonal, and purpose-specific. Use them in doctests, integration tests, examples, and benchmarks
+instead of deep module paths when demonstrating public workflows. Avoid duplicating specialized APIs across scoped preludes unless the overlap is deliberate and
+documented:
 
 - `prelude::geometry` for backend construction, geometry generators, and geometry traits
 - `prelude::triangulation` for CDT wrappers, foliation classification, topology metadata, and triangulation queries
 - `prelude::moves` for local ergodic move kernels, move results, move types, and move statistics
 - `prelude::action` for standalone action configuration and Regge action calculations
 - `prelude::errors` for crate error types and typed error-category enums needed to pattern-match failures
-- `prelude::simulation` for Metropolis/action simulation workflows, proposal types, simulation result types, and telemetry needed to inspect or debug simulations
-- `prelude::observables` for user-facing analysis APIs that measure triangulations or derived physical observables, such as volume profiles, Hausdorff-dimension estimators, and spectral-dimension estimators
+- `prelude::simulation` for Metropolis/action simulation workflows, proposal types, simulation result types, and telemetry needed to inspect or debug
+  simulations
+- `prelude::observables` for user-facing analysis APIs that measure triangulations or derived physical observables, such as volume profiles, Hausdorff-dimension
+  estimators, and spectral-dimension estimators
 - `prelude::testing` for fixture-only helpers such as the mock backend and its typed error categories
 
 Keep the simulation and observables boundaries crisp:
 
 - Export user-facing observable estimators from `prelude::observables`, not `prelude::simulation`.
-- Keep simulation telemetry, proposal adapters, and result containers in `prelude::simulation`; do not export them from `prelude::observables` merely because an observable can be computed from them.
+- Keep simulation telemetry, proposal adapters, and result containers in `prelude::simulation`; do not export them from `prelude::observables` merely because an
+  observable can be computed from them.
 - Examples and doctests for measurements should prefer `prelude::observables::*`; examples and doctests for running MCMC should prefer `prelude::simulation::*`.
 
 ---
@@ -292,7 +314,9 @@ Before adding a dependency, consider:
 
 ## Geometry Backend Isolation
 
-`src/geometry/` is the backend interface layer. It is responsible for wrapping the upstream `delaunay` crate behind this crate's traits, opaque handles, generators, and backend adapters. `src/cdt/` is the CDT domain layer: it owns foliation, topology, causality, moves, action, simulation, results, and observables.
+`src/geometry/` is the backend interface layer. It is responsible for wrapping the upstream `delaunay` crate behind this crate's traits, opaque handles,
+generators, and backend adapters. `src/cdt/` is the CDT domain layer: it owns foliation, topology, causality, moves, action, simulation, results, and
+observables.
 
 Direct `use delaunay::` imports are **restricted** to the `src/geometry/` subtree:
 

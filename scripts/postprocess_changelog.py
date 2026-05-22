@@ -38,8 +38,11 @@ _TOKEN_RE = re.compile(
 )
 
 
-# Version section heading: ## [X.Y.Z] or ## [Unreleased]
-_VERSION_RE = re.compile(r"^## \[")
+# Version section heading: ## [X.Y.Z], ## [vX.Y.Z], or ## [Unreleased]
+_VERSION_RE = re.compile(
+    r"^## \[(?:v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?|Unreleased)\]"
+    r"(?:\s+-\s+\d{4}-\d{2}-\d{2})?\s*$"
+)
 
 # PR link: [#123](https://github.com/.../pull/123)
 _PR_LINK_RE = re.compile(r"\[#(\d+)\]\(https://github\.com/[^)]+/pull/\d+\)")
@@ -64,6 +67,25 @@ _INDENTED_ATX_HEADING_RE = re.compile(r"^(?P<indent>\s+)#{1,6}\s+(?P<title>.*?)(
 # those become ordinary list items, which makes them look like separate
 # generated commits. Treat them as prose headings inside the parent entry.
 _SQUASH_HEADING_RE = re.compile(r"^(?P<indent>\s*)-\s+(?P<prefix>[A-Za-z]+(?:\([^)]+\))?!?):\s+(?P<title>.+?)\s*$")
+
+# Changelog section headings that may appear at column zero under a version
+# heading. Other accidental ``##``/``###`` headings from commit bodies are
+# demoted to entry-level headings so they cannot split the generated hierarchy.
+_CHANGELOG_SECTION_HEADINGS = {
+    "Added",
+    "Changed",
+    "Deprecated",
+    "Dependencies",
+    "Documentation",
+    "Fixed",
+    "Maintenance",
+    "Merged Pull Requests",
+    "Performance",
+    "Removed",
+    "Security",
+    "⚠️ Breaking Changes",
+}
+_ENTRY_HEADING_RE = re.compile(r"^(?P<level>#{2,6})\s+(?P<title>.*?)(?:\s+#+\s*)?$")
 
 # This label set is intentionally broad, including release labels such as
 # "added", "fixed", "changed", "removed", and "deprecated". Rewriting is
@@ -432,6 +454,38 @@ def _normalize_indented_heading(line: str) -> str:
     return f"{match.group('indent')}**{title}**"
 
 
+def _normalize_entry_heading(line: str) -> str:
+    """Demote accidental column-zero commit-body headings to entry headings."""
+    match = _ENTRY_HEADING_RE.match(line)
+    if match is None:
+        return line
+
+    level = match.group("level")
+    title = match.group("title").strip()
+    if not title or level.startswith("####"):
+        return line
+    if level == "##" and (_VERSION_RE.match(line) or title == "Archives"):
+        return line
+    if level == "###" and title in _CHANGELOG_SECTION_HEADINGS:
+        return line
+    return f"#### {title}"
+
+
+def normalize_entry_headings_text(text: str) -> str:
+    """Normalize accidental entry headings in an existing changelog document."""
+    result: list[str] = []
+    in_code_block = False
+
+    for line in text.split("\n"):
+        if line.lstrip().startswith("```"):
+            result.append(line)
+            in_code_block = not in_code_block
+            continue
+        result.append(line if in_code_block else _normalize_entry_heading(line))
+
+    return "\n".join(result).rstrip("\n") + "\n"
+
+
 def _process_code_fence(line: str, result: list[str], in_code_block: bool, next_line: str | None) -> tuple[bool, bool]:
     """Handle fenced-code transitions and append the line when consumed."""
     stripped = line.lstrip()
@@ -481,6 +535,7 @@ def _normalize_body_line(line: str, lines: list[str], idx: int, result: list[str
     is_isolated_body_heading = _is_isolated_body_heading(lines, idx)
     line = _deindent_orphan(line, lines, idx)
     line = _normalize_indented_heading(line)
+    line = _normalize_entry_heading(line)
 
     if is_isolated_body_heading:
         line = _normalize_squash_heading(line, nested=current_entry_summary is not None)
