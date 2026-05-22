@@ -342,6 +342,13 @@ Time: [100.0, 110.0, 120.0] µs
 
         assert comparator._matching_baseline(current, {"repair/4d": baseline}) is baseline
 
+    def test_matching_baseline_falls_back_to_legacy_key_after_id_miss(self, comparator) -> None:
+        """Point-sized ID-keyed benchmarks still match historical point/dimension baselines."""
+        current = BenchmarkData(1000, "2D", benchmark_id="insert/2d").with_timing(100.0, 110.0, 120.0, "µs")
+        baseline = BenchmarkData(1000, "2D").with_timing(95.0, 105.0, 115.0, "µs")
+
+        assert comparator._matching_baseline(current, {"1000_2D": baseline}) is baseline
+
     def test_write_time_comparison_no_regression(self, comparator):
         """Test time comparison writing with no regression."""
         current = BenchmarkData(1000, "2D").with_timing(100.0, 110.0, 120.0, "µs")

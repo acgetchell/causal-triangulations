@@ -2197,8 +2197,8 @@ mod tests {
             .expect("resumed triangulation should preserve causality");
         first_resumed
             .triangulation()
-            .validate_cell_classification()
-            .expect("resumed triangulation should preserve cell classification");
+            .validate_simplex_classification()
+            .expect("resumed triangulation should preserve simplex classification");
         assert_eq!(
             to_value(first_resumed.steps()).expect("steps should serialize"),
             to_value(second_resumed.steps()).expect("steps should serialize")

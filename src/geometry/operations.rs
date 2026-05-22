@@ -49,7 +49,7 @@ impl<V: Hash> Hash for UnorderedPair<V> {
 
 /// An unordered set key (order-independent equality + hashing).
 ///
-/// Used to match the same facet extracted from two adjacent cells, even if vertex order differs.
+/// Used to match the same facet extracted from two adjacent simplices, even if vertex order differs.
 #[derive(Clone, Debug)]
 struct UnorderedSet<V>(Vec<V>);
 
@@ -78,8 +78,8 @@ impl<V: Hash> Hash for UnorderedSet<V> {
 
 /// Compute boundary facets (a.k.a. hull facets) of the simplicial complex.
 ///
-/// For simplices (Delaunay cells), a facet is the set of all cell vertices excluding one vertex.
-/// Any facet that appears in exactly one cell is on the boundary.
+/// For Delaunay simplices, a facet is the set of all simplex vertices excluding one vertex.
+/// Any facet that appears in exactly one simplex is on the boundary.
 fn boundary_facets<B: TriangulationQuery>(tri: &B) -> Vec<Vec<B::VertexHandle>> {
     // Map: facet key -> (occurrence count, representative vertex list)
     type FacetCounts<V> = HashMap<UnorderedSet<V>, (usize, Vec<V>)>;
@@ -94,7 +94,7 @@ fn boundary_facets<B: TriangulationQuery>(tri: &B) -> Vec<Vec<B::VertexHandle>> 
             continue;
         }
 
-        // Degenerate 1D cell (edge): treat each endpoint as a "facet" (0D boundary).
+        // Degenerate 1D simplex (edge): treat each endpoint as a "facet" (0D boundary).
         if vertices.len() == 2 {
             for v in &vertices {
                 let facet = vec![v.clone()];

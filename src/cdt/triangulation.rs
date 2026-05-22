@@ -1102,7 +1102,7 @@ mod tests {
         assert_eq!(tri.slice_sizes(), initial_slice_sizes.as_slice());
         assert!(tri.time_label(&vertex).is_some());
         assert!(tri.edge_type(&edge).is_some());
-        assert!(tri.cell_type(&face).is_some());
+        assert!(tri.simplex_type(&face).is_some());
     }
 
     #[test]
@@ -1438,10 +1438,10 @@ mod tests {
             restored
                 .geometry()
                 .faces()
-                .filter(|face| restored.cell_type(face).is_some())
+                .filter(|face| restored.simplex_type(face).is_some())
                 .count(),
             restored.face_count(),
-            "all strip cells should keep Up/Down classification"
+            "all strip simplices should keep Up/Down classification"
         );
     }
 
@@ -1809,7 +1809,7 @@ mod prop_tests {
 
             // TODO: Revisit connectivity constraint when Delaunay crate is updated/fixed
             // The underlying Delaunay triangulation generation can create degenerate triangulations
-            // where E < V-1 due to invalid cell removal and disconnected components.
+            // where E < V-1 due to invalid simplex removal and disconnected components.
             // This is a known issue with the current Delaunay crate implementation.
             // For now, we use a more lenient bound that accommodates the observed behavior.
             //

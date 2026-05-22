@@ -14,7 +14,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// This is the invariant set required after ergodic moves and completed
     /// simulations: upstream structural geometry validity plus CDT topology,
-    /// foliation, causality, and cell-classification checks. It intentionally
+    /// foliation, causality, and simplex-classification checks. It intentionally
     /// does not require the Level 4 Delaunay empty-circumsphere predicate,
     /// because local CDT moves are not expected to preserve Delaunay-ness.
     ///
@@ -25,7 +25,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// Returns [`CdtError::DelaunayValidationFailed`] if backend structural
     /// geometry fails upstream validation. Returns
-    /// [`CdtError::ValidationFailed`] if causality or cell-classification checks
+    /// [`CdtError::ValidationFailed`] if causality or simplex-classification checks
     /// fail, and returns topology or foliation errors from the corresponding
     /// validators when those invariants are violated.
     ///
@@ -82,7 +82,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         self.validate_topology()?;
         self.validate_foliation()?;
         self.validate_causality()?;
-        self.validate_cell_classification()?;
+        self.validate_simplex_classification()?;
 
         Ok(())
     }
@@ -90,7 +90,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Validates the initialization contract for labeled CDT constructors.
     ///
     /// Initial meshes must be genuine Delaunay triangulations and must satisfy
-    /// the stricter CDT foliation, topology, causality, and cell-classification
+    /// the stricter CDT foliation, topology, causality, and simplex-classification
     /// invariants before any simulation code can observe them.
     pub(crate) fn validate_initial_delaunay_cdt(&mut self) -> CdtResult<()> {
         self.geometry
@@ -102,7 +102,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         self.validate_topology()?;
         self.validate_foliation()?;
         self.validate_causality()?;
-        self.classify_all_cells().map(|_| ())
+        self.classify_all_simplices().map(|_| ())
     }
 
     /// Validate causality constraints.
@@ -212,7 +212,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     check: CdtValidationCheck::Causality,
                     detail: format!(
                         "face {:?} has {} vertices, expected 3",
-                        face.cell_key(),
+                        face.simplex_key(),
                         verts.len(),
                     ),
                 });
@@ -293,7 +293,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     check: CdtValidationCheck::Causality,
                     detail: format!(
                         "invalid CDT triangle at face {:?}: spacelike={}, timelike={}",
-                        face.cell_key(),
+                        face.simplex_key(),
                         spacelike,
                         timelike
                     ),

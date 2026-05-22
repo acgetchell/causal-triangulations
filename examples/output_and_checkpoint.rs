@@ -67,7 +67,7 @@ fn main() -> CdtResult<()> {
     restored.validate_topology()?;
     restored.validate_foliation()?;
     restored.validate_causality()?;
-    restored.validate_cell_classification()?;
+    restored.validate_simplex_classification()?;
 
     let mcmc_checkpoint = MetropolisAlgorithm::new(
         MetropolisConfig::new(1.0, 2, 0, 1).with_seed(13),

@@ -530,6 +530,20 @@ class TestFormattingFunctions:
         assert "| `insert/4d` | 1000 | 110.00 µs | N/A | N/A |" in markdown_content
         assert "| `repair/4d` | n/a | 220.00 µs | N/A | N/A |" in markdown_content
 
+    def test_format_benchmark_tables_sorts_unsized_without_comparison_key(self) -> None:
+        """Unsized benchmarks without IDs should format instead of raising during sort."""
+        benchmarks = [
+            BenchmarkData(None, "4D").with_timing(200.0, 220.0, 240.0, "µs"),
+            BenchmarkData(1000, "4D").with_timing(100.0, 110.0, 120.0, "µs"),
+        ]
+
+        lines = format_benchmark_tables(benchmarks, input_label="Input")
+        markdown_content = "\n".join(lines)
+
+        assert "| Input | Time (mean) | Throughput (mean) | Scaling |" in markdown_content
+        assert "| 1000 | 110.00 µs | N/A | 1.0x |" in markdown_content
+        assert "| n/a | 220.00 µs | N/A | 2.0x |" in markdown_content
+
     def test_format_benchmark_tables_include_simplices(self) -> None:
         """Test optional simplex counts replace the scaling column."""
         benchmarks = [

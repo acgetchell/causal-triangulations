@@ -349,7 +349,17 @@ def archive_changelog(
     try:
         archive_dir_rel = archive_dir.relative_to(changelog_path.parent).as_posix()
     except ValueError:
-        archive_dir_rel = Path(os.path.relpath(archive_dir, changelog_path.parent)).as_posix()
+        try:
+            archive_dir_rel = Path(os.path.relpath(archive_dir, changelog_path.parent)).as_posix()
+        except ValueError as err:
+            archive_dir_rel = archive_dir.as_posix()
+            LOGGER.warning(
+                "Could not compute relative archive directory: %s; archive_dir=%s changelog_parent=%s; generated Markdown links use %s",
+                err,
+                archive_dir,
+                changelog_path.parent,
+                archive_dir_rel,
+            )
         if archive_dir_rel == ".." or archive_dir_rel.startswith("../") or Path(archive_dir_rel).is_absolute():
             LOGGER.warning(
                 "Archive directory %s is outside changelog directory %s; generated Markdown links use %s",

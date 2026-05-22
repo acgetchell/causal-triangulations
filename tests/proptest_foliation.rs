@@ -76,8 +76,8 @@ fn cdt_strip_builds_delaunay_mesh() {
         .expect("Delaunay CDT strip foliation should validate");
     tri.validate_causality_delaunay()
         .expect("Delaunay CDT strip causality should validate");
-    tri.validate_cell_classification()
-        .expect("Delaunay CDT strip cells should classify");
+    tri.validate_simplex_classification()
+        .expect("Delaunay CDT strip simplices should classify");
 }
 
 proptest! {
@@ -148,7 +148,7 @@ proptest! {
         prop_assert!(tri.validate_topology().is_ok());
         prop_assert!(tri.validate_foliation().is_ok());
         prop_assert!(tri.validate_causality().is_ok());
-        prop_assert!(tri.validate_cell_classification().is_ok());
+        prop_assert!(tri.validate_simplex_classification().is_ok());
     }
 }
 
@@ -194,7 +194,7 @@ proptest! {
         prop_assert!(tri.validate_causality_delaunay().is_ok(),
             "Causality should hold for Delaunay CDT strip with {} vertices/slice, {} slices",
             vertices_per_slice, num_slices);
-        prop_assert!(tri.validate_cell_classification().is_ok(),
+        prop_assert!(tri.validate_simplex_classification().is_ok(),
             "Every Delaunay strip face should classify as Up or Down");
     }
 

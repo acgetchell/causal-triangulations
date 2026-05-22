@@ -1785,7 +1785,7 @@ class PerformanceComparator:
             baseline_benchmark = baseline_results.get(current.comparison_key)
         except ValueError:
             return None
-        if baseline_benchmark is not None or current.benchmark_id:
+        if baseline_benchmark is not None:
             return baseline_benchmark
         if current.points is None:
             return None

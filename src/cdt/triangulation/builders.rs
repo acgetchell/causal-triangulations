@@ -83,7 +83,7 @@ const fn strip_generation_error(
 pub(super) fn validate_strip_counts(
     backend: &DelaunayBackend2D,
     total_vertices: u32,
-    total_cells: u32,
+    total_simplices: u32,
     expected_vertices: usize,
     expected_faces: usize,
     vertices_per_slice: u32,
@@ -110,7 +110,7 @@ pub(super) fn validate_strip_counts(
             format!(
                 "build_delaunay2_with_data()/from_cdt_strip() produced {} faces, expected {} for vertices_per_slice={} and num_slices={}",
                 backend.face_count(),
-                total_cells,
+                total_simplices,
                 vertices_per_slice,
                 num_slices,
             ),
@@ -198,7 +198,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Creates an unfoliated triangulation with a Delaunay backend from random points.
     ///
     /// This is useful for raw geometry tests and experiments. It does not
-    /// assign time labels or CDT cell classifications, so production CDT
+    /// assign time labels or CDT simplex classifications, so production CDT
     /// simulations should prefer [`CdtTriangulation::from_cdt_strip`] or
     /// [`CdtTriangulation::from_toroidal_cdt`].
     ///
@@ -245,7 +245,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// Use this builder for raw geometry examples, tests, and benchmarks that
     /// need deterministic input geometry. It does not assign time labels or
-    /// CDT cell classifications, so production CDT simulations should prefer
+    /// CDT simplex classifications, so production CDT simulations should prefer
     /// [`CdtTriangulation::from_cdt_strip`] or
     /// [`CdtTriangulation::from_toroidal_cdt`].
     ///
@@ -365,7 +365,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidGenerationParameters`] if `vertices_per_slice < 4`,
-    /// `num_slices < 2`, or the derived vertex or cell count overflows `u32`.
+    /// `num_slices < 2`, or the derived vertex or simplex count overflows `u32`.
     /// Returns [`CdtError::DelaunayGenerationFailed`] if constructor storage cannot
     /// be reserved, if the underlying Delaunay builder rejects the points, if
     /// `build_delaunay2_with_data()` returns a vertex or face count that does not
@@ -384,7 +384,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 2)?;
     ///     assert_eq!(tri.vertex_count(), 8);
     ///     assert_eq!(tri.face_count(), 6);
-    ///     assert!(tri.validate_cell_classification().is_ok());
+    ///     assert!(tri.validate_simplex_classification().is_ok());
     ///     Ok(())
     /// }
     /// ```
@@ -420,16 +420,16 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let temporal_quads = num_slices - 1;
         let total_quads = spatial_quads.checked_mul(temporal_quads).ok_or_else(|| {
             CdtError::InvalidGenerationParameters {
-                issue: "Cell count overflow".to_string(),
+                issue: "Simplex count overflow".to_string(),
                 provided_value: format!("{spatial_quads} × {temporal_quads}"),
                 expected_range: "product ≤ u32::MAX".to_string(),
             }
         })?;
-        let total_cells =
+        let total_simplices =
             total_quads
                 .checked_mul(2)
                 .ok_or_else(|| CdtError::InvalidGenerationParameters {
-                    issue: "Cell count overflow".to_string(),
+                    issue: "Simplex count overflow".to_string(),
                     provided_value: format!("2 × {total_quads}"),
                     expected_range: "product ≤ u32::MAX".to_string(),
                 })?;
@@ -442,7 +442,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let expected_vertices =
             usize::try_from(total_vertices).map_err(|err| generation_failed(err.to_string()))?;
         let expected_faces =
-            usize::try_from(total_cells).map_err(|err| generation_failed(err.to_string()))?;
+            usize::try_from(total_simplices).map_err(|err| generation_failed(err.to_string()))?;
 
         let n = usize::try_from(vertices_per_slice)
             .map_err(|err| generation_failed(err.to_string()))?;
@@ -501,7 +501,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         validate_strip_counts(
             &backend,
             total_vertices,
-            total_cells,
+            total_simplices,
             expected_vertices,
             expected_faces,
             vertices_per_slice,
@@ -600,11 +600,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 expected_range: "product ≤ u32::MAX".to_string(),
             }
         })?;
-        let total_cells =
+        let total_simplices =
             total_vertices
                 .checked_mul(2)
                 .ok_or_else(|| CdtError::InvalidGenerationParameters {
-                    issue: "Cell count overflow".to_string(),
+                    issue: "Simplex count overflow".to_string(),
                     provided_value: format!("2 × {total_vertices}"),
                     expected_range: "product ≤ u32::MAX".to_string(),
                 })?;
@@ -617,7 +617,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let expected_vertices =
             usize::try_from(total_vertices).map_err(|err| generation_failed(err.to_string()))?;
         let expected_faces =
-            usize::try_from(total_cells).map_err(|err| generation_failed(err.to_string()))?;
+            usize::try_from(total_simplices).map_err(|err| generation_failed(err.to_string()))?;
 
         let n = usize::try_from(vertices_per_slice)
             .map_err(|err| generation_failed(err.to_string()))?;
@@ -677,9 +677,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cdt::foliation::{CellType, EdgeType, FoliationError};
+    use crate::cdt::foliation::{EdgeType, FoliationError, SimplexType};
     use crate::errors::CdtValidationCheck;
-    use crate::geometry::generators::{build_delaunay2_from_cells, build_delaunay2_with_data};
+    use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
 
     /// Builds a minimal labeled Delaunay backend for constructor tests.
     fn labeled_triangle_backend(labels: [u32; 3]) -> DelaunayBackend2D {
@@ -720,11 +720,11 @@ mod tests {
         tri.geometry()
             .validate_delaunay()
             .expect("Delaunay strip should pass upstream Level 1-4 validation");
-        tri.validate_cell_classification()
-            .expect("all Delaunay strip cells should classify");
+        tri.validate_simplex_classification()
+            .expect("all Delaunay strip simplices should classify");
         for face in tri.geometry().faces() {
-            assert!(tri.cell_type(&face).is_some());
-            assert!(tri.cell_type_from_data(&face).is_some());
+            assert!(tri.simplex_type(&face).is_some());
+            assert!(tri.simplex_type_from_data(&face).is_some());
         }
         tri
     }
@@ -949,7 +949,7 @@ mod tests {
         assert!(tri.has_foliation());
         assert_eq!(tri.slice_sizes(), &[2, 1]);
         assert!(tri.validate_foliation().is_ok());
-        assert!(tri.validate_cell_classification().is_ok());
+        assert!(tri.validate_simplex_classification().is_ok());
 
         for vh in tri.geometry().vertices() {
             assert!(tri.time_label(&vh).is_some());
@@ -1015,8 +1015,8 @@ mod tests {
     }
 
     #[test]
-    fn test_from_labeled_delaunay_rejects_non_cdt_cells() {
-        let dt = build_delaunay2_from_cells(
+    fn test_from_labeled_delaunay_rejects_non_cdt_simplices() {
+        let dt = build_delaunay2_from_simplices(
             &[
                 ([0.0, 0.0], 0),
                 ([1.0, 0.0], 0),
@@ -1025,7 +1025,7 @@ mod tests {
             ],
             &[vec![0, 1, 2], vec![1, 3, 2]],
         )
-        .expect("explicit cells should build before constructor validation");
+        .expect("explicit simplices should build before constructor validation");
         let backend = DelaunayBackend2D::from_triangulation(dt)
             .expect("test Delaunay square should validate");
 
@@ -1042,8 +1042,8 @@ mod tests {
     }
 
     #[test]
-    fn test_builder_rejects_non_delaunay_cells() {
-        let result = build_delaunay2_from_cells(
+    fn test_builder_rejects_non_delaunay_simplices() {
+        let result = build_delaunay2_from_simplices(
             &[
                 ([0.0, 0.0], 0),
                 ([1.0, 0.0], 0),
@@ -1056,9 +1056,10 @@ mod tests {
         assert!(matches!(
             result,
             Err(CdtError::DelaunayGenerationFailed {
-                ref underlying_error,
+                vertex_count: 4,
+                attempt: 1,
                 ..
-            }) if underlying_error.contains("Delaunay repair postcondition failed")
+            })
         ));
     }
 
@@ -1109,7 +1110,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_cdt_strip_rejects_cell_count_overflow() {
+    fn test_from_cdt_strip_rejects_simplex_count_overflow() {
         let result = CdtTriangulation::from_cdt_strip(65_535, 65_537);
 
         assert!(matches!(
@@ -1118,7 +1119,7 @@ mod tests {
                 ref issue,
                 ref provided_value,
                 ref expected_range,
-            }) if issue == "Cell count overflow"
+            }) if issue == "Simplex count overflow"
                 && provided_value == "2 × 4294836224"
                 && expected_range == "product ≤ u32::MAX"
         ));
@@ -1133,7 +1134,7 @@ mod tests {
         assert!(tri.validate_topology().is_ok());
         assert!(tri.validate_foliation().is_ok());
         assert!(tri.validate_causality_delaunay().is_ok());
-        assert!(tri.validate_cell_classification().is_ok());
+        assert!(tri.validate_simplex_classification().is_ok());
     }
 
     #[test]
@@ -1156,12 +1157,12 @@ mod tests {
     }
 
     #[test]
-    fn test_cell_type_returns_up_or_down() {
+    fn test_simplex_type_returns_up_or_down() {
         let tri = strict_strip(5, 3);
         for face in tri.geometry().faces() {
             assert!(matches!(
-                tri.cell_type(&face),
-                Some(CellType::Up | CellType::Down)
+                tri.simplex_type(&face),
+                Some(SimplexType::Up | SimplexType::Down)
             ));
         }
     }
@@ -1169,7 +1170,7 @@ mod tests {
     #[test]
     fn test_from_toroidal_cdt_basic() {
         let tri = CdtTriangulation::from_toroidal_cdt(4, 3)
-            .expect("toroidal CDT should build with delaunay v0.7.7");
+            .expect("toroidal CDT should build with delaunay v0.7.8");
 
         // V = N*T = 12, F = 2*N*T = 24, E = 3*N*T = 36, χ = 0.
         assert_eq!(tri.vertex_count(), 12);
@@ -1223,8 +1224,8 @@ mod tests {
             .expect("initial toroidal CDT must have valid time-slice foliation");
         tri.validate_causality()
             .expect("initial toroidal CDT must only contain adjacent-slice edges");
-        tri.validate_cell_classification()
-            .expect("initial toroidal CDT must classify every face as an Up or Down CDT cell");
+        tri.validate_simplex_classification()
+            .expect("initial toroidal CDT must classify every face as an Up or Down CDT simplex");
     }
 
     #[test]
@@ -1298,7 +1299,7 @@ mod tests {
     }
 
     #[test]
-    fn test_toroidal_cell_classification_uses_temporal_wrap() {
+    fn test_toroidal_simplex_classification_uses_temporal_wrap() {
         let tri = CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
         let mut saw_wrap_up = false;
         let mut saw_wrap_down = false;
@@ -1319,8 +1320,8 @@ mod tests {
                 .collect();
 
             if labels.contains(&0) && labels.contains(&2) {
-                let cell_type = tri
-                    .cell_type(&face)
+                let simplex_type = tri
+                    .simplex_type(&face)
                     .expect("wrap-around toroidal face should classify");
                 let edge_types = tri
                     .face_edge_types(&face)
@@ -1335,10 +1336,10 @@ mod tests {
                 let is_wrap_down = zero_count == 2 && two_count == 1;
 
                 if is_wrap_up {
-                    assert_eq!(cell_type, CellType::Up);
+                    assert_eq!(simplex_type, SimplexType::Up);
                 }
                 if is_wrap_down {
-                    assert_eq!(cell_type, CellType::Down);
+                    assert_eq!(simplex_type, SimplexType::Down);
                 }
 
                 saw_wrap_up |= is_wrap_up;
@@ -1346,10 +1347,13 @@ mod tests {
             }
         }
 
-        assert!(saw_wrap_up, "expected an Up cell across the temporal wrap");
+        assert!(
+            saw_wrap_up,
+            "expected an Up simplex across the temporal wrap"
+        );
         assert!(
             saw_wrap_down,
-            "expected a Down cell across the temporal wrap"
+            "expected a Down simplex across the temporal wrap"
         );
         assert!(
             saw_wrap_timelike_edge,

@@ -58,7 +58,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 mod tests {
     use super::*;
     use crate::geometry::CdtTriangulation2D;
-    use crate::geometry::generators::build_delaunay2_from_cells;
+    use crate::geometry::generators::build_delaunay2_from_simplices;
     use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
 
     /// Computes the centroid of a live triangular face.
@@ -87,7 +87,7 @@ mod tests {
 
     /// Builds a two-triangle CDT fixture with a shared edge that can flip cleanly.
     fn square_two_triangles() -> CdtTriangulation2D {
-        let dt = build_delaunay2_from_cells(
+        let dt = build_delaunay2_from_simplices(
             &[
                 ([0.0, 0.0], 0),
                 ([1.0, 0.0], 0),

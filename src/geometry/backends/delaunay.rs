@@ -14,20 +14,14 @@ use crate::geometry::traits::{
     EdgeAdjacentFaces, EdgeAdjacentFacesResult, FlipResult, GeometryBackend, SubdivisionResult,
     TriangulationMut, TriangulationQuery,
 };
-use delaunay::core::DataType;
-use delaunay::core::edge::EdgeKey;
-use delaunay::core::facet::FacetHandle;
-use delaunay::core::tds::{CellKey, Tds, VertexKey};
-use delaunay::core::vertex::Vertex;
+use delaunay::flips::BistellarFlips;
 use delaunay::geometry::kernel::AdaptiveKernel;
 use delaunay::geometry::point::Point;
 use delaunay::geometry::traits::coordinate::Coordinate;
-use delaunay::prelude::TopologyGuarantee;
-use delaunay::prelude::VertexBuilder;
-use delaunay::prelude::triangulation::flips::BistellarFlips;
-use delaunay::prelude::triangulation::repair::DelaunayCheckPolicy;
+use delaunay::prelude::{DataType, VertexBuilder};
+use delaunay::tds::{EdgeKey, FacetHandle, SimplexKey, Tds, Vertex, VertexKey};
 use delaunay::topology::traits::{GlobalTopology, TopologyKind, ToroidalConstructionMode};
-use delaunay::triangulation::DelaunayTriangulation;
+use delaunay::{DelaunayCheckPolicy, DelaunayTriangulation, TopologyGuarantee};
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
@@ -35,8 +29,8 @@ use std::fmt::{self, Display};
 use std::num::NonZeroUsize;
 
 type DelaunayKernel = AdaptiveKernel<f64>;
-type RawTriangulation<VertexData, CellData, const D: usize> =
-    DelaunayTriangulation<DelaunayKernel, VertexData, CellData, D>;
+type RawTriangulation<VertexData, SimplexData, const D: usize> =
+    DelaunayTriangulation<DelaunayKernel, VertexData, SimplexData, D>;
 type RawVertex<VertexData, const D: usize> = Vertex<f64, VertexData, D>;
 
 /// Delaunay backend wrapping the delaunay crate's triangulation (f64 coordinates).
@@ -57,20 +51,20 @@ type RawVertex<VertexData, const D: usize> = Vertex<f64, VertexData, D>;
 /// strictly positive periods; invalid domains are rejected during
 /// deserialization before a backend can observe them.
 #[derive(Debug, Clone)]
-pub struct DelaunayBackend<VertexData, CellData, const D: usize> {
+pub struct DelaunayBackend<VertexData, SimplexData, const D: usize> {
     /// The underlying Delaunay triangulation from the delaunay crate
-    dt: RawTriangulation<VertexData, CellData, D>,
+    dt: RawTriangulation<VertexData, SimplexData, D>,
     /// Interior 2D edge to one incident facet suitable for k=2 local queries.
     interior_facets_by_edge: HashMap<EdgeKey, FacetHandle>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(bound(
-    serialize = "Tds<f64, VertexData, CellData, D>: Serialize",
-    deserialize = "Tds<f64, VertexData, CellData, D>: Deserialize<'de>"
+    serialize = "Tds<f64, VertexData, SimplexData, D>: Serialize",
+    deserialize = "Tds<f64, VertexData, SimplexData, D>: Deserialize<'de>"
 ))]
-struct SerializedDelaunayBackend<VertexData, CellData, const D: usize> {
-    tds: Tds<f64, VertexData, CellData, D>,
+struct SerializedDelaunayBackend<VertexData, SimplexData, const D: usize> {
+    tds: Tds<f64, VertexData, SimplexData, D>,
     global_topology: SerializableGlobalTopology,
     topology_guarantee: SerializableTopologyGuarantee,
     #[serde(default)]
@@ -213,10 +207,10 @@ impl SerializableDelaunayCheckPolicy {
     }
 }
 
-impl<VertexData: DataType, CellData: DataType, const D: usize> Serialize
-    for DelaunayBackend<VertexData, CellData, D>
+impl<VertexData: DataType, SimplexData: DataType, const D: usize> Serialize
+    for DelaunayBackend<VertexData, SimplexData, D>
 where
-    Tds<f64, VertexData, CellData, D>: Serialize,
+    Tds<f64, VertexData, SimplexData, D>: Serialize,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -232,10 +226,10 @@ where
     }
 }
 
-impl<'de, VertexData: DataType, CellData: DataType, const D: usize> Deserialize<'de>
-    for DelaunayBackend<VertexData, CellData, D>
+impl<'de, VertexData: DataType, SimplexData: DataType, const D: usize> Deserialize<'de>
+    for DelaunayBackend<VertexData, SimplexData, D>
 where
-    Tds<f64, VertexData, CellData, D>: Deserialize<'de>,
+    Tds<f64, VertexData, SimplexData, D>: Deserialize<'de>,
 {
     fn deserialize<DE>(deserializer: DE) -> Result<Self, DE::Error>
     where
@@ -283,13 +277,13 @@ pub struct DelaunayEdgeHandle {
 /// Opaque handle for faces in Delaunay backend
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct DelaunayFaceHandle {
-    key: CellKey,
+    key: SimplexKey,
 }
 
 impl DelaunayFaceHandle {
-    /// Returns the underlying cell key for payload lookups and updates by key.
+    /// Returns the underlying simplex key for payload lookups and updates by key.
     #[must_use]
-    pub(crate) const fn cell_key(&self) -> CellKey {
+    pub(crate) const fn simplex_key(&self) -> SimplexKey {
         self.key
     }
 }
@@ -335,7 +329,7 @@ impl fmt::Display for DelaunayOperation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum NonFlippableEdgeReason {
-    /// The edge is not represented by an interior facet shared by two cells.
+    /// The edge is not represented by an interior facet shared by two simplices.
     NotInteriorFacet,
 }
 
@@ -343,7 +337,7 @@ impl fmt::Display for NonFlippableEdgeReason {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::NotInteriorFacet => {
-                formatter.write_str("edge is not an interior 2D facet shared by two cells")
+                formatter.write_str("edge is not an interior 2D facet shared by two simplices")
             }
         }
     }
@@ -387,11 +381,11 @@ pub enum DelaunayError {
         reason: NonFlippableEdgeReason,
     },
 
-    /// Invalid face/cell handle (key not found in triangulation)
+    /// Invalid face/simplex handle (key not found in triangulation)
     #[error("invalid face handle: key {key:?} not found in triangulation")]
     InvalidFace {
-        /// The cell key that was looked up
-        key: CellKey,
+        /// The simplex key that was looked up.
+        key: SimplexKey,
     },
 
     /// Coordinate slice length does not match the backend dimension.
@@ -470,8 +464,8 @@ pub enum DelaunayError {
     },
 }
 
-impl<VertexData: DataType, CellData: DataType, const D: usize>
-    DelaunayBackend<VertexData, CellData, D>
+impl<VertexData: DataType, SimplexData: DataType, const D: usize>
+    DelaunayBackend<VertexData, SimplexData, D>
 {
     /// Builds a backend vertex from a coordinate slice and optional payload.
     fn build_vertex(
@@ -512,21 +506,21 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
         self.interior_facets_by_edge.get(&edge).copied()
     }
 
-    /// Builds the 2D interior edge-facet lookup from current cell adjacency.
+    /// Builds the 2D interior edge-facet lookup from current simplex adjacency.
     fn build_interior_facets_by_edge(
-        dt: &RawTriangulation<VertexData, CellData, D>,
+        dt: &RawTriangulation<VertexData, SimplexData, D>,
     ) -> HashMap<EdgeKey, FacetHandle> {
         let mut facets_by_edge = HashMap::new();
         if D != 2 {
             return facets_by_edge;
         }
-        for (cell_key, cell) in dt.cells() {
-            let vertices = cell.vertices();
-            let Some(neighbors) = cell.neighbors() else {
+        for (simplex_key, simplex) in dt.simplices() {
+            let vertices = simplex.vertices();
+            let Some(neighbors) = simplex.neighbors() else {
                 continue;
             };
 
-            for (facet_index, neighbor) in neighbors.iter().enumerate() {
+            for (facet_index, neighbor) in neighbors.enumerate() {
                 if neighbor.is_none() {
                     continue;
                 }
@@ -547,7 +541,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
                     };
                     facets_by_edge
                         .entry(EdgeKey::new(v0, v1))
-                        .or_insert_with(|| FacetHandle::new(cell_key, facet_index));
+                        .or_insert_with(|| FacetHandle::new(simplex_key, facet_index));
                 }
             }
         }
@@ -566,7 +560,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// Level 1-3 structural contract.
     fn validate_mutation_or_restore(
         &mut self,
-        dt_before: RawTriangulation<VertexData, CellData, D>,
+        dt_before: RawTriangulation<VertexData, SimplexData, D>,
         facets_before: HashMap<EdgeKey, FacetHandle>,
         operation: DelaunayOperation,
         target: impl Display,
@@ -640,7 +634,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// }
     /// ```
     pub fn from_triangulation(
-        dt: DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D>,
+        dt: DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, SimplexData, D>,
     ) -> Result<Self, DelaunayError> {
         let interior_facets_by_edge = Self::build_interior_facets_by_edge(&dt);
         let backend = Self {
@@ -675,7 +669,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     #[must_use]
     pub const fn triangulation(
         &self,
-    ) -> &DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, CellData, D> {
+    ) -> &DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, SimplexData, D> {
         &self.dt
     }
 
@@ -847,7 +841,8 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// underlying triangulation.
     ///
     /// This exposes the [`GlobalTopology`]
-    /// metadata attached by [`DelaunayTriangulationBuilder`](delaunay::triangulation::builder::DelaunayTriangulationBuilder) at construction time.
+    /// metadata attached by [`DelaunayTriangulationBuilder`](delaunay::DelaunayTriangulationBuilder)
+    /// at construction time.
     ///
     /// # Examples
     ///
@@ -912,7 +907,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
         self.dt.tds().vertex(key)?.data().copied()
     }
 
-    /// Returns the cell payload for `key`, if present.
+    /// Returns the simplex payload for `key`, if present.
     ///
     /// # Examples
     ///
@@ -927,12 +922,12 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// ]).unwrap();
     /// let backend = DelaunayBackend2D::from_triangulation(dt)
     ///     .expect("Delaunay input should validate");
-    /// let (key, _) = backend.triangulation().cells().next().unwrap();
-    /// assert_eq!(backend.cell_data_by_key(key), None);
+    /// let (key, _) = backend.triangulation().simplices().next().unwrap();
+    /// assert_eq!(backend.simplex_data_by_key(key), None);
     /// ```
     #[must_use]
-    pub fn cell_data_by_key(&self, key: CellKey) -> Option<CellData> {
-        self.dt.tds().cell(key)?.data().copied()
+    pub fn simplex_data_by_key(&self, key: SimplexKey) -> Option<SimplexData> {
+        self.dt.tds().simplex(key)?.data().copied()
     }
 
     /// Sets the optional payload for a vertex identified by `key`.
@@ -971,7 +966,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
             .ok_or(DelaunayError::InvalidVertex { key })
     }
 
-    /// Sets the optional payload for a cell identified by `key`.
+    /// Sets the optional payload for a simplex identified by `key`.
     ///
     /// Returns the previous payload for a valid key.
     ///
@@ -992,24 +987,24 @@ impl<VertexData: DataType, CellData: DataType, const D: usize>
     /// ]).unwrap();
     /// let mut backend = DelaunayBackend2D::from_triangulation(dt)
     ///     .expect("Delaunay input should validate");
-    /// let (key, _) = backend.triangulation().cells().next().unwrap();
-    /// let previous = backend.set_cell_data_by_key(key, Some(1)).unwrap();
+    /// let (key, _) = backend.triangulation().simplices().next().unwrap();
+    /// let previous = backend.set_simplex_data_by_key(key, Some(1)).unwrap();
     /// assert_eq!(previous, None);
-    /// assert_eq!(backend.cell_data_by_key(key), Some(1));
+    /// assert_eq!(backend.simplex_data_by_key(key), Some(1));
     /// ```
-    pub fn set_cell_data_by_key(
+    pub fn set_simplex_data_by_key(
         &mut self,
-        key: CellKey,
-        data: Option<CellData>,
-    ) -> Result<Option<CellData>, DelaunayError> {
+        key: SimplexKey,
+        data: Option<SimplexData>,
+    ) -> Result<Option<SimplexData>, DelaunayError> {
         self.dt
-            .set_cell_data(key, data)
+            .set_simplex_data(key, data)
             .ok_or(DelaunayError::InvalidFace { key })
     }
 }
 
-impl<VertexData: DataType, CellData: DataType, const D: usize> GeometryBackend
-    for DelaunayBackend<VertexData, CellData, D>
+impl<VertexData: DataType, SimplexData: DataType, const D: usize> GeometryBackend
+    for DelaunayBackend<VertexData, SimplexData, D>
 {
     type Coordinate = f64;
     type VertexHandle = DelaunayVertexHandle;
@@ -1022,8 +1017,8 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> GeometryBackend
     }
 }
 
-impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuery
-    for DelaunayBackend<VertexData, CellData, D>
+impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationQuery
+    for DelaunayBackend<VertexData, SimplexData, D>
 {
     fn vertex_count(&self) -> usize {
         self.dt.number_of_vertices()
@@ -1034,7 +1029,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuer
     }
 
     fn face_count(&self) -> usize {
-        self.dt.number_of_cells()
+        self.dt.number_of_simplices()
     }
 
     fn dimension(&self) -> usize {
@@ -1052,7 +1047,9 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuer
     }
 
     fn faces(&self) -> impl Iterator<Item = Self::FaceHandle> + '_ {
-        self.dt.cells().map(|(key, _)| DelaunayFaceHandle { key })
+        self.dt
+            .simplices()
+            .map(|(key, _)| DelaunayFaceHandle { key })
     }
 
     fn vertex_coordinates(
@@ -1072,7 +1069,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuer
     ) -> Result<Vec<Self::VertexHandle>, Self::Error> {
         let vkeys = self
             .dt
-            .cell_vertices(face.key)
+            .simplex_vertices(face.key)
             .ok_or(DelaunayError::InvalidFace { key: face.key })?;
         Ok(vkeys
             .iter()
@@ -1122,7 +1119,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuer
             edge_exists,
             self.dt.number_of_vertices(),
             self.dt.as_triangulation().number_of_edges(),
-            self.dt.number_of_cells(),
+            self.dt.number_of_simplices(),
         );
 
         None
@@ -1142,18 +1139,18 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuer
         let Some(facet) = self.interior_facet_for_edge(edge.key) else {
             return Ok(None);
         };
-        let face_0 = facet.cell_key();
+        let face_0 = facet.simplex_key();
         let facet_index = <usize as From<_>>::from(facet.facet_index());
-        let Some(cell_0) = self.dt.tds().cell(face_0) else {
+        let Some(simplex_0) = self.dt.tds().simplex(face_0) else {
             return Err(DelaunayError::InvalidFace { key: face_0 });
         };
-        let vertices_0 = cell_0.vertices();
+        let vertices_0 = simplex_0.vertices();
         if vertices_0.len() != 3 || facet_index >= vertices_0.len() {
             return Ok(None);
         }
-        let Some(face_1) = cell_0
+        let Some(face_1) = simplex_0
             .neighbors()
-            .and_then(|neighbors| neighbors.get(facet_index).copied().flatten())
+            .and_then(|mut neighbors| neighbors.nth(facet_index).flatten())
         else {
             return Ok(None);
         };
@@ -1172,7 +1169,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuer
             return Ok(None);
         }
 
-        let Some(vertices_1) = self.dt.cell_vertices(face_1) else {
+        let Some(vertices_1) = self.dt.simplex_vertices(face_1) else {
             return Err(DelaunayError::InvalidFace { key: face_1 });
         };
         if vertices_1.len() != 3 {
@@ -1213,8 +1210,12 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuer
         }
         Ok(self
             .dt
-            .as_triangulation()
-            .adjacent_cells(vertex.key)
+            .build_adjacency_index()
+            .map_err(|err| DelaunayError::ValidationFailed {
+                level: DelaunayValidationLevel::Three,
+                detail: err.to_string(),
+            })?
+            .adjacent_simplices(vertex.key)
             .map(|key| DelaunayFaceHandle { key })
             .collect())
     }
@@ -1237,19 +1238,19 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuer
         &self,
         face: &Self::FaceHandle,
     ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
-        if !self.dt.tds().contains_cell_key(face.key) {
+        if !self.dt.tds().contains_simplex_key(face.key) {
             return Err(DelaunayError::InvalidFace { key: face.key });
         }
         Ok(self
             .dt
-            .cell_neighbors(face.key)
+            .simplex_neighbors(face.key)
             .map(|key| DelaunayFaceHandle { key })
             .collect())
     }
 
     fn is_valid(&self) -> bool {
-        // Structural minimum: must have enough vertices and at least one cell.
-        if self.dt.number_of_vertices() <= D || self.dt.number_of_cells() == 0 {
+        // Structural minimum: must have enough vertices and at least one simplex.
+        if self.dt.number_of_vertices() <= D || self.dt.number_of_simplices() == 0 {
             return false;
         }
 
@@ -1261,8 +1262,8 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationQuer
     }
 }
 
-impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
-    for DelaunayBackend<VertexData, CellData, D>
+impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationMut
+    for DelaunayBackend<VertexData, SimplexData, D>
 {
     fn insert_vertex(
         &mut self,
@@ -1323,7 +1324,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
             format!("vertex {:?}", vertex.key),
         )?;
         Ok(info
-            .new_cells
+            .new_simplices
             .iter()
             .copied()
             .map(|key| DelaunayFaceHandle { key })
@@ -1418,7 +1419,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
             format!("edge {:?} -- {:?}", edge.key.v0(), edge.key.v1()),
         )?;
         let affected_faces = info
-            .new_cells
+            .new_simplices
             .iter()
             .copied()
             .map(|key| DelaunayFaceHandle { key })
@@ -1440,7 +1441,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
         face: Self::FaceHandle,
         point: &[Self::Coordinate],
     ) -> Result<SubdivisionResult<Self::VertexHandle, Self::FaceHandle>, Self::Error> {
-        if !self.dt.tds().contains_cell_key(face.key) {
+        if !self.dt.tds().contains_simplex_key(face.key) {
             return Err(DelaunayError::InvalidFace { key: face.key });
         }
 
@@ -1490,7 +1491,7 @@ impl<VertexData: DataType, CellData: DataType, const D: usize> TriangulationMut
         )?;
         Ok(SubdivisionResult::new(
             DelaunayVertexHandle { key: new_vertex },
-            info.new_cells
+            info.new_simplices
                 .iter()
                 .copied()
                 .map(|key| DelaunayFaceHandle { key })
@@ -1517,7 +1518,7 @@ mod tests {
     use super::*;
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{
-        DelaunayTriangulation2D, build_delaunay2_from_cells, build_delaunay2_with_data,
+        DelaunayTriangulation2D, build_delaunay2_from_simplices, build_delaunay2_with_data,
         generate_delaunay2, random_delaunay2, seeded_delaunay2,
     };
     use serde_json::{Value, error::Category};
@@ -1588,35 +1589,35 @@ mod tests {
         let v2 = find_vertex_uuid([4.0, 2.0]);
         let v3 = find_vertex_uuid([1.0, 2.0]);
 
-        let cell_uuids: Vec<_> = tds
-            .get("cells")
+        let simplex_uuids: Vec<_> = tds
+            .get("simplices")
             .and_then(Value::as_array)
-            .expect("serialized TDS should contain cells")
+            .expect("serialized TDS should contain simplices")
             .iter()
             .filter_map(|slot| slot.get("value")?.get("uuid")?.as_str())
             .map(str::to_string)
             .collect();
         assert_eq!(
-            cell_uuids.len(),
+            simplex_uuids.len(),
             2,
-            "convex quad fixture should serialize exactly two cells"
+            "convex quad fixture should serialize exactly two simplices"
         );
 
-        let cell_vertices = value
+        let simplex_vertices = value
             .get_mut("tds")
-            .and_then(|tds| tds.get_mut("cell_vertices"))
+            .and_then(|tds| tds.get_mut("simplex_vertices"))
             .and_then(Value::as_object_mut)
-            .expect("serialized TDS should contain cell_vertices");
-        cell_vertices.insert(
-            cell_uuids[0].clone(),
+            .expect("serialized TDS should contain simplex_vertices");
+        simplex_vertices.insert(
+            simplex_uuids[0].clone(),
             Value::Array(vec![
                 Value::String(v0.clone()),
                 Value::String(v1),
                 Value::String(v2.clone()),
             ]),
         );
-        cell_vertices.insert(
-            cell_uuids[1].clone(),
+        simplex_vertices.insert(
+            simplex_uuids[1].clone(),
             Value::Array(vec![
                 Value::String(v0),
                 Value::String(v2),
@@ -1698,7 +1699,7 @@ mod tests {
     fn non_flippable_edge_reason_display_covers_all_reasons() {
         assert_eq!(
             NonFlippableEdgeReason::NotInteriorFacet.to_string(),
-            "edge is not an interior 2D facet shared by two cells"
+            "edge is not an interior 2D facet shared by two simplices"
         );
     }
 
@@ -1737,13 +1738,13 @@ mod tests {
 
         let malformed_insert = DelaunayError::UnexpectedFlipOutput {
             operation: DelaunayOperation::FlipK1Insert,
-            target: "face CellKey(3v1) at point [0.5, 0.5]".to_string(),
+            target: "face SimplexKey(3v1) at point [0.5, 0.5]".to_string(),
             expected: "exactly one inserted-face vertex for the inserted point",
             actual: "2 inserted-face vertices including unexpected VertexKey(4v1)".to_string(),
         };
         assert_eq!(
             malformed_insert.to_string(),
-            "flip_k1_insert returned unexpected output for face CellKey(3v1) at point [0.5, 0.5]: expected exactly one inserted-face vertex for the inserted point, got 2 inserted-face vertices including unexpected VertexKey(4v1)"
+            "flip_k1_insert returned unexpected output for face SimplexKey(3v1) at point [0.5, 0.5]: expected exactly one inserted-face vertex for the inserted point, got 2 inserted-face vertices including unexpected VertexKey(4v1)"
         );
 
         let validation = DelaunayError::ValidationFailed {
@@ -1935,7 +1936,7 @@ mod tests {
         let dt = random_delaunay2(3, (0.0, 10.0));
         let backend = validated_backend(dt);
 
-        let bogus_key = CellKey::from(KeyData::from_ffi(u64::MAX));
+        let bogus_key = SimplexKey::from(KeyData::from_ffi(u64::MAX));
         let invalid_handle = DelaunayFaceHandle { key: bogus_key };
         let err = backend.face_vertices(&invalid_handle).unwrap_err();
         assert!(
@@ -2154,7 +2155,7 @@ mod tests {
         let dt = random_delaunay2(3, (0.0, 10.0));
         let backend = validated_backend(dt);
 
-        let bogus_key = CellKey::from(KeyData::from_ffi(u64::MAX));
+        let bogus_key = SimplexKey::from(KeyData::from_ffi(u64::MAX));
         let invalid_handle = DelaunayFaceHandle { key: bogus_key };
         let err = backend.face_neighbors(&invalid_handle).unwrap_err();
         assert!(
@@ -2329,7 +2330,7 @@ mod tests {
 
     #[test]
     fn test_mutation_methods_use_delaunay_edit_api() {
-        let dt = build_delaunay2_from_cells(
+        let dt = build_delaunay2_from_simplices(
             &[
                 ([0.0, 0.0], 0),
                 ([1.0, 0.0], 0),
@@ -2408,7 +2409,7 @@ mod tests {
             Err(DelaunayError::InvalidVertex { key }) if key == bogus_vertex,
         ));
 
-        let bogus_face = CellKey::from(KeyData::from_ffi(u64::MAX));
+        let bogus_face = SimplexKey::from(KeyData::from_ffi(u64::MAX));
         assert!(matches!(
             backend.subdivide_face(DelaunayFaceHandle { key: bogus_face }, &[0.25, 0.25]),
             Err(DelaunayError::InvalidFace { key }) if key == bogus_face,
@@ -2486,7 +2487,7 @@ mod tests {
 
     #[test]
     fn test_interior_facet_cache_updates_after_edge_flip() {
-        let dt = build_delaunay2_from_cells(
+        let dt = build_delaunay2_from_simplices(
             &[
                 ([0.0, 0.0], 0),
                 ([1.0, 0.0], 0),

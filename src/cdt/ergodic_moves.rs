@@ -326,7 +326,7 @@ impl ErgodicsSystem {
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
     ///
-    /// let dt = build_delaunay2_from_cells(
+    /// let dt = build_delaunay2_from_simplices(
     ///     &[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 1), ([1.0, 1.0], 1)],
     ///     &[vec![0, 1, 2], vec![1, 3, 2]],
     /// )
@@ -419,7 +419,7 @@ impl ErgodicsSystem {
             };
         };
 
-        let subdivision_target = format!("face {:?}", face.cell_key());
+        let subdivision_target = format!("face {:?}", face.simplex_key());
         let snapshot = triangulation.clone();
         let subdivision = triangulation.subdivide_face(face, &point);
 
@@ -551,7 +551,7 @@ impl ErgodicsSystem {
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
     ///
-    /// let dt = build_delaunay2_from_cells(
+    /// let dt = build_delaunay2_from_simplices(
     ///     &[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 1), ([1.0, 1.0], 1)],
     ///     &[vec![0, 1, 2], vec![1, 3, 2]],
     /// )
@@ -661,6 +661,9 @@ impl ErgodicsSystem {
     ) -> MoveResult {
         if let Err(err) = triangulation.synchronize_foliation_from_live_labels() {
             return MoveResult::HardFailure(err);
+        }
+        if let Err(err) = triangulation.validate_evolved_cdt() {
+            return MoveResult::Rejected(err);
         }
 
         self.stats.record_success(move_type);
@@ -982,7 +985,7 @@ mod tests {
     use super::*;
     use crate::errors::CdtValidationCheck;
     use crate::geometry::DelaunayBackend2D;
-    use crate::geometry::generators::{build_delaunay2_from_cells, build_delaunay2_with_data};
+    use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
     use approx::assert_relative_eq;
     use std::collections::HashSet;
 
@@ -997,7 +1000,7 @@ mod tests {
 
     /// Builds two foliated triangles sharing one interior edge for k=2 flips.
     fn square_two_triangles() -> CdtTriangulation2D {
-        let dt = build_delaunay2_from_cells(
+        let dt = build_delaunay2_from_simplices(
             &[
                 ([0.0, 0.0], 0),
                 ([1.0, 0.0], 0),
@@ -1260,8 +1263,35 @@ mod tests {
         );
     }
 
+    /// Builds a backend-mutated toroidal subdivision fixture for testing `(3,1)` rollback support.
+    ///
+    /// The public `(1,3)` kernel now rejects this candidate after final invariant validation,
+    /// but the inverse `(3,1)` path still needs direct coverage against a periodic subdivision.
+    fn subdivide_first_toroidal_candidate(triangulation: &mut CdtTriangulation2D) {
+        let candidate = triangulation.geometry().faces().find_map(|face| {
+            let point = centroid(triangulation, &face)?;
+            let label = insertion_label(triangulation, &face)?;
+            Some((face, point, label))
+        });
+        let Some((face, point, label)) = candidate else {
+            panic!("periodic toroidal fixture should contain a causal subdivision candidate");
+        };
+
+        let subdivision = triangulation
+            .subdivide_face(face, &point)
+            .expect("periodic toroidal subdivision should reach the backend");
+        if let InsertionLabel::Label(label) = label {
+            triangulation
+                .set_vertex_data(&subdivision.new_vertex, Some(label))
+                .expect("subdivision vertex label should be writable");
+        }
+        triangulation
+            .synchronize_foliation_from_live_labels()
+            .expect("subdivided fixture should rebuild foliation bookkeeping");
+    }
+
     #[test]
-    fn periodic_toroidal_move_13_reports_backend_offset_limitation() {
+    fn periodic_toroidal_move_13_rolls_back_invalid_s1_subdivision_after_offset_support() {
         let mut system = ErgodicsSystem::with_seed(7);
         let mut triangulation =
             CdtTriangulation2D::from_toroidal_cdt(8, 8).expect("build toroidal CDT");
@@ -1274,18 +1304,10 @@ mod tests {
         let result = system.attempt_13_move(&mut triangulation);
 
         assert!(
-            matches!(
-                result,
-                MoveResult::Rejected(CdtError::BackendMutationFailed {
-                    ref operation,
-                    ref detail,
-                    ..
-                }) if *operation == BackendMutationOperation::SubdivideFace
-                    && detail.contains("periodic external cell")
-                    && detail.contains("aligned periodic offsets")
-            ),
-            "periodic toroidal Move13Add should expose the upstream periodic-offset flip limitation, got {result:?}"
+            matches!(result, MoveResult::Rejected(CdtError::Foliation(_))),
+            "periodic toroidal Move13Add should reach the offset-aware backend, then reject the invalid closed-S1 subdivision, got {result:?}"
         );
+        assert_eq!(system.stats.moves_13_accepted, 0);
         assert_eq!(
             (
                 triangulation.vertex_count(),
@@ -1293,11 +1315,81 @@ mod tests {
                 triangulation.face_count(),
             ),
             counts_before,
-            "rejected periodic toroidal mutation should roll back geometry"
+            "rejected periodic toroidal subdivision should roll back simplex counts"
         );
         triangulation
             .validate()
-            .expect("rejected periodic toroidal move should preserve evolved CDT invariants");
+            .expect("rejected periodic toroidal Move13Add should preserve evolved CDT invariants");
+    }
+
+    #[test]
+    fn periodic_toroidal_move_31_succeeds_after_offset_support() {
+        let mut system = ErgodicsSystem::with_seed(7);
+        let mut triangulation =
+            CdtTriangulation2D::from_toroidal_cdt(8, 8).expect("build toroidal CDT");
+        subdivide_first_toroidal_candidate(&mut triangulation);
+        let counts_before = (
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+        );
+
+        let result = system.attempt_31_move(&mut triangulation);
+
+        assert_eq!(
+            result,
+            MoveResult::Success,
+            "periodic toroidal Move31Remove should apply with upstream offset-aware flips"
+        );
+        assert_eq!(system.stats.moves_31_accepted, 1);
+        assert_eq!(
+            (
+                triangulation.vertex_count(),
+                triangulation.edge_count(),
+                triangulation.face_count(),
+            ),
+            (
+                counts_before.0 - 1,
+                counts_before.1 - 3,
+                counts_before.2 - 2
+            ),
+            "accepted periodic toroidal removal should reverse a local 1,3 subdivision"
+        );
+        triangulation.validate().expect(
+            "accepted periodic toroidal Move31Remove should preserve evolved CDT invariants",
+        );
+    }
+
+    #[test]
+    fn periodic_toroidal_k2_move_attempts_preserve_invariants() {
+        type AttemptK2Move = fn(&mut ErgodicsSystem, &mut CdtTriangulation2D) -> MoveResult;
+        type K2MoveCase = (MoveType, u64, AttemptK2Move);
+
+        let cases: [K2MoveCase; 2] = [
+            (MoveType::Move22, 11, ErgodicsSystem::attempt_22_move),
+            (MoveType::EdgeFlip, 13, ErgodicsSystem::attempt_edge_flip),
+        ];
+
+        for (move_type, seed, attempt_move) in cases {
+            let mut system = ErgodicsSystem::with_seed(seed);
+            let mut triangulation =
+                CdtTriangulation2D::from_toroidal_cdt(8, 8).expect("build toroidal CDT");
+
+            let result = attempt_move(&mut system, &mut triangulation);
+
+            assert!(
+                matches!(
+                    result,
+                    MoveResult::Success
+                        | MoveResult::CausalityViolation
+                        | MoveResult::GeometricViolation
+                ),
+                "periodic toroidal {move_type:?} should not fail through backend offset handling, got {result:?}"
+            );
+            triangulation.validate().expect(
+                "periodic toroidal k=2 move attempt should preserve evolved CDT invariants",
+            );
+        }
     }
 
     #[test]

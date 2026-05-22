@@ -74,8 +74,8 @@ impl fmt::Display for CheckpointOperation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum BackendMutationOperation {
-    /// Write cell payload by backend cell key.
-    SetCellDataByKey,
+    /// Write simplex payload by backend simplex key.
+    SetSimplexDataByKey,
     /// Write vertex payload by backend vertex key.
     SetVertexDataByKey,
     /// Write vertex payload through a vertex handle.
@@ -91,7 +91,7 @@ pub enum BackendMutationOperation {
 impl fmt::Display for BackendMutationOperation {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::SetCellDataByKey => formatter.write_str("set_cell_data_by_key"),
+            Self::SetSimplexDataByKey => formatter.write_str("set_simplex_data_by_key"),
             Self::SetVertexDataByKey => formatter.write_str("set_vertex_data_by_key"),
             Self::SetVertexData => formatter.write_str("set_vertex_data"),
             Self::SubdivideFace => formatter.write_str("subdivide_face"),
@@ -111,8 +111,8 @@ pub enum CdtValidationCheck {
     FoliationAssignment,
     /// Causality validation failed.
     Causality,
-    /// Strict CDT cell classification failed.
-    CellClassification,
+    /// Strict CDT simplex classification failed.
+    SimplexClassification,
     /// Local ergodic move candidate geometry could not be interpreted.
     ErgodicMoveCandidateGeometry,
 }
@@ -123,7 +123,7 @@ impl fmt::Display for CdtValidationCheck {
             Self::Geometry => formatter.write_str("geometry"),
             Self::FoliationAssignment => formatter.write_str("foliation_assignment"),
             Self::Causality => formatter.write_str("causality"),
-            Self::CellClassification => formatter.write_str("cell_classification"),
+            Self::SimplexClassification => formatter.write_str("simplex_classification"),
             Self::ErgodicMoveCandidateGeometry => {
                 formatter.write_str("ergodic_move_candidate_geometry")
             }
@@ -566,8 +566,8 @@ mod tests {
         );
         assert_eq!(CdtValidationCheck::Causality.to_string(), "causality");
         assert_eq!(
-            CdtValidationCheck::CellClassification.to_string(),
-            "cell_classification"
+            CdtValidationCheck::SimplexClassification.to_string(),
+            "simplex_classification"
         );
         assert_eq!(
             CdtValidationCheck::ErgodicMoveCandidateGeometry.to_string(),
@@ -591,8 +591,8 @@ mod tests {
     fn backend_mutation_operation_display_covers_all_operations() {
         let cases = [
             (
-                BackendMutationOperation::SetCellDataByKey,
-                "set_cell_data_by_key",
+                BackendMutationOperation::SetSimplexDataByKey,
+                "set_simplex_data_by_key",
             ),
             (
                 BackendMutationOperation::SetVertexDataByKey,

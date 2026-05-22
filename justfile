@@ -333,8 +333,8 @@ publish-check: _ensure-jq
     echo "🔍 Validating crates.io metadata..."
     errors=0
 
-    keywords=$(cargo metadata --no-deps --format-version=1 2>/dev/null \
-        | jq -r '.packages[0].keywords[]')
+    metadata=$(cargo metadata --no-deps --format-version=1 2>/dev/null)
+    keywords=$(echo "$metadata" | jq -r '.packages[0].keywords // [] | .[]')
     count=0
     while IFS= read -r kw; do
         [[ -z "$kw" ]] && continue

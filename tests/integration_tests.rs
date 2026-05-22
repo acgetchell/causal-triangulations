@@ -64,7 +64,7 @@ mod integration_tests {
     }
 
     #[test]
-    fn test_toroidal_metropolis_preserves_topology_after_many_attempted_moves() {
+    fn test_toroidal_metropolis_accepts_periodic_moves_and_preserves_topology() {
         const STEPS: u32 = 200;
 
         let triangulation = CdtTriangulation::from_toroidal_cdt(8, 6).expect("build toroidal CDT");
@@ -85,6 +85,10 @@ mod integration_tests {
 
         assert_eq!(results.steps().len(), STEPS as usize);
         assert_eq!(results.move_stats().total_attempted(), u64::from(STEPS));
+        assert!(
+            results.move_stats().total_accepted() > 0,
+            "periodic toroidal simulation should accept at least one move"
+        );
         assert_eq!(
             results.triangulation().metadata().topology,
             CdtTopology::Toroidal
@@ -104,8 +108,8 @@ mod integration_tests {
             .expect("final toroidal causality remains valid");
         results
             .triangulation()
-            .validate_cell_classification()
-            .expect("final toroidal cell classification remains valid");
+            .validate_simplex_classification()
+            .expect("final toroidal simplex classification remains valid");
     }
 
     #[test]

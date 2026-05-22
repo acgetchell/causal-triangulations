@@ -411,7 +411,7 @@ def format_benchmark_tables(
     for dimension in sorted(by_dimension.keys(), key=_dim_key):
         dim_benchmarks = sorted(
             by_dimension[dimension],
-            key=lambda b: (b.points is None, b.points or 0, b.comparison_key),
+            key=lambda b: (b.points is None, b.points or 0, b.benchmark_id or b.header_line()),
         )
         include_benchmark_id = any(bench.benchmark_id for bench in dim_benchmarks)
 

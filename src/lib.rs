@@ -43,7 +43,7 @@
 //!     restored.validate_topology()?;
 //!     restored.validate_foliation()?;
 //!     restored.validate_causality()?;
-//!     restored.validate_cell_classification()?;
+//!     restored.validate_simplex_classification()?;
 //!     assert_eq!(restored.slice_sizes(), &[4, 4, 4]);
 //!     Ok(())
 //! }
@@ -99,7 +99,7 @@ pub mod geometry {
     // Type aliases for common backend combinations
     /// 2D Delaunay backend (most common configuration).
     ///
-    /// Uses `f64` coordinates with `u32` vertex data (time-slice labels) and `i32` cell data.
+    /// Uses `f64` coordinates with `u32` vertex data (time-slice labels) and `i32` simplex data.
     pub type DelaunayBackend2D = backends::delaunay::DelaunayBackend<u32, i32, 2>;
 
     /// Default backend type for 2D CDT simulations
@@ -132,7 +132,7 @@ pub mod cdt {
 // Re-exports for convenience
 pub use cdt::action::{ActionConfig, compute_regge_action};
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
-pub use cdt::foliation::{CellType, EdgeType, Foliation, FoliationError};
+pub use cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType};
 pub use cdt::metropolis::{
     CdtMcmcCheckpoint, CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget,
     MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
@@ -244,7 +244,7 @@ pub mod prelude {
     /// ```
     pub mod triangulation {
         pub use crate::CdtTriangulation;
-        pub use crate::cdt::foliation::{CellType, EdgeType, Foliation, FoliationError};
+        pub use crate::cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType};
         pub use crate::config::CdtTopology;
         pub use crate::errors::{CdtError, CdtResult};
         pub use crate::geometry::CdtTriangulation2D;
@@ -358,8 +358,9 @@ pub mod prelude {
         };
         pub use crate::geometry::generators::{
             GlobalTopology, TopologyGuarantee, ToroidalConstructionMode,
-            build_delaunay2_from_cells, build_delaunay2_with_data, build_delaunay2_with_topology,
-            build_periodic_toroidal_delaunay2, build_toroidal_delaunay2, generate_delaunay2,
+            build_delaunay2_from_simplices, build_delaunay2_with_data,
+            build_delaunay2_with_topology, build_periodic_toroidal_delaunay2,
+            build_toroidal_delaunay2, generate_delaunay2,
         };
         pub use crate::geometry::operations::TriangulationOps;
         pub use crate::geometry::traits::{
@@ -654,8 +655,8 @@ mod tests {
             .expect("open-boundary run should preserve adjacent-slice causality");
         results
             .triangulation()
-            .validate_cell_classification()
-            .expect("open-boundary run should classify CDT cells");
+            .validate_simplex_classification()
+            .expect("open-boundary run should classify CDT simplices");
         assert!(!results.measurements().is_empty());
     }
 
@@ -825,8 +826,8 @@ mod tests {
             .expect("simulated open-boundary run should keep adjacent-slice causality");
         results
             .triangulation()
-            .validate_cell_classification()
-            .expect("simulated open-boundary run should keep CDT cell classification");
+            .validate_simplex_classification()
+            .expect("simulated open-boundary run should keep CDT simplex classification");
         assert!(!results.measurements().is_empty());
     }
 

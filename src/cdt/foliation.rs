@@ -27,13 +27,13 @@ pub enum EdgeType {
     Acausal,
 }
 
-/// Classification of a triangle (cell) in a foliated 1+1 CDT.
+/// Classification of a triangle (2-simplex) in a foliated 1+1 CDT.
 ///
 /// In a valid foliated triangulation every triangle spans exactly two
 /// adjacent time slices.  The type is determined by how many vertices
 /// sit on the lower vs. upper slice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum CellType {
+pub enum SimplexType {
     /// **(2,1)** — two vertices at time *t*, one at *t + 1*.
     /// The spacelike base is in the lower slice.
     Up,
@@ -42,16 +42,16 @@ pub enum CellType {
     Down,
 }
 
-impl CellType {
-    /// Encode as the `i32` value stored in cell data.
+impl SimplexType {
+    /// Encode as the `i32` value stored in simplex data.
     ///
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::CellType;
+    /// use causal_triangulations::SimplexType;
     ///
-    /// assert_eq!(CellType::Up.to_i32(), 1);
-    /// assert_eq!(CellType::Down.to_i32(), -1);
+    /// assert_eq!(SimplexType::Up.to_i32(), 1);
+    /// assert_eq!(SimplexType::Down.to_i32(), -1);
     /// ```
     #[must_use]
     pub const fn to_i32(self) -> i32 {
@@ -61,17 +61,17 @@ impl CellType {
         }
     }
 
-    /// Decode from the `i32` value stored in cell data.
+    /// Decode from the `i32` value stored in simplex data.
     ///
-    /// Returns `None` for values that do not represent a valid cell type.
+    /// Returns `None` for values that do not represent a valid simplex type.
     ///
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::CellType;
+    /// use causal_triangulations::SimplexType;
     ///
-    /// assert_eq!(CellType::from_i32(1), Some(CellType::Up));
-    /// assert_eq!(CellType::from_i32(0), None);
+    /// assert_eq!(SimplexType::from_i32(1), Some(SimplexType::Up));
+    /// assert_eq!(SimplexType::from_i32(0), None);
     /// ```
     #[must_use]
     pub const fn from_i32(value: i32) -> Option<Self> {
@@ -117,14 +117,14 @@ pub fn classify_edge(t0: Option<u32>, t1: Option<u32>) -> Option<EdgeType> {
 /// # Examples
 ///
 /// ```
-/// use causal_triangulations::cdt::foliation::{classify_cell, CellType};
+/// use causal_triangulations::cdt::foliation::{classify_simplex, SimplexType};
 ///
-/// assert_eq!(classify_cell(Some(0), Some(0), Some(1)), Some(CellType::Up));
-/// assert_eq!(classify_cell(Some(0), Some(1), Some(1)), Some(CellType::Down));
-/// assert_eq!(classify_cell(Some(0), Some(0), Some(0)), None);
+/// assert_eq!(classify_simplex(Some(0), Some(0), Some(1)), Some(SimplexType::Up));
+/// assert_eq!(classify_simplex(Some(0), Some(1), Some(1)), Some(SimplexType::Down));
+/// assert_eq!(classify_simplex(Some(0), Some(0), Some(0)), None);
 /// ```
 #[must_use]
-pub fn classify_cell(t0: Option<u32>, t1: Option<u32>, t2: Option<u32>) -> Option<CellType> {
+pub fn classify_simplex(t0: Option<u32>, t1: Option<u32>, t2: Option<u32>) -> Option<SimplexType> {
     let t0 = t0?;
     let t1 = t1?;
     let t2 = t2?;
@@ -139,9 +139,9 @@ pub fn classify_cell(t0: Option<u32>, t1: Option<u32>, t2: Option<u32>) -> Optio
 
     let lower_count = [t0, t1, t2].iter().filter(|&&t| t == min_t).count();
     match lower_count {
-        2 => Some(CellType::Up),   // (2,1): two at t, one at t+1
-        1 => Some(CellType::Down), // (1,2): one at t, two at t+1
-        _ => None,                 // unreachable for 3 vertices spanning 2 values
+        2 => Some(SimplexType::Up),   // (2,1): two at t, one at t+1
+        1 => Some(SimplexType::Down), // (1,2): one at t, two at t+1
+        _ => None,                    // unreachable for 3 vertices spanning 2 values
     }
 }
 
@@ -572,69 +572,78 @@ mod tests {
     }
 
     // =========================================================================
-    // CellType tests
+    // SimplexType tests
     // =========================================================================
 
     #[test]
-    fn test_cell_type_encoding_roundtrip() {
+    fn test_simplex_type_encoding_roundtrip() {
         assert_eq!(
-            CellType::from_i32(CellType::Up.to_i32()),
-            Some(CellType::Up)
+            SimplexType::from_i32(SimplexType::Up.to_i32()),
+            Some(SimplexType::Up)
         );
         assert_eq!(
-            CellType::from_i32(CellType::Down.to_i32()),
-            Some(CellType::Down)
+            SimplexType::from_i32(SimplexType::Down.to_i32()),
+            Some(SimplexType::Down)
         );
     }
 
     #[test]
-    fn test_cell_type_from_invalid_i32() {
-        assert_eq!(CellType::from_i32(0), None);
-        assert_eq!(CellType::from_i32(2), None);
-        assert_eq!(CellType::from_i32(-2), None);
+    fn test_simplex_type_from_invalid_i32() {
+        assert_eq!(SimplexType::from_i32(0), None);
+        assert_eq!(SimplexType::from_i32(2), None);
+        assert_eq!(SimplexType::from_i32(-2), None);
     }
 
     #[test]
-    fn test_classify_cell_up() {
+    fn test_classify_simplex_up() {
         // Two at t=0, one at t=1 → Up (2,1)
-        assert_eq!(classify_cell(Some(0), Some(0), Some(1)), Some(CellType::Up));
-        assert_eq!(classify_cell(Some(0), Some(1), Some(0)), Some(CellType::Up));
-        assert_eq!(classify_cell(Some(1), Some(0), Some(0)), Some(CellType::Up));
+        assert_eq!(
+            classify_simplex(Some(0), Some(0), Some(1)),
+            Some(SimplexType::Up)
+        );
+        assert_eq!(
+            classify_simplex(Some(0), Some(1), Some(0)),
+            Some(SimplexType::Up)
+        );
+        assert_eq!(
+            classify_simplex(Some(1), Some(0), Some(0)),
+            Some(SimplexType::Up)
+        );
     }
 
     #[test]
-    fn test_classify_cell_down() {
+    fn test_classify_simplex_down() {
         // One at t=0, two at t=1 → Down (1,2)
         assert_eq!(
-            classify_cell(Some(1), Some(1), Some(0)),
-            Some(CellType::Down)
+            classify_simplex(Some(1), Some(1), Some(0)),
+            Some(SimplexType::Down)
         );
         assert_eq!(
-            classify_cell(Some(1), Some(0), Some(1)),
-            Some(CellType::Down)
+            classify_simplex(Some(1), Some(0), Some(1)),
+            Some(SimplexType::Down)
         );
         assert_eq!(
-            classify_cell(Some(0), Some(1), Some(1)),
-            Some(CellType::Down)
+            classify_simplex(Some(0), Some(1), Some(1)),
+            Some(SimplexType::Down)
         );
     }
 
     #[test]
-    fn test_classify_cell_same_slice_returns_none() {
+    fn test_classify_simplex_same_slice_returns_none() {
         // All vertices at same time → None (degenerate)
-        assert_eq!(classify_cell(Some(2), Some(2), Some(2)), None);
+        assert_eq!(classify_simplex(Some(2), Some(2), Some(2)), None);
     }
 
     #[test]
-    fn test_classify_cell_spans_two_slices_returns_none() {
+    fn test_classify_simplex_spans_two_slices_returns_none() {
         // Spans more than one slice → None (acausal)
-        assert_eq!(classify_cell(Some(0), Some(1), Some(2)), None);
+        assert_eq!(classify_simplex(Some(0), Some(1), Some(2)), None);
     }
 
     #[test]
-    fn test_classify_cell_unlabeled_returns_none() {
-        assert_eq!(classify_cell(Some(0), Some(0), None), None);
-        assert_eq!(classify_cell(None, Some(0), Some(1)), None);
+    fn test_classify_simplex_unlabeled_returns_none() {
+        assert_eq!(classify_simplex(Some(0), Some(0), None), None);
+        assert_eq!(classify_simplex(None, Some(0), Some(1)), None);
     }
 
     // =========================================================================

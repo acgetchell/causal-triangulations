@@ -175,7 +175,7 @@ impl SimulationResultsBackend {
     ///
     /// The final triangulation is checked with the crate's evolved-CDT validation
     /// path, so this can also return backend validation, topology, foliation,
-    /// causality, or cell-classification errors, including
+    /// causality, or simplex-classification errors, including
     /// [`CdtError::DelaunayValidationFailed`], [`CdtError::TopologyMismatch`],
     /// [`CdtError::Foliation`], [`CdtError::CausalityViolation`], and
     /// [`CdtError::ValidationFailed`].
@@ -1056,6 +1056,47 @@ mod tests {
                 ch => ch,
             })
             .collect()
+    }
+
+    #[test]
+    fn public_constructor_accepts_valid_components_and_preserves_accessors() {
+        let config = MetropolisConfig::new(1.5, 4, 1, 2).with_seed(23);
+        let action_config = ActionConfig::new(1.0, 0.5, 0.25);
+        let mut move_stats = MoveStatistics::new();
+        move_stats.record_attempt(MoveType::Move22);
+        move_stats.record_success(MoveType::Move22);
+        let step = MonteCarloStep {
+            step: 2,
+            move_type: MoveType::Move22,
+            accepted: true,
+            action_before: 4.0,
+            action_after: Some(3.5),
+            delta_action: Some(-0.5),
+        };
+        let measurement = Measurement::new(2, 3.5, 12, 26, 12).with_volume_profile(vec![4, 4, 4]);
+        let elapsed = Duration::from_millis(42);
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+
+        let results = SimulationResultsBackend::new(
+            config.clone(),
+            action_config.clone(),
+            move_stats,
+            vec![step],
+            vec![measurement],
+            elapsed,
+            triangulation,
+        )
+        .expect("valid result components should construct");
+
+        assert_eq!(results.config(), &config);
+        assert_eq!(results.action_config(), &action_config);
+        assert_eq!(results.move_stats().total_attempted(), 1);
+        assert_eq!(results.move_stats().total_accepted(), 1);
+        assert_eq!(results.steps()[0].step, 2);
+        assert_eq!(results.measurements()[0].volume_profile, vec![4, 4, 4]);
+        assert_eq!(results.elapsed_time(), elapsed);
+        assert_eq!(results.triangulation().slice_sizes(), &[4, 4, 4]);
     }
 
     #[test]

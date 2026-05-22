@@ -48,7 +48,7 @@ Owns a `MoveStatistics` instance and a thread-local RNG. Public API:
 - `attempt_edge_flip(&mut CdtTriangulation2D) -> MoveResult`
 - `attempt_random_move(&mut CdtTriangulation2D) -> MoveResult` — delegates to one of the above
 
-Accepted moves mutate the triangulation through narrow CDT-owned edit operations, then rebuild CDT foliation bookkeeping from live vertex labels and refresh cell classifications. On toroidal triangulations, move finalization also rechecks χ = 0 and the closed-S¹ per-slice foliation invariant before recording success. The raw mutable backend is not exposed as part of the CDT API.
+Accepted moves mutate the triangulation through narrow CDT-owned edit operations, then rebuild CDT foliation bookkeeping from live vertex labels and refresh simplex classifications. On toroidal triangulations, move finalization also rechecks χ = 0 and the closed-S¹ per-slice foliation invariant before recording success. The raw mutable backend is not exposed as part of the CDT API.
 
 ## Architecture
 
@@ -68,4 +68,4 @@ The Metropolis loop accepts or rejects a move type before calling these mutating
 
 - [ ] Weight `select_random_move()` by available application sites per move type to remove uniform-sampling chain bias
 - [ ] Weight accepted move-site retries by available local sites instead of bounded random retries
-- [ ] Broaden per-kernel toroidal move-site tests around periodic boundary cells
+- [ ] Broaden per-kernel toroidal move-site tests around periodic boundary simplices

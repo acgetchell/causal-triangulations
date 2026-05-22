@@ -19,7 +19,7 @@ pub use delaunay::{core::edge::EdgeKey, core::tds::VertexKey};
 pub(crate) use delaunay::prelude::Tds;
 
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
-pub(super) use delaunay::{core::cell::CellKey, core::facet::Facet};
+pub(super) use delaunay::tds::{FacetHandle, SimplexKey};
 
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 use delaunay::{
