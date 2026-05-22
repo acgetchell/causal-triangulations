@@ -13,17 +13,19 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 ```bash
 # Basic 2D CDT triangulation with default parameters
-./target/release/cdt --vertices 10 --timeslices 5
+./target/release/cdt --vertices-per-slice 4 --timeslices 5
 
 # Run with custom simulation settings
-./target/release/cdt --vertices 20 --timeslices 10 --temperature 1.5 --steps 2000 --simulate
+./target/release/cdt --vertices-per-slice 4 --timeslices 10 --temperature 1.5 --steps 2000 --simulate
 ```
 
 ## Command Line Arguments
 
 ### Required Arguments
 
-- `--vertices <N>`: Number of vertices in the triangulation (minimum 3)
+- `--vertices-per-slice <N>`: Vertices on each initial spatial slice. Prefer this for regular CDT initial data; the binary computes
+  `total vertices = vertices-per-slice × timeslices`.
+- `--vertices <N>`: Total initial vertex count. Use this only when the total is already known; it must divide evenly by `--timeslices`.
 - `--timeslices <N>`: Number of time slices in the CDT foliation (minimum 1)
 
 ### Optional Simulation Parameters
@@ -50,12 +52,12 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 ```bash
 # Quick triangulation-generation test with minimal parameters
-./target/release/cdt --vertices 5 --timeslices 2
+./target/release/cdt --vertices-per-slice 4 --timeslices 2
 ```
 
 **Expected Output:**
 
-- Creates a 5-vertex, 2-timeslice triangulation
+- Creates an 8-vertex, 2-timeslice open-boundary triangulation
 - Does not run Monte Carlo steps unless `--simulate` is passed
 - Reports the initial triangulation measurement
 
@@ -63,7 +65,7 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 ```bash
 ./target/release/cdt \
-  --vertices 50 \
+  --vertices-per-slice 5 \
   --timeslices 10 \
   --temperature 1.2 \
   --steps 5000 \
@@ -79,7 +81,7 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 ```bash
 # High temperature configuration
 ./target/release/cdt \
-  --vertices 30 \
+  --vertices-per-slice 4 \
   --timeslices 8 \
   --temperature 10.0 \
   --steps 3000 \
@@ -93,7 +95,7 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 ```bash
 # Low temperature configuration
 ./target/release/cdt \
-  --vertices 25 \
+  --vertices-per-slice 4 \
   --timeslices 12 \
   --temperature 0.5 \
   --steps 8000 \
@@ -108,7 +110,7 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 ```bash
 # Modified coupling constants
 ./target/release/cdt \
-  --vertices 40 \
+  --vertices-per-slice 5 \
   --timeslices 8 \
   --coupling-0 0.8 \
   --coupling-2 1.2 \
@@ -122,7 +124,7 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 ```bash
 # Generate triangulation without running Monte Carlo simulation
-./target/release/cdt --vertices 100 --timeslices 20
+./target/release/cdt --vertices-per-slice 5 --timeslices 20
 ```
 
 **Use Case:** Generate initial configurations for other analysis tools
@@ -140,7 +142,7 @@ Create a script to run parameter sweeps:
 for temp in 0.5 1.0 1.5 2.0 2.5; do
     echo "Running simulation at temperature $temp"
     ./target/release/cdt \
-        --vertices 30 \
+        --vertices-per-slice 4 \
         --timeslices 10 \
         --temperature $temp \
         --steps 2000 \
@@ -154,7 +156,7 @@ done
 ```bash
 # Large simulation for performance testing
 ./target/release/cdt \
-  --vertices 200 \
+  --vertices-per-slice 8 \
   --timeslices 25 \
   --steps 10000 \
   --measurement-frequency 100 \
@@ -167,16 +169,16 @@ Enable detailed logging:
 
 ```bash
 # Set log level for detailed triangulation output
-RUST_LOG=debug ./target/release/cdt --vertices 10 --timeslices 5
+RUST_LOG=debug ./target/release/cdt --vertices-per-slice 4 --timeslices 5
 
 # Show detailed simulation logging
-RUST_LOG=debug ./target/release/cdt --vertices 10 --timeslices 5 --simulate
+RUST_LOG=debug ./target/release/cdt --vertices-per-slice 4 --timeslices 5 --simulate
 
 # Log only errors and warnings
-RUST_LOG=warn ./target/release/cdt --vertices 50 --timeslices 10 --simulate
+RUST_LOG=warn ./target/release/cdt --vertices-per-slice 5 --timeslices 10 --simulate
 
 # Save output to file
-./target/release/cdt --vertices 25 --timeslices 8 --simulate > simulation.log 2>&1
+./target/release/cdt --vertices-per-slice 4 --timeslices 8 --simulate > simulation.log 2>&1
 ```
 
 ## Expected Output Format
@@ -185,11 +187,11 @@ RUST_LOG=warn ./target/release/cdt --vertices 50 --timeslices 10 --simulate
 
 ```text
 [INFO] Dimensionality: 2
-[INFO] Number of vertices: 10
+[INFO] Number of vertices: 20
 [INFO] Number of timeslices: 5
 [INFO] Topology: OpenBoundary
 [INFO] Using trait-based backend system
-[INFO] Triangulation created with 10 vertices, <edge-count> edges, <face-count> faces
+[INFO] Triangulation created with 20 vertices, <edge-count> edges, <face-count> faces
 [INFO] CDT simulation completed successfully
 ```
 
@@ -197,11 +199,11 @@ RUST_LOG=warn ./target/release/cdt --vertices 50 --timeslices 10 --simulate
 
 ```bash
 # Invalid parameters
-./target/release/cdt --vertices 2 --timeslices 1
-# Error: vertices must be >= 3
+./target/release/cdt --vertices-per-slice 2 --timeslices 2
+# Error: vertices must be >= 4 · timeslices (8) for open-boundary topology
 
 # Unsupported dimension
-./target/release/cdt --vertices 10 --timeslices 5 --dimension 4
+./target/release/cdt --vertices-per-slice 4 --timeslices 5 --dimension 4
 # Error: unsupported dimension
 ```
 
@@ -246,7 +248,7 @@ RUST_LOG=warn ./target/release/cdt --vertices 50 --timeslices 10 --simulate
    - Consider reducing measurement frequency
 
 4. **Parameter validation errors**
-   - Check minimum values (vertices ≥ 3, timeslices ≥ 1)
+   - Check minimum values (open-boundary vertices per slice ≥ 4, toroidal vertices per slice ≥ 3)
    - Verify dimension is 2
 
 ## Integration with Other Tools
@@ -255,7 +257,7 @@ RUST_LOG=warn ./target/release/cdt --vertices 50 --timeslices 10 --simulate
 
 ```bash
 # Pipe triangulation-only output to analysis tools
-./target/release/cdt --vertices 50 --timeslices 10 | \
+./target/release/cdt --vertices-per-slice 5 --timeslices 10 | \
   python analysis_script.py
 ```
 
@@ -264,7 +266,7 @@ RUST_LOG=warn ./target/release/cdt --vertices 50 --timeslices 10 --simulate
 ```bash
 # Use in makefiles or CI/CD
 make run-simulation: 
- ./target/release/cdt --vertices $(VERTICES) --timeslices $(SLICES)
+ ./target/release/cdt --vertices-per-slice $(VERTICES_PER_SLICE) --timeslices $(SLICES)
 ```
 
 ## Help and Documentation

@@ -58,7 +58,11 @@ fn assert_physics_pipeline(config: &CdtConfig) {
     );
 
     let stats = results.move_stats();
-    assert!(stats.moves_22_attempted > 0);
+    assert_eq!(
+        stats.total_attempted(),
+        u64::from(config.steps),
+        "one move proposal should be recorded for each configured simulation step"
+    );
     assert!(stats.total_acceptance_rate() > 0.0);
 }
 

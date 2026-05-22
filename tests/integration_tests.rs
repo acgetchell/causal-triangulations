@@ -70,6 +70,7 @@ mod integration_tests {
         let triangulation = CdtTriangulation::from_toroidal_cdt(8, 6).expect("build toroidal CDT");
         assert_eq!(triangulation.metadata().topology, CdtTopology::Toroidal);
         assert_eq!(triangulation.geometry().euler_characteristic(), 0);
+        let initial_profile = triangulation.volume_profile();
         triangulation
             .validate_topology()
             .expect("initial toroidal topology is valid");
@@ -88,6 +89,19 @@ mod integration_tests {
         assert!(
             results.move_stats().total_accepted() > 0,
             "periodic toroidal simulation should accept at least one move"
+        );
+        assert!(
+            results.move_stats().moves_13_accepted > 0,
+            "periodic toroidal simulation should accept at least one volume-increasing move"
+        );
+        assert!(
+            results.move_stats().moves_31_accepted > 0,
+            "periodic toroidal simulation should accept at least one inverse volume move after growth"
+        );
+        assert_ne!(
+            results.triangulation().volume_profile(),
+            initial_profile,
+            "periodic toroidal volume moves should change the final volume profile"
         );
         assert_eq!(
             results.triangulation().metadata().topology,

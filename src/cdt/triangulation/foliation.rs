@@ -5,7 +5,9 @@
 use super::CdtTriangulation;
 use crate::cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType, classify_simplex};
 use crate::config::CdtTopology;
-use crate::errors::{BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck};
+use crate::errors::{
+    BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
+};
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
@@ -311,20 +313,20 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 let coords = self.geometry.vertex_coordinates(&vh).map_err(|e| {
                     CdtError::ValidationFailed {
                         check: CdtValidationCheck::FoliationAssignment,
-                        detail: format!(
-                            "failed to read coordinates for vertex {:?}: {e}",
-                            vh.vertex_key()
-                        ),
+                        failure: CdtValidationFailure::VertexCoordinateReadFailed {
+                            vertex: format!("{:?}", vh.vertex_key()),
+                            detail: e.to_string(),
+                        },
                     }
                 })?;
                 if coords.len() < 2 {
                     return Err(CdtError::ValidationFailed {
                         check: CdtValidationCheck::FoliationAssignment,
-                        detail: format!(
-                            "vertex {:?} has {} coordinates, expected ≥ 2",
-                            vh.vertex_key(),
-                            coords.len()
-                        ),
+                        failure: CdtValidationFailure::VertexCoordinateDimension {
+                            vertex: format!("{:?}", vh.vertex_key()),
+                            actual: coords.len(),
+                            expected_minimum: 2,
+                        },
                     });
                 }
                 Ok((vh, coords[1]))
@@ -865,10 +867,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
             if self.simplex_type(&face).is_none() {
                 return Err(CdtError::ValidationFailed {
                     check: CdtValidationCheck::SimplexClassification,
-                    detail: format!(
-                        "face {:?} is not a strict CDT simplex (expected Up or Down)",
-                        face.simplex_key()
-                    ),
+                    failure: CdtValidationFailure::NonStrictSimplex {
+                        face: format!("{:?}", face.simplex_key()),
+                    },
                 });
             }
         }
@@ -912,10 +913,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
             let Some(ct) = self.simplex_type(face) else {
                 return Err(CdtError::ValidationFailed {
                     check: CdtValidationCheck::SimplexClassification,
-                    detail: format!(
-                        "face {:?} is not a strict CDT simplex (expected Up or Down)",
-                        face.simplex_key()
-                    ),
+                    failure: CdtValidationFailure::NonStrictSimplex {
+                        face: format!("{:?}", face.simplex_key()),
+                    },
                 });
             };
             classifications.push((face.simplex_key(), ct));
@@ -1393,11 +1393,15 @@ mod tests {
 
         assert!(matches!(
             CdtTriangulation::from_labeled_delaunay(backend, 1, 2),
-            Err(CdtError::ValidationFailed { ref check, ref detail })
+            Err(CdtError::ValidationFailed {
+                ref check,
+                failure: CdtValidationFailure::InvalidCdtTriangle {
+                    spacelike_edges: 3,
+                    timelike_edges: 0,
+                    ..
+                },
+            })
                 if *check == CdtValidationCheck::Causality
-                    && detail.contains("invalid CDT triangle")
-                    && detail.contains("spacelike=3")
-                    && detail.contains("timelike=0")
         ));
     }
 

@@ -11,10 +11,13 @@
 use crate::config::CdtTopology;
 use crate::errors::{BackendMutationOperation, CdtError};
 use crate::geometry::CdtTriangulation2D;
-use crate::geometry::backends::delaunay::{DelaunayFaceHandle, DelaunayVertexHandle};
+use crate::geometry::backends::delaunay::{
+    DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
+};
 use crate::geometry::traits::{EdgeAdjacentFaces, TriangulationQuery};
 use rand::{RngExt, SeedableRng, rngs::Xoshiro256PlusPlus};
 use serde::{Deserialize, Serialize};
+use std::array;
 use std::fmt::Display;
 
 /// Types of ergodic moves available in 2D CDT.
@@ -22,9 +25,9 @@ use std::fmt::Display;
 pub enum MoveType {
     /// (2,2) move: Flip edge between two triangles
     Move22,
-    /// (1,3) move: Add vertex by subdividing triangle
+    /// (1,3) move: Add a vertex by subdividing local CDT volume
     Move13Add,
-    /// (3,1) move: Remove vertex by merging triangles
+    /// (3,1) move: Remove a vertex by collapsing local CDT volume
     Move31Remove,
     /// Edge flip: API-compatible alias for the 2D (2,2) move
     EdgeFlip,
@@ -33,7 +36,7 @@ pub enum MoveType {
 /// Result of attempting an ergodic move.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MoveResult {
-    /// Move was successfully applied
+    /// Move was successfully applied and validated as the next CDT state
     Success,
     /// Move was rejected due to causality constraints
     CausalityViolation,
@@ -41,29 +44,50 @@ pub enum MoveResult {
     GeometricViolation,
     /// Move was rejected for other reasons
     Rejected(CdtError),
-    /// Move mutated geometry but failed a required post-mutation invariant refresh
+    /// Move mutated geometry but failed a required post-mutation invariant refresh.
+    ///
+    /// Hard failures are rolled back by public move attempts and are tracked
+    /// separately from ordinary proposal rejections in [`MoveStatistics`].
     HardFailure(CdtError),
 }
 
 /// Statistics tracking for ergodic moves.
+///
+/// Attempts count every selected move proposal. Accepted counts include only
+/// moves that committed and validated successfully. Hard-failure counts record
+/// proposals that mutated the backend but failed post-mutation CDT invariants;
+/// those failures remain in the attempt denominator but are not counted as
+/// accepted moves.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MoveStatistics {
     /// Number of (2,2) moves attempted
     pub moves_22_attempted: u64,
     /// Number of (2,2) moves accepted
     pub moves_22_accepted: u64,
+    /// Number of (2,2) moves that mutated state but failed post-mutation invariants.
+    #[serde(default)]
+    pub moves_22_hard_failed: u64,
     /// Number of (1,3) moves attempted
     pub moves_13_attempted: u64,
     /// Number of (1,3) moves accepted
     pub moves_13_accepted: u64,
+    /// Number of (1,3) moves that mutated state but failed post-mutation invariants.
+    #[serde(default)]
+    pub moves_13_hard_failed: u64,
     /// Number of (3,1) moves attempted
     pub moves_31_attempted: u64,
     /// Number of (3,1) moves accepted
     pub moves_31_accepted: u64,
+    /// Number of (3,1) moves that mutated state but failed post-mutation invariants.
+    #[serde(default)]
+    pub moves_31_hard_failed: u64,
     /// Number of edge flips attempted
     pub edge_flips_attempted: u64,
     /// Number of edge flips accepted
     pub edge_flips_accepted: u64,
+    /// Number of edge flips that mutated state but failed post-mutation invariants.
+    #[serde(default)]
+    pub edge_flips_hard_failed: u64,
 }
 
 impl MoveStatistics {
@@ -102,7 +126,7 @@ impl MoveStatistics {
         }
     }
 
-    /// Records a successful move.
+    /// Records a successful move that committed and validated.
     ///
     /// # Examples
     ///
@@ -122,7 +146,39 @@ impl MoveStatistics {
         }
     }
 
+    /// Records a move that mutated state but failed a post-mutation invariant.
+    ///
+    /// Hard failures are distinct from ordinary proposal rejections and are not
+    /// counted as accepted moves. Call this after the corresponding
+    /// [`Self::record_attempt`] so acceptance-rate denominators continue to
+    /// reflect all selected proposals.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::{MoveStatistics, MoveType};
+    ///
+    /// let mut stats = MoveStatistics::new();
+    /// stats.record_attempt(MoveType::Move31Remove);
+    /// stats.record_hard_failure(MoveType::Move31Remove);
+    /// assert_eq!(stats.moves_31_accepted, 0);
+    /// assert_eq!(stats.moves_31_hard_failed, 1);
+    /// ```
+    pub const fn record_hard_failure(&mut self, move_type: MoveType) {
+        match move_type {
+            MoveType::Move22 => self.moves_22_hard_failed += 1,
+            MoveType::Move13Add => self.moves_13_hard_failed += 1,
+            MoveType::Move31Remove => self.moves_31_hard_failed += 1,
+            MoveType::EdgeFlip => self.edge_flips_hard_failed += 1,
+        }
+    }
+
     /// Calculates acceptance rate for a specific move type.
+    ///
+    /// The returned ratio is accepted attempts divided by all attempts for that
+    /// move type. Ordinary rejections and hard failures both remain in the
+    /// denominator; hard failures are additionally visible through
+    /// [`Self::total_hard_failures`] and the per-move hard-failure fields.
     ///
     /// # Examples
     ///
@@ -154,6 +210,11 @@ impl MoveStatistics {
     }
 
     /// Calculates overall acceptance rate.
+    ///
+    /// This is the total number of committed, validated moves divided by total
+    /// attempts across all move types. Hard failures are not accepted moves, so
+    /// they lower this rate and are separately reported by
+    /// [`Self::total_hard_failures`].
     ///
     /// # Examples
     ///
@@ -188,6 +249,9 @@ impl MoveStatistics {
 
     /// Returns the total number of attempted moves across all move types.
     ///
+    /// This includes proposals that were later accepted, rejected, or recorded
+    /// as hard failures.
+    ///
     /// # Examples
     ///
     /// ```
@@ -208,6 +272,9 @@ impl MoveStatistics {
 
     /// Returns the total number of accepted moves across all move types.
     ///
+    /// This counts only moves that committed and validated successfully. It does
+    /// not include ordinary rejections or hard failures.
+    ///
     /// # Examples
     ///
     /// ```
@@ -224,6 +291,30 @@ impl MoveStatistics {
             + self.moves_13_accepted
             + self.moves_31_accepted
             + self.edge_flips_accepted
+    }
+
+    /// Returns the total number of hard failures across all move types.
+    ///
+    /// A hard failure means a proposal mutated backend state before a required
+    /// post-mutation CDT invariant check failed. Public move attempts roll back
+    /// the triangulation before returning [`MoveResult::HardFailure`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::{MoveStatistics, MoveType};
+    ///
+    /// let mut stats = MoveStatistics::new();
+    /// stats.record_hard_failure(MoveType::Move13Add);
+    /// stats.record_hard_failure(MoveType::EdgeFlip);
+    /// assert_eq!(stats.total_hard_failures(), 2);
+    /// ```
+    #[must_use]
+    pub const fn total_hard_failures(&self) -> u64 {
+        self.moves_22_hard_failed
+            + self.moves_13_hard_failed
+            + self.moves_31_hard_failed
+            + self.edge_flips_hard_failed
     }
 }
 
@@ -249,6 +340,18 @@ pub struct ErgodicsSystem {
 enum InsertionLabel {
     Unfoliated,
     Label(u32),
+}
+
+struct ToroidalInsertionCandidate {
+    edge: DelaunayEdgeHandle,
+    face: DelaunayFaceHandle,
+    point: [f64; 2],
+    label: u32,
+}
+
+struct ToroidalRemovalCandidate {
+    vertex: DelaunayVertexHandle,
+    flip_edge: DelaunayEdgeHandle,
 }
 
 impl ErgodicsSystem {
@@ -345,14 +448,22 @@ impl ErgodicsSystem {
     /// ```
     pub fn attempt_22_move(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         self.stats.record_attempt(MoveType::Move22);
-        self.attempt_causal_edge_flip(triangulation, MoveType::Move22)
+        let result = self.attempt_causal_edge_flip(triangulation, MoveType::Move22);
+        self.record_hard_failure_if_needed(MoveType::Move22, result)
     }
 
     /// Attempts a (1,3) move on the triangulation.
     ///
-    /// A (1,3) move inserts a vertex at the selected triangle centroid. For a
-    /// foliated triangle, the inserted vertex receives the unique time label
-    /// that keeps all three replacement triangles causal.
+    /// On open-boundary and unfoliated triangulations, a (1,3) move inserts a
+    /// vertex at the selected triangle centroid. For a foliated triangle, the
+    /// inserted vertex receives the unique time label that keeps all three
+    /// replacement triangles causal.
+    ///
+    /// On toroidal foliated triangulations, the same public move type is
+    /// realized as a spacelike-link split: the kernel subdivides one adjacent
+    /// face, labels the inserted vertex on the split link's time slice, flips
+    /// the original spacelike link away, and finalizes only if the periodic
+    /// topology and closed-S¹ slice invariants still hold.
     ///
     /// # Examples
     ///
@@ -378,7 +489,8 @@ impl ErgodicsSystem {
     /// ```
     pub fn attempt_13_move(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         self.stats.record_attempt(MoveType::Move13Add);
-        self.attempt_13_move_mutating(triangulation)
+        let result = self.attempt_13_move_mutating(triangulation);
+        self.record_hard_failure_if_needed(MoveType::Move13Add, result)
     }
 
     /// Rollback boundary for an accepted (1,3) move application.
@@ -388,6 +500,12 @@ impl ErgodicsSystem {
     /// every early return must pass a `MoveResult` through `rollback_if_failed`
     /// or restore state itself.
     fn attempt_13_move_mutating(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
+        if matches!(triangulation.metadata().topology, CdtTopology::Toroidal)
+            && triangulation.has_foliation()
+        {
+            return self.attempt_toroidal_13_move_mutating(triangulation);
+        }
+
         let mut geometric_candidate_seen = false;
         let mut causal_candidate_count = 0;
         let mut selected_candidate = None;
@@ -451,11 +569,90 @@ impl ErgodicsSystem {
         rollback_if_failed(triangulation, snapshot, result)
     }
 
+    /// Applies the toroidal volume-add move as a spacelike-link split.
+    ///
+    /// The backend only exposes primitive bistellar edits, so this composes a
+    /// face subdivision with an immediate flip of the original spacelike link.
+    /// The intermediate same-slice triangle is never finalized as CDT state.
+    fn attempt_toroidal_13_move_mutating(
+        &mut self,
+        triangulation: &mut CdtTriangulation2D,
+    ) -> MoveResult {
+        let mut geometric_candidate_seen = false;
+        let mut causal_candidate_count = 0;
+        let mut selected_candidate = None;
+
+        let geometry = triangulation.geometry();
+        for edge in geometry.edges() {
+            let Ok(Some(adjacent)) = geometry.edge_adjacent_faces(&edge) else {
+                continue;
+            };
+            geometric_candidate_seen = true;
+
+            let Some(candidate) = toroidal_insertion_candidate(triangulation, edge, &adjacent)
+            else {
+                continue;
+            };
+
+            causal_candidate_count += 1;
+            if self.rng.random_range(0..causal_candidate_count) == 0 {
+                selected_candidate = Some(candidate);
+            }
+        }
+
+        let Some(candidate) = selected_candidate else {
+            if !geometric_candidate_seen {
+                return MoveResult::GeometricViolation;
+            }
+            return MoveResult::CausalityViolation;
+        };
+
+        let snapshot = triangulation.clone();
+        let subdivision_target = format!("face {:?}", candidate.face.simplex_key());
+        let subdivision = triangulation.subdivide_face(candidate.face, &candidate.point);
+        let subdivision = match subdivision {
+            Ok(subdivision) => subdivision,
+            Err(err) => {
+                let result = reject_backend(
+                    BackendMutationOperation::SubdivideFace,
+                    subdivision_target,
+                    &err,
+                );
+                return rollback_if_failed(triangulation, snapshot, result);
+            }
+        };
+
+        if let Err(err) =
+            triangulation.set_vertex_data(&subdivision.new_vertex, Some(candidate.label))
+        {
+            let result = MoveResult::HardFailure(CdtError::BackendMutationFailed {
+                operation: BackendMutationOperation::SetVertexData,
+                target: format!("vertex {:?}", subdivision.new_vertex.vertex_key()),
+                detail: err.to_string(),
+            });
+            return rollback_if_failed(triangulation, snapshot, result);
+        }
+
+        let flip_target = format!("{:?}", candidate.edge);
+        let flip_result = triangulation.flip_edge(candidate.edge);
+        let result = match flip_result {
+            Ok(_) => self.finish_mutated_move(triangulation, MoveType::Move13Add),
+            Err(err) => reject_backend(BackendMutationOperation::FlipEdge, flip_target, &err),
+        };
+        rollback_if_failed(triangulation, snapshot, result)
+    }
+
     /// Attempts a (3,1) move on the triangulation.
     ///
-    /// A (3,1) move removes a degree-3 vertex if its neighbouring vertices can
-    /// form one causal replacement triangle and the removal does not empty a
-    /// time slice.
+    /// On open-boundary and unfoliated triangulations, a (3,1) move removes a
+    /// degree-3 vertex if its neighbouring vertices can form one causal
+    /// replacement triangle and the removal does not empty a time slice.
+    ///
+    /// On toroidal foliated triangulations, this inverse volume move targets a
+    /// degree-4 local configuration produced by a spacelike-link split. The
+    /// kernel flips a timelike support edge so the removable vertex becomes
+    /// degree 3, then collapses it and finalizes only if the periodic topology
+    /// and closed-S¹ slice invariants still hold.
     ///
     /// # Examples
     ///
@@ -485,7 +682,8 @@ impl ErgodicsSystem {
     /// ```
     pub fn attempt_31_move(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         self.stats.record_attempt(MoveType::Move31Remove);
-        self.attempt_31_move_mutating(triangulation)
+        let result = self.attempt_31_move_mutating(triangulation);
+        self.record_hard_failure_if_needed(MoveType::Move31Remove, result)
     }
 
     /// Rollback boundary for an accepted (3,1) move application.
@@ -494,6 +692,12 @@ impl ErgodicsSystem {
     /// bookkeeping. Once the snapshot exists, every early return must pass a
     /// `MoveResult` through `rollback_if_failed` or restore state itself.
     fn attempt_31_move_mutating(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
+        if matches!(triangulation.metadata().topology, CdtTopology::Toroidal)
+            && triangulation.has_foliation()
+        {
+            return self.attempt_toroidal_31_move_mutating(triangulation);
+        }
+
         let mut geometric_candidate_seen = false;
         let mut causal_candidate_count = 0;
         let mut selected_vertex = None;
@@ -538,6 +742,48 @@ impl ErgodicsSystem {
         rollback_if_failed(triangulation, snapshot, result)
     }
 
+    /// Applies the toroidal inverse volume move as flip-then-collapse.
+    fn attempt_toroidal_31_move_mutating(
+        &mut self,
+        triangulation: &mut CdtTriangulation2D,
+    ) -> MoveResult {
+        let mut candidate_count = 0_usize;
+        let mut selected_candidate = None;
+
+        for vertex in triangulation.geometry().vertices() {
+            let Some(candidate) = toroidal_removal_candidate(triangulation, vertex) else {
+                continue;
+            };
+
+            candidate_count += 1;
+            if self.rng.random_range(0..candidate_count) == 0 {
+                selected_candidate = Some(candidate);
+            }
+        }
+
+        let Some(candidate) = selected_candidate else {
+            return MoveResult::GeometricViolation;
+        };
+
+        let snapshot = triangulation.clone();
+        let flip_target = format!("{:?}", candidate.flip_edge);
+        let flip_result = triangulation.flip_edge(candidate.flip_edge);
+        if let Err(err) = flip_result {
+            let result = reject_backend(BackendMutationOperation::FlipEdge, flip_target, &err);
+            return rollback_if_failed(triangulation, snapshot, result);
+        }
+
+        let removal_target = format!("vertex {:?}", candidate.vertex.vertex_key());
+        let removal = triangulation.remove_vertex(candidate.vertex);
+        let result = match removal {
+            Ok(_) => self.finish_mutated_move(triangulation, MoveType::Move31Remove),
+            Err(err) => {
+                reject_backend(BackendMutationOperation::RemoveVertex, removal_target, &err)
+            }
+        };
+        rollback_if_failed(triangulation, snapshot, result)
+    }
+
     /// Attempts an edge flip move on the triangulation.
     ///
     /// In 2D this is the same bistellar k=2 operation as [`Self::attempt_22_move`].
@@ -570,7 +816,8 @@ impl ErgodicsSystem {
     /// ```
     pub fn attempt_edge_flip(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         self.stats.record_attempt(MoveType::EdgeFlip);
-        self.attempt_causal_edge_flip(triangulation, MoveType::EdgeFlip)
+        let result = self.attempt_causal_edge_flip(triangulation, MoveType::EdgeFlip);
+        self.record_hard_failure_if_needed(MoveType::EdgeFlip, result)
     }
 
     /// Attempts a random ergodic move on the triangulation.
@@ -668,6 +915,18 @@ impl ErgodicsSystem {
 
         self.stats.record_success(move_type);
         MoveResult::Success
+    }
+
+    /// Records hard-failure telemetry without treating it as acceptance.
+    const fn record_hard_failure_if_needed(
+        &mut self,
+        move_type: MoveType,
+        result: MoveResult,
+    ) -> MoveResult {
+        if matches!(result, MoveResult::HardFailure(_)) {
+            self.stats.record_hard_failure(move_type);
+        }
+        result
     }
 }
 
@@ -809,8 +1068,8 @@ fn flip_is_causal(
 ///
 /// The candidate label must keep all three replacement triangles valid CDT
 /// triangles; unfoliated triangulations return a marker that skips labeling.
-/// Toroidal triangulations reject `(1,3)` subdivisions before mutation because
-/// the local subdivision is not compatible with the closed spatial slice
+/// Toroidal triangulations use a separate spacelike-link split path, because a
+/// bare face subdivision is not compatible with the closed spatial slice
 /// invariant.
 fn insertion_label(
     triangulation: &CdtTriangulation2D,
@@ -819,11 +1078,83 @@ fn insertion_label(
     if !triangulation.has_foliation() {
         return Some(InsertionLabel::Unfoliated);
     }
-    if matches!(triangulation.metadata().topology, CdtTopology::Toroidal) {
+
+    causal_insertion_label(triangulation, face)
+}
+
+/// Returns the previous and next labels around the toroidal time circle.
+const fn toroidal_neighbor_labels(
+    triangulation: &CdtTriangulation2D,
+    label: u32,
+) -> Option<(u32, u32)> {
+    let total = triangulation.time_slices();
+    if total < 3 || label >= total {
+        return None;
+    }
+    let previous = if label == 0 { total - 1 } else { label - 1 };
+    let next = (label + 1) % total;
+    Some((previous, next))
+}
+
+/// Checks whether two labels are the previous and next toroidal slices.
+const fn labels_are_toroidal_neighbors(
+    triangulation: &CdtTriangulation2D,
+    base: u32,
+    first: u32,
+    second: u32,
+) -> bool {
+    let Some((previous, next)) = toroidal_neighbor_labels(triangulation, base) else {
+        return false;
+    };
+    (first == previous && second == next) || (first == next && second == previous)
+}
+
+/// Selects a valid toroidal `(1,3)` candidate around one spacelike link.
+fn toroidal_insertion_candidate(
+    triangulation: &CdtTriangulation2D,
+    edge: DelaunayEdgeHandle,
+    adjacent: &EdgeAdjacentFaces<DelaunayVertexHandle, DelaunayFaceHandle>,
+) -> Option<ToroidalInsertionCandidate> {
+    let (endpoint_0, endpoint_1) = &adjacent.endpoints;
+    let endpoint_0_label = triangulation
+        .geometry()
+        .vertex_data_by_key(endpoint_0.vertex_key())?;
+    let endpoint_1_label = triangulation
+        .geometry()
+        .vertex_data_by_key(endpoint_1.vertex_key())?;
+    if endpoint_0_label != endpoint_1_label {
         return None;
     }
 
-    causal_insertion_label(triangulation, face)
+    let (opposite_0, opposite_1) = &adjacent.opposite_vertices;
+    let opposite_0_label = triangulation
+        .geometry()
+        .vertex_data_by_key(opposite_0.vertex_key())?;
+    let opposite_1_label = triangulation
+        .geometry()
+        .vertex_data_by_key(opposite_1.vertex_key())?;
+    if !labels_are_toroidal_neighbors(
+        triangulation,
+        endpoint_0_label,
+        opposite_0_label,
+        opposite_1_label,
+    ) {
+        return None;
+    }
+    if !cdt_vertex_triple(triangulation, [endpoint_0, endpoint_1, opposite_0])
+        || !cdt_vertex_triple(triangulation, [endpoint_0, endpoint_1, opposite_1])
+    {
+        return None;
+    }
+
+    let face = adjacent.faces.0.clone();
+    let point = centroid(triangulation, &face)?;
+    Some(ToroidalInsertionCandidate {
+        edge,
+        face,
+        point,
+        label: endpoint_0_label,
+    })
 }
 
 /// Finds a CDT-valid inserted vertex label without topology-specific guards.
@@ -895,19 +1226,18 @@ fn centroid(triangulation: &CdtTriangulation2D, face: &DelaunayFaceHandle) -> Op
 
 /// Computes a centroid in one periodic image, then wraps it back into the domain.
 fn toroidal_centroid(coords: &[[f64; 2]], domain: [f64; 2]) -> Option<[f64; 2]> {
-    let [reference, rest @ ..] = coords else {
+    let [reference, coord_1, coord_2] = coords else {
         return None;
     };
-    if rest.len() != 2
-        || domain
-            .iter()
-            .any(|period| !period.is_finite() || *period <= 0.0)
+    if domain
+        .iter()
+        .any(|period| !period.is_finite() || *period <= 0.0)
     {
         return None;
     }
 
     let mut centroid = *reference;
-    for coord in rest {
+    for coord in [coord_1, coord_2] {
         for axis in 0..2 {
             let period = domain[axis];
             let mut unwrapped = coord[axis];
@@ -925,6 +1255,130 @@ fn toroidal_centroid(coords: &[[f64; 2]], domain: [f64; 2]) -> Option<[f64; 2]> 
         centroid[axis] = (centroid[axis] / 3.0).rem_euclid(domain[axis]);
     }
     Some(centroid)
+}
+
+/// Returns the other endpoint of an edge if `vertex` is incident to it.
+fn other_endpoint(
+    triangulation: &CdtTriangulation2D,
+    edge: &DelaunayEdgeHandle,
+    vertex: &DelaunayVertexHandle,
+) -> Option<DelaunayVertexHandle> {
+    let (first, second) = triangulation.geometry().edge_endpoints(edge)?;
+    if &first == vertex {
+        Some(second)
+    } else if &second == vertex {
+        Some(first)
+    } else {
+        None
+    }
+}
+
+/// Returns true when a live edge connects the two vertices.
+fn edge_exists_between(
+    triangulation: &CdtTriangulation2D,
+    first: &DelaunayVertexHandle,
+    second: &DelaunayVertexHandle,
+) -> bool {
+    triangulation
+        .geometry()
+        .incident_edges(first)
+        .is_ok_and(|edges| {
+            edges.into_iter().any(|edge| {
+                triangulation
+                    .geometry()
+                    .edge_endpoints(&edge)
+                    .is_some_and(|(left, right)| &left == second || &right == second)
+            })
+        })
+}
+
+/// Checks whether two opposite vertices match an unordered pair.
+fn opposites_match_pair(
+    adjacent: &EdgeAdjacentFaces<DelaunayVertexHandle, DelaunayFaceHandle>,
+    first: &DelaunayVertexHandle,
+    second: &DelaunayVertexHandle,
+) -> bool {
+    let (opposite_0, opposite_1) = &adjacent.opposite_vertices;
+    (opposite_0 == first && opposite_1 == second) || (opposite_0 == second && opposite_1 == first)
+}
+
+/// Selects a valid toroidal inverse `(3,1)` candidate.
+fn toroidal_removal_candidate(
+    triangulation: &CdtTriangulation2D,
+    vertex: DelaunayVertexHandle,
+) -> Option<ToroidalRemovalCandidate> {
+    let label = triangulation
+        .geometry()
+        .vertex_data_by_key(vertex.vertex_key())?;
+    let slice = usize::try_from(label).ok()?;
+    if triangulation
+        .slice_sizes()
+        .get(slice)
+        .is_none_or(|&count| count <= 3)
+    {
+        return None;
+    }
+
+    let incident_edges = triangulation.geometry().incident_edges(&vertex).ok()?;
+    if incident_edges.len() != 4 {
+        return None;
+    }
+
+    let mut spacelike_neighbors: [Option<DelaunayVertexHandle>; 2] = array::from_fn(|_| None);
+    let mut timelike_neighbors: [Option<(DelaunayVertexHandle, DelaunayEdgeHandle, u32)>; 2] =
+        array::from_fn(|_| None);
+    let mut spacelike_count = 0;
+    let mut timelike_count = 0;
+    for edge in incident_edges {
+        let neighbor = other_endpoint(triangulation, &edge, &vertex)?;
+        let neighbor_label = triangulation
+            .geometry()
+            .vertex_data_by_key(neighbor.vertex_key())?;
+        match time_dist(triangulation, label, neighbor_label) {
+            0 => {
+                let slot = spacelike_neighbors.get_mut(spacelike_count)?;
+                *slot = Some(neighbor);
+                spacelike_count += 1;
+            }
+            1 => {
+                let slot = timelike_neighbors.get_mut(timelike_count)?;
+                *slot = Some((neighbor, edge, neighbor_label));
+                timelike_count += 1;
+            }
+            _ => return None,
+        }
+    }
+
+    let [Some(space_0), Some(space_1)] = spacelike_neighbors else {
+        return None;
+    };
+    let [
+        Some((_, time_edge_0, time_label_0)),
+        Some((_, time_edge_1, time_label_1)),
+    ] = timelike_neighbors
+    else {
+        return None;
+    };
+    if !labels_are_toroidal_neighbors(triangulation, label, time_label_0, time_label_1) {
+        return None;
+    }
+    if edge_exists_between(triangulation, &space_0, &space_1) {
+        return None;
+    }
+
+    for edge in [&time_edge_0, &time_edge_1] {
+        let Ok(Some(adjacent)) = triangulation.geometry().edge_adjacent_faces(edge) else {
+            continue;
+        };
+        if opposites_match_pair(&adjacent, &space_0, &space_1) {
+            return Some(ToroidalRemovalCandidate {
+                vertex,
+                flip_edge: edge.clone(),
+            });
+        }
+    }
+
+    None
 }
 
 /// Collects the three distinct neighboring vertices around a removable vertex.
@@ -998,10 +1452,92 @@ fn removal_candidate_is_causal(
         .is_some_and(|&count| count > 1)
 }
 
+/// Counts concrete local sites that can realize `move_type` from `triangulation`.
+///
+/// The Metropolis-Hastings proposal ratio uses this to account for asymmetric
+/// forward and reverse site multiplicities for volume-changing CDT moves.
+pub(crate) fn proposal_site_count(
+    triangulation: &CdtTriangulation2D,
+    move_type: MoveType,
+) -> usize {
+    match move_type {
+        MoveType::Move22 | MoveType::EdgeFlip => edge_flip_site_count(triangulation),
+        MoveType::Move13Add => insertion_site_count(triangulation),
+        MoveType::Move31Remove => removal_site_count(triangulation),
+    }
+}
+
+fn edge_flip_site_count(triangulation: &CdtTriangulation2D) -> usize {
+    let geometry = triangulation.geometry();
+    geometry
+        .edges()
+        .filter(|edge| {
+            let Ok(Some(adjacent)) = geometry.edge_adjacent_faces(edge) else {
+                return false;
+            };
+            flip_is_causal(triangulation, &adjacent)
+        })
+        .count()
+}
+
+fn insertion_site_count(triangulation: &CdtTriangulation2D) -> usize {
+    if is_toroidal_foliated(triangulation) {
+        return toroidal_insertion_site_count(triangulation);
+    }
+
+    triangulation
+        .geometry()
+        .faces()
+        .filter(|face| {
+            centroid(triangulation, face).is_some()
+                && insertion_label(triangulation, face).is_some()
+        })
+        .count()
+}
+
+fn toroidal_insertion_site_count(triangulation: &CdtTriangulation2D) -> usize {
+    let geometry = triangulation.geometry();
+    geometry
+        .edges()
+        .filter(|edge| {
+            let Ok(Some(adjacent)) = geometry.edge_adjacent_faces(edge) else {
+                return false;
+            };
+            toroidal_insertion_candidate(triangulation, edge.clone(), &adjacent).is_some()
+        })
+        .count()
+}
+
+fn removal_site_count(triangulation: &CdtTriangulation2D) -> usize {
+    if is_toroidal_foliated(triangulation) {
+        return triangulation
+            .geometry()
+            .vertices()
+            .filter(|vertex| toroidal_removal_candidate(triangulation, vertex.clone()).is_some())
+            .count();
+    }
+
+    triangulation
+        .geometry()
+        .vertices()
+        .filter(|vertex| {
+            let Some(neighbors) = neighbors3(triangulation, vertex) else {
+                return false;
+            };
+            removal_candidate_is_causal(triangulation, vertex, &neighbors)
+        })
+        .count()
+}
+
+fn is_toroidal_foliated(triangulation: &CdtTriangulation2D) -> bool {
+    matches!(triangulation.metadata().topology, CdtTopology::Toroidal)
+        && triangulation.has_foliation()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::CdtValidationCheck;
+    use crate::errors::{CdtValidationCheck, CdtValidationFailure};
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
     use approx::assert_relative_eq;
@@ -1058,19 +1594,70 @@ mod tests {
         ] {
             assert_relative_eq!(stats.acceptance_rate(move_type), 0.0);
             stats.record_attempt(move_type);
+            stats.record_hard_failure(move_type);
+            assert_relative_eq!(stats.acceptance_rate(move_type), 0.0);
+            stats.record_attempt(move_type);
             stats.record_success(move_type);
-            assert_relative_eq!(stats.acceptance_rate(move_type), 1.0);
+            assert_relative_eq!(stats.acceptance_rate(move_type), 0.5);
         }
 
-        assert_eq!(stats.moves_22_attempted, 1);
-        assert_eq!(stats.moves_13_attempted, 1);
-        assert_eq!(stats.moves_31_attempted, 1);
-        assert_eq!(stats.edge_flips_attempted, 1);
+        assert_eq!(stats.moves_22_attempted, 2);
+        assert_eq!(stats.moves_13_attempted, 2);
+        assert_eq!(stats.moves_31_attempted, 2);
+        assert_eq!(stats.edge_flips_attempted, 2);
         assert_eq!(stats.moves_22_accepted, 1);
         assert_eq!(stats.moves_13_accepted, 1);
         assert_eq!(stats.moves_31_accepted, 1);
         assert_eq!(stats.edge_flips_accepted, 1);
-        assert_relative_eq!(stats.total_acceptance_rate(), 1.0);
+        assert_eq!(stats.moves_22_hard_failed, 1);
+        assert_eq!(stats.moves_13_hard_failed, 1);
+        assert_eq!(stats.moves_31_hard_failed, 1);
+        assert_eq!(stats.edge_flips_hard_failed, 1);
+        assert_eq!(stats.total_hard_failures(), 4);
+        assert_relative_eq!(stats.total_acceptance_rate(), 0.5);
+    }
+
+    #[test]
+    fn hard_failure_result_updates_stats_without_acceptance() {
+        let mut system = ErgodicsSystem::new();
+        system.stats.record_attempt(MoveType::Move13Add);
+
+        let result = system.record_hard_failure_if_needed(
+            MoveType::Move13Add,
+            MoveResult::HardFailure(CdtError::ValidationFailed {
+                check: CdtValidationCheck::ErgodicMoveCandidateGeometry,
+                failure: CdtValidationFailure::ErgodicMoveCandidateGeometry {
+                    detail: "simulated hard failure".to_string(),
+                },
+            }),
+        );
+
+        assert!(matches!(result, MoveResult::HardFailure(_)));
+        assert_eq!(system.stats.moves_13_attempted, 1);
+        assert_eq!(system.stats.moves_13_accepted, 0);
+        assert_eq!(system.stats.moves_13_hard_failed, 1);
+        assert_relative_eq!(system.stats.acceptance_rate(MoveType::Move13Add), 0.0);
+    }
+
+    #[test]
+    fn move_statistics_defaults_hard_failures_for_legacy_payloads() {
+        let stats: MoveStatistics = serde_json::from_str(
+            r#"{
+                "moves_22_attempted": 1,
+                "moves_22_accepted": 1,
+                "moves_13_attempted": 2,
+                "moves_13_accepted": 0,
+                "moves_31_attempted": 3,
+                "moves_31_accepted": 0,
+                "edge_flips_attempted": 4,
+                "edge_flips_accepted": 1
+            }"#,
+        )
+        .expect("legacy move statistics should deserialize");
+
+        assert_eq!(stats.total_attempted(), 10);
+        assert_eq!(stats.total_accepted(), 2);
+        assert_eq!(stats.total_hard_failures(), 0);
     }
 
     #[test]
@@ -1169,7 +1756,9 @@ mod tests {
             snapshot,
             MoveResult::HardFailure(CdtError::ValidationFailed {
                 check: CdtValidationCheck::ErgodicMoveCandidateGeometry,
-                detail: "simulated post-mutation failure".to_string(),
+                failure: CdtValidationFailure::ErgodicMoveCandidateGeometry {
+                    detail: "simulated post-mutation failure".to_string(),
+                },
             }),
         );
 
@@ -1281,35 +1870,8 @@ mod tests {
         );
     }
 
-    /// Builds a backend-mutated toroidal subdivision fixture for testing `(3,1)` rollback support.
-    ///
-    /// The public `(1,3)` kernel now rejects this candidate after final invariant validation,
-    /// but the inverse `(3,1)` path still needs direct coverage against a periodic subdivision.
-    fn subdivide_first_toroidal_candidate(triangulation: &mut CdtTriangulation2D) {
-        let candidate = triangulation.geometry().faces().find_map(|face| {
-            let point = centroid(triangulation, &face)?;
-            let label = causal_insertion_label(triangulation, &face)?;
-            Some((face, point, label))
-        });
-        let Some((face, point, label)) = candidate else {
-            panic!("periodic toroidal fixture should contain a causal subdivision candidate");
-        };
-
-        let subdivision = triangulation
-            .subdivide_face(face, &point)
-            .expect("periodic toroidal subdivision should reach the backend");
-        if let InsertionLabel::Label(label) = label {
-            triangulation
-                .set_vertex_data(&subdivision.new_vertex, Some(label))
-                .expect("subdivision vertex label should be writable");
-        }
-        triangulation
-            .synchronize_foliation_from_live_labels()
-            .expect("subdivided fixture should rebuild foliation bookkeeping");
-    }
-
     #[test]
-    fn periodic_toroidal_move_13_rejects_invalid_s1_subdivision_before_mutation() {
+    fn periodic_toroidal_move_13_splits_spacelike_link() {
         let mut system = ErgodicsSystem::with_seed(7);
         let mut triangulation =
             CdtTriangulation2D::from_toroidal_cdt(8, 8).expect("build toroidal CDT");
@@ -1321,31 +1883,37 @@ mod tests {
 
         let result = system.attempt_13_move(&mut triangulation);
 
-        assert!(
-            matches!(result, MoveResult::CausalityViolation),
-            "periodic toroidal Move13Add should reject closed-S1 subdivision candidates before mutation, got {result:?}"
+        assert_eq!(
+            result,
+            MoveResult::Success,
+            "periodic toroidal Move13Add should split a spacelike link, got {result:?}"
         );
-        assert_eq!(system.stats.moves_13_accepted, 0);
+        assert_eq!(system.stats.moves_13_accepted, 1);
         assert_eq!(
             (
                 triangulation.vertex_count(),
                 triangulation.edge_count(),
                 triangulation.face_count(),
             ),
-            counts_before,
-            "rejected periodic toroidal subdivision should leave simplex counts unchanged"
+            (
+                counts_before.0 + 1,
+                counts_before.1 + 3,
+                counts_before.2 + 2
+            ),
+            "accepted periodic toroidal insertion should apply the CDT volume-move count delta"
         );
         triangulation
             .validate()
-            .expect("rejected periodic toroidal Move13Add should preserve evolved CDT invariants");
+            .expect("accepted periodic toroidal Move13Add should preserve evolved CDT invariants");
     }
 
     #[test]
-    fn periodic_toroidal_move_31_succeeds_after_offset_support() {
-        let mut system = ErgodicsSystem::with_seed(7);
+    fn periodic_toroidal_move_31_reverses_link_split() {
+        let mut system = ErgodicsSystem::with_seed(0);
         let mut triangulation =
             CdtTriangulation2D::from_toroidal_cdt(8, 8).expect("build toroidal CDT");
-        subdivide_first_toroidal_candidate(&mut triangulation);
+        let insert = system.attempt_13_move(&mut triangulation);
+        assert_eq!(insert, MoveResult::Success);
         let counts_before = (
             triangulation.vertex_count(),
             triangulation.edge_count(),
@@ -1373,9 +1941,56 @@ mod tests {
             ),
             "accepted periodic toroidal removal should reverse a local 1,3 subdivision"
         );
+        assert!(
+            triangulation
+                .volume_profile()
+                .iter()
+                .all(|&count| count >= 3),
+            "accepted periodic toroidal removal must preserve nonempty closed spatial slices"
+        );
         triangulation.validate().expect(
             "accepted periodic toroidal Move31Remove should preserve evolved CDT invariants",
         );
+    }
+
+    #[test]
+    fn periodic_toroidal_move_31_rejects_minimal_slice_removal() {
+        let mut system = ErgodicsSystem::with_seed(7);
+        let mut triangulation =
+            CdtTriangulation2D::from_toroidal_cdt(3, 3).expect("build minimal toroidal CDT");
+        let counts_before = (
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+        );
+        let profile_before = triangulation.volume_profile();
+
+        let result = system.attempt_31_move(&mut triangulation);
+
+        assert_eq!(
+            result,
+            MoveResult::GeometricViolation,
+            "minimal periodic toroidal slices should not expose removable volume candidates"
+        );
+        assert_eq!(system.stats.moves_31_attempted, 1);
+        assert_eq!(system.stats.moves_31_accepted, 0);
+        assert_eq!(
+            (
+                triangulation.vertex_count(),
+                triangulation.edge_count(),
+                triangulation.face_count(),
+            ),
+            counts_before,
+            "rejected minimal toroidal removal must preserve simplex counts"
+        );
+        assert_eq!(
+            triangulation.volume_profile(),
+            profile_before,
+            "rejected minimal toroidal removal must preserve closed spatial slices"
+        );
+        triangulation
+            .validate()
+            .expect("rejected minimal toroidal removal should preserve CDT invariants");
     }
 
     #[test]

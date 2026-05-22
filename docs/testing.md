@@ -25,7 +25,6 @@ into equal-size spatial slices.
 ### Ergodic Move Sampling
 
 - Weight move-type selection by available application sites instead of sampling move types uniformly.
-- Weight or enumerate accepted move-site retries so proposals bind to concrete local moves before Metropolis acceptance.
 - Add focused per-kernel toroidal fixtures for spatial and temporal wrap-around simplices.
 - Exercise more negative cases where a geometrically editable site must be rejected because it would break CDT invariants.
 

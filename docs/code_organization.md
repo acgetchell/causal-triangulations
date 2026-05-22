@@ -125,6 +125,7 @@ causal-triangulations/
 │   │           └── rust_style.rs
 │   ├── cli.rs
 │   ├── integration_tests.rs
+│   ├── large_scale_debug.rs
 │   ├── physics_integration.rs
 │   ├── proptest_foliation.rs
 │   ├── proptest_metropolis.rs
@@ -218,10 +219,11 @@ The implementation is split into child modules under `src/cdt/triangulation/`:
 
 ### `cdt/metropolis.rs` — Metropolis move ordering
 
-`MetropolisAlgorithm::run()` proposes a move type, computes `ΔS` from the move's simplex-count delta, accepts or rejects the proposal, and only mutates the
-triangulation after acceptance. Accepted applications that fail are rolled back from a triangulation snapshot and retried at another random local site; retry
-exhaustion is recorded as a rejection, while hard backend failures remain structured errors. Toroidal move finalization rejects and rolls back candidate sites
-that would violate χ = 0 or the closed-S¹ per-slice foliation invariant. See `docs/metropolis.md` for the detailed ordering.
+`MetropolisAlgorithm::run()` proposes a move type, plans a concrete local transition on a cloned triangulation, computes `ΔS` and the forward/reverse
+Metropolis-Hastings site-count ratio, accepts or rejects the concrete proposal, and only replaces the live triangulation after acceptance. Planning failures are
+rolled back inside the move kernels; retry exhaustion is recorded as a rejection, while hard backend failures remain structured errors. Toroidal move
+finalization rejects and rolls back candidate sites that would violate χ = 0 or the closed-S¹ per-slice foliation invariant. See `docs/metropolis.md` for the
+detailed ordering.
 
 ### `cdt/results.rs` — Simulation outputs
 

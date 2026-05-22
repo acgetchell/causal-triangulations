@@ -13,29 +13,44 @@ The v0.1.0 foundation work focuses on making the crate a usable, validated 1+1 C
 - [x] Explicit toroidal S¹×S¹ CDT construction with χ = 0 validation
 - [x] Per-vertex foliation labels, causality checks, and strict Up/Down simplex classification
 - [x] Real 2D ergodic move kernels over Delaunay backend edit operations
-- [x] Proposal-before-mutation Metropolis loop with rollback and bounded local-site retries
+- [x] Concrete delayed-proposal Metropolis-Hastings loop with forward/reverse local-site weighting
 - [x] Toroidal Metropolis regression coverage requiring accepted periodic moves while preserving topology and foliation
 - [x] CLI and configuration support for open-boundary and toroidal topology selection
 - [x] Volume-profile, Hausdorff-dimension, and spectral-dimension observables on the combinatorial dual graph
 - [x] Repository validation loop covering Rust, Python support scripts, Semgrep rules, documentation, examples, and benchmarks
+- [ ] Support variable spatial volume profiles for 1+1 CDT initial geometries
+  ([#141](https://github.com/acgetchell/causal-triangulations/issues/141))
+- [ ] Track release-readiness gates for the first public release
+  ([#140](https://github.com/acgetchell/causal-triangulations/issues/140))
 
 ## 1+1 Maturity
 
 Likely follow-up work before broadening the dimensional surface:
 
 - Weight move-type selection by available application sites to reduce uniform-sampling bias
-- Weight or enumerate accepted move-site retries so proposals bind to concrete local moves before acceptance
 - Broaden per-kernel toroidal tests around spatial and temporal wrap-around simplices
 - Accept fixed triangle simplices directly in explicit-simplex generator APIs to remove per-triangle `Vec` adaptation
 - Add manual foliation assignment APIs with the same validation and synchronization guarantees as constructor-assigned labels
 - Add tutorial-style examples for open-boundary strips, toroidal runs, observables, and interpreting Metropolis acceptance behavior
+
+## v0.1.1 Ensemble Controls
+
+The post-v0.1.0 1+1 track should keep the default ensemble scientifically explicit while adding opt-in controls for finite-volume numerical workflows:
+
+- Add optional CDT volume fixing for bounded large-scale simulations
+  ([#142](https://github.com/acgetchell/causal-triangulations/issues/142)). Volume fixing should be opt-in and documented as a modified action, not the default
+  unfixed-volume ensemble.
+- Add λ scan utilities for unfixed-volume 1+1 CDT runs
+  ([#143](https://github.com/acgetchell/causal-triangulations/issues/143)). These should help users tune the cosmological constant, which is conjugate to the
+  lattice volume term and controls volume growth or shrinkage in unfixed-volume runs.
 
 ## Higher-Dimensional CDT Tracks
 
 The next CDT dimensions should advance as explicit topology tracks rather than a generic higher-dimensional bucket:
 
 - 2+1 CDT with spherical spatial slices (S²) and toroidal spatial slices (T²), including constructor fixtures, foliation validation, local move kernels,
-  Metropolis sampling, and topology-specific regression tests
+  Metropolis sampling, and topology-specific regression tests. The current v0.2.0 scoped issue is 2+1 toroidal CDT triangulations
+  ([#144](https://github.com/acgetchell/causal-triangulations/issues/144)).
 - 3+1 CDT with spherical spatial slices (S³) and toroidal spatial slices (T³), following the same staged path after the required geometry-backend operations and
   invariants are available
 - Periodic-time variants where the topology contract is well defined and the backend can validate the corresponding Euler/Poincaré-style invariants cleanly

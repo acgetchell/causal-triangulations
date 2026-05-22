@@ -22,11 +22,11 @@ echo
 
 # Run a basic simulation with logging
 echo "Running basic CDT simulation..."
-echo "Parameters: 10 vertices, 5 timeslices, 1000 MC steps"
+echo "Parameters: 4 vertices/slice, 5 timeslices, 1000 MC steps"
 echo
 
 RUST_LOG=info ./target/release/cdt \
-	--vertices 10 \
+	--vertices-per-slice 4 \
 	--timeslices 5 \
 	--temperature 1.0 \
 	--steps 1000 \

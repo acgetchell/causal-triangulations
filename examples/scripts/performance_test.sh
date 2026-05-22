@@ -9,10 +9,10 @@ echo
 
 # System size configurations to test
 declare -a TEST_CONFIGS=(
-	"10 5 1000"   # Small: 10 vertices, 5 slices, 1000 steps
-	"20 8 2000"   # Medium: 20 vertices, 8 slices, 2000 steps
-	"50 10 3000"  # Large: 50 vertices, 10 slices, 3000 steps
-	"100 15 5000" # Extra Large: 100 vertices, 15 slices, 5000 steps
+	"4 5 1000"  # Small: 4 vertices/slice, 5 slices, 1000 steps
+	"4 8 2000"  # Medium: 4 vertices/slice, 8 slices, 2000 steps
+	"5 10 3000" # Large: 5 vertices/slice, 10 slices, 3000 steps
+	"8 15 5000" # Extra Large: 8 vertices/slice, 15 slices, 5000 steps
 )
 
 declare -a SIZE_NAMES=("Small" "Medium" "Large" "Extra Large")
@@ -30,24 +30,24 @@ echo
 
 results_file="performance_results.txt"
 echo "# CDT Performance Test Results - $(date)" >"$results_file"
-echo "# Format: Size | Vertices | Slices | Steps | Runtime (s) | Memory (MB)" >>"$results_file"
+echo "# Format: Size | Vertices/Slice | Slices | Steps | Runtime (s) | Memory (MB)" >>"$results_file"
 echo
 
 for i in "${!TEST_CONFIGS[@]}"; do
 	read -ra config <<<"${TEST_CONFIGS[$i]}"
-	vertices=${config[0]}
+	vertices_per_slice=${config[0]}
 	slices=${config[1]}
 	steps=${config[2]}
 	size_name=${SIZE_NAMES[$i]}
 
-	echo "Testing $size_name configuration: $vertices vertices, $slices slices, $steps steps"
+	echo "Testing $size_name configuration: $vertices_per_slice vertices/slice, $slices slices, $steps steps"
 
 	# Measure execution time and memory usage
 	start_time=$(date +%s.%N)
 
 	# Run simulation with minimal logging to reduce I/O overhead
 	RUST_LOG=error ./target/release/cdt \
-		--vertices "$vertices" \
+		--vertices-per-slice "$vertices_per_slice" \
 		--timeslices "$slices" \
 		--steps "$steps" \
 		--thermalization-steps $((steps / 10)) \
@@ -64,7 +64,7 @@ for i in "${!TEST_CONFIGS[@]}"; do
 	echo "  ✓ Completed in ${runtime_formatted}s"
 
 	# Log results
-	echo "$size_name | $vertices | $slices | $steps | $runtime_formatted | N/A" >>"$results_file"
+	echo "$size_name | $vertices_per_slice | $slices | $steps | $runtime_formatted | N/A" >>"$results_file"
 done
 
 echo

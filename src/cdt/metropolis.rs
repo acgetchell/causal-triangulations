@@ -11,11 +11,15 @@
 //! randomly selected local site.
 
 use crate::cdt::action::ActionConfig;
-use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
+use crate::cdt::ergodic_moves::{
+    ErgodicsSystem, MoveResult, MoveStatistics, MoveType, proposal_site_count,
+};
 use crate::cdt::results::{Measurement, SimulationResultsBackend};
 use crate::cdt::triangulation::SimulationEvent;
 use crate::config::validate_schedule;
-use crate::errors::{CdtError, CdtResult, CheckpointResumeReason};
+use crate::errors::{
+    CdtError, CdtResult, CheckpointResumeReason, MetropolisMoveApplicationFailure,
+};
 use crate::geometry::CdtTriangulation2D;
 use crate::util::saturating_usize_to_u32;
 use markov_chain_monte_carlo::{Chain, ChainCheckpoint, DelayedProposal, Target};
@@ -575,21 +579,15 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
     ) -> Result<Option<Self::Plan>, Self::Error> {
         let move_type = self.moves.select_random_move();
         let action_before = action_for(&self.action_config, state);
-        if proposed_delta_action(&self.action_config, simplex_counts(state), move_type).is_none() {
-            cold_path();
-            return Ok(None);
-        }
-
-        let mut proposed_state = state.clone();
-        let action_after = match apply_accepted_move(
-            &mut proposed_state,
+        let plan = match propose_concrete_plan(
+            state,
             &mut self.moves,
             &self.action_config,
             move_type,
             action_before,
         ) {
-            Ok(AcceptedMoveResult::Applied { action_after }) => action_after,
-            Ok(AcceptedMoveResult::NoApplicableSite { .. }) => {
+            Ok(Some(plan)) => plan,
+            Ok(None) => {
                 cold_path();
                 return Ok(None);
             }
@@ -602,15 +600,7 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
                 });
             }
         };
-        let delta_action = action_after - action_before;
-
-        Ok(Some(CdtProposalPlan {
-            move_type,
-            action_before,
-            action_after: Some(action_after),
-            delta_action: Some(delta_action),
-            proposed_state,
-        }))
+        Ok(Some(plan))
     }
 
     fn proposed_log_prob<T: Target<CdtTriangulation2D>>(
@@ -622,6 +612,14 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
         Ok(plan
             .action_after
             .map_or(f64::NEG_INFINITY, |_| target.log_prob(&plan.proposed_state)))
+    }
+
+    fn log_q_ratio(
+        &self,
+        state: &CdtTriangulation2D,
+        plan: &Self::Plan,
+    ) -> Result<f64, Self::Error> {
+        Ok(concrete_log_q_ratio(state, plan))
     }
 
     fn info(&self, plan: &Self::Plan) -> Self::Info {
@@ -1324,7 +1322,7 @@ fn run_one_step(
         });
 
     let action_before = state.current_action;
-    let delta_action = proposed_delta_action(
+    let mut delta_action = proposed_delta_action(
         &algorithm.action_config,
         simplex_counts(&state.triangulation),
         move_type,
@@ -1332,49 +1330,51 @@ fn run_one_step(
 
     let mut accepted = false;
     let mut action_after = None;
-    if let Some(delta) = delta_action
-        && metropolis_accept(
-            delta,
-            algorithm.config.temperature,
-            &mut state.acceptance_rng,
-        )
-    {
-        match apply_accepted_move(
-            &mut state.triangulation,
+
+    let plan = if delta_action.is_some() {
+        match propose_concrete_plan(
+            &state.triangulation,
             &mut state.ergodics,
             &algorithm.action_config,
             move_type,
             action_before,
         ) {
-            Ok(AcceptedMoveResult::Applied {
-                action_after: applied_action,
-            }) => {
-                accepted = true;
-                action_after = Some(applied_action);
-                state.current_action = applied_action;
-                state.move_stats.record_success(move_type);
-                state
-                    .triangulation
-                    .record_event(SimulationEvent::MoveAccepted {
-                        move_type: format!("{move_type:?}"),
-                        step: step.into(),
-                        action_change: applied_action - action_before,
-                    });
-                validate_evolved_cdt_if_due(state)?;
-            }
-            Ok(AcceptedMoveResult::NoApplicableSite { .. }) => {
-                // A move type can be Metropolis-accepted even when bounded
-                // random local-site selection finds no realizable site. That
-                // is an ordinary proposal rejection, not a fatal simulation error.
-            }
+            Ok(plan) => plan,
             Err(err) => {
+                state.move_stats.record_hard_failure(move_type);
                 return Err(accepted_move_error(
                     step,
                     move_type,
                     err.attempt,
-                    err.source.to_string(),
+                    err.source,
                 ));
             }
+        }
+    } else {
+        None
+    };
+
+    if let Some(plan) = plan {
+        delta_action = plan.delta_action;
+        let log_alpha = -(plan.action_after.expect("planned moves have actions") - action_before)
+            / algorithm.config.temperature
+            + concrete_log_q_ratio(&state.triangulation, &plan);
+
+        if metropolis_accept_log_alpha(log_alpha, &mut state.acceptance_rng) {
+            let applied_action = plan.action_after.expect("planned moves have actions");
+            state.triangulation = plan.proposed_state;
+            accepted = true;
+            action_after = Some(applied_action);
+            state.current_action = applied_action;
+            state.move_stats.record_success(move_type);
+            state
+                .triangulation
+                .record_event(SimulationEvent::MoveAccepted {
+                    move_type: format!("{move_type:?}"),
+                    step: step.into(),
+                    action_change: applied_action - action_before,
+                });
+            validate_evolved_cdt_if_due(state)?;
         }
     }
 
@@ -1648,14 +1648,99 @@ fn validate_checkpoint_measurements(checkpoint: &CdtMcmcCheckpoint) -> CdtResult
     Ok(())
 }
 
+/// Sums move counters without allowing invalid serialized telemetry to wrap.
+fn checked_move_counter_sum(counter_name: &str, counters: [u64; 4]) -> CdtResult<u64> {
+    counters.into_iter().try_fold(0_u64, |total, count| {
+        total.checked_add(count).ok_or_else(|| {
+            checkpoint_resume_failed(
+                CheckpointResumeReason::MoveStatisticsInvariant,
+                format!("{counter_name} move count exceeds u64::MAX"),
+            )
+        })
+    })
+}
+
+/// Rejects per-move counter states that cannot be produced by the sampler.
+fn validate_move_counter_bounds(move_stats: &MoveStatistics) -> CdtResult<()> {
+    let counters = [
+        (
+            MoveType::Move22,
+            move_stats.moves_22_attempted,
+            move_stats.moves_22_accepted,
+            move_stats.moves_22_hard_failed,
+        ),
+        (
+            MoveType::Move13Add,
+            move_stats.moves_13_attempted,
+            move_stats.moves_13_accepted,
+            move_stats.moves_13_hard_failed,
+        ),
+        (
+            MoveType::Move31Remove,
+            move_stats.moves_31_attempted,
+            move_stats.moves_31_accepted,
+            move_stats.moves_31_hard_failed,
+        ),
+        (
+            MoveType::EdgeFlip,
+            move_stats.edge_flips_attempted,
+            move_stats.edge_flips_accepted,
+            move_stats.edge_flips_hard_failed,
+        ),
+    ];
+
+    for (move_type, attempted, accepted, hard_failed) in counters {
+        if accepted > attempted {
+            return Err(checkpoint_resume_failed(
+                CheckpointResumeReason::MoveStatisticsInvariant,
+                format!("{move_type:?} accepted move count exceeds attempted move count"),
+            ));
+        }
+
+        let finalized_or_hard_failed = accepted.checked_add(hard_failed).ok_or_else(|| {
+            checkpoint_resume_failed(
+                CheckpointResumeReason::MoveStatisticsInvariant,
+                format!("{move_type:?} accepted plus hard-failure count exceeds u64::MAX"),
+            )
+        })?;
+        if finalized_or_hard_failed > attempted {
+            return Err(checkpoint_resume_failed(
+                CheckpointResumeReason::MoveStatisticsInvariant,
+                format!(
+                    "{move_type:?} accepted plus hard-failure count exceeds attempted move count"
+                ),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 /// Converts CDT move statistics into generic MCMC chain counters.
 ///
 /// Accepted and rejected counts are derived from proposal accounting, with
 /// overflow and impossible accepted-above-attempted states reported as
 /// checkpoint resume errors instead of panicking.
 fn chain_counters(move_stats: &MoveStatistics) -> CdtResult<(usize, usize)> {
-    let attempted = move_stats.total_attempted();
-    let accepted = move_stats.total_accepted();
+    validate_move_counter_bounds(move_stats)?;
+    let attempted = checked_move_counter_sum(
+        "attempted",
+        [
+            move_stats.moves_22_attempted,
+            move_stats.moves_13_attempted,
+            move_stats.moves_31_attempted,
+            move_stats.edge_flips_attempted,
+        ],
+    )?;
+    let accepted = checked_move_counter_sum(
+        "accepted",
+        [
+            move_stats.moves_22_accepted,
+            move_stats.moves_13_accepted,
+            move_stats.moves_31_accepted,
+            move_stats.edge_flips_accepted,
+        ],
+    )?;
     let rejected = attempted.checked_sub(accepted).ok_or_else(|| {
         checkpoint_resume_failed(
             CheckpointResumeReason::MoveStatisticsInvariant,
@@ -1753,12 +1838,83 @@ fn proposed_delta_action(
     Some(action_after - action_before)
 }
 
+fn propose_concrete_plan(
+    state: &CdtTriangulation2D,
+    moves: &mut ErgodicsSystem,
+    action_config: &ActionConfig,
+    move_type: MoveType,
+    action_before: f64,
+) -> Result<Option<CdtProposalPlan>, MoveApplicationError> {
+    if proposed_delta_action(action_config, simplex_counts(state), move_type).is_none() {
+        return Ok(None);
+    }
+
+    let mut proposed_state = state.clone();
+    let action_after = match apply_accepted_move(
+        &mut proposed_state,
+        moves,
+        action_config,
+        move_type,
+        action_before,
+    )? {
+        AcceptedMoveResult::Applied { action_after } => action_after,
+        AcceptedMoveResult::NoApplicableSite { .. } => return Ok(None),
+    };
+    let delta_action = action_after - action_before;
+
+    Ok(Some(CdtProposalPlan {
+        move_type,
+        action_before,
+        action_after: Some(action_after),
+        delta_action: Some(delta_action),
+        proposed_state,
+    }))
+}
+
+fn concrete_log_q_ratio(state: &CdtTriangulation2D, plan: &CdtProposalPlan) -> f64 {
+    let forward_sites = proposal_site_count(state, plan.move_type);
+    if forward_sites == 0 {
+        return f64::NEG_INFINITY;
+    }
+
+    let reverse_sites =
+        proposal_site_count(&plan.proposed_state, reverse_move_type(plan.move_type));
+    if reverse_sites == 0 {
+        return f64::NEG_INFINITY;
+    }
+
+    site_count_to_f64(forward_sites).ln() - site_count_to_f64(reverse_sites).ln()
+}
+
+const fn reverse_move_type(move_type: MoveType) -> MoveType {
+    match move_type {
+        MoveType::Move22 => MoveType::Move22,
+        MoveType::Move13Add => MoveType::Move31Remove,
+        MoveType::Move31Remove => MoveType::Move13Add,
+        MoveType::EdgeFlip => MoveType::EdgeFlip,
+    }
+}
+
+/// Converts local-site counts to finite values for proposal-ratio accounting.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "site counts are converted only for logarithmic Metropolis-Hastings ratios"
+)]
+const fn site_count_to_f64(count: usize) -> f64 {
+    count as f64
+}
+
 /// Applies the Metropolis acceptance rule to a proposed action change.
 ///
 /// Factoring this out keeps the probability rule isolated from move selection
 /// and makes deterministic unit tests possible with a seeded RNG.
+#[cfg(test)]
 fn metropolis_accept<R: Rng + ?Sized>(delta_action: f64, temperature: f64, rng: &mut R) -> bool {
-    delta_action <= 0.0 || rng.random::<f64>() < (-delta_action / temperature).exp()
+    metropolis_accept_log_alpha(-delta_action / temperature, rng)
+}
+
+fn metropolis_accept_log_alpha<R: Rng + ?Sized>(log_alpha: f64, rng: &mut R) -> bool {
+    log_alpha >= 0.0 || rng.random::<f64>() < log_alpha.exp()
 }
 
 /// Compares action values with a scale-aware tolerance for checkpoint validation.
@@ -1837,17 +1993,17 @@ fn apply_accepted_move(
 /// The move kernels keep causal, geometric, and backend failures orthogonal; this
 /// wrapper adds the Metropolis step, move type, and retry context callers need to
 /// debug a failed accepted application.
-const fn accepted_move_error(
+fn accepted_move_error(
     step: u32,
     move_type: MoveType,
     attempts: usize,
-    last_failure: String,
+    source: CdtError,
 ) -> CdtError {
     CdtError::MetropolisMoveApplicationFailed {
         step,
         move_type,
         attempts,
-        last_failure,
+        source: MetropolisMoveApplicationFailure::from(source),
     }
 }
 
@@ -2393,6 +2549,38 @@ mod tests {
     }
 
     #[test]
+    fn chain_counters_rejects_counter_sum_overflow() {
+        let stats = MoveStatistics {
+            moves_22_attempted: u64::MAX,
+            moves_13_attempted: 1,
+            ..MoveStatistics::new()
+        };
+        let Err(CdtError::CheckpointResumeFailed { reason, detail }) = chain_counters(&stats)
+        else {
+            panic!("expected overflowing move statistics to fail");
+        };
+
+        assert_eq!(reason, CheckpointResumeReason::MoveStatisticsInvariant);
+        assert!(detail.contains("attempted move count exceeds u64::MAX"));
+    }
+
+    #[test]
+    fn chain_counters_rejects_hard_failures_above_attempted() {
+        let stats = MoveStatistics {
+            moves_22_attempted: 1,
+            moves_22_hard_failed: 2,
+            ..MoveStatistics::new()
+        };
+        let Err(CdtError::CheckpointResumeFailed { reason, detail }) = chain_counters(&stats)
+        else {
+            panic!("expected impossible hard-failure statistics to fail");
+        };
+
+        assert_eq!(reason, CheckpointResumeReason::MoveStatisticsInvariant);
+        assert!(detail.contains("accepted plus hard-failure count exceeds attempted move count"));
+    }
+
+    #[test]
     fn explicit_cdt_volume_profiles_count_time_slabs() {
         let strip = CdtTriangulation::from_cdt_strip(4, 3).expect("create Delaunay strip");
         assert_eq!(strip.volume_profile(), vec![6, 6, 0]);
@@ -2781,6 +2969,46 @@ mod tests {
         } else {
             assert!(proposed_log_prob.is_infinite() && proposed_log_prob.is_sign_negative());
         }
+    }
+
+    #[test]
+    fn cdt_proposal_log_q_ratio_uses_forward_and_reverse_site_counts() {
+        let action_config = ActionConfig::default();
+        let triangulation =
+            CdtTriangulation::from_toroidal_cdt(4, 3).expect("toroidal CDT should build");
+        let mut moves = ErgodicsSystem::with_seed(19);
+        let action_before = action_for(&action_config, &triangulation);
+        let plan = propose_concrete_plan(
+            &triangulation,
+            &mut moves,
+            &action_config,
+            MoveType::Move13Add,
+            action_before,
+        )
+        .expect("planning should not hard-fail")
+        .expect("toroidal triangulation should have a volume-add proposal");
+
+        let forward_sites = proposal_site_count(&triangulation, MoveType::Move13Add);
+        let reverse_sites = proposal_site_count(&plan.proposed_state, MoveType::Move31Remove);
+        assert!(forward_sites > 0);
+        assert!(reverse_sites > 0);
+
+        let expected =
+            site_count_to_f64(forward_sites).ln() - site_count_to_f64(reverse_sites).ln();
+        assert_relative_eq!(
+            concrete_log_q_ratio(&triangulation, &plan),
+            expected,
+            epsilon = 1e-12
+        );
+
+        let proposal = CdtProposal::new(action_config).expect("valid proposal configuration");
+        assert_relative_eq!(
+            proposal
+                .log_q_ratio(&triangulation, &plan)
+                .expect("proposal-ratio scoring should not fail"),
+            expected,
+            epsilon = 1e-12
+        );
     }
 
     #[test]

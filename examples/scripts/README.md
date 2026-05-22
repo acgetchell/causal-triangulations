@@ -144,7 +144,7 @@ cargo build --release
 
 # Run with custom parameters. Remove --simulate for a successful triangulation-only run.
 RUST_LOG=info ./target/release/cdt \
-    --vertices 25 \
+    --vertices-per-slice 4 \
     --timeslices 10 \
     --temperature 1.5 \
     --steps 3000 \
@@ -222,11 +222,11 @@ Triangulation-only logs contain:
 
 ```text
 [INFO] Dimensionality: 2
-[INFO] Number of vertices: 20
+[INFO] Number of vertices: 32
 [INFO] Number of timeslices: 8
 [INFO] Topology: OpenBoundary
 [INFO] Using trait-based backend system
-[INFO] Triangulation created with 20 vertices, <edge-count> edges, <face-count> faces
+[INFO] Triangulation created with 32 vertices, <edge-count> edges, <face-count> faces
 [INFO] CDT simulation completed successfully
 ```
 
