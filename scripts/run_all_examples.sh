@@ -21,7 +21,7 @@ DESCRIPTION:
     Automatically discovers and runs Cargo examples in examples/:
       - examples/<name>.rs
       - examples/<name>/main.rs
-    All examples run in release mode (--release).
+    All examples are built once in release mode, then executed directly.
 
 OPTIONS:
     -h, --help       Show this help message and exit
@@ -39,6 +39,7 @@ EXAMPLES:
 
 NOTES:
     - All examples run in release mode for better performance
+    - Cargo examples are compiled once before execution to avoid repeated Cargo work
     - Examples are discovered automatically from the examples/ directory
     - Output is shown in real-time as examples execute
     - Script exits with error code if any example fails
@@ -130,17 +131,34 @@ elif command -v gtimeout >/dev/null 2>&1; then
 	TIMEOUT_CMD="gtimeout"
 fi
 
-run_cargo_example() {
+case "$(uname -s 2>/dev/null || true)" in
+MINGW* | MSYS* | CYGWIN*) EXE_SUFFIX=".exe" ;;
+*) EXE_SUFFIX="" ;;
+esac
+
+TARGET_DIR="${CARGO_TARGET_DIR:-${PROJECT_ROOT}/target}"
+EXAMPLES_BIN_DIR="${TARGET_DIR}/release/examples"
+
+echo "Building release examples once..."
+cargo build --release --examples
+echo
+
+run_compiled_example() {
 	local example="$1"
+	local binary="${EXAMPLES_BIN_DIR}/${example}${EXE_SUFFIX}"
+
+	if [[ ! -x "$binary" ]]; then
+		error_exit "Compiled example binary not found or not executable: $binary"
+	fi
 
 	if [[ -n "$TIMEOUT_CMD" ]]; then
 		DURATION="${EXAMPLE_TIMEOUT:-600s}"
 		# If DURATION has no unit suffix, assume seconds
 		case "$DURATION" in *[a-zA-Z]) ;; *) DURATION="${DURATION}s" ;; esac
 		"$TIMEOUT_CMD" --preserve-status --signal=TERM --kill-after=10s "$DURATION" \
-			cargo run --release --example "$example"
+			"$binary"
 	else
-		cargo run --release --example "$example"
+		"$binary"
 	fi
 }
 
@@ -191,7 +209,7 @@ validate_example_output() {
 for example in "${all_examples[@]}"; do
 	echo "=== Running $example ==="
 	if [[ "$VALIDATE_OUTPUT" == true ]]; then
-		if output=$(run_cargo_example "$example" 2>&1); then
+		if output=$(run_compiled_example "$example" 2>&1); then
 			printf '%s\n' "$output"
 			validate_example_output "$example" "$output"
 		else
@@ -199,7 +217,7 @@ for example in "${all_examples[@]}"; do
 			error_exit "Example $example failed!"
 		fi
 	else
-		run_cargo_example "$example" || error_exit "Example $example failed!"
+		run_compiled_example "$example" || error_exit "Example $example failed!"
 	fi
 done
 

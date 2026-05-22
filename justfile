@@ -7,6 +7,7 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 cargo_llvm_cov_version := "0.8.5"
+cargo_nextest_version := "0.9.136"
 
 # Common cargo-llvm-cov arguments for all coverage runs.
 # Excludes benches/examples from reports while allowing integration tests to
@@ -36,6 +37,15 @@ _ensure-cargo-machete:
     if ! cargo machete --version >/dev/null 2>&1; then
         echo "❌ 'cargo-machete' not found. Install with:"
         echo "   cargo install --locked cargo-machete"
+        exit 1
+    fi
+
+_ensure-cargo-nextest:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! cargo nextest --version >/dev/null 2>&1; then
+        echo "❌ 'cargo-nextest' not found. See 'just setup-tools' or install:"
+        echo "   cargo install --locked cargo-nextest --version {{cargo_nextest_version}}"
         exit 1
     fi
 
@@ -131,9 +141,9 @@ bench-smoke:
 bench-compile:
     RUSTFLAGS='-D warnings' cargo bench --workspace --no-run
 
-# Compile benchmarks and release-profile integration tests without running.
-bench-test-compile: bench-compile
-    cargo test --tests --release --no-run
+# Compile benchmarks and release-profile Rust test binaries without running.
+bench-test-compile: bench-compile _ensure-cargo-nextest
+    cargo nextest run --tests --release --no-run
 
 # Build commands
 build:
@@ -179,8 +189,9 @@ check: lint
 check-fast:
     cargo check
 
-# CI simulation: comprehensive validation (matches .github/workflows/ci.yml)
-# Runs: checks + all tests (Rust + Python) + validated examples + bench compile
+# CI simulation: comprehensive validation (matches .github/workflows/ci.yml).
+# Rust unit/integration tests use nextest; doctests remain on cargo test because
+# nextest does not execute rustdoc doctests.
 ci: check bench-compile test-all examples-validate
     @echo "🎯 CI checks complete!"
 
@@ -544,7 +555,7 @@ setup-tools:
         else
             echo "Install required tools via your system package manager, or ensure they are on PATH."
         fi
-        echo "Required tools: uv, jq, taplo, yamllint, shfmt, shellcheck, actionlint, git-cliff, dprint, typos, cargo-llvm-cov, cargo-machete"
+        echo "Required tools: uv, jq, taplo, yamllint, shfmt, shellcheck, actionlint, git-cliff, dprint, typos, cargo-llvm-cov, cargo-nextest, cargo-machete"
         echo ""
     fi
 
@@ -604,6 +615,14 @@ setup-tools:
         echo "  ✓ cargo-llvm-cov ${cargo_llvm_cov_version}"
     fi
 
+    cargo_nextest_version="{{cargo_nextest_version}}"
+    if ! cargo nextest --version >/dev/null 2>&1 || [[ "$(cargo nextest --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$cargo_nextest_version" ]]; then
+        echo "  ⏳ Installing cargo-nextest ${cargo_nextest_version} (cargo)..."
+        cargo install --locked cargo-nextest --version "${cargo_nextest_version}"
+    else
+        echo "  ✓ cargo-nextest ${cargo_nextest_version}"
+    fi
+
     if ! cargo machete --version >/dev/null 2>&1; then
         echo "  ⏳ Installing cargo-machete (cargo)..."
         cargo install --locked cargo-machete
@@ -638,6 +657,12 @@ setup-tools:
         echo "  ✓ cargo machete"
     else
         echo "  ✗ cargo machete"
+        missing=1
+    fi
+    if cargo nextest --version >/dev/null 2>&1; then
+        echo "  ✓ cargo nextest"
+    else
+        echo "  ✗ cargo nextest"
         missing=1
     fi
     if [ "$missing" -ne 0 ]; then
@@ -729,36 +754,38 @@ spell-check: _ensure-typos
         echo "No modified files to spell-check."
     fi
 
-# Testing: fast tests (lib + doc)
+# Testing: fast tests (lib via nextest + rustdoc doctests via cargo test)
 test: test-lib test-doc
 
-# Testing: comprehensive suite (lib + doc + integration + Python)
+# Testing: comprehensive suite (Rust runnable tests via nextest + doctests + Python)
 test-all: test test-integration test-python
     @echo "✅ All tests passed!"
 
-test-lib:
-    cargo test --lib --verbose
+test-lib: _ensure-cargo-nextest
+    cargo nextest run --lib --verbose
 
+# Doctests must stay on cargo test; nextest does not run rustdoc doctests.
 test-doc:
     cargo test --doc --verbose
 
-test-integration:
-    cargo test --tests --verbose
+test-integration: _ensure-cargo-nextest
+    cargo nextest run -E 'kind(test)' --verbose
 
-test-slow:
-    cargo test --tests --features slow-tests --verbose
+test-slow: _ensure-cargo-nextest
+    cargo nextest run -E 'kind(test)' --features slow-tests --verbose
 
-test-examples:
-    cargo test --examples --verbose
+test-examples: _ensure-cargo-nextest
+    cargo nextest run --examples --verbose --no-tests pass
 
-test-cli:
-    cargo test --test cli --verbose
+test-cli: _ensure-cargo-nextest
+    cargo nextest run --test cli --verbose
 
 test-python: _ensure-uv
     uv run python -m pytest
 
-test-release:
-    cargo test --release
+test-release: _ensure-cargo-nextest
+    cargo nextest run --release --workspace
+    cargo test --doc --release
 
 # File validation
 validate-json: _ensure-jq

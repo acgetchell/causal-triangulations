@@ -29,7 +29,7 @@ The broad-exception Semgrep rule now covers the full Python support-script tree.
 
 Some differences remain because CDT has different workflows and project invariants:
 
-- CDT runs examples through `scripts/run_all_examples.sh`, which discovers current examples dynamically and applies a timeout. Its `--validate` mode checks stable semantic output markers for known Cargo examples without requiring exact numeric output.
+- CDT runs examples through `scripts/run_all_examples.sh`, which discovers current examples dynamically, builds release examples once, applies a timeout while running the compiled binaries, and checks stable semantic output markers in `--validate` mode without requiring exact numeric output.
 - CDT keeps `archive-changelog` so completed release series move under `docs/archive/changelog/`; MCMC does not yet archive old changelog sections.
 - CDT keeps a dedicated `performance.yml` workflow and local `perf-*` recipes. MCMC does not have matching CDT benchmark-baseline tooling.
 - CDT exposes feature-gated long-running Rust checks through the `slow-tests` Cargo feature and the `just test-slow` recipe, keeping normal CI fast while giving stabilization work a named path for heavier integration coverage.
@@ -57,6 +57,8 @@ The useful Semgrep updates ported from the sibling `delaunay` repository are:
 The useful `justfile` updates ported from `delaunay` are:
 
 - `ci-slow`, a named CI-plus-slow-tests workflow using CDT's existing `slow-tests` feature gate;
+- `cargo nextest` for runnable Rust unit, integration, CLI, slow, example, and release test recipes, while keeping rustdoc doctests on `cargo test --doc` because nextest does not execute doctests;
+- single-pass release example builds in `scripts/run_all_examples.sh`, which preserve semantic output validation while avoiding repeated `cargo run --example` invocations;
 - `bench-smoke`, adapted to CDT's `cdt_benchmarks` harness and Criterion's minimal sample settings so benchmark harnesses can be smoke-tested without producing baseline-quality numbers;
 - `bench-test-compile`, which layers release-profile integration-test compilation on top of the existing warning-denying benchmark compile check;
 - opt-in release hygiene recipes `unused-deps` and `publish-check`, kept outside the default `lint` and `ci` paths so they are available before releases without making routine validation slower or more tool-dependent;

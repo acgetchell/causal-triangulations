@@ -111,6 +111,10 @@ All Python tests should:
 - use type hints
 - include `-> None` return annotations on test functions
 
+### Rust Test Runner
+
+Runnable Rust tests use `cargo nextest` through the repository `just` recipes. Rustdoc doctests remain on `cargo test --doc` because nextest does not execute doctests. Use the `just` recipes instead of calling Cargo directly so this split stays consistent locally and in CI.
+
 ---
 
 ## Floating-Point Comparisons
@@ -225,8 +229,8 @@ The `ci` recipe runs `check bench-compile test-all examples-validate`, which enf
 
 - **check** (via `lint`): formatting, clippy, documentation builds, markdown, spelling, config validation (JSON, TOML, YAML, GitHub Actions)
 - **bench-compile**: benchmarks compile without warnings under `-D warnings`
-- **test-all**: unit tests, doc tests, integration tests, and Python tests (pytest)
-- **examples-validate**: all Cargo examples run successfully and user-facing examples emit stable output markers
+- **test-all**: unit tests and integration tests via nextest, rustdoc doctests via `cargo test --doc`, and Python tests via pytest
+- **examples-validate**: Cargo examples build once, then the compiled binaries run successfully with stable output markers
 
 ---
 
