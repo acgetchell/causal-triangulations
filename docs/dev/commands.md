@@ -11,8 +11,8 @@ Agents must run appropriate checks after modifying code.
 Typical development loop:
 
 ```bash
-just fix
 just check
+just fix
 just test
 ```
 
@@ -198,16 +198,20 @@ TOML files should be validated and formatted using Taplo.
 Commands:
 
 ```bash
-just toml-lint
-just toml-fmt
-just toml-fmt-check
+just toml-check       # Non-mutating formatting and lint checks
+just toml-fix         # Apply formatting fixes
 ```
+
+Compatibility aliases remain available as granular recipes:
+`just toml-lint`, `just toml-fmt-check`, and `just toml-fmt`.
 
 ---
 
 ## Markdown Formatting
 
-Markdown files are formatted with dprint.
+Markdown files are checked and fixed with `rumdl`. The current config keeps
+legacy long-line and generated-reference behavior out of the migration so the
+tooling change does not become a broad documentation rewrite.
 
 Commands:
 
@@ -231,23 +235,27 @@ Commands:
 
 ```bash
 just shell-check       # Lint (non-mutating)
-just shell-fmt         # Format (mutating)
+just shell-fix         # Format (mutating)
 ```
+
+`just shell-fmt` remains as a compatibility alias for the formatter.
 
 ---
 
 ## YAML Validation
 
-YAML files are validated with yamllint and formatted with prettier.
+YAML files are checked with `yamllint` and formatted with `dprint` using the
+Rust-native `pretty_yaml` plugin.
 
 Commands:
 
 ```bash
-just yaml-lint         # Lint (non-mutating)
+just yaml-check        # Non-mutating formatting and lint checks
 just yaml-fix          # Format (mutating)
 ```
 
-`just yaml-fix` accepts either a globally installed `prettier` or `npx` fallback.
+Compatibility aliases remain available as granular recipes:
+`just yaml-lint` and `just yaml-fmt-check`.
 
 ---
 
@@ -272,6 +280,12 @@ jq empty file.json
 Workflows must pass `actionlint`.
 
 The repository has separate workflows for full CI, dependency audit, Codecov coverage, repository-rule SARIF upload, Clippy SARIF, performance checks, and CodeQL analysis. Do not add another external analysis workflow unless it has a distinct signal and required secrets are configured for this repository.
+
+External GitHub Actions must use full commit-SHA pins, stay within the
+repository-owned allowlist in `semgrep.yaml`, and keep a readable version
+comment next to each pin. Dependabot remains configured for the
+`github-actions` ecosystem; its update PRs should preserve both the SHA pin and
+the adjacent human-readable version comment.
 
 Run with:
 
@@ -319,8 +333,8 @@ just publish-check
 
 | Task                  | Command                  |
 | --------------------- | ------------------------ |
-| Format code           | `just fix`               |
 | Run lints             | `just check`             |
+| Format code           | `just fix`               |
 | Run unit tests        | `just test`              |
 | Run integration tests | `just test-integration`  |
 | Run slow tests        | `just test-slow`         |

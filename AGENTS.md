@@ -150,8 +150,8 @@ After modifying files, run appropriate validators.
 Common commands:
 
 ```bash
-just fix
 just check
+just fix
 just ci
 ```
 

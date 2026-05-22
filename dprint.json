@@ -1,30 +1,18 @@
 {
   "$schema": "https://dprint.dev/schemas/v0.json",
-  "incremental": true,
+  "lineWidth": 120,
+  "indentWidth": 2,
+  "useTabs": false,
+  "newLineKind": "lf",
   "plugins": [
-    "https://plugins.dprint.dev/markdown-0.21.1.wasm",
-    "https://plugins.dprint.dev/json-0.21.1.wasm",
     "https://plugins.dprint.dev/g-plane/pretty_yaml-v0.6.0.wasm"
   ],
   "includes": [
-    "**/*.{md,json,yml,yaml}"
+    "**/*.{yaml,yml}"
   ],
   "excludes": [
-    "**/node_modules",
-    "**/*-lock.json",
-    "**/target",
-    "**/Cargo.lock",
-    "**/CHANGELOG.md"
-  ],
-  "markdown": {
-    "lineWidth": 120,
-    "textWrap": "never"
-  },
-  "json": {
-    "indentWidth": 2
-  },
-  "yaml": {
-    "printWidth": 120,
-    "quotes": "preferDouble"
-  }
+    "target/**",
+    "target-*/**",
+    "**/target/**"
+  ]
 }

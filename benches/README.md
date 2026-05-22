@@ -204,18 +204,18 @@ The benchmarks use criterion's default statistical analysis with:
 /// Benchmark new CDT operation
 fn bench_new_operation(c: &mut Criterion) {
     let mut group = c.benchmark_group("new_operation");
-    
+
     // Setup test data
     let triangulation = CdtTriangulation2D::new_with_delaunay(20, 1, 2)
         .expect("Failed to create triangulation");
-    
+
     group.bench_function("operation_name", |b| {
         b.iter(|| {
             let result = operation_to_benchmark(black_box(&triangulation));
             black_box(result)
         });
     });
-    
+
     group.finish();
 }
 

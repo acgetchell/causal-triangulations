@@ -22,8 +22,9 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   ACTIONLINT_VERSION: "1.7.10"
-  DPRINT_VERSION: "0.51.1"
+  DPRINT_VERSION: "0.54.0"
   NEXTEST_VERSION: "0.9.136"
+  RUMDL_VERSION: "0.1.96"
   SHFMT_VERSION: "3.12.0"
   TYPOS_VERSION: "1.43.5"
   UV_VERSION: "0.9.21"
@@ -79,7 +80,13 @@ jobs:
         with:
           tool: typos-cli@${{ env.TYPOS_VERSION }}
 
-      - name: Install dprint (for markdown/JSON/YAML formatting)
+      - name: Install rumdl (for Markdown linting)
+        if: matrix.os != 'windows-latest'
+        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d # v2.79.2
+        with:
+          tool: rumdl@${{ env.RUMDL_VERSION }}
+
+      - name: Install dprint (for YAML formatting)
         if: matrix.os != 'windows-latest'
         uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d # v2.79.2
         with:

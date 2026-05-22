@@ -70,7 +70,8 @@ Before you begin, ensure you have:
    cargo test --test integration_tests  # Integration tests
 
    # Or use convenient workflows:
-   just fix             # Apply formatters/auto-fixes
+   just check           # Run non-mutating checks
+   just fix             # Apply formatters/auto-fixes when needed
    just test-all        # All tests
    ```
 
@@ -96,8 +97,8 @@ Before you begin, ensure you have:
    ```bash
    cargo fmt            # Format code
    cargo clippy --all-targets -- -D warnings  # Linting
-   just fix             # Apply formatters/auto-fixes (recommended)
    just check           # Run all non-mutating checks
+   just fix             # Apply formatters/auto-fixes when needed
    just lint            # Lint code, docs, and config (checks only)
    ```
 
@@ -108,8 +109,8 @@ Before you begin, ensure you have:
    just --list
 
    # Common workflows
-   just fix             # Apply formatters/auto-fixes
    just check           # Run all linters/validators
+   just fix             # Apply formatters/auto-fixes when needed
    just commit-check    # Full pre-commit validation
    just ci              # CI parity (mirrors .github/workflows/ci.yml)
    ```
@@ -159,8 +160,8 @@ This project uses [Just] as the primary task automation tool. Just provides bett
 
 ```bash
 just setup          # Complete environment setup
-just fix            # Apply formatters/auto-fixes (mutating)
 just check          # Run linters/validators (non-mutating)
+just fix            # Apply formatters/auto-fixes (mutating)
 just ci             # CI parity (mirrors .github/workflows/ci.yml)
 just commit-check   # Comprehensive pre-commit validation (recommended before pushing)
 just lint           # Lint code, docs, and config (checks only)
@@ -208,8 +209,8 @@ scripts/tag_release.py # Annotated release tags from root or archived changelog 
 
    ```bash
    # Make changes to code
-   just fix             # Apply formatters/auto-fixes
    just test            # Run fast tests (lib + doc)
+   just fix             # Apply formatters/auto-fixes when needed
    # Repeat until satisfied
    ```
 

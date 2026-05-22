@@ -66,19 +66,12 @@ _ensure-git-cliff:
 _ensure-dprint:
     #!/usr/bin/env bash
     set -euo pipefail
-    command -v dprint >/dev/null || { echo "❌ 'dprint' not found. See 'just setup' or install: cargo install dprint"; exit 1; }
+    command -v dprint >/dev/null || { echo "❌ 'dprint' not found. See 'just setup' or install: brew install dprint"; exit 1; }
 
-_ensure-prettier-or-npx:
+_ensure-rumdl:
     #!/usr/bin/env bash
     set -euo pipefail
-    if command -v prettier >/dev/null; then
-        exit 0
-    fi
-    command -v npx >/dev/null || {
-        echo "❌ Neither 'prettier' nor 'npx' found. Install via npm (recommended): npm i -g prettier"
-        echo "   Or install Node.js (for npx): https://nodejs.org"
-        exit 1
-    }
+    command -v rumdl >/dev/null || { echo "❌ 'rumdl' not found. See 'just setup' or install: cargo install rumdl"; exit 1; }
 
 _ensure-shellcheck:
     #!/usr/bin/env bash
@@ -248,7 +241,7 @@ examples-validate:
     ./scripts/run_all_examples.sh --validate
 
 # Fix (mutating): apply formatters/auto-fixes
-fix: toml-fmt fmt python-fix shell-fmt markdown-fix yaml-fix
+fix: toml-fix fmt python-fix shell-fix markdown-fix yaml-fix
     @echo "✅ Fixes applied!"
 
 fmt:
@@ -260,8 +253,8 @@ fmt-check:
 # Help workflows
 help-workflows:
     @echo "Common Just workflows:"
+    @echo "  just check             # Run all non-mutating lints/validators"
     @echo "  just fix               # Apply formatters/auto-fixes (mutating)"
-    @echo "  just check             # Run lint/validators (non-mutating)"
     @echo "  just check-fast        # Fast compile check (cargo check)"
     @echo "  just ci                # Full CI run (checks + all tests + examples + bench compile)"
     @echo "  just ci-baseline       # CI + save performance baseline"
@@ -324,17 +317,44 @@ lint: lint-code lint-docs lint-config
 lint-code: fmt-check clippy doc-check semgrep semgrep-test python-lint shell-lint
 
 # Configuration validation: JSON, TOML, YAML, GitHub Actions workflows
-lint-config: validate-json toml-lint toml-fmt-check yaml-lint action-lint
+lint-config: validate-json toml-check yaml-check action-lint
 
 # Documentation linting: Markdown + spell checking
 lint-docs: markdown-check spell-check
 
-markdown-check: _ensure-dprint
-    dprint check
+markdown-check: _ensure-rumdl
+    #!/usr/bin/env bash
+    set -euo pipefail
+    files=()
+    while IFS= read -r -d '' file; do
+        case "$file" in
+            CHANGELOG.md|docs/archive/*) continue ;;
+        esac
+        files+=("$file")
+    done < <(git ls-files -z '*.md')
+    if [ "${#files[@]}" -gt 0 ]; then
+        printf '%s\0' "${files[@]}" | xargs -0 -n100 rumdl check
+    else
+        echo "No markdown files found to check."
+    fi
 
 # Markdown and YAML: apply auto-fixes (mutating)
-markdown-fix: _ensure-dprint
-    dprint fmt
+markdown-fix: _ensure-rumdl
+    #!/usr/bin/env bash
+    set -euo pipefail
+    files=()
+    while IFS= read -r -d '' file; do
+        case "$file" in
+            CHANGELOG.md|docs/archive/*) continue ;;
+        esac
+        files+=("$file")
+    done < <(git ls-files -z '*.md')
+    if [ "${#files[@]}" -gt 0 ]; then
+        echo "📝 rumdl check --fix (${#files[@]} files)"
+        printf '%s\0' "${files[@]}" | xargs -0 -n100 rumdl check --fix
+    else
+        echo "No markdown files found to format."
+    fi
 
 markdown-lint: markdown-check
 
@@ -543,6 +563,8 @@ setup-tools:
         install_with_brew uv
         install_with_brew jq
         install_with_brew taplo
+        install_with_brew dprint
+        install_with_brew rumdl
         install_with_brew yamllint
         install_with_brew shfmt
         install_with_brew shellcheck
@@ -555,7 +577,7 @@ setup-tools:
         else
             echo "Install required tools via your system package manager, or ensure they are on PATH."
         fi
-        echo "Required tools: uv, jq, taplo, yamllint, shfmt, shellcheck, actionlint, git-cliff, dprint, typos, cargo-llvm-cov, cargo-nextest, cargo-machete"
+        echo "Required tools: uv, jq, taplo, dprint, rumdl, yamllint, shfmt, shellcheck, actionlint, git-cliff, typos, cargo-llvm-cov, cargo-nextest, cargo-machete"
         echo ""
     fi
 
@@ -568,27 +590,21 @@ setup-tools:
     rustup component add llvm-tools-preview
     echo ""
 
-    echo "Ensuring Node/prettier (used by yaml-fix)..."
-    if have prettier; then
-        echo "  ✓ prettier"
-    elif have npx; then
-        echo "  ✓ npx (prettier will run via npx)"
-    elif have brew && [ "$brew_available" -ne 0 ]; then
-        echo "  ⏳ Installing node (brew)..."
-        HOMEBREW_NO_AUTO_UPDATE=1 brew install node
-        npm install -g prettier
-    else
-        echo "  ⚠️  Neither prettier nor npx found. Install Node.js (https://nodejs.org) and run: npm install -g prettier"
-    fi
-    echo ""
-
     echo "Ensuring cargo tools..."
-    dprint_version="0.53.0"
+    dprint_version="0.54.0"
     if ! have dprint || [[ "$(dprint --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$dprint_version" ]]; then
         echo "  ⏳ Installing dprint ${dprint_version} (cargo)..."
         cargo install --locked dprint --version "${dprint_version}"
     else
         echo "  ✓ dprint ${dprint_version}"
+    fi
+
+    rumdl_version="0.1.96"
+    if ! have rumdl || [[ "$(rumdl --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$rumdl_version" ]]; then
+        echo "  ⏳ Installing rumdl ${rumdl_version} (cargo)..."
+        cargo install --locked rumdl --version "${rumdl_version}"
+    else
+        echo "  ✓ rumdl ${rumdl_version}"
     fi
 
     typos_version="1.44.0"
@@ -634,17 +650,7 @@ setup-tools:
     echo "Verifying required commands are available..."
     missing=0
 
-    cmds=(uv jq taplo yamllint shfmt shellcheck actionlint git-cliff dprint typos cargo-llvm-cov)
-
-    # prettier (or npx as fallback) is required by the yaml-fix recipe
-    if ! have prettier && ! have npx; then
-        echo "  ✗ prettier/npx (required by yaml-fix)"
-        missing=1
-    elif have prettier; then
-        echo "  ✓ prettier"
-    else
-        echo "  ✓ npx (prettier via npx)"
-    fi
+    cmds=(uv jq taplo dprint rumdl yamllint shfmt shellcheck actionlint git-cliff typos cargo-llvm-cov)
     for cmd in "${cmds[@]}"; do
         if have "$cmd"; then
             echo "  ✓ $cmd"
@@ -715,6 +721,8 @@ shell-fmt: _ensure-shfmt
     # Note: justfiles are not shell scripts and are excluded from shellcheck
 
 shell-lint: shell-check
+
+shell-fix: shell-fmt
 
 # Spell check (typos)
 spell-check: _ensure-typos
@@ -843,10 +851,16 @@ toml-lint: _ensure-taplo
         echo "No TOML files found to lint."
     fi
 
+toml-check: toml-fmt-check toml-lint
+
+toml-fix: toml-fmt
+
 unused-deps: _ensure-cargo-machete
     cargo machete
 
-yaml-fix: _ensure-prettier-or-npx
+yaml-check: yaml-fmt-check yaml-lint
+
+yaml-fix: _ensure-dprint
     #!/usr/bin/env bash
     set -euo pipefail
     files=()
@@ -854,26 +868,24 @@ yaml-fix: _ensure-prettier-or-npx
         files+=("$file")
     done < <(git ls-files -z '*.yml' '*.yaml')
     if [ "${#files[@]}" -gt 0 ]; then
-        echo "📝 prettier --write (YAML, ${#files[@]} files)"
-
-        cmd=()
-        if command -v prettier >/dev/null; then
-            cmd=(prettier --write --print-width 120)
-        elif command -v npx >/dev/null; then
-            cmd=(npx)
-            if npx --help 2>&1 | grep -q -- '--yes'; then
-                cmd+=(--yes)
-            fi
-            cmd+=(prettier --write --print-width 120)
-        else
-            echo "❌ 'prettier' not found. Install via npm (recommended): npm i -g prettier"
-            echo "   Or install Node.js (for npx): https://nodejs.org"
-            exit 1
-        fi
-
-        printf '%s\0' "${files[@]}" | xargs -0 -n100 "${cmd[@]}"
+        echo "📝 dprint fmt (YAML, ${#files[@]} files)"
+        dprint fmt --incremental=false "${files[@]}"
     else
         echo "No YAML files found to format."
+    fi
+
+yaml-fmt-check: _ensure-dprint
+    #!/usr/bin/env bash
+    set -euo pipefail
+    files=()
+    while IFS= read -r -d '' file; do
+        files+=("$file")
+    done < <(git ls-files -z '*.yml' '*.yaml')
+    if [ "${#files[@]}" -gt 0 ]; then
+        echo "🔍 dprint check (YAML, ${#files[@]} files)"
+        dprint check --incremental=false "${files[@]}"
+    else
+        echo "No YAML files found to check."
     fi
 
 yaml-lint: _ensure-yamllint

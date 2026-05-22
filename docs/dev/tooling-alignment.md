@@ -11,7 +11,7 @@ Both repositories now have explicit local configuration for the core Rust and Py
 - `.taplo.toml` keeps TOML formatting conservative and Cargo-like.
 - `ty.toml` scopes Ty to `scripts/` and pins the supported Python version.
 - `pyproject.toml` owns Ruff, Ty, pytest, uv packaging, and uv-managed development dependencies.
-- `dprint.json`, `.yamllint`, `typos.toml`, and `clippy.toml` define documentation and configuration checks.
+- `rumdl.toml`, `dprint.json`, `.yamllint`, `typos.toml`, and `clippy.toml` define documentation and configuration checks.
 - `justfile` is the single local entry point for formatting, linting, tests, coverage, Semgrep, changelog, and setup commands.
 
 ## Python Tooling
@@ -62,7 +62,8 @@ The useful `justfile` updates ported from `delaunay` are:
 - `bench-smoke`, adapted to CDT's `cdt_benchmarks` harness and Criterion's minimal sample settings so benchmark harnesses can be smoke-tested without producing baseline-quality numbers;
 - `bench-test-compile`, which layers release-profile integration-test compilation on top of the existing warning-denying benchmark compile check;
 - opt-in release hygiene recipes `unused-deps` and `publish-check`, kept outside the default `lint` and `ci` paths so they are available before releases without making routine validation slower or more tool-dependent;
-- a shared `_ensure-prettier-or-npx` helper for `yaml-fix` and a corrected rename/copy note in `spell-check`.
+- `rumdl` Markdown checking, `dprint`/`pretty_yaml` YAML formatting, check/fix aliases, and a corrected rename/copy note in `spell-check`.
+- repository-owned Semgrep rules that keep user-facing `just check` examples before `just fix` examples and enforce SHA-pinned, allowlisted GitHub Actions with readable version comments. Dependabot remains the update path for pinned external actions, with review focused on preserving both the SHA and readable version comment.
 
 ## Deferred Updates
 
@@ -71,4 +72,4 @@ These were evaluated but not ported in this pass:
 - `codacy.yml`: defer until the repository has an intentional Codacy project token and a decision about whether Codacy should upload repository-owned OpenGrep/Semgrep findings in addition to `.github/workflows/semgrep-sarif.yml`.
 - Delaunay's hot-path `FastHashMap`/`FastHashSet` rule: defer because CDT does not currently define equivalent hash aliases or the same `src/core` hot-path layout.
 - Delaunay's `ci_performance_suite`, `profiling_suite`, `[profile.perf]`, and same-machine baseline recipes: defer because CDT currently has a single `cdt_benchmarks` harness plus the existing `performance-analysis` workflow, so porting those recipes would require a CDT-specific benchmark contract rather than a justfile-only change.
-- Delaunay's markdownlint/npx migration: defer because CDT intentionally uses `dprint.json`, project docs, and CI setup for Markdown, JSON, and YAML formatting.
+- Delaunay's broader Markdown cleanup: defer because CDT intentionally keeps legacy long-line and generated-reference behavior out of the `rumdl` migration.

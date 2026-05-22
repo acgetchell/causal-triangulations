@@ -322,8 +322,8 @@ cargo clippy
 Typically run via:
 
 ```bash
-just fix
 just check
+just fix
 ```
 
 CI treats warnings as errors.

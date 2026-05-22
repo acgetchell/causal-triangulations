@@ -77,8 +77,8 @@ cargo build && cargo test
 # Modern approach (recommended) - install just command runner
 cargo install just
 just setup           # Complete environment setup
-just fix             # Apply formatters/auto-fixes
 just check           # Run all linters/validators
+just fix             # Apply formatters/auto-fixes
 just --list          # See all available development commands
 
 # Run examples
@@ -92,8 +92,8 @@ just run-example     # Basic simulation
 
 **Just Workflows:**
 
-- `just fix` - Apply formatters/auto-fixes (mutating)
 - `just check` - Run linters/validators (non-mutating)
+- `just fix` - Apply formatters/auto-fixes (mutating)
 - `just ci` - CI parity (mirrors GitHub Actions workflow [`ci.yml`](.github/workflows/ci.yml))
 - `just commit-check` - Comprehensive pre-commit validation
 
