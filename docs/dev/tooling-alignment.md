@@ -65,11 +65,53 @@ The useful `justfile` updates ported from `delaunay` are:
 - `rumdl` Markdown checking, `dprint`/`pretty_yaml` YAML formatting, check/fix aliases, and a corrected rename/copy note in `spell-check`.
 - repository-owned Semgrep rules that keep user-facing `just check` examples before `just fix` examples and enforce SHA-pinned, allowlisted GitHub Actions with readable version comments. Dependabot remains the update path for pinned external actions, with review focused on preserving both the SHA and readable version comment.
 
+## CI Shape Evaluation
+
+Issue #131 evaluated larger CI-shape changes after the lower-risk speedups from
+issue #130. Recent successful PR CI runs on May 22, 2026 showed the macOS and
+Windows matrix legs often determining wall-clock duration:
+
+- `perf/130-ci-speedups` (#137): Ubuntu completed in about 3m31s, macOS in
+  about 3m52s, and Windows in about 3m40s.
+- `feat/checked-delaunay-api` (#128): Ubuntu completed in about 4m28s, macOS
+  in about 4m56s, and Windows in about 6m10s.
+
+The repository intentionally keeps the existing `build (ubuntu-latest)`,
+`build (macos-latest)`, and `build (windows-latest)` required check contexts,
+and keeps Rust target coverage on all three platforms. A broader split that
+would run the comprehensive repository/tooling path only on Linux was rejected
+because it would weaken the current macOS build signal.
+
+The adopted change is smaller: the Windows leg now uses
+`cargo nextest run --workspace --all-targets --no-run` instead of an initial
+`cargo build --all-targets`, then runs lib, binary, example, and integration
+test targets through one nextest invocation. That keeps the full Rust target
+compile surface on Windows, including benchmark compilation, while avoiding
+accidental Criterion benchmark execution in the test job. Rustdoc doctests
+remain on `cargo test --doc` because nextest does not execute doctests.
+
+The May 2026 Delaunay tooling refresh was reviewed for portable pieces. CDT
+adopted `cargo-llvm-cov` 0.8.7 in both local setup and Codecov, added `rumdl`
+formatting to generated changelog recipes, and ported archive heading
+normalization so historical changelog archives are cleaned even when a release
+only rewrites the active minor series. Delaunay's profiling, Codacy SARIF
+filtering, and benchmark-comparison machinery remained deferred from that pass
+because CDT needed a different benchmark contract and has no configured Codacy
+workflow.
+
+The follow-up benchmark alignment introduced a CDT-specific
+`ci_performance_suite` rather than copying Delaunay's dimensional construction
+contract. CDT's suite covers generated open-boundary and toroidal
+triangulations, validation, individual ergodic move attempts, ten-sweep
+random-move workloads, and ten-sweep Metropolis runs. The suite uses a local
+`perf` profile and feeds the existing performance-analysis scripts, while the
+larger Delaunay profiling and same-machine comparison helpers remain deferred.
+
 ## Deferred Updates
 
 These were evaluated but not ported in this pass:
 
 - `codacy.yml`: defer until the repository has an intentional Codacy project token and a decision about whether Codacy should upload repository-owned OpenGrep/Semgrep findings in addition to `.github/workflows/semgrep-sarif.yml`.
 - Delaunay's hot-path `FastHashMap`/`FastHashSet` rule: defer because CDT does not currently define equivalent hash aliases or the same `src/core` hot-path layout.
-- Delaunay's `ci_performance_suite`, `profiling_suite`, `[profile.perf]`, and same-machine baseline recipes: defer because CDT currently has a single `cdt_benchmarks` harness plus the existing `performance-analysis` workflow, so porting those recipes would require a CDT-specific benchmark contract rather than a justfile-only change.
+- Delaunay's `profiling_suite` and same-machine baseline recipes: defer because CDT's `ci_performance_suite` now provides the portable regression contract, while deeper profiling still needs CDT-specific benchmark interpretation.
 - Delaunay's broader Markdown cleanup: defer because CDT intentionally keeps legacy long-line and generated-reference behavior out of the `rumdl` migration.

@@ -173,6 +173,9 @@ cargo bench triangulation_creation
 cargo bench metropolis_simulation
 cargo bench action_calculations
 
+# CI regression benchmark contract
+just bench-ci
+
 # Performance regression testing
 just perf-check          # Check for performance regressions
 just perf-baseline       # Save performance baseline

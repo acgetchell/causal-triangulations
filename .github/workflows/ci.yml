@@ -244,8 +244,6 @@ jobs:
       - name: Build and test (Windows)
         if: matrix.os == 'windows-latest'
         run: |
-          cargo build --verbose --all-targets
-          cargo nextest run --lib --verbose
+          cargo nextest run --workspace --all-targets --verbose --no-run
+          cargo nextest run --workspace --lib --bins --examples --tests --verbose --no-tests pass
           cargo test --doc --verbose
-          cargo nextest run -E 'kind(test)' --verbose
-          cargo nextest run --examples --verbose --no-tests pass

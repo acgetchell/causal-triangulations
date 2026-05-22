@@ -314,6 +314,12 @@ Benchmark harnesses can be smoke-tested without producing baseline-quality perfo
 just bench-smoke
 ```
 
+The smaller CI regression benchmark contract runs through the `perf` Cargo profile:
+
+```bash
+just bench-ci
+```
+
 To compile benchmarks and release-profile integration tests without running them:
 
 ```bash
@@ -388,7 +394,8 @@ Regenerate with:
 just changelog
 ```
 
-This runs `git-cliff`, applies the Python postprocessor, and archives completed minor release series under `docs/archive/changelog/`.
+This runs `git-cliff`, applies the Python postprocessor, archives completed minor release series under `docs/archive/changelog/`, and
+formats generated changelog files with `rumdl`.
 
 For release PRs, generate the changelog for a version before the final tag exists with:
 

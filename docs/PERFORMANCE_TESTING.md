@@ -278,7 +278,7 @@ Include performance results in your PR description:
 
 ```bash
 # Ensure benchmarks are compiled and run first
-cargo bench
+just bench-ci
 just perf-check
 ```
 
@@ -304,7 +304,7 @@ uv run performance-analysis --no-run
 
 ```bash
 # Run with verbose output
-RUST_BACKTRACE=1 cargo bench -- --verbose
+RUST_BACKTRACE=1 cargo bench --profile perf --bench ci_performance_suite -- --verbose
 
 # Analyze specific benchmark group
 cargo bench triangulation_creation
@@ -368,7 +368,7 @@ just perf-check 5.0   # Strict threshold before completion
 
 ### Components
 
-1. **Criterion Benchmarks** (`benches/cdt_benchmarks.rs`): Core benchmark definitions
+1. **Criterion Benchmarks** (`benches/cdt_benchmarks.rs`, `benches/ci_performance_suite.rs`): Core and CI regression benchmark definitions
 2. **Performance Analyzer** (`scripts/performance_analysis.py`): Analysis and reporting engine
 3. **Justfile Integration**: User-friendly command interface
 4. **GitHub Actions** (`.github/workflows/performance.yml`): CI/CD automation

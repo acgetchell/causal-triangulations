@@ -14,6 +14,23 @@ The benchmarking suite measures performance of key CDT operations using the [cri
 cargo bench
 ```
 
+### CI Performance Suite
+
+```bash
+just bench-ci
+```
+
+The `ci_performance_suite` target is the smaller regression contract used by
+the performance tooling. It runs with the Cargo `perf` profile and focuses on
+CDT workflows that should stay comparable across releases:
+
+- generating open-boundary and toroidal CDT triangulations;
+- validating generated triangulations;
+- attempting individual ergodic move types;
+- executing ten random-move sweeps, where each sweep attempts one move per
+  current simplex;
+- running short Metropolis simulations sized as ten initial sweeps.
+
 ### Specific Benchmark Groups
 
 ```bash
@@ -43,6 +60,9 @@ cargo bench cache_operations
 
 # Validation operations
 cargo bench validation
+
+# CI regression contract
+cargo bench --profile perf --bench ci_performance_suite
 ```
 
 ### Output Format
@@ -240,8 +260,8 @@ criterion_group!(
 ### Automated Benchmarking
 
 ```bash
-# Run benchmarks in CI
-cargo bench -- --output-format json > benchmark_results.json
+# Run the CI regression benchmark contract
+just bench-ci
 
 # Performance regression detection
 cargo bench -- --save-baseline main

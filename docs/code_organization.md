@@ -30,7 +30,8 @@ causal-triangulations/
 │   └── dependabot.yml
 ├── benches/
 │   ├── README.md
-│   └── cdt_benchmarks.rs
+│   ├── cdt_benchmarks.rs
+│   └── ci_performance_suite.rs
 ├── docs/
 │   ├── dev/
 │   │   ├── commands.md

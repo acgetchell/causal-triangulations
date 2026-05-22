@@ -1,0 +1,338 @@
+#![forbid(unsafe_code)]
+
+//! CI performance suite for CDT regression checks.
+//!
+//! This harness is the small, durable performance contract for CDT workflows. It
+//! complements the broader `cdt_benchmarks` target by focusing on operations that
+//! should stay fast across releases:
+//!
+//! 1. Open-boundary and toroidal CDT triangulation construction.
+//! 2. Evolved-state validation on generated triangulations.
+//! 3. Individual ergodic move attempts on fresh fixtures.
+//! 4. Ten-sweep random-move workloads, where each sweep attempts one move per
+//!    current simplex.
+//! 5. Short Metropolis runs sized as ten initial sweeps.
+
+use causal_triangulations::prelude::action::ActionConfig;
+use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveStatistics, MoveType};
+use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
+use causal_triangulations::prelude::triangulation::CdtTriangulation2D;
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use std::hint::black_box;
+use std::time::Duration;
+
+const SWEEP_COUNT: u32 = 10;
+const BENCH_SEED: u64 = 0xCDA7_2026;
+
+#[derive(Clone, Copy)]
+enum TopologyFixture {
+    OpenStrip,
+    Toroidal,
+}
+
+#[derive(Clone, Copy)]
+struct CdtFixture {
+    name: &'static str,
+    topology: TopologyFixture,
+    vertices_per_slice: u32,
+    time_slices: u32,
+}
+
+struct PreparedFixture {
+    fixture: CdtFixture,
+    triangulation: CdtTriangulation2D,
+    vertices: usize,
+    simplices: usize,
+}
+
+const GENERATION_FIXTURES: &[CdtFixture] = &[
+    CdtFixture {
+        name: "open_strip_small",
+        topology: TopologyFixture::OpenStrip,
+        vertices_per_slice: 12,
+        time_slices: 8,
+    },
+    CdtFixture {
+        name: "open_strip_medium",
+        topology: TopologyFixture::OpenStrip,
+        vertices_per_slice: 20,
+        time_slices: 10,
+    },
+    CdtFixture {
+        name: "open_strip_large",
+        topology: TopologyFixture::OpenStrip,
+        vertices_per_slice: 28,
+        time_slices: 12,
+    },
+    CdtFixture {
+        name: "toroidal_small",
+        topology: TopologyFixture::Toroidal,
+        vertices_per_slice: 8,
+        time_slices: 8,
+    },
+    CdtFixture {
+        name: "toroidal_medium",
+        topology: TopologyFixture::Toroidal,
+        vertices_per_slice: 12,
+        time_slices: 10,
+    },
+];
+
+const SWEEP_FIXTURES: &[CdtFixture] = &[
+    CdtFixture {
+        name: "open_strip_tiny",
+        topology: TopologyFixture::OpenStrip,
+        vertices_per_slice: 4,
+        time_slices: 3,
+    },
+    CdtFixture {
+        name: "open_strip_small",
+        topology: TopologyFixture::OpenStrip,
+        vertices_per_slice: 6,
+        time_slices: 4,
+    },
+    CdtFixture {
+        name: "toroidal_tiny",
+        topology: TopologyFixture::Toroidal,
+        vertices_per_slice: 4,
+        time_slices: 3,
+    },
+];
+
+impl CdtFixture {
+    /// Builds the requested CDT topology for a benchmark fixture.
+    fn build(self) -> CdtTriangulation2D {
+        match self.topology {
+            TopologyFixture::OpenStrip => {
+                CdtTriangulation2D::from_cdt_strip(self.vertices_per_slice, self.time_slices)
+            }
+            TopologyFixture::Toroidal => {
+                CdtTriangulation2D::from_toroidal_cdt(self.vertices_per_slice, self.time_slices)
+            }
+        }
+        .expect("CDT benchmark fixture should build")
+    }
+}
+
+/// Materializes a fixture once so benchmarks can use stable size metadata.
+fn prepare_fixture(fixture: CdtFixture) -> PreparedFixture {
+    let triangulation = fixture.build();
+    let vertices = triangulation.vertex_count();
+    let simplices = triangulation.face_count();
+    PreparedFixture {
+        fixture,
+        triangulation,
+        vertices,
+        simplices,
+    }
+}
+
+/// Converts Criterion throughput element counts without silently truncating.
+fn usize_to_u64(value: usize) -> u64 {
+    u64::try_from(value).expect("benchmark size should fit in u64")
+}
+
+/// Computes the Metropolis step budget for the ten-sweep CI workload.
+fn ten_sweep_step_count(simplices: usize) -> u32 {
+    u32::try_from(sweep_attempt_count(simplices))
+        .expect("benchmark sweep step count should fit in u32")
+}
+
+/// Encodes the CDT convention that one sweep attempts one move per simplex.
+fn sweep_attempt_count(simplices: usize) -> usize {
+    let sweeps = usize::try_from(SWEEP_COUNT).expect("sweep count should fit in usize");
+    simplices
+        .checked_mul(sweeps)
+        .expect("benchmark sweep step count should not overflow")
+}
+
+/// Runs ten random-move sweeps and validates the evolved triangulation.
+fn run_random_move_sweeps(mut triangulation: CdtTriangulation2D, seed: u64) -> MoveStatistics {
+    let mut ergodics = ErgodicsSystem::with_seed(seed);
+
+    for _ in 0..SWEEP_COUNT {
+        let attempts = triangulation.face_count();
+        for _ in 0..attempts {
+            let result = ergodics.attempt_random_move(&mut triangulation);
+            black_box(result);
+        }
+    }
+
+    triangulation
+        .validate()
+        .expect("random sweep workload should preserve CDT invariants");
+    black_box(triangulation.face_count());
+    ergodics.stats
+}
+
+/// Runs a short Metropolis simulation sized to match the ten-sweep workload.
+fn run_metropolis_ten_sweeps(triangulation: CdtTriangulation2D, simplices: usize) -> usize {
+    let steps = ten_sweep_step_count(simplices);
+    let config = MetropolisConfig::new(1.0, steps, 0, steps).with_seed(BENCH_SEED);
+    let results = MetropolisAlgorithm::new(config, ActionConfig::default())
+        .run(triangulation)
+        .expect("ten-sweep Metropolis workload should run");
+    black_box(results.acceptance_rate());
+    results.steps().len()
+}
+
+/// Benchmarks deterministic construction for representative CDT topologies.
+fn bench_cdt_generation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cdt_generation_2d");
+
+    for &fixture in GENERATION_FIXTURES {
+        let prepared = prepare_fixture(fixture);
+        group.throughput(Throughput::Elements(usize_to_u64(prepared.vertices)));
+        group.bench_with_input(
+            BenchmarkId::new(fixture.name, prepared.vertices),
+            &fixture,
+            |b, &fixture| {
+                b.iter(|| {
+                    let triangulation = fixture.build();
+                    black_box(triangulation)
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmarks full CDT validation on already-generated triangulations.
+fn bench_cdt_validation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cdt_validation_2d");
+
+    for &fixture in GENERATION_FIXTURES {
+        let prepared = prepare_fixture(fixture);
+        group.throughput(Throughput::Elements(usize_to_u64(prepared.simplices)));
+        group.bench_with_input(
+            BenchmarkId::new(fixture.name, prepared.simplices),
+            &prepared.triangulation,
+            |b, triangulation| {
+                b.iter(|| {
+                    let result = triangulation.validate();
+                    black_box(result)
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmarks individual ergodic move attempts on a common fresh fixture.
+fn bench_cdt_move_attempts(c: &mut Criterion) {
+    let prepared = prepare_fixture(CdtFixture {
+        name: "open_strip_medium",
+        topology: TopologyFixture::OpenStrip,
+        vertices_per_slice: 20,
+        time_slices: 10,
+    });
+    let mut group = c.benchmark_group("cdt_move_attempts_2d");
+    group.throughput(Throughput::Elements(usize_to_u64(prepared.simplices)));
+
+    for move_type in [
+        MoveType::Move22,
+        MoveType::Move13Add,
+        MoveType::Move31Remove,
+        MoveType::EdgeFlip,
+    ] {
+        group.bench_with_input(
+            BenchmarkId::new(format!("{move_type:?}"), prepared.simplices),
+            &move_type,
+            |b, &move_type| {
+                b.iter_batched(
+                    || {
+                        (
+                            ErgodicsSystem::with_seed(BENCH_SEED),
+                            prepared.triangulation.clone(),
+                        )
+                    },
+                    |(mut ergodics, mut triangulation)| {
+                        let result = match move_type {
+                            MoveType::Move22 => ergodics.attempt_22_move(&mut triangulation),
+                            MoveType::Move13Add => ergodics.attempt_13_move(&mut triangulation),
+                            MoveType::Move31Remove => ergodics.attempt_31_move(&mut triangulation),
+                            MoveType::EdgeFlip => ergodics.attempt_edge_flip(&mut triangulation),
+                        };
+                        black_box(result)
+                    },
+                    BatchSize::LargeInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmarks short random-move evolution over tiny CI-sized triangulations.
+fn bench_cdt_random_move_sweeps(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cdt_random_move_sweeps_2d");
+
+    for &fixture in SWEEP_FIXTURES {
+        let prepared = prepare_fixture(fixture);
+        group.throughput(Throughput::Elements(usize_to_u64(sweep_attempt_count(
+            prepared.simplices,
+        ))));
+        group.bench_with_input(
+            BenchmarkId::new(prepared.fixture.name, prepared.simplices),
+            &prepared,
+            |b, prepared| {
+                b.iter_batched(
+                    || prepared.triangulation.clone(),
+                    |triangulation| {
+                        let stats = run_random_move_sweeps(triangulation, BENCH_SEED);
+                        black_box(stats.total_attempted())
+                    },
+                    BatchSize::LargeInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmarks the simulation driver with the same ten-sweep sizing contract.
+fn bench_cdt_metropolis_ten_sweeps(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cdt_metropolis_2d");
+
+    for &fixture in &SWEEP_FIXTURES[..2] {
+        let prepared = prepare_fixture(fixture);
+        group.throughput(Throughput::Elements(usize_to_u64(sweep_attempt_count(
+            prepared.simplices,
+        ))));
+        group.bench_with_input(
+            BenchmarkId::new(prepared.fixture.name, prepared.simplices),
+            &prepared,
+            |b, prepared| {
+                b.iter_batched(
+                    || prepared.triangulation.clone(),
+                    |triangulation| {
+                        let steps = run_metropolis_ten_sweeps(triangulation, prepared.simplices);
+                        black_box(steps)
+                    },
+                    BatchSize::LargeInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    name = benches;
+    config = Criterion::default()
+        .sample_size(10)
+        .measurement_time(Duration::from_secs(2))
+        .warm_up_time(Duration::from_secs(1));
+    targets =
+        bench_cdt_generation,
+        bench_cdt_validation,
+        bench_cdt_move_attempts,
+        bench_cdt_random_move_sweeps,
+        bench_cdt_metropolis_ten_sweeps
+);
+criterion_main!(benches);

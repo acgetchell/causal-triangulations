@@ -6,7 +6,7 @@
 # Use bash with strict error handling for all recipes
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-cargo_llvm_cov_version := "0.8.5"
+cargo_llvm_cov_version := "0.8.7"
 cargo_nextest_version := "0.9.136"
 
 # Common cargo-llvm-cov arguments for all coverage runs.
@@ -124,9 +124,13 @@ action-lint: _ensure-actionlint
 bench:
     cargo bench --workspace
 
+bench-ci:
+    cargo bench --profile perf --bench ci_performance_suite
+
 # Smoke-test benchmark harnesses with minimal samples; not for performance data.
 bench-smoke:
     cargo bench --workspace --bench cdt_benchmarks -- --sample-size 10 --measurement-time 1 --warm-up-time 1 --noplot
+    cargo bench --workspace --bench ci_performance_suite -- --sample-size 10 --measurement-time 1 --warm-up-time 1 --noplot
 
 # Compile benchmarks without running them, treating warnings as errors.
 # This catches bench/release-profile-only warnings (e.g. debug_assertions-gated unused vars)
@@ -145,20 +149,34 @@ build:
 build-release:
     cargo build --release
 
-# Changelog management (git-cliff + post-processing + archiving)
-changelog: _ensure-git-cliff python-sync
+# Changelog management (git-cliff + post-processing + archiving + rumdl formatting)
+changelog: _ensure-git-cliff _ensure-rumdl python-sync
     #!/usr/bin/env bash
     set -euo pipefail
     GIT_CLIFF_OFFLINE=true git-cliff -o CHANGELOG.md
     uv run postprocess-changelog
     uv run archive-changelog
+    archive_files=()
+    if [ -d docs/archive/changelog ]; then
+        while IFS= read -r -d '' file; do
+            archive_files+=("$file")
+        done < <(find docs/archive/changelog -name '*.md' -print0)
+    fi
+    rumdl fmt --silent CHANGELOG.md "${archive_files[@]}"
 
-changelog-unreleased version: _ensure-git-cliff python-sync
+changelog-unreleased version: _ensure-git-cliff _ensure-rumdl python-sync
     #!/usr/bin/env bash
     set -euo pipefail
     GIT_CLIFF_OFFLINE=true git-cliff --tag {{version}} -o CHANGELOG.md
     uv run postprocess-changelog
     uv run archive-changelog
+    archive_files=()
+    if [ -d docs/archive/changelog ]; then
+        while IFS= read -r -d '' file; do
+            archive_files+=("$file")
+        done < <(find docs/archive/changelog -name '*.md' -print0)
+    fi
+    rumdl fmt --silent CHANGELOG.md "${archive_files[@]}"
 
 tag version: python-sync
     uv run tag-release {{version}}
@@ -283,6 +301,7 @@ help-workflows:
     @echo ""
     @echo "Benchmark System:"
     @echo "  just bench              # Run all benchmarks"
+    @echo "  just bench-ci           # Run CI regression benchmarks with the perf profile"
     @echo "  just bench-smoke        # Smoke-test benchmark harnesses with minimal samples"
     @echo "  just bench-compile      # Compile benchmarks without running"
     @echo "  just bench-test-compile # Compile benches + release integration tests without running"

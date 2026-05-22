@@ -268,6 +268,57 @@ class TestCriterionParser:
         actual_order = [(b.dimension, b.points) for b in ci_suite_results]
         assert actual_order == expected_order
 
+    def test_process_point_directory_preserves_benchmark_id(self, tmp_path: Path) -> None:
+        estimates = tmp_path / "target" / "criterion" / "cdt_generation_2d" / "open_strip_medium" / "200" / "new" / "estimates.json"
+        estimates.parent.mkdir(parents=True)
+        estimates.write_text(
+            json.dumps(
+                {
+                    "mean": {
+                        "point_estimate": 25_000.0,
+                        "confidence_interval": {
+                            "lower_bound": 20_000.0,
+                            "upper_bound": 30_000.0,
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = CriterionParser._process_point_directory(estimates.parents[1], "2")
+
+        assert result is not None
+        assert result.benchmark_id == "cdt_generation_2d/open_strip_medium/200"
+        assert result.comparison_key == "cdt_generation_2d/open_strip_medium/200"
+
+    def test_find_criterion_results_keeps_same_size_workloads_separate(self, tmp_path: Path) -> None:
+        criterion_dir = tmp_path / "target" / "criterion" / "cdt_move_attempts_2d"
+        for workload, mean in [("Move22", 10_000.0), ("EdgeFlip", 20_000.0)]:
+            estimates = criterion_dir / workload / "342" / "new" / "estimates.json"
+            estimates.parent.mkdir(parents=True)
+            estimates.write_text(
+                json.dumps(
+                    {
+                        "mean": {
+                            "point_estimate": mean,
+                            "confidence_interval": {
+                                "lower_bound": mean * 0.9,
+                                "upper_bound": mean * 1.1,
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+        results = CriterionParser.find_criterion_results(tmp_path / "target")
+
+        assert [result.benchmark_id for result in results] == [
+            "cdt_move_attempts_2d/EdgeFlip/342",
+            "cdt_move_attempts_2d/Move22/342",
+        ]
+
 
 class TestPerformanceComparator:
     """Test cases for PerformanceComparator class."""
