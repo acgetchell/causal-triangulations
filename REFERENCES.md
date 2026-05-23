@@ -104,6 +104,9 @@ These references provide the algorithmic foundations for Monte Carlo simulations
 - Israel, N. S., and Lindner, J. F. "Quantum gravity on a laptop: 1+1 Dimensional Causal Dynamical Triangulation simulation." _Results in Physics_ 2 (2012):
   164-169. DOI: [10.1016/j.rinp.2012.10.001](https://doi.org/10.1016/j.rinp.2012.10.001)
 
+- Getchell, Adam. "CDT-plusplus: Causal Dynamical Triangulations in C++." Repository: <https://github.com/acgetchell/CDT-plusplus>. A Zenodo DOI will be added
+  after a formal release.
+
 ### Ergodic Moves and Alexander Moves
 
 - Alexander, J. W. "The combinatorial theory of complexes." _Annals of Mathematics_ 31, no. 2 (1930): 292-320. DOI:

@@ -5,9 +5,10 @@
 //! This module provides CDT-specific triangulation data structures that work
 //! with any geometry backend implementing the trait interfaces.
 
+use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::{Foliation, FoliationError};
 use crate::config::CdtTopology;
-use crate::errors::{CdtError, CdtResult};
+use crate::errors::{CdtError, CdtResult, TriangulationMetadataField};
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::traits::TriangulationQuery;
 use serde::de::Error as DeError;
@@ -32,7 +33,7 @@ pub struct CdtTriangulation<B> {
     foliation_synced_at_modification: Option<u64>,
 }
 
-/// CDT-specific metadata
+/// Metadata describing the CDT foliation, topology, and simulation history.
 #[derive(Debug, Clone)]
 pub struct CdtMetadata {
     /// Number of time slices in the CDT foliation
@@ -47,7 +48,9 @@ pub struct CdtMetadata {
     pub last_modified: Instant,
     /// Count of modifications made to the triangulation
     pub modification_count: u64,
-    /// History of simulation events
+    /// Ordered simulation event history recorded for this triangulation.
+    ///
+    /// Move events identify proposals and acceptances with [`MoveType`].
     pub simulation_history: Vec<SimulationEvent>,
 }
 
@@ -64,37 +67,61 @@ struct CachedValue<T> {
     modification_count: u64,
 }
 
-/// Events in simulation history
+/// Event recorded in a CDT simulation history.
+///
+/// The history is stored on [`CdtMetadata::simulation_history`]. Move events
+/// use [`MoveType`] to keep history, checkpoint serialization, and move
+/// statistics aligned with the crate's supported ergodic move set.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::moves::MoveType;
+/// use causal_triangulations::prelude::triangulation::SimulationEvent;
+///
+/// let event = SimulationEvent::MoveAttempted {
+///     move_type: MoveType::Move13Add,
+///     step: 7,
+/// };
+///
+/// assert!(matches!(
+///     event,
+///     SimulationEvent::MoveAttempted {
+///         move_type: MoveType::Move13Add,
+///         step: 7,
+///     }
+/// ));
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SimulationEvent {
-    /// Triangulation was created
+    /// Triangulation creation event.
     Created {
-        /// Initial number of vertices
+        /// Initial number of vertices.
         vertex_count: usize,
-        /// Number of time slices
+        /// Number of time slices.
         time_slices: u32,
     },
-    /// An ergodic move was attempted
+    /// Ergodic move proposal event.
     MoveAttempted {
-        /// Type of move attempted
-        move_type: String,
-        /// Simulation step number
+        /// Type of move attempted.
+        move_type: MoveType,
+        /// Simulation step number.
         step: u64,
     },
-    /// An ergodic move was accepted
+    /// Accepted ergodic move event.
     MoveAccepted {
-        /// Type of move accepted
-        move_type: String,
-        /// Simulation step number
+        /// Type of move accepted.
+        move_type: MoveType,
+        /// Simulation step number.
         step: u64,
-        /// Change in action from this move
+        /// Change in action from this move.
         action_change: f64,
     },
-    /// A measurement was taken
+    /// Observable measurement event.
     MeasurementTaken {
-        /// Simulation step number
+        /// Simulation step number.
         step: u64,
-        /// Action value measured
+        /// Action value measured.
         action: f64,
     },
 }
@@ -263,7 +290,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// ```
     ///
     /// ```rust
-    /// use causal_triangulations::prelude::errors::CdtError;
+    /// use causal_triangulations::prelude::errors::{CdtError, TriangulationMetadataField};
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::triangulation::*;
     ///
@@ -285,7 +312,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///         topology,
     ///         provided_value,
     ///         expected,
-    ///     } if field == "timeslices"
+    ///     } if field == TriangulationMetadataField::Timeslices
     ///         && topology == CdtTopology::Toroidal
     ///         && provided_value == "2"
     ///         && expected == "≥ 3"
@@ -293,7 +320,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// ```
     ///
     /// ```rust
-    /// use causal_triangulations::prelude::errors::CdtError;
+    /// use causal_triangulations::prelude::errors::{CdtError, TriangulationMetadataField};
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::triangulation::*;
     ///
@@ -366,7 +393,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     fn check_time_slices(topology: CdtTopology, time_slices: u32) -> CdtResult<()> {
         if time_slices == 0 {
             return Err(CdtError::InvalidTriangulationMetadata {
-                field: "timeslices".to_string(),
+                field: TriangulationMetadataField::Timeslices,
                 topology,
                 provided_value: "0".to_string(),
                 expected: "≥ 1".to_string(),
@@ -375,7 +402,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
 
         if matches!(topology, CdtTopology::Toroidal) && time_slices < 3 {
             return Err(CdtError::InvalidTriangulationMetadata {
-                field: "timeslices".to_string(),
+                field: TriangulationMetadataField::Timeslices,
                 topology,
                 provided_value: time_slices.to_string(),
                 expected: "≥ 3".to_string(),
@@ -392,7 +419,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         let backend_dimension = self.geometry.dimension();
         if usize::from(self.metadata.dimension) != backend_dimension {
             return Err(CdtError::InvalidTriangulationMetadata {
-                field: "dimension".to_string(),
+                field: TriangulationMetadataField::Dimension,
                 topology: self.metadata.topology,
                 provided_value: self.metadata.dimension.to_string(),
                 expected: format!("backend dimension ({backend_dimension})"),
@@ -669,7 +696,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::errors::CdtError;
+    /// use causal_triangulations::prelude::errors::{CdtError, TriangulationMetadataField};
     /// use causal_triangulations::prelude::triangulation::{CdtTopology, CdtTriangulation};
     ///
     /// let mut tri = CdtTriangulation::from_toroidal_cdt(4, 3)
@@ -683,7 +710,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///         topology,
     ///         provided_value,
     ///         expected,
-    ///     } if field == "timeslices"
+    ///     } if field == TriangulationMetadataField::Timeslices
     ///         && topology == CdtTopology::Toroidal
     ///         && provided_value == "2"
     ///         && expected == "≥ 3"
@@ -726,7 +753,7 @@ mod tests {
     use super::*;
     use crate::geometry::generators::build_delaunay2_with_data;
     use serde_json::error::Category;
-    use serde_json::{from_str, to_string};
+    use serde_json::{from_str, from_value, json, to_string, to_value};
     use std::num::NonZeroUsize;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -782,7 +809,7 @@ mod tests {
                 topology,
                 ref provided_value,
                 ref expected,
-            }) if field == "timeslices"
+            }) if *field == TriangulationMetadataField::Timeslices
                 && topology == CdtTopology::OpenBoundary
                 && provided_value == "0"
                 && expected == "≥ 1"
@@ -801,7 +828,7 @@ mod tests {
                 topology,
                 ref provided_value,
                 ref expected,
-            }) if field == "dimension"
+            }) if *field == TriangulationMetadataField::Dimension
                 && topology == CdtTopology::OpenBoundary
                 && provided_value == "3"
                 && expected == "backend dimension (2)"
@@ -821,7 +848,7 @@ mod tests {
                 ref provided_value,
                 ref expected,
                 ..
-            }) if field == "dimension"
+            }) if *field == TriangulationMetadataField::Dimension
                 && provided_value == "3"
                 && expected == "backend dimension (2)"
         ));
@@ -1007,12 +1034,12 @@ mod tests {
         thread::sleep(Duration::from_millis(5));
 
         triangulation.record_event(SimulationEvent::MoveAttempted {
-            move_type: "test_move".to_string(),
+            move_type: MoveType::Move22,
             step: 1,
         });
 
         triangulation.record_event(SimulationEvent::MoveAccepted {
-            move_type: "test_move".to_string(),
+            move_type: MoveType::Move22,
             step: 1,
             action_change: -0.5,
         });
@@ -1033,7 +1060,7 @@ mod tests {
         let history = &triangulation.metadata().simulation_history;
         match &history[initial_history_len] {
             SimulationEvent::MoveAttempted { move_type, step } => {
-                assert_eq!(move_type, "test_move");
+                assert_eq!(*move_type, MoveType::Move22);
                 assert_eq!(*step, 1);
             }
             _ => panic!("Expected MoveAttempted event"),
@@ -1045,7 +1072,7 @@ mod tests {
                 step,
                 action_change,
             } => {
-                assert_eq!(move_type, "test_move");
+                assert_eq!(*move_type, MoveType::Move22);
                 assert_eq!(*step, 1);
                 approx::assert_relative_eq!(*action_change, -0.5);
             }
@@ -1090,7 +1117,7 @@ mod tests {
         let initial_slice_sizes = tri.slice_sizes().to_vec();
 
         tri.record_event(SimulationEvent::MoveAttempted {
-            move_type: "history_only".to_string(),
+            move_type: MoveType::EdgeFlip,
             step: 7,
         });
 
@@ -1167,7 +1194,7 @@ mod tests {
                 ref provided_value,
                 ref expected,
                 ..
-            }) if field == "timeslices" && provided_value == "0" && expected == "≥ 1"
+            }) if *field == TriangulationMetadataField::Timeslices && provided_value == "0" && expected == "≥ 1"
         ));
     }
 
@@ -1271,11 +1298,11 @@ mod tests {
                 time_slices: 2,
             },
             SimulationEvent::MoveAttempted {
-                move_type: "flip".to_string(),
+                move_type: MoveType::EdgeFlip,
                 step: 1,
             },
             SimulationEvent::MoveAccepted {
-                move_type: "flip".to_string(),
+                move_type: MoveType::EdgeFlip,
                 step: 1,
                 action_change: 0.5,
             },
@@ -1290,6 +1317,53 @@ mod tests {
             // Should not panic and should contain meaningful content
             assert!(!debug_str.is_empty());
         }
+    }
+
+    #[test]
+    fn simulation_event_move_type_serializes_as_enum_variant() {
+        let event = SimulationEvent::MoveAccepted {
+            move_type: MoveType::Move31Remove,
+            step: 9,
+            action_change: -1.25,
+        };
+
+        let value = to_value(&event).expect("event should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "MoveAccepted": {
+                    "move_type": "Move31Remove",
+                    "step": 9,
+                    "action_change": -1.25
+                }
+            })
+        );
+
+        let restored: SimulationEvent =
+            from_value(value).expect("typed move event should deserialize");
+        match restored {
+            SimulationEvent::MoveAccepted {
+                move_type,
+                step,
+                action_change,
+            } => {
+                assert_eq!(move_type, MoveType::Move31Remove);
+                assert_eq!(step, 9);
+                approx::assert_relative_eq!(action_change, -1.25);
+            }
+            other => panic!("expected MoveAccepted event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn simulation_event_rejects_free_form_move_type_strings() {
+        let invalid_json = r#"{"MoveAttempted":{"move_type":"test_move","step":1}}"#;
+
+        let error = from_str::<SimulationEvent>(invalid_json)
+            .expect_err("move history should reject unsupported move strings");
+
+        assert_checkpoint_data_error(&error, &["unknown variant `test_move`", "Move22"]);
     }
 
     #[test]
@@ -1389,7 +1463,7 @@ mod tests {
                 topology,
                 ref provided_value,
                 ref expected,
-            }) if field == "timeslices"
+            }) if *field == TriangulationMetadataField::Timeslices
                 && topology == CdtTopology::Toroidal
                 && provided_value == "2"
                 && expected == "≥ 3"
@@ -1413,7 +1487,7 @@ mod tests {
                 topology,
                 ref provided_value,
                 ref expected,
-            }) if field == "timeslices"
+            }) if *field == TriangulationMetadataField::Timeslices
                 && topology == CdtTopology::Toroidal
                 && provided_value == "2"
                 && expected == "≥ 3"
@@ -1495,7 +1569,7 @@ mod tests {
         let mut triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay CDT strip should build");
         triangulation.record_event(SimulationEvent::MoveAttempted {
-            move_type: "Move22".to_string(),
+            move_type: MoveType::Move22,
             step: 1,
         });
         triangulation.record_event(SimulationEvent::MeasurementTaken {
@@ -1768,7 +1842,7 @@ mod prop_tests {
             prop_assert!(initial_history_len >= 1, "Should have at least creation event");
 
             triangulation.record_event(SimulationEvent::MoveAttempted {
-                move_type: "test".to_string(),
+                move_type: MoveType::Move22,
                 step: 1,
             });
             triangulation.record_event(SimulationEvent::MeasurementTaken {

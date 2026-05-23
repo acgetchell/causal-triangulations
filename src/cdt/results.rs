@@ -8,7 +8,7 @@
 
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::MoveStatistics;
-use crate::cdt::metropolis::{MetropolisConfig, MonteCarloStep};
+use crate::cdt::metropolis::{MetropolisConfig, MonteCarloStep, ProposalStatistics};
 use crate::cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
 use crate::config::{CdtConfig, CdtTopology};
 use crate::errors::{CdtError, CdtResult, OutputFormat};
@@ -120,6 +120,9 @@ pub struct SimulationResultsBackend {
     action_config: ActionConfig,
     /// Metropolis-level ergodic move statistics
     move_stats: MoveStatistics,
+    /// Concrete proposal-kernel telemetry
+    #[serde(default)]
+    proposal_stats: ProposalStatistics,
     /// All Monte Carlo steps performed
     steps: Vec<MonteCarloStep>,
     /// Measurements taken during simulation
@@ -135,25 +138,43 @@ struct SimulationResultsBackendWire {
     config: MetropolisConfig,
     action_config: ActionConfig,
     move_stats: MoveStatistics,
+    #[serde(default)]
+    proposal_stats: ProposalStatistics,
     steps: Vec<MonteCarloStep>,
     measurements: Vec<Measurement>,
     elapsed_time: Duration,
     triangulation: CdtTriangulation2D,
 }
 
+/// Validated components for constructing a simulation result snapshot.
+pub(crate) struct SimulationResultsParts {
+    pub(crate) config: MetropolisConfig,
+    pub(crate) action_config: ActionConfig,
+    pub(crate) move_stats: MoveStatistics,
+    pub(crate) proposal_stats: ProposalStatistics,
+    pub(crate) steps: Vec<MonteCarloStep>,
+    pub(crate) measurements: Vec<Measurement>,
+    pub(crate) elapsed_time: Duration,
+    pub(crate) triangulation: CdtTriangulation2D,
+}
+
 impl TryFrom<SimulationResultsBackendWire> for SimulationResultsBackend {
     type Error = CdtError;
 
     fn try_from(wire: SimulationResultsBackendWire) -> Result<Self, Self::Error> {
-        Self::new(
-            wire.config,
-            wire.action_config,
-            wire.move_stats,
-            wire.steps,
-            wire.measurements,
-            wire.elapsed_time,
-            wire.triangulation,
-        )
+        wire.config.validate()?;
+        wire.action_config.validate()?;
+        wire.triangulation.validate_evolved_cdt()?;
+        Ok(Self::from_parts(SimulationResultsParts {
+            config: wire.config,
+            action_config: wire.action_config,
+            move_stats: wire.move_stats,
+            proposal_stats: wire.proposal_stats,
+            steps: wire.steps,
+            measurements: wire.measurements,
+            elapsed_time: wire.elapsed_time,
+            triangulation: wire.triangulation,
+        }))
     }
 }
 
@@ -174,6 +195,7 @@ struct SimulationSummary<'a> {
     metropolis_config: &'a MetropolisConfig,
     action_config: &'a ActionConfig,
     move_stats: &'a MoveStatistics,
+    proposal_stats: &'a ProposalStatistics,
     aggregate: AggregateSummary,
     final_triangulation: TriangulationSummary,
     steps: &'a [MonteCarloStep],
@@ -208,6 +230,10 @@ impl SimulationResultsBackend {
     /// use the same data shape but avoid revalidating immediately after the run has
     /// already checked its final CDT invariants.
     ///
+    /// The supplied [`MoveStatistics`] and [`ProposalStatistics`] are preserved
+    /// verbatim so serialized or externally reconstructed telemetry keeps the
+    /// same wire shape as results produced by the Metropolis runner.
+    ///
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if `config` is not a
@@ -226,7 +252,8 @@ impl SimulationResultsBackend {
     /// ```
     /// use causal_triangulations::prelude::moves::MoveStatistics;
     /// use causal_triangulations::prelude::simulation::{
-    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisConfig, ProposalStatistics,
+    ///     SimulationResultsBackend,
     /// };
     /// use std::time::Duration;
     ///
@@ -236,6 +263,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         MoveStatistics::new(),
+    ///         ProposalStatistics::new(),
     ///         vec![],
     ///         vec![],
     ///         Duration::from_millis(0),
@@ -245,10 +273,15 @@ impl SimulationResultsBackend {
     ///     Ok(())
     /// }
     /// ```
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "public constructor mirrors the serialized simulation result components"
+    )]
     pub fn new(
         config: MetropolisConfig,
         action_config: ActionConfig,
         move_stats: MoveStatistics,
+        proposal_stats: ProposalStatistics,
         steps: Vec<MonteCarloStep>,
         measurements: Vec<Measurement>,
         elapsed_time: Duration,
@@ -257,35 +290,29 @@ impl SimulationResultsBackend {
         config.validate()?;
         action_config.validate()?;
         triangulation.validate_evolved_cdt()?;
-        Ok(Self::from_parts(
+        Ok(Self::from_parts(SimulationResultsParts {
             config,
             action_config,
             move_stats,
+            proposal_stats,
             steps,
             measurements,
             elapsed_time,
             triangulation,
-        ))
+        }))
     }
 
     /// Creates a result snapshot from components that were already validated by this crate.
-    pub(crate) const fn from_parts(
-        config: MetropolisConfig,
-        action_config: ActionConfig,
-        move_stats: MoveStatistics,
-        steps: Vec<MonteCarloStep>,
-        measurements: Vec<Measurement>,
-        elapsed_time: Duration,
-        triangulation: CdtTriangulation2D,
-    ) -> Self {
+    pub(crate) fn from_parts(parts: SimulationResultsParts) -> Self {
         Self {
-            config,
-            action_config,
-            move_stats,
-            steps,
-            measurements,
-            elapsed_time,
-            triangulation,
+            config: parts.config,
+            action_config: parts.action_config,
+            move_stats: parts.move_stats,
+            proposal_stats: parts.proposal_stats,
+            steps: parts.steps,
+            measurements: parts.measurements,
+            elapsed_time: parts.elapsed_time,
+            triangulation: parts.triangulation,
         }
     }
 
@@ -306,6 +333,7 @@ impl SimulationResultsBackend {
     ///         config.clone(),
     ///         ActionConfig::default(),
     ///         MoveStatistics::new(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::ZERO,
@@ -337,6 +365,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         action_config.clone(),
     ///         MoveStatistics::new(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::ZERO,
@@ -368,6 +397,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         move_stats,
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::ZERO,
@@ -380,6 +410,31 @@ impl SimulationResultsBackend {
     #[must_use]
     pub const fn move_stats(&self) -> &MoveStatistics {
         &self.move_stats
+    }
+
+    /// Returns concrete proposal-kernel telemetry.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let results = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1).with_seed(13),
+    ///         ActionConfig::default(),
+    ///     )
+    ///     .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    ///
+    ///     assert_eq!(results.proposal_stats().move_family_proposals, 1);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn proposal_stats(&self) -> &ProposalStatistics {
+        &self.proposal_stats
     }
 
     /// Returns recorded Monte Carlo step telemetry.
@@ -398,6 +453,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         MoveStatistics::new(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::ZERO,
@@ -428,6 +484,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         MoveStatistics::new(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::ZERO,
@@ -459,6 +516,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         MoveStatistics::new(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         elapsed,
@@ -489,6 +547,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         MoveStatistics::new(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::ZERO,
@@ -520,6 +579,7 @@ impl SimulationResultsBackend {
     ///     let results = SimulationResultsBackend::new(
     ///         config,
     ///         ActionConfig::default(),
+    ///         Default::default(),
     ///         Default::default(),
     ///         vec![],
     ///         vec![],
@@ -566,6 +626,7 @@ impl SimulationResultsBackend {
     ///     let results = SimulationResultsBackend::new(
     ///         config,
     ///         ActionConfig::default(),
+    ///         Default::default(),
     ///         Default::default(),
     ///         vec![],
     ///         vec![],
@@ -614,6 +675,7 @@ impl SimulationResultsBackend {
     ///     let results = SimulationResultsBackend::new(
     ///         config,
     ///         ActionConfig::default(),
+    ///         Default::default(),
     ///         Default::default(),
     ///         vec![],
     ///         vec![
@@ -679,6 +741,7 @@ impl SimulationResultsBackend {
     ///     let results = SimulationResultsBackend::new(
     ///         config,
     ///         ActionConfig::default(),
+    ///         Default::default(),
     ///         Default::default(),
     ///         vec![],
     ///         vec![
@@ -748,6 +811,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         Default::default(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::from_millis(0),
@@ -788,6 +852,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         Default::default(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::from_millis(0),
@@ -826,6 +891,7 @@ impl SimulationResultsBackend {
     ///     let results = SimulationResultsBackend::new(
     ///         config,
     ///         ActionConfig::default(),
+    ///         Default::default(),
     ///         Default::default(),
     ///         vec![],
     ///         vec![],
@@ -955,6 +1021,7 @@ impl SimulationResultsBackend {
             metropolis_config: &self.config,
             action_config: &self.action_config,
             move_stats: &self.move_stats,
+            proposal_stats: &self.proposal_stats,
             aggregate: AggregateSummary {
                 acceptance_rate: self.acceptance_rate(),
                 average_action: mean_measurement_action(self.equilibrium_measurements_iter()),
@@ -1028,9 +1095,10 @@ mod tests {
     use crate::cdt::ergodic_moves::MoveType;
     use crate::cdt::foliation::FoliationError;
     use crate::cdt::triangulation::CdtTriangulation;
+    use crate::errors::ConfigurationSetting;
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
-    use serde_json::{Value, from_str};
+    use serde_json::{Value, from_str, to_value};
     use std::env;
     use std::fs;
     use std::path::PathBuf;
@@ -1048,6 +1116,7 @@ mod tests {
             config,
             action_config: ActionConfig::default(),
             move_stats: MoveStatistics::new(),
+            proposal_stats: ProposalStatistics::new(),
             steps,
             measurements,
             elapsed_time: Duration::from_millis(100),
@@ -1106,6 +1175,17 @@ mod tests {
         let mut move_stats = MoveStatistics::new();
         move_stats.record_attempt(MoveType::Move22);
         move_stats.record_success(MoveType::Move22);
+        let proposal_stats = ProposalStatistics {
+            move_family_proposals: 2,
+            observed_forward_sites: 7,
+            no_site_proposals: 1,
+            site_causality_rejections: 0,
+            site_geometric_rejections: 0,
+            site_backend_rejections: 0,
+            metropolis_rejections: 0,
+            accepted_transitions: 1,
+            hard_failures: 0,
+        };
         let step = MonteCarloStep {
             step: 2,
             move_type: MoveType::Move22,
@@ -1123,6 +1203,7 @@ mod tests {
             config.clone(),
             action_config.clone(),
             move_stats,
+            proposal_stats.clone(),
             vec![step],
             vec![measurement],
             elapsed,
@@ -1134,6 +1215,7 @@ mod tests {
         assert_eq!(results.action_config(), &action_config);
         assert_eq!(results.move_stats().total_attempted(), 1);
         assert_eq!(results.move_stats().total_accepted(), 1);
+        assert_eq!(results.proposal_stats(), &proposal_stats);
         assert_eq!(results.steps()[0].step, 2);
         assert_eq!(results.measurements()[0].volume_profile, vec![4, 4, 4]);
         assert_eq!(results.elapsed_time(), elapsed);
@@ -1149,6 +1231,7 @@ mod tests {
             MetropolisConfig::new(0.0, 1, 0, 1),
             ActionConfig::default(),
             MoveStatistics::new(),
+            ProposalStatistics::new(),
             vec![],
             vec![],
             Duration::ZERO,
@@ -1162,7 +1245,7 @@ mod tests {
                 ref setting,
                 ref provided_value,
                 ref expected,
-            } if setting == "temperature"
+            } if *setting == ConfigurationSetting::Temperature
                 && provided_value == "0"
                 && expected == "finite and positive"
         ));
@@ -1177,6 +1260,7 @@ mod tests {
             MetropolisConfig::new(1.0, 1, 0, 1),
             ActionConfig::new(f64::NAN, 0.0, 0.0),
             MoveStatistics::new(),
+            ProposalStatistics::new(),
             vec![],
             vec![],
             Duration::ZERO,
@@ -1190,7 +1274,7 @@ mod tests {
                 ref setting,
                 ref provided_value,
                 ref expected,
-            } if setting == "coupling_0" && provided_value == "NaN" && expected == "finite"
+            } if *setting == ConfigurationSetting::Coupling0 && provided_value == "NaN" && expected == "finite"
         ));
     }
 
@@ -1215,6 +1299,7 @@ mod tests {
             MetropolisConfig::new(1.0, 1, 0, 1),
             ActionConfig::default(),
             MoveStatistics::new(),
+            ProposalStatistics::new(),
             vec![],
             vec![],
             Duration::ZERO,
@@ -1236,6 +1321,7 @@ mod tests {
             MetropolisConfig::new(1.0, 1, 0, 1),
             ActionConfig::default(),
             MoveStatistics::new(),
+            ProposalStatistics::new(),
             vec![],
             vec![],
             Duration::ZERO,
@@ -1260,6 +1346,37 @@ mod tests {
     }
 
     #[test]
+    fn deserialization_defaults_missing_proposal_stats() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let results = SimulationResultsBackend::new(
+            MetropolisConfig::new(1.0, 1, 0, 1),
+            ActionConfig::default(),
+            MoveStatistics::new(),
+            ProposalStatistics::new(),
+            vec![],
+            vec![],
+            Duration::ZERO,
+            triangulation,
+        )
+        .expect("valid result components should construct");
+        let mut payload = to_value(&results).expect("results should serialize");
+        payload
+            .as_object_mut()
+            .expect("results payload should be an object")
+            .remove("proposal_stats");
+
+        let restored: SimulationResultsBackend =
+            from_str(&payload.to_string()).expect("legacy results should deserialize");
+
+        assert_eq!(restored.proposal_stats(), &ProposalStatistics::new());
+        restored
+            .triangulation()
+            .validate()
+            .expect("legacy results should still validate triangulation");
+    }
+
+    #[test]
     fn result_wire_validation_rejects_invalid_metropolis_config() {
         let triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
@@ -1267,6 +1384,7 @@ mod tests {
             config: MetropolisConfig::new(0.0, 1, 0, 1),
             action_config: ActionConfig::default(),
             move_stats: MoveStatistics::new(),
+            proposal_stats: ProposalStatistics::new(),
             steps: vec![],
             measurements: vec![],
             elapsed_time: Duration::ZERO,
@@ -1280,7 +1398,7 @@ mod tests {
                 ref setting,
                 ref provided_value,
                 ref expected,
-            } if setting == "temperature" && provided_value == "0" && expected == "finite and positive"
+            } if *setting == ConfigurationSetting::Temperature && provided_value == "0" && expected == "finite and positive"
         ));
     }
 
@@ -1292,6 +1410,7 @@ mod tests {
             config: MetropolisConfig::new(1.0, 1, 0, 1),
             action_config: ActionConfig::new(f64::NAN, 0.0, 0.0),
             move_stats: MoveStatistics::new(),
+            proposal_stats: ProposalStatistics::new(),
             steps: vec![],
             measurements: vec![],
             elapsed_time: Duration::ZERO,
@@ -1305,7 +1424,7 @@ mod tests {
                 ref setting,
                 ref provided_value,
                 ref expected,
-            } if setting == "coupling_0" && provided_value == "NaN" && expected == "finite"
+            } if *setting == ConfigurationSetting::Coupling0 && provided_value == "NaN" && expected == "finite"
         ));
     }
 

@@ -26,7 +26,9 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 - `--vertices-per-slice <N>`: Vertices on each initial spatial slice. Prefer this for regular CDT initial data; the binary computes
   `total vertices = vertices-per-slice × timeslices`.
 - `--vertices <N>`: Total initial vertex count. Use this only when the total is already known; it must divide evenly by `--timeslices`.
-- `--timeslices <N>`: Number of time slices in the CDT foliation (minimum 1)
+- `--volume-profile <N0,N1,...>`: Explicit vertices per initial spatial slice for nonuniform CDT initial data. The profile length defines `--timeslices` when
+  `--timeslices` is omitted.
+- `--timeslices <N>`: Number of time slices in the CDT foliation (required unless `--volume-profile` is supplied)
 
 ### Optional Simulation Parameters
 
@@ -76,7 +78,20 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 **Use Case:** Study phase transitions or scaling behavior
 
-### 3. High-Temperature Simulation
+### 3. Nonuniform Initial Volume Profile
+
+```bash
+./target/release/cdt \
+  --volume-profile 4,6,5 \
+  --steps 100 \
+  --thermalization-steps 10 \
+  --measurement-frequency 10 \
+  --simulate
+```
+
+**Use Case:** Start from explicit nonuniform spatial volumes `N(t)` instead of the regular equal-slice fixture.
+
+### 4. High-Temperature Simulation
 
 ```bash
 # High temperature configuration
@@ -90,7 +105,7 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 **Use Case:** Explore classical geometry limit
 
-### 4. Low-Temperature Simulation
+### 5. Low-Temperature Simulation
 
 ```bash
 # Low temperature configuration
@@ -105,7 +120,7 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 **Use Case:** Study quantum fluctuations and crumpled phase
 
-### 5. Custom Physics Parameters
+### 6. Custom Physics Parameters
 
 ```bash
 # Modified coupling constants
@@ -120,7 +135,7 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 **Use Case:** Explore modified gravity or different action formulations
 
-### 6. Triangulation-Only Mode
+### 7. Triangulation-Only Mode
 
 ```bash
 # Generate triangulation without running Monte Carlo simulation

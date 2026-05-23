@@ -32,6 +32,202 @@ impl fmt::Display for DelaunayValidationLevel {
     }
 }
 
+/// Identifies the top-level or simulation configuration setting that failed validation.
+///
+/// Use this with [`CdtError::InvalidConfiguration`] and
+/// [`CdtError::InvalidSimulationConfiguration`] to inspect invalid settings
+/// without parsing rendered error messages.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::errors::{CdtError, ConfigurationSetting};
+/// use causal_triangulations::prelude::CdtConfig;
+///
+/// let config = CdtConfig {
+///     vertices: 2,
+///     ..CdtConfig::new(36, 3)
+/// };
+/// let err = config.validate().expect_err("vertices below the minimum are invalid");
+///
+/// assert!(matches!(
+///     err,
+///     CdtError::InvalidConfiguration {
+///         setting: ConfigurationSetting::Vertices,
+///         ..
+///     }
+/// ));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ConfigurationSetting {
+    /// CDT dimensionality setting.
+    Dimension,
+    /// Total vertex count setting.
+    Vertices,
+    /// Number of time slices setting.
+    Timeslices,
+    /// Metropolis temperature setting.
+    Temperature,
+    /// Number of Metropolis steps setting.
+    Steps,
+    /// Number of thermalization steps setting.
+    ThermalizationSteps,
+    /// Measurement cadence setting.
+    MeasurementFrequency,
+    /// Combined measurement schedule constraint.
+    MeasurementSchedule,
+    /// Bare inverse Newton coupling setting.
+    Coupling0,
+    /// Curvature coupling setting.
+    Coupling2,
+    /// Cosmological constant setting.
+    CosmologicalConstant,
+    /// Explicit per-slice volume profile setting.
+    VolumeProfile,
+}
+
+impl fmt::Display for ConfigurationSetting {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Dimension => formatter.write_str("dimension"),
+            Self::Vertices => formatter.write_str("vertices"),
+            Self::Timeslices => formatter.write_str("timeslices"),
+            Self::Temperature => formatter.write_str("temperature"),
+            Self::Steps => formatter.write_str("steps"),
+            Self::ThermalizationSteps => formatter.write_str("thermalization_steps"),
+            Self::MeasurementFrequency => formatter.write_str("measurement_frequency"),
+            Self::MeasurementSchedule => formatter.write_str("measurement schedule"),
+            Self::Coupling0 => formatter.write_str("coupling_0"),
+            Self::Coupling2 => formatter.write_str("coupling_2"),
+            Self::CosmologicalConstant => formatter.write_str("cosmological_constant"),
+            Self::VolumeProfile => formatter.write_str("volume_profile"),
+        }
+    }
+}
+
+/// Identifies the issue category for invalid triangulation generation parameters.
+///
+/// Use this with [`CdtError::InvalidGenerationParameters`] when a constructor
+/// rejects input before attempting triangulation.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::errors::{CdtError, GenerationParameterIssue};
+/// use causal_triangulations::prelude::triangulation::CdtTriangulation;
+///
+/// let err = CdtTriangulation::from_random_points(2, 2, 2)
+///     .expect_err("fewer than three vertices cannot form a triangulation");
+///
+/// assert!(matches!(
+///     err,
+///     CdtError::InvalidGenerationParameters {
+///         issue: GenerationParameterIssue::InsufficientVertexCount,
+///         ..
+///     }
+/// ));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum GenerationParameterIssue {
+    /// Coordinate range has invalid ordering or bounds.
+    InvalidCoordinateRange,
+    /// Toroidal domain extents are invalid.
+    InvalidToroidalDomain,
+    /// A supplied vertex coordinate is NaN or infinite.
+    NonFiniteVertexCoordinate,
+    /// Total vertex count is below the constructor minimum.
+    InsufficientVertexCount,
+    /// Per-slice vertex count is below the constructor minimum.
+    InsufficientVerticesPerSlice,
+    /// Number of time slices is below the topology minimum.
+    InsufficientNumberOfTimeSlices,
+    /// A slice count was zero where at least one slice is required.
+    NonPositiveSliceCount,
+    /// Explicit volume profile has no slices.
+    EmptyVolumeProfile,
+    /// Explicit volume profile length cannot fit in supported counters.
+    VolumeProfileLengthOverflow,
+    /// A volume-profile slice has too few vertices.
+    InsufficientVerticesInVolumeProfileSlice,
+    /// Total vertex count cannot fit in supported counters.
+    VertexCountOverflow,
+    /// Simplex count cannot fit in supported counters.
+    SimplexCountOverflow,
+}
+
+impl fmt::Display for GenerationParameterIssue {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidCoordinateRange => formatter.write_str("Invalid coordinate range"),
+            Self::InvalidToroidalDomain => formatter.write_str("Invalid toroidal domain"),
+            Self::NonFiniteVertexCoordinate => formatter.write_str("Non-finite vertex coordinate"),
+            Self::InsufficientVertexCount => formatter.write_str("Insufficient vertex count"),
+            Self::InsufficientVerticesPerSlice => {
+                formatter.write_str("Insufficient vertices per slice")
+            }
+            Self::InsufficientNumberOfTimeSlices => {
+                formatter.write_str("Insufficient number of time slices")
+            }
+            Self::NonPositiveSliceCount => formatter.write_str("Number of slices must be positive"),
+            Self::EmptyVolumeProfile => formatter.write_str("Empty volume profile"),
+            Self::VolumeProfileLengthOverflow => {
+                formatter.write_str("Volume profile length overflow")
+            }
+            Self::InsufficientVerticesInVolumeProfileSlice => {
+                formatter.write_str("Insufficient vertices in volume-profile slice")
+            }
+            Self::VertexCountOverflow => formatter.write_str("Vertex count overflow"),
+            Self::SimplexCountOverflow => formatter.write_str("Simplex count overflow"),
+        }
+    }
+}
+
+/// Identifies the CDT triangulation metadata field that failed validation.
+///
+/// Use this with [`CdtError::InvalidTriangulationMetadata`] to distinguish
+/// invalid metadata fields without relying on display text.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::errors::{CdtError, TriangulationMetadataField};
+/// use causal_triangulations::prelude::triangulation::CdtTopology;
+///
+/// let metadata_error = CdtError::InvalidTriangulationMetadata {
+///     field: TriangulationMetadataField::Timeslices,
+///     topology: CdtTopology::Toroidal,
+///     provided_value: "2".to_string(),
+///     expected: "at least three time slices".to_string(),
+/// };
+///
+/// assert!(matches!(
+///     metadata_error,
+///     CdtError::InvalidTriangulationMetadata {
+///         field: TriangulationMetadataField::Timeslices,
+///         ..
+///     }
+/// ));
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum TriangulationMetadataField {
+    /// Number of time slices recorded in triangulation metadata.
+    Timeslices,
+    /// Dimensionality recorded in triangulation metadata.
+    Dimension,
+}
+
+impl fmt::Display for TriangulationMetadataField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Timeslices => formatter.write_str("timeslices"),
+            Self::Dimension => formatter.write_str("dimension"),
+        }
+    }
+}
+
 /// Simulation output format for typed output read/write failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -556,8 +752,8 @@ pub enum CdtError {
         "Invalid triangulation parameters: {issue} (got: {provided_value}, expected: {expected_range})"
     )]
     InvalidGenerationParameters {
-        /// Description of the specific parameter issue
-        issue: String,
+        /// Structured category for the rejected generation parameter.
+        issue: GenerationParameterIssue,
         /// The actual value that was provided
         provided_value: String,
         /// The expected range or constraint for the parameter
@@ -566,8 +762,8 @@ pub enum CdtError {
     /// Top-level CDT configuration failed validation.
     #[error("Invalid configuration: {setting} (got: {provided_value}, expected: {expected})")]
     InvalidConfiguration {
-        /// Name of the invalid configuration setting.
-        setting: String,
+        /// Structured category for the invalid configuration setting.
+        setting: ConfigurationSetting,
         /// Value supplied for the setting.
         provided_value: String,
         /// Expected constraint for the setting.
@@ -578,8 +774,8 @@ pub enum CdtError {
         "Invalid simulation configuration: {setting} (got: {provided_value}, expected: {expected})"
     )]
     InvalidSimulationConfiguration {
-        /// Name of the invalid simulation setting.
-        setting: String,
+        /// Structured category for the invalid simulation setting.
+        setting: ConfigurationSetting,
         /// Value supplied for the setting.
         provided_value: String,
         /// Expected constraint for the setting.
@@ -609,8 +805,8 @@ pub enum CdtError {
         "Invalid triangulation metadata: {field} for {topology} (got: {provided_value}, expected: {expected})"
     )]
     InvalidTriangulationMetadata {
-        /// Name of the invalid metadata field.
-        field: String,
+        /// Structured category for the invalid metadata field.
+        field: TriangulationMetadataField,
         /// Topology whose invariant was violated.
         topology: CdtTopology,
         /// Value stored in the triangulation metadata.
@@ -795,7 +991,7 @@ mod tests {
     #[test]
     fn test_invalid_configuration_error() {
         let error = CdtError::InvalidConfiguration {
-            setting: "vertices".to_string(),
+            setting: ConfigurationSetting::Vertices,
             provided_value: "2".to_string(),
             expected: "≥ 3".to_string(),
         };
@@ -809,7 +1005,7 @@ mod tests {
     #[test]
     fn test_invalid_simulation_configuration_error() {
         let error = CdtError::InvalidSimulationConfiguration {
-            setting: "temperature".to_string(),
+            setting: ConfigurationSetting::Temperature,
             provided_value: "NaN".to_string(),
             expected: "finite and positive".to_string(),
         };
@@ -823,7 +1019,7 @@ mod tests {
     #[test]
     fn test_invalid_triangulation_metadata_error() {
         let error = CdtError::InvalidTriangulationMetadata {
-            field: "timeslices".to_string(),
+            field: TriangulationMetadataField::Timeslices,
             topology: CdtTopology::Toroidal,
             provided_value: "2".to_string(),
             expected: "≥ 3".to_string(),
@@ -886,6 +1082,110 @@ mod tests {
         assert_eq!(
             CdtValidationCheck::ErgodicMoveCandidateGeometry.to_string(),
             "ergodic_move_candidate_geometry"
+        );
+    }
+
+    #[test]
+    fn configuration_setting_display_covers_all_settings() {
+        let cases = [
+            (ConfigurationSetting::Dimension, "dimension"),
+            (ConfigurationSetting::Vertices, "vertices"),
+            (ConfigurationSetting::Timeslices, "timeslices"),
+            (ConfigurationSetting::Temperature, "temperature"),
+            (ConfigurationSetting::Steps, "steps"),
+            (
+                ConfigurationSetting::ThermalizationSteps,
+                "thermalization_steps",
+            ),
+            (
+                ConfigurationSetting::MeasurementFrequency,
+                "measurement_frequency",
+            ),
+            (
+                ConfigurationSetting::MeasurementSchedule,
+                "measurement schedule",
+            ),
+            (ConfigurationSetting::Coupling0, "coupling_0"),
+            (ConfigurationSetting::Coupling2, "coupling_2"),
+            (
+                ConfigurationSetting::CosmologicalConstant,
+                "cosmological_constant",
+            ),
+            (ConfigurationSetting::VolumeProfile, "volume_profile"),
+        ];
+
+        for (setting, expected) in cases {
+            assert_eq!(setting.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn generation_parameter_issue_display_covers_all_issues() {
+        let cases = [
+            (
+                GenerationParameterIssue::InvalidCoordinateRange,
+                "Invalid coordinate range",
+            ),
+            (
+                GenerationParameterIssue::InvalidToroidalDomain,
+                "Invalid toroidal domain",
+            ),
+            (
+                GenerationParameterIssue::NonFiniteVertexCoordinate,
+                "Non-finite vertex coordinate",
+            ),
+            (
+                GenerationParameterIssue::InsufficientVertexCount,
+                "Insufficient vertex count",
+            ),
+            (
+                GenerationParameterIssue::InsufficientVerticesPerSlice,
+                "Insufficient vertices per slice",
+            ),
+            (
+                GenerationParameterIssue::InsufficientNumberOfTimeSlices,
+                "Insufficient number of time slices",
+            ),
+            (
+                GenerationParameterIssue::NonPositiveSliceCount,
+                "Number of slices must be positive",
+            ),
+            (
+                GenerationParameterIssue::EmptyVolumeProfile,
+                "Empty volume profile",
+            ),
+            (
+                GenerationParameterIssue::VolumeProfileLengthOverflow,
+                "Volume profile length overflow",
+            ),
+            (
+                GenerationParameterIssue::InsufficientVerticesInVolumeProfileSlice,
+                "Insufficient vertices in volume-profile slice",
+            ),
+            (
+                GenerationParameterIssue::VertexCountOverflow,
+                "Vertex count overflow",
+            ),
+            (
+                GenerationParameterIssue::SimplexCountOverflow,
+                "Simplex count overflow",
+            ),
+        ];
+
+        for (issue, expected) in cases {
+            assert_eq!(issue.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn triangulation_metadata_field_display_covers_all_fields() {
+        assert_eq!(
+            TriangulationMetadataField::Timeslices.to_string(),
+            "timeslices"
+        );
+        assert_eq!(
+            TriangulationMetadataField::Dimension.to_string(),
+            "dimension"
         );
     }
 
@@ -1019,14 +1319,14 @@ mod tests {
     #[test]
     fn test_invalid_generation_parameters_error() {
         let error = CdtError::InvalidGenerationParameters {
-            issue: "Vertex count too small".to_string(),
+            issue: GenerationParameterIssue::InsufficientVertexCount,
             provided_value: "2".to_string(),
             expected_range: "at least 3".to_string(),
         };
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Invalid triangulation parameters: Vertex count too small (got: 2, expected: at least 3)"
+            "Invalid triangulation parameters: Insufficient vertex count (got: 2, expected: at least 3)"
         );
     }
 
@@ -1542,17 +1842,17 @@ mod tests {
     #[test]
     fn test_error_equality() {
         let error1 = CdtError::InvalidConfiguration {
-            setting: "steps".to_string(),
+            setting: ConfigurationSetting::Steps,
             provided_value: "0".to_string(),
             expected: "≥ 1".to_string(),
         };
         let error2 = CdtError::InvalidConfiguration {
-            setting: "steps".to_string(),
+            setting: ConfigurationSetting::Steps,
             provided_value: "0".to_string(),
             expected: "≥ 1".to_string(),
         };
         let error3 = CdtError::InvalidConfiguration {
-            setting: "steps".to_string(),
+            setting: ConfigurationSetting::Steps,
             provided_value: "10".to_string(),
             expected: "≥ 1".to_string(),
         };
@@ -1571,20 +1871,20 @@ mod tests {
     #[test]
     fn test_error_debug() {
         let error = CdtError::InvalidConfiguration {
-            setting: "vertices".to_string(),
+            setting: ConfigurationSetting::Vertices,
             provided_value: "2".to_string(),
             expected: "≥ 3".to_string(),
         };
         let debug_str = format!("{error:?}");
         assert!(debug_str.contains("InvalidConfiguration"));
-        assert!(debug_str.contains("vertices"));
+        assert!(debug_str.contains("Vertices"));
     }
 
     #[test]
     fn test_cdt_result_type() {
         let success: CdtResult<i32> = Ok(42);
         let failure: CdtResult<i32> = Err(CdtError::InvalidConfiguration {
-            setting: "steps".to_string(),
+            setting: ConfigurationSetting::Steps,
             provided_value: "0".to_string(),
             expected: "≥ 1".to_string(),
         });
@@ -1603,7 +1903,7 @@ mod tests {
     #[test]
     fn test_std_error_trait() {
         let error = CdtError::InvalidConfiguration {
-            setting: "temperature".to_string(),
+            setting: ConfigurationSetting::Temperature,
             provided_value: "NaN".to_string(),
             expected: "finite and positive".to_string(),
         };

@@ -57,7 +57,8 @@ pub enum MoveResult {
 /// moves that committed and validated successfully. Hard-failure counts record
 /// proposals that mutated the backend but failed post-mutation CDT invariants;
 /// those failures remain in the attempt denominator but are not counted as
-/// accepted moves.
+/// accepted moves. Individual counters and aggregate totals saturate at
+/// `u64::MAX` so long-running or restored simulations cannot wrap telemetry.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MoveStatistics {
     /// Number of (2,2) moves attempted
@@ -106,7 +107,7 @@ impl MoveStatistics {
         Self::default()
     }
 
-    /// Records an attempted move.
+    /// Records an attempted move, saturating the matching counter at `u64::MAX`.
     ///
     /// # Examples
     ///
@@ -119,14 +120,24 @@ impl MoveStatistics {
     /// ```
     pub const fn record_attempt(&mut self, move_type: MoveType) {
         match move_type {
-            MoveType::Move22 => self.moves_22_attempted += 1,
-            MoveType::Move13Add => self.moves_13_attempted += 1,
-            MoveType::Move31Remove => self.moves_31_attempted += 1,
-            MoveType::EdgeFlip => self.edge_flips_attempted += 1,
+            MoveType::Move22 => {
+                self.moves_22_attempted = self.moves_22_attempted.saturating_add(1);
+            }
+            MoveType::Move13Add => {
+                self.moves_13_attempted = self.moves_13_attempted.saturating_add(1);
+            }
+            MoveType::Move31Remove => {
+                self.moves_31_attempted = self.moves_31_attempted.saturating_add(1);
+            }
+            MoveType::EdgeFlip => {
+                self.edge_flips_attempted = self.edge_flips_attempted.saturating_add(1);
+            }
         }
     }
 
     /// Records a successful move that committed and validated.
+    ///
+    /// The matching accepted counter saturates at `u64::MAX`.
     ///
     /// # Examples
     ///
@@ -139,10 +150,18 @@ impl MoveStatistics {
     /// ```
     pub const fn record_success(&mut self, move_type: MoveType) {
         match move_type {
-            MoveType::Move22 => self.moves_22_accepted += 1,
-            MoveType::Move13Add => self.moves_13_accepted += 1,
-            MoveType::Move31Remove => self.moves_31_accepted += 1,
-            MoveType::EdgeFlip => self.edge_flips_accepted += 1,
+            MoveType::Move22 => {
+                self.moves_22_accepted = self.moves_22_accepted.saturating_add(1);
+            }
+            MoveType::Move13Add => {
+                self.moves_13_accepted = self.moves_13_accepted.saturating_add(1);
+            }
+            MoveType::Move31Remove => {
+                self.moves_31_accepted = self.moves_31_accepted.saturating_add(1);
+            }
+            MoveType::EdgeFlip => {
+                self.edge_flips_accepted = self.edge_flips_accepted.saturating_add(1);
+            }
         }
     }
 
@@ -151,7 +170,8 @@ impl MoveStatistics {
     /// Hard failures are distinct from ordinary proposal rejections and are not
     /// counted as accepted moves. Call this after the corresponding
     /// [`Self::record_attempt`] so acceptance-rate denominators continue to
-    /// reflect all selected proposals.
+    /// reflect all selected proposals. The matching hard-failure counter
+    /// saturates at `u64::MAX`.
     ///
     /// # Examples
     ///
@@ -166,10 +186,18 @@ impl MoveStatistics {
     /// ```
     pub const fn record_hard_failure(&mut self, move_type: MoveType) {
         match move_type {
-            MoveType::Move22 => self.moves_22_hard_failed += 1,
-            MoveType::Move13Add => self.moves_13_hard_failed += 1,
-            MoveType::Move31Remove => self.moves_31_hard_failed += 1,
-            MoveType::EdgeFlip => self.edge_flips_hard_failed += 1,
+            MoveType::Move22 => {
+                self.moves_22_hard_failed = self.moves_22_hard_failed.saturating_add(1);
+            }
+            MoveType::Move13Add => {
+                self.moves_13_hard_failed = self.moves_13_hard_failed.saturating_add(1);
+            }
+            MoveType::Move31Remove => {
+                self.moves_31_hard_failed = self.moves_31_hard_failed.saturating_add(1);
+            }
+            MoveType::EdgeFlip => {
+                self.edge_flips_hard_failed = self.edge_flips_hard_failed.saturating_add(1);
+            }
         }
     }
 
@@ -229,14 +257,8 @@ impl MoveStatistics {
     /// ```
     #[must_use]
     pub fn total_acceptance_rate(&self) -> f64 {
-        let total_attempted = self.moves_22_attempted
-            + self.moves_13_attempted
-            + self.moves_31_attempted
-            + self.edge_flips_attempted;
-        let total_accepted = self.moves_22_accepted
-            + self.moves_13_accepted
-            + self.moves_31_accepted
-            + self.edge_flips_accepted;
+        let total_attempted = self.total_attempted();
+        let total_accepted = self.total_accepted();
 
         if total_attempted == 0 {
             0.0
@@ -250,7 +272,7 @@ impl MoveStatistics {
     /// Returns the total number of attempted moves across all move types.
     ///
     /// This includes proposals that were later accepted, rejected, or recorded
-    /// as hard failures.
+    /// as hard failures. The returned total saturates at `u64::MAX`.
     ///
     /// # Examples
     ///
@@ -265,15 +287,16 @@ impl MoveStatistics {
     #[must_use]
     pub const fn total_attempted(&self) -> u64 {
         self.moves_22_attempted
-            + self.moves_13_attempted
-            + self.moves_31_attempted
-            + self.edge_flips_attempted
+            .saturating_add(self.moves_13_attempted)
+            .saturating_add(self.moves_31_attempted)
+            .saturating_add(self.edge_flips_attempted)
     }
 
     /// Returns the total number of accepted moves across all move types.
     ///
     /// This counts only moves that committed and validated successfully. It does
-    /// not include ordinary rejections or hard failures.
+    /// not include ordinary rejections or hard failures. The returned total
+    /// saturates at `u64::MAX`.
     ///
     /// # Examples
     ///
@@ -288,16 +311,17 @@ impl MoveStatistics {
     #[must_use]
     pub const fn total_accepted(&self) -> u64 {
         self.moves_22_accepted
-            + self.moves_13_accepted
-            + self.moves_31_accepted
-            + self.edge_flips_accepted
+            .saturating_add(self.moves_13_accepted)
+            .saturating_add(self.moves_31_accepted)
+            .saturating_add(self.edge_flips_accepted)
     }
 
     /// Returns the total number of hard failures across all move types.
     ///
     /// A hard failure means a proposal mutated backend state before a required
     /// post-mutation CDT invariant check failed. Public move attempts roll back
-    /// the triangulation before returning [`MoveResult::HardFailure`].
+    /// the triangulation before returning [`MoveResult::HardFailure`]. The
+    /// returned total saturates at `u64::MAX`.
     ///
     /// # Examples
     ///
@@ -312,9 +336,9 @@ impl MoveStatistics {
     #[must_use]
     pub const fn total_hard_failures(&self) -> u64 {
         self.moves_22_hard_failed
-            + self.moves_13_hard_failed
-            + self.moves_31_hard_failed
-            + self.edge_flips_hard_failed
+            .saturating_add(self.moves_13_hard_failed)
+            .saturating_add(self.moves_31_hard_failed)
+            .saturating_add(self.edge_flips_hard_failed)
     }
 }
 
@@ -336,22 +360,62 @@ pub struct ErgodicsSystem {
     rng: Xoshiro256PlusPlus,
 }
 
+/// Labeling instruction for a vertex inserted by a `(1,3)` proposal.
+///
+/// Unfoliated triangulations do not carry vertex time labels, while foliated
+/// proposals must write the selected causal slice label before validation.
 #[derive(Debug, Clone, Copy)]
-enum InsertionLabel {
+pub(crate) enum InsertionLabel {
     Unfoliated,
     Label(u32),
 }
 
-struct ToroidalInsertionCandidate {
+/// Concrete toroidal `(1,3)` proposal realized as a spacelike-link split.
+///
+/// The candidate keeps both backend operations together: subdivide the chosen
+/// face at `point`, label the new vertex, then flip the original spacelike edge.
+pub(crate) struct ToroidalInsertionCandidate {
     edge: DelaunayEdgeHandle,
     face: DelaunayFaceHandle,
     point: [f64; 2],
     label: u32,
 }
 
-struct ToroidalRemovalCandidate {
+/// Concrete toroidal `(3,1)` proposal realized as flip-then-collapse.
+///
+/// The vertex cannot be collapsed directly in periodic CDT; the stored edge is
+/// flipped first to expose the inverse local volume move.
+pub(crate) struct ToroidalRemovalCandidate {
     vertex: DelaunayVertexHandle,
     flip_edge: DelaunayEdgeHandle,
+}
+
+/// Concrete local site selected from a move-family proposal.
+///
+/// Metropolis planning samples one of these after counting the same site
+/// universe used in the Hastings correction, so selection and denominator
+/// semantics remain aligned.
+pub(crate) enum ProposalSite {
+    EdgeFlip(DelaunayEdgeHandle),
+    FaceSubdivision {
+        face: DelaunayFaceHandle,
+        point: [f64; 2],
+        label: InsertionLabel,
+    },
+    ToroidalInsertion(ToroidalInsertionCandidate),
+    VertexRemoval(DelaunayVertexHandle),
+    ToroidalRemoval(ToroidalRemovalCandidate),
+}
+
+/// Result of sampling a move family over its concrete local site universe.
+///
+/// `site_count` is the forward proposal denominator, `site` is the sampled site
+/// when one exists, and `geometric_candidate_seen` distinguishes empty geometry
+/// from causally rejected geometry for public move-result reporting.
+pub(crate) struct ProposalSiteSelection {
+    pub(crate) site_count: usize,
+    pub(crate) site: Option<ProposalSite>,
+    geometric_candidate_seen: bool,
 }
 
 impl ErgodicsSystem {
@@ -413,6 +477,81 @@ impl ErgodicsSystem {
             1 => MoveType::Move13Add,
             2 => MoveType::Move31Remove,
             _ => MoveType::EdgeFlip,
+        }
+    }
+
+    /// Samples one concrete proposal site from the same universe used for proposal counts.
+    ///
+    /// Reservoir sampling avoids allocating candidate lists while preserving a
+    /// uniform draw over the deterministic visitor order used by
+    /// [`proposal_site_count`].
+    pub(crate) fn select_proposal_site(
+        &mut self,
+        triangulation: &CdtTriangulation2D,
+        move_type: MoveType,
+    ) -> ProposalSiteSelection {
+        let mut site_count = 0;
+        let mut selected_site = None;
+        let geometric_candidate_seen = visit_proposal_sites(triangulation, move_type, |site| {
+            site_count += 1;
+            if self.rng.random_range(0..site_count) == 0 {
+                selected_site = Some(site);
+            }
+        });
+
+        ProposalSiteSelection {
+            site_count,
+            site: selected_site,
+            geometric_candidate_seen,
+        }
+    }
+
+    /// Applies one previously selected proposal site.
+    ///
+    /// Matching the site variant against the move family keeps accidental
+    /// cross-family application as a normal geometric rejection without touching
+    /// backend state.
+    pub(crate) fn apply_proposal_site(
+        &mut self,
+        triangulation: &mut CdtTriangulation2D,
+        move_type: MoveType,
+        site: ProposalSite,
+    ) -> MoveResult {
+        match (move_type, site) {
+            (MoveType::Move22 | MoveType::EdgeFlip, ProposalSite::EdgeFlip(edge)) => {
+                self.apply_edge_flip_site(triangulation, move_type, edge)
+            }
+            (MoveType::Move13Add, ProposalSite::FaceSubdivision { face, point, label }) => {
+                self.apply_face_subdivision_site(triangulation, face, point, label)
+            }
+            (MoveType::Move13Add, ProposalSite::ToroidalInsertion(candidate)) => {
+                self.apply_toroidal_insertion_site(triangulation, candidate)
+            }
+            (MoveType::Move31Remove, ProposalSite::VertexRemoval(vertex)) => {
+                self.apply_vertex_removal_site(triangulation, vertex)
+            }
+            (MoveType::Move31Remove, ProposalSite::ToroidalRemoval(candidate)) => {
+                self.apply_toroidal_removal_site(triangulation, candidate)
+            }
+            (
+                MoveType::Move22 | MoveType::EdgeFlip,
+                ProposalSite::FaceSubdivision { .. }
+                | ProposalSite::ToroidalInsertion(_)
+                | ProposalSite::VertexRemoval(_)
+                | ProposalSite::ToroidalRemoval(_),
+            )
+            | (
+                MoveType::Move13Add,
+                ProposalSite::EdgeFlip(_)
+                | ProposalSite::VertexRemoval(_)
+                | ProposalSite::ToroidalRemoval(_),
+            )
+            | (
+                MoveType::Move31Remove,
+                ProposalSite::EdgeFlip(_)
+                | ProposalSite::FaceSubdivision { .. }
+                | ProposalSite::ToroidalInsertion(_),
+            ) => MoveResult::GeometricViolation,
         }
     }
 
@@ -500,152 +639,12 @@ impl ErgodicsSystem {
     /// every early return must pass a `MoveResult` through `rollback_if_failed`
     /// or restore state itself.
     fn attempt_13_move_mutating(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
-        if matches!(triangulation.metadata().topology, CdtTopology::Toroidal)
-            && triangulation.has_foliation()
-        {
-            return self.attempt_toroidal_13_move_mutating(triangulation);
-        }
-
-        let mut geometric_candidate_seen = false;
-        let mut causal_candidate_count = 0;
-        let mut selected_candidate = None;
-
-        for face in triangulation.geometry().faces() {
-            let Some(point) = centroid(triangulation, &face) else {
-                continue;
-            };
-            geometric_candidate_seen = true;
-
-            let Some(label) = insertion_label(triangulation, &face) else {
-                continue;
-            };
-            if !insertion_candidate_is_committable(triangulation, &face, &point, label) {
-                continue;
-            }
-
-            causal_candidate_count += 1;
-            if self.rng.random_range(0..causal_candidate_count) == 0 {
-                selected_candidate = Some((face, point, label));
-            }
-        }
-
-        let Some((face, point, label)) = selected_candidate else {
-            if !geometric_candidate_seen {
-                return MoveResult::GeometricViolation;
-            }
-            return if triangulation.has_foliation() {
-                MoveResult::CausalityViolation
-            } else {
-                MoveResult::GeometricViolation
-            };
+        let selection = self.select_proposal_site(triangulation, MoveType::Move13Add);
+        let Some(site) = selection.site else {
+            return rejected_empty_selection(triangulation, &selection);
         };
 
-        let subdivision_target = format!("face {:?}", face.simplex_key());
-        let snapshot = triangulation.clone();
-        let subdivision = triangulation.subdivide_face(face, &point);
-
-        let subdivision = match subdivision {
-            Ok(subdivision) => subdivision,
-            Err(err) => {
-                let result = reject_backend(
-                    BackendMutationOperation::SubdivideFace,
-                    subdivision_target,
-                    &err,
-                );
-                return rollback_if_failed(triangulation, snapshot, result);
-            }
-        };
-
-        if let InsertionLabel::Label(label) = label {
-            let set_label = triangulation.set_vertex_data(&subdivision.new_vertex, Some(label));
-            if let Err(err) = set_label {
-                let result = MoveResult::HardFailure(CdtError::BackendMutationFailed {
-                    operation: BackendMutationOperation::SetVertexData,
-                    target: format!("vertex {:?}", subdivision.new_vertex.vertex_key()),
-                    detail: err.to_string(),
-                });
-                return rollback_if_failed(triangulation, snapshot, result);
-            }
-        }
-
-        let result = self.finish_mutated_move(triangulation, MoveType::Move13Add);
-        rollback_if_failed(triangulation, snapshot, result)
-    }
-
-    /// Applies the toroidal volume-add move as a spacelike-link split.
-    ///
-    /// The backend only exposes primitive bistellar edits, so this composes a
-    /// face subdivision with an immediate flip of the original spacelike link.
-    /// The intermediate same-slice triangle is never finalized as CDT state.
-    fn attempt_toroidal_13_move_mutating(
-        &mut self,
-        triangulation: &mut CdtTriangulation2D,
-    ) -> MoveResult {
-        let mut geometric_candidate_seen = false;
-        let mut causal_candidate_count = 0;
-        let mut selected_candidate = None;
-
-        let geometry = triangulation.geometry();
-        for edge in geometry.edges() {
-            let Ok(Some(adjacent)) = geometry.edge_adjacent_faces(&edge) else {
-                continue;
-            };
-            geometric_candidate_seen = true;
-
-            let Some(candidate) = toroidal_insertion_candidate(triangulation, edge, &adjacent)
-            else {
-                continue;
-            };
-            if !toroidal_insertion_candidate_is_committable(triangulation, &candidate) {
-                continue;
-            }
-
-            causal_candidate_count += 1;
-            if self.rng.random_range(0..causal_candidate_count) == 0 {
-                selected_candidate = Some(candidate);
-            }
-        }
-
-        let Some(candidate) = selected_candidate else {
-            if !geometric_candidate_seen {
-                return MoveResult::GeometricViolation;
-            }
-            return MoveResult::CausalityViolation;
-        };
-
-        let snapshot = triangulation.clone();
-        let subdivision_target = format!("face {:?}", candidate.face.simplex_key());
-        let subdivision = triangulation.subdivide_face(candidate.face, &candidate.point);
-        let subdivision = match subdivision {
-            Ok(subdivision) => subdivision,
-            Err(err) => {
-                let result = reject_backend(
-                    BackendMutationOperation::SubdivideFace,
-                    subdivision_target,
-                    &err,
-                );
-                return rollback_if_failed(triangulation, snapshot, result);
-            }
-        };
-
-        if let Err(err) =
-            triangulation.set_vertex_data(&subdivision.new_vertex, Some(candidate.label))
-        {
-            let result = MoveResult::HardFailure(CdtError::BackendMutationFailed {
-                operation: BackendMutationOperation::SetVertexData,
-                target: format!("vertex {:?}", subdivision.new_vertex.vertex_key()),
-                detail: err.to_string(),
-            });
-            return rollback_if_failed(triangulation, snapshot, result);
-        }
-
-        let flip_target = format!("{:?}", candidate.edge);
-        let flip_result = triangulation.flip_edge(candidate.edge);
-        let result = match flip_result {
-            Ok(_) => self.finish_mutated_move(triangulation, MoveType::Move13Add),
-            Err(err) => reject_backend(BackendMutationOperation::FlipEdge, flip_target, &err),
-        };
-        rollback_if_failed(triangulation, snapshot, result)
+        self.apply_proposal_site(triangulation, MoveType::Move13Add, site)
     }
 
     /// Attempts a (3,1) move on the triangulation.
@@ -698,102 +697,12 @@ impl ErgodicsSystem {
     /// bookkeeping. Once the snapshot exists, every early return must pass a
     /// `MoveResult` through `rollback_if_failed` or restore state itself.
     fn attempt_31_move_mutating(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
-        if matches!(triangulation.metadata().topology, CdtTopology::Toroidal)
-            && triangulation.has_foliation()
-        {
-            return self.attempt_toroidal_31_move_mutating(triangulation);
-        }
-
-        let mut geometric_candidate_seen = false;
-        let mut causal_candidate_count = 0;
-        let mut selected_vertex = None;
-
-        for vertex in triangulation.geometry().vertices() {
-            let Some(neighbors) = neighbors3(triangulation, &vertex) else {
-                continue;
-            };
-            geometric_candidate_seen = true;
-
-            if !removal_candidate_is_causal(triangulation, &vertex, &neighbors) {
-                continue;
-            }
-            if !removal_candidate_is_committable(triangulation, &vertex, &neighbors) {
-                continue;
-            }
-
-            causal_candidate_count += 1;
-            if self.rng.random_range(0..causal_candidate_count) == 0 {
-                selected_vertex = Some(vertex);
-            }
-        }
-
-        let Some(vertex) = selected_vertex else {
-            if !geometric_candidate_seen {
-                return MoveResult::GeometricViolation;
-            }
-            return if triangulation.has_foliation() {
-                MoveResult::CausalityViolation
-            } else {
-                MoveResult::GeometricViolation
-            };
+        let selection = self.select_proposal_site(triangulation, MoveType::Move31Remove);
+        let Some(site) = selection.site else {
+            return rejected_empty_selection(triangulation, &selection);
         };
 
-        let removal_target = format!("vertex {:?}", vertex.vertex_key());
-        let snapshot = triangulation.clone();
-        let removal = triangulation.remove_vertex(vertex);
-
-        let result = match removal {
-            Ok(_) => self.finish_mutated_move(triangulation, MoveType::Move31Remove),
-            Err(err) => {
-                reject_backend(BackendMutationOperation::RemoveVertex, removal_target, &err)
-            }
-        };
-        rollback_if_failed(triangulation, snapshot, result)
-    }
-
-    /// Applies the toroidal inverse volume move as flip-then-collapse.
-    fn attempt_toroidal_31_move_mutating(
-        &mut self,
-        triangulation: &mut CdtTriangulation2D,
-    ) -> MoveResult {
-        let mut candidate_count = 0_usize;
-        let mut selected_candidate = None;
-
-        for vertex in triangulation.geometry().vertices() {
-            let Some(candidate) = toroidal_removal_candidate(triangulation, vertex) else {
-                continue;
-            };
-            if !toroidal_removal_candidate_is_committable(triangulation, &candidate) {
-                continue;
-            }
-
-            candidate_count += 1;
-            if self.rng.random_range(0..candidate_count) == 0 {
-                selected_candidate = Some(candidate);
-            }
-        }
-
-        let Some(candidate) = selected_candidate else {
-            return MoveResult::GeometricViolation;
-        };
-
-        let snapshot = triangulation.clone();
-        let flip_target = format!("{:?}", candidate.flip_edge);
-        let flip_result = triangulation.flip_edge(candidate.flip_edge);
-        if let Err(err) = flip_result {
-            let result = reject_backend(BackendMutationOperation::FlipEdge, flip_target, &err);
-            return rollback_if_failed(triangulation, snapshot, result);
-        }
-
-        let removal_target = format!("vertex {:?}", candidate.vertex.vertex_key());
-        let removal = triangulation.remove_vertex(candidate.vertex);
-        let result = match removal {
-            Ok(_) => self.finish_mutated_move(triangulation, MoveType::Move31Remove),
-            Err(err) => {
-                reject_backend(BackendMutationOperation::RemoveVertex, removal_target, &err)
-            }
-        };
-        rollback_if_failed(triangulation, snapshot, result)
+        self.apply_proposal_site(triangulation, MoveType::Move31Remove, site)
     }
 
     /// Attempts an edge flip move on the triangulation.
@@ -874,33 +783,24 @@ impl ErgodicsSystem {
         triangulation: &mut CdtTriangulation2D,
         move_type: MoveType,
     ) -> MoveResult {
-        let mut geometric_candidate_seen = false;
-        let mut causal_candidate_count = 0;
-        let mut selected_edge = None;
-
-        let geometry = triangulation.geometry();
-        for edge in geometry.edges() {
-            let Ok(Some(adjacent)) = geometry.edge_adjacent_faces(&edge) else {
-                continue;
-            };
-            geometric_candidate_seen = true;
-            if !edge_flip_candidate_is_committable(triangulation, &edge, &adjacent) {
-                continue;
-            }
-
-            causal_candidate_count += 1;
-            if self.rng.random_range(0..causal_candidate_count) == 0 {
-                selected_edge = Some(edge);
-            }
-        }
-
-        let Some(edge) = selected_edge else {
-            if geometric_candidate_seen && triangulation.has_foliation() {
-                return MoveResult::CausalityViolation;
-            }
-            return MoveResult::GeometricViolation;
+        let selection = self.select_proposal_site(triangulation, move_type);
+        let Some(site) = selection.site else {
+            return rejected_empty_selection(triangulation, &selection);
         };
 
+        self.apply_proposal_site(triangulation, move_type, site)
+    }
+
+    /// Applies a selected edge-flip site and rolls back any failed mutation.
+    ///
+    /// This is shared by `Move22` and `EdgeFlip`, which are public names for the
+    /// same 2D k=2 bistellar flip kernel.
+    fn apply_edge_flip_site(
+        &mut self,
+        triangulation: &mut CdtTriangulation2D,
+        move_type: MoveType,
+        edge: DelaunayEdgeHandle,
+    ) -> MoveResult {
         let flip_target = format!("{edge:?}");
         let snapshot = triangulation.clone();
         let flip_result = triangulation.flip_edge(edge);
@@ -908,6 +808,142 @@ impl ErgodicsSystem {
         let result = match flip_result {
             Ok(_) => self.finish_mutated_move(triangulation, move_type),
             Err(err) => reject_backend(BackendMutationOperation::FlipEdge, flip_target, &err),
+        };
+        rollback_if_failed(triangulation, snapshot, result)
+    }
+
+    /// Applies a selected open-boundary face subdivision site.
+    ///
+    /// The mutation is finalized only after optional vertex labeling,
+    /// foliation synchronization, and evolved-CDT validation all succeed.
+    fn apply_face_subdivision_site(
+        &mut self,
+        triangulation: &mut CdtTriangulation2D,
+        face: DelaunayFaceHandle,
+        point: [f64; 2],
+        label: InsertionLabel,
+    ) -> MoveResult {
+        let subdivision_target = format!("face {:?}", face.simplex_key());
+        let snapshot = triangulation.clone();
+        let subdivision = triangulation.subdivide_face(face, &point);
+
+        let subdivision = match subdivision {
+            Ok(subdivision) => subdivision,
+            Err(err) => {
+                let result = reject_backend(
+                    BackendMutationOperation::SubdivideFace,
+                    subdivision_target,
+                    &err,
+                );
+                return rollback_if_failed(triangulation, snapshot, result);
+            }
+        };
+
+        if let InsertionLabel::Label(label) = label {
+            let set_label = triangulation.set_vertex_data(&subdivision.new_vertex, Some(label));
+            if let Err(err) = set_label {
+                let result = reject_backend(
+                    BackendMutationOperation::SetVertexData,
+                    format!("vertex {:?}", subdivision.new_vertex.vertex_key()),
+                    &err,
+                );
+                return rollback_if_failed(triangulation, snapshot, result);
+            }
+        }
+
+        let result = self.finish_mutated_move(triangulation, MoveType::Move13Add);
+        rollback_if_failed(triangulation, snapshot, result)
+    }
+
+    /// Applies the toroidal volume-add move as a spacelike-link split.
+    ///
+    /// The backend only exposes primitive bistellar edits, so this composes a
+    /// face subdivision with an immediate flip of the original spacelike link.
+    /// The intermediate same-slice triangle is never finalized as CDT state.
+    fn apply_toroidal_insertion_site(
+        &mut self,
+        triangulation: &mut CdtTriangulation2D,
+        candidate: ToroidalInsertionCandidate,
+    ) -> MoveResult {
+        let snapshot = triangulation.clone();
+        let subdivision_target = format!("face {:?}", candidate.face.simplex_key());
+        let subdivision = triangulation.subdivide_face(candidate.face, &candidate.point);
+        let subdivision = match subdivision {
+            Ok(subdivision) => subdivision,
+            Err(err) => {
+                let result = reject_backend(
+                    BackendMutationOperation::SubdivideFace,
+                    subdivision_target,
+                    &err,
+                );
+                return rollback_if_failed(triangulation, snapshot, result);
+            }
+        };
+
+        if let Err(err) =
+            triangulation.set_vertex_data(&subdivision.new_vertex, Some(candidate.label))
+        {
+            let result = reject_backend(
+                BackendMutationOperation::SetVertexData,
+                format!("vertex {:?}", subdivision.new_vertex.vertex_key()),
+                &err,
+            );
+            return rollback_if_failed(triangulation, snapshot, result);
+        }
+
+        let flip_target = format!("{:?}", candidate.edge);
+        let flip_result = triangulation.flip_edge(candidate.edge);
+        let result = match flip_result {
+            Ok(_) => self.finish_mutated_move(triangulation, MoveType::Move13Add),
+            Err(err) => reject_backend(BackendMutationOperation::FlipEdge, flip_target, &err),
+        };
+        rollback_if_failed(triangulation, snapshot, result)
+    }
+
+    /// Applies a selected open-boundary vertex-removal site.
+    ///
+    /// The candidate was already screened for causal and replacement-face
+    /// preconditions; this function owns the backend edit, validation, and
+    /// rollback boundary.
+    fn apply_vertex_removal_site(
+        &mut self,
+        triangulation: &mut CdtTriangulation2D,
+        vertex: DelaunayVertexHandle,
+    ) -> MoveResult {
+        let removal_target = format!("vertex {:?}", vertex.vertex_key());
+        let snapshot = triangulation.clone();
+        let removal = triangulation.remove_vertex(vertex);
+
+        let result = match removal {
+            Ok(_) => self.finish_mutated_move(triangulation, MoveType::Move31Remove),
+            Err(err) => {
+                reject_backend(BackendMutationOperation::RemoveVertex, removal_target, &err)
+            }
+        };
+        rollback_if_failed(triangulation, snapshot, result)
+    }
+
+    /// Applies the toroidal inverse volume move as flip-then-collapse.
+    fn apply_toroidal_removal_site(
+        &mut self,
+        triangulation: &mut CdtTriangulation2D,
+        candidate: ToroidalRemovalCandidate,
+    ) -> MoveResult {
+        let snapshot = triangulation.clone();
+        let flip_target = format!("{:?}", candidate.flip_edge);
+        let flip_result = triangulation.flip_edge(candidate.flip_edge);
+        if let Err(err) = flip_result {
+            let result = reject_backend(BackendMutationOperation::FlipEdge, flip_target, &err);
+            return rollback_if_failed(triangulation, snapshot, result);
+        }
+
+        let removal_target = format!("vertex {:?}", candidate.vertex.vertex_key());
+        let removal = triangulation.remove_vertex(candidate.vertex);
+        let result = match removal {
+            Ok(_) => self.finish_mutated_move(triangulation, MoveType::Move31Remove),
+            Err(err) => {
+                reject_backend(BackendMutationOperation::RemoveVertex, removal_target, &err)
+            }
         };
         rollback_if_failed(triangulation, snapshot, result)
     }
@@ -960,6 +996,22 @@ fn rollback_if_failed(
 
     *triangulation = snapshot;
     result
+}
+
+/// Converts an empty sampled site set into the public move-result category.
+///
+/// Seeing geometric candidates but no sampleable foliated sites means causality
+/// filtered every candidate; no geometric candidates means the move is
+/// unavailable for topological/backend shape reasons.
+fn rejected_empty_selection(
+    triangulation: &CdtTriangulation2D,
+    selection: &ProposalSiteSelection,
+) -> MoveResult {
+    if selection.geometric_candidate_seen && triangulation.has_foliation() {
+        MoveResult::CausalityViolation
+    } else {
+        MoveResult::GeometricViolation
+    }
 }
 
 /// Converts an unexpected backend edit error into the move-level rejection shape.
@@ -1077,7 +1129,7 @@ fn flip_is_causal(
 }
 
 /// Checks whether a k=2 edge flip passes the cheap deterministic edit guards.
-fn edge_flip_candidate_is_committable(
+fn edge_flip_candidate_is_sampleable(
     triangulation: &CdtTriangulation2D,
     edge: &DelaunayEdgeHandle,
     adjacent: &EdgeAdjacentFaces<DelaunayVertexHandle, DelaunayFaceHandle>,
@@ -1086,9 +1138,6 @@ fn edge_flip_candidate_is_committable(
     triangulation.geometry().can_flip_edge(edge)
         && flip_is_causal(triangulation, adjacent)
         && !edge_exists_between(triangulation, opposite_0, opposite_1)
-        && candidate_mutation_succeeds(triangulation, |candidate| {
-            candidate.flip_edge(edge.clone()).is_ok()
-        })
 }
 
 /// Finds the inserted vertex label that makes a `(1,3)` subdivision causal.
@@ -1110,24 +1159,8 @@ fn insertion_label(
 }
 
 /// Checks coordinate-level backend preconditions for face subdivision.
-fn insertion_candidate_is_committable(
-    triangulation: &CdtTriangulation2D,
-    face: &DelaunayFaceHandle,
-    point: &[f64; 2],
-    label: InsertionLabel,
-) -> bool {
+fn insertion_candidate_is_sampleable(point: &[f64; 2]) -> bool {
     point.iter().all(|coordinate| coordinate.is_finite())
-        && candidate_mutation_succeeds(triangulation, |candidate| {
-            let Ok(subdivision) = candidate.subdivide_face(face.clone(), point) else {
-                return false;
-            };
-            if let InsertionLabel::Label(label) = label {
-                return candidate
-                    .set_vertex_data(&subdivision.new_vertex, Some(label))
-                    .is_ok();
-            }
-            true
-        })
 }
 
 /// Returns the previous and next labels around the toroidal time circle.
@@ -1206,24 +1239,11 @@ fn toroidal_insertion_candidate(
 }
 
 /// Checks backend-local preconditions for the toroidal spacelike-link split.
-fn toroidal_insertion_candidate_is_committable(
-    triangulation: &CdtTriangulation2D,
-    candidate: &ToroidalInsertionCandidate,
-) -> bool {
+fn toroidal_insertion_candidate_is_sampleable(candidate: &ToroidalInsertionCandidate) -> bool {
     candidate
         .point
         .iter()
         .all(|coordinate| coordinate.is_finite())
-        && candidate_mutation_succeeds(triangulation, |dry_run| {
-            let Ok(subdivision) = dry_run.subdivide_face(candidate.face.clone(), &candidate.point)
-            else {
-                return false;
-            };
-            dry_run
-                .set_vertex_data(&subdivision.new_vertex, Some(candidate.label))
-                .is_ok()
-                && dry_run.flip_edge(candidate.edge.clone()).is_ok()
-        })
 }
 
 /// Finds a CDT-valid inserted vertex label without topology-specific guards.
@@ -1272,6 +1292,10 @@ fn vertex_point_2d(
 ///
 /// Returning `None` keeps malformed or non-triangular faces out of the mutation
 /// path instead of relying on the backend to reject them later.
+///
+/// TODO(acgetchell/delaunay#420): replace this local point-selection policy
+/// with a backend-owned simplex subdivision API once upstream Delaunay exposes
+/// one.
 fn centroid(triangulation: &CdtTriangulation2D, face: &DelaunayFaceHandle) -> Option<[f64; 2]> {
     let vertices = triangulation.geometry().face_vertices(face).ok()?;
     let [v0, v1, v2] = vertices.as_slice() else {
@@ -1467,27 +1491,19 @@ fn toroidal_removal_candidate(
 }
 
 /// Checks whether collapsing a degree-3 vertex would duplicate an existing face.
-fn removal_candidate_is_committable(
+fn removal_candidate_is_sampleable(
     triangulation: &CdtTriangulation2D,
-    vertex: &DelaunayVertexHandle,
     neighbors: &[DelaunayVertexHandle; 3],
 ) -> bool {
     !face_exists_with_vertices(triangulation, neighbors)
-        && candidate_mutation_succeeds(triangulation, |candidate| {
-            candidate.remove_vertex(vertex.clone()).is_ok()
-        })
 }
 
 /// Checks backend-local preconditions for the toroidal flip-then-collapse move.
-fn toroidal_removal_candidate_is_committable(
+fn toroidal_removal_candidate_is_sampleable(
     triangulation: &CdtTriangulation2D,
     candidate: &ToroidalRemovalCandidate,
 ) -> bool {
     triangulation.geometry().can_flip_edge(&candidate.flip_edge)
-        && candidate_mutation_succeeds(triangulation, |dry_run| {
-            dry_run.flip_edge(candidate.flip_edge.clone()).is_ok()
-                && dry_run.remove_vertex(candidate.vertex.clone()).is_ok()
-        })
 }
 
 /// Collects the three distinct neighboring vertices around a removable vertex.
@@ -1571,105 +1587,136 @@ pub(crate) fn proposal_site_count(
     triangulation: &CdtTriangulation2D,
     move_type: MoveType,
 ) -> usize {
-    match move_type {
-        MoveType::Move22 | MoveType::EdgeFlip => edge_flip_site_count(triangulation),
-        MoveType::Move13Add => insertion_site_count(triangulation),
-        MoveType::Move31Remove => removal_site_count(triangulation),
-    }
+    let mut site_count = 0;
+    visit_proposal_sites(triangulation, move_type, |_| site_count += 1);
+    site_count
 }
 
-fn edge_flip_site_count(triangulation: &CdtTriangulation2D) -> usize {
-    let geometry = triangulation.geometry();
-    geometry
-        .edges()
-        .filter(|edge| {
-            let Ok(Some(adjacent)) = geometry.edge_adjacent_faces(edge) else {
-                return false;
-            };
-            edge_flip_candidate_is_committable(triangulation, edge, &adjacent)
-        })
-        .count()
-}
-
-fn insertion_site_count(triangulation: &CdtTriangulation2D) -> usize {
-    if is_toroidal_foliated(triangulation) {
-        return toroidal_insertion_site_count(triangulation);
-    }
-
-    triangulation
-        .geometry()
-        .faces()
-        .filter(|face| {
-            let Some(point) = centroid(triangulation, face) else {
-                return false;
-            };
-            let Some(label) = insertion_label(triangulation, face) else {
-                return false;
-            };
-
-            insertion_candidate_is_committable(triangulation, face, &point, label)
-        })
-        .count()
-}
-
-fn toroidal_insertion_site_count(triangulation: &CdtTriangulation2D) -> usize {
-    let geometry = triangulation.geometry();
-    geometry
-        .edges()
-        .filter(|edge| {
-            let Ok(Some(adjacent)) = geometry.edge_adjacent_faces(edge) else {
-                return false;
-            };
-            let Some(insert) = toroidal_insertion_candidate(triangulation, edge.clone(), &adjacent)
-            else {
-                return false;
-            };
-            toroidal_insertion_candidate_is_committable(triangulation, &insert)
-        })
-        .count()
-}
-
-fn removal_site_count(triangulation: &CdtTriangulation2D) -> usize {
-    if is_toroidal_foliated(triangulation) {
-        return triangulation
-            .geometry()
-            .vertices()
-            .filter(|vertex| {
-                let Some(remove) = toroidal_removal_candidate(triangulation, vertex.clone()) else {
-                    return false;
-                };
-                toroidal_removal_candidate_is_committable(triangulation, &remove)
-            })
-            .count();
-    }
-
-    triangulation
-        .geometry()
-        .vertices()
-        .filter(|vertex| {
-            let Some(neighbors) = neighbors3(triangulation, vertex) else {
-                return false;
-            };
-            removal_candidate_is_causal(triangulation, vertex, &neighbors)
-                && removal_candidate_is_committable(triangulation, vertex, &neighbors)
-        })
-        .count()
-}
-
-/// Tests a candidate mutation on a cloned triangulation before counting or sampling it.
+/// Visits every sampleable proposal site for one move family.
 ///
-/// Metropolis-Hastings site counts must include only sites that can actually
-/// commit through the same backend mutation path as the executor. Cheap local
-/// guards run first where possible, and this dry-run catches remaining backend
-/// constraints without mutating the live state.
-fn candidate_mutation_succeeds(
+/// The return value records whether any coarse geometric candidate existed,
+/// even if no candidate survived causal or backend-local screening.
+fn visit_proposal_sites(
     triangulation: &CdtTriangulation2D,
-    operation: impl FnOnce(&mut CdtTriangulation2D) -> bool,
+    move_type: MoveType,
+    mut visit: impl FnMut(ProposalSite),
 ) -> bool {
-    let mut candidate = triangulation.clone();
-    operation(&mut candidate)
+    match move_type {
+        MoveType::Move22 | MoveType::EdgeFlip => edge_flip_sites(triangulation, &mut visit),
+        MoveType::Move13Add => insertion_sites(triangulation, &mut visit),
+        MoveType::Move31Remove => removal_sites(triangulation, &mut visit),
+    }
 }
 
+/// Visits sampleable k=2 edge-flip sites.
+///
+/// Each visited edge has two adjacent faces, passes the causal flip guard, and
+/// avoids creating a duplicate edge between opposite vertices.
+fn edge_flip_sites(
+    triangulation: &CdtTriangulation2D,
+    visit: &mut impl FnMut(ProposalSite),
+) -> bool {
+    let geometry = triangulation.geometry();
+    let mut geometric_candidate_seen = false;
+    for edge in geometry.edges() {
+        let Ok(Some(adjacent)) = geometry.edge_adjacent_faces(&edge) else {
+            continue;
+        };
+        geometric_candidate_seen = true;
+        if edge_flip_candidate_is_sampleable(triangulation, &edge, &adjacent) {
+            visit(ProposalSite::EdgeFlip(edge));
+        }
+    }
+    geometric_candidate_seen
+}
+
+/// Visits sampleable `(1,3)` insertion sites for the triangulation topology.
+///
+/// Toroidal foliated triangulations use the spacelike-link split visitor;
+/// ordinary face subdivision is used for open-boundary and unfoliated states.
+fn insertion_sites(
+    triangulation: &CdtTriangulation2D,
+    visit: &mut impl FnMut(ProposalSite),
+) -> bool {
+    if is_toroidal_foliated(triangulation) {
+        return toroidal_insertion_sites(triangulation, visit);
+    }
+
+    let mut geometric_candidate_seen = false;
+    for face in triangulation.geometry().faces() {
+        let Some(point) = centroid(triangulation, &face) else {
+            continue;
+        };
+        geometric_candidate_seen = true;
+        let Some(label) = insertion_label(triangulation, &face) else {
+            continue;
+        };
+
+        if insertion_candidate_is_sampleable(&point) {
+            visit(ProposalSite::FaceSubdivision { face, point, label });
+        }
+    }
+    geometric_candidate_seen
+}
+
+/// Visits sampleable toroidal `(1,3)` spacelike-link split sites.
+///
+/// The visitor only receives candidates whose adjacent faces identify a
+/// same-slice edge with neighboring time labels and a finite insertion point.
+fn toroidal_insertion_sites(
+    triangulation: &CdtTriangulation2D,
+    visit: &mut impl FnMut(ProposalSite),
+) -> bool {
+    let geometry = triangulation.geometry();
+    let mut geometric_candidate_seen = false;
+    for edge in geometry.edges() {
+        let Ok(Some(adjacent)) = geometry.edge_adjacent_faces(&edge) else {
+            continue;
+        };
+        geometric_candidate_seen = true;
+        let Some(insert) = toroidal_insertion_candidate(triangulation, edge, &adjacent) else {
+            continue;
+        };
+        if toroidal_insertion_candidate_is_sampleable(&insert) {
+            visit(ProposalSite::ToroidalInsertion(insert));
+        }
+    }
+    geometric_candidate_seen
+}
+
+/// Visits sampleable `(3,1)` removal sites for the triangulation topology.
+///
+/// Toroidal foliated states use flip-then-collapse candidates; open-boundary
+/// and unfoliated states use direct degree-3 vertex collapses.
+fn removal_sites(triangulation: &CdtTriangulation2D, visit: &mut impl FnMut(ProposalSite)) -> bool {
+    if is_toroidal_foliated(triangulation) {
+        for vertex in triangulation.geometry().vertices() {
+            let Some(remove) = toroidal_removal_candidate(triangulation, vertex) else {
+                continue;
+            };
+            if toroidal_removal_candidate_is_sampleable(triangulation, &remove) {
+                visit(ProposalSite::ToroidalRemoval(remove));
+            }
+        }
+        return true;
+    }
+
+    let mut geometric_candidate_seen = false;
+    for vertex in triangulation.geometry().vertices() {
+        let Some(neighbors) = neighbors3(triangulation, &vertex) else {
+            continue;
+        };
+        geometric_candidate_seen = true;
+        if removal_candidate_is_causal(triangulation, &vertex, &neighbors)
+            && removal_candidate_is_sampleable(triangulation, &neighbors)
+        {
+            visit(ProposalSite::VertexRemoval(vertex));
+        }
+    }
+    geometric_candidate_seen
+}
+
+/// Checks whether toroidal move kernels must preserve periodic foliation structure.
 fn is_toroidal_foliated(triangulation: &CdtTriangulation2D) -> bool {
     matches!(triangulation.metadata().topology, CdtTopology::Toroidal)
         && triangulation.has_foliation()
@@ -1756,6 +1803,100 @@ mod tests {
         assert_eq!(stats.edge_flips_hard_failed, 1);
         assert_eq!(stats.total_hard_failures(), 4);
         assert_relative_eq!(stats.total_acceptance_rate(), 0.5);
+    }
+
+    #[test]
+    fn move_statistics_saturate_extreme_counters() {
+        let mut stats = MoveStatistics {
+            moves_22_attempted: u64::MAX,
+            moves_13_attempted: 1,
+            moves_31_attempted: 1,
+            edge_flips_attempted: 1,
+            moves_22_accepted: u64::MAX,
+            moves_13_accepted: 1,
+            moves_31_accepted: 1,
+            edge_flips_accepted: 1,
+            moves_22_hard_failed: u64::MAX,
+            moves_13_hard_failed: 1,
+            moves_31_hard_failed: 1,
+            edge_flips_hard_failed: 1,
+        };
+
+        stats.record_attempt(MoveType::Move22);
+        stats.record_success(MoveType::Move22);
+        stats.record_hard_failure(MoveType::Move22);
+
+        assert_eq!(stats.moves_22_attempted, u64::MAX);
+        assert_eq!(stats.moves_22_accepted, u64::MAX);
+        assert_eq!(stats.moves_22_hard_failed, u64::MAX);
+        assert_eq!(stats.total_attempted(), u64::MAX);
+        assert_eq!(stats.total_accepted(), u64::MAX);
+        assert_eq!(stats.total_hard_failures(), u64::MAX);
+    }
+
+    #[test]
+    fn move_statistics_saturate_each_move_type_counter() {
+        for move_type in [
+            MoveType::Move22,
+            MoveType::Move13Add,
+            MoveType::Move31Remove,
+            MoveType::EdgeFlip,
+        ] {
+            let mut stats = MoveStatistics::new();
+            match move_type {
+                MoveType::Move22 => {
+                    stats.moves_22_attempted = u64::MAX;
+                    stats.moves_22_accepted = u64::MAX;
+                    stats.moves_22_hard_failed = u64::MAX;
+                }
+                MoveType::Move13Add => {
+                    stats.moves_13_attempted = u64::MAX;
+                    stats.moves_13_accepted = u64::MAX;
+                    stats.moves_13_hard_failed = u64::MAX;
+                }
+                MoveType::Move31Remove => {
+                    stats.moves_31_attempted = u64::MAX;
+                    stats.moves_31_accepted = u64::MAX;
+                    stats.moves_31_hard_failed = u64::MAX;
+                }
+                MoveType::EdgeFlip => {
+                    stats.edge_flips_attempted = u64::MAX;
+                    stats.edge_flips_accepted = u64::MAX;
+                    stats.edge_flips_hard_failed = u64::MAX;
+                }
+            }
+
+            stats.record_attempt(move_type);
+            stats.record_success(move_type);
+            stats.record_hard_failure(move_type);
+
+            let (attempted, accepted, hard_failed) = match move_type {
+                MoveType::Move22 => (
+                    stats.moves_22_attempted,
+                    stats.moves_22_accepted,
+                    stats.moves_22_hard_failed,
+                ),
+                MoveType::Move13Add => (
+                    stats.moves_13_attempted,
+                    stats.moves_13_accepted,
+                    stats.moves_13_hard_failed,
+                ),
+                MoveType::Move31Remove => (
+                    stats.moves_31_attempted,
+                    stats.moves_31_accepted,
+                    stats.moves_31_hard_failed,
+                ),
+                MoveType::EdgeFlip => (
+                    stats.edge_flips_attempted,
+                    stats.edge_flips_accepted,
+                    stats.edge_flips_hard_failed,
+                ),
+            };
+            assert_eq!(attempted, u64::MAX);
+            assert_eq!(accepted, u64::MAX);
+            assert_eq!(hard_failed, u64::MAX);
+            assert_relative_eq!(stats.acceptance_rate(move_type), 1.0);
+        }
     }
 
     #[test]
@@ -1993,7 +2134,96 @@ mod tests {
     }
 
     #[test]
-    fn removal_committable_guard_rejects_existing_replacement_face() {
+    fn selected_proposal_site_reports_count_and_empty_state() {
+        let mut system = ErgodicsSystem::with_seed(11);
+        let mut triangulation = single_triangle();
+
+        let empty_selection = system.select_proposal_site(&triangulation, MoveType::Move31Remove);
+        assert_eq!(empty_selection.site_count, 0);
+        assert!(empty_selection.site.is_none());
+
+        let insertion_selection = system.select_proposal_site(&triangulation, MoveType::Move13Add);
+        assert_eq!(
+            insertion_selection.site_count,
+            proposal_site_count(&triangulation, MoveType::Move13Add)
+        );
+        let Some(insertion_site) = insertion_selection.site else {
+            panic!("nonempty insertion selection should include a concrete site");
+        };
+
+        let result =
+            system.apply_proposal_site(&mut triangulation, MoveType::Move13Add, insertion_site);
+        assert_eq!(result, MoveResult::Success);
+
+        let removal_selection = system.select_proposal_site(&triangulation, MoveType::Move31Remove);
+        assert_eq!(
+            removal_selection.site_count,
+            proposal_site_count(&triangulation, MoveType::Move31Remove)
+        );
+        assert!(removal_selection.site.is_some());
+    }
+
+    #[test]
+    fn mismatched_proposal_site_rejects_without_mutating() {
+        let mut system = ErgodicsSystem::with_seed(11);
+        let mut triangulation = single_triangle();
+        let counts_before = (
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+            triangulation.metadata().modification_count,
+        );
+
+        let insertion_selection = system.select_proposal_site(&triangulation, MoveType::Move13Add);
+        let Some(insertion_site) = insertion_selection.site else {
+            panic!("single triangle should expose one insertion site");
+        };
+
+        let result =
+            system.apply_proposal_site(&mut triangulation, MoveType::Move22, insertion_site);
+
+        assert_eq!(result, MoveResult::GeometricViolation);
+        assert_eq!(
+            (
+                triangulation.vertex_count(),
+                triangulation.edge_count(),
+                triangulation.face_count(),
+                triangulation.metadata().modification_count,
+            ),
+            counts_before
+        );
+        triangulation
+            .validate()
+            .expect("rejecting a mismatched proposal site should leave CDT invariants intact");
+    }
+
+    #[test]
+    fn proposal_site_count_handles_nonuniform_toroidal_profiles() {
+        let mut system = ErgodicsSystem::with_seed(7);
+        let mut triangulation = CdtTriangulation2D::from_toroidal_cdt_profile(&[3, 4, 5, 4])
+            .expect("nonuniform toroidal CDT should build");
+
+        let initial_insertions = proposal_site_count(&triangulation, MoveType::Move13Add);
+        let initial_removals = proposal_site_count(&triangulation, MoveType::Move31Remove);
+        assert!(
+            initial_insertions > 0,
+            "nonuniform toroidal profiles should expose counted insertion sites"
+        );
+        assert!(
+            initial_removals > 0,
+            "nonuniform toroidal profiles should expose counted inverse-volume sites"
+        );
+
+        let result = system.attempt_13_move(&mut triangulation);
+        assert_eq!(result, MoveResult::Success);
+        triangulation
+            .validate()
+            .expect("counted nonuniform-profile insertion should preserve CDT invariants");
+        assert!(proposal_site_count(&triangulation, MoveType::Move13Add) > 0);
+    }
+
+    #[test]
+    fn removal_sampleable_guard_rejects_existing_replacement_face() {
         let triangulation = single_triangle();
         let face = triangulation
             .geometry()
@@ -2013,9 +2243,8 @@ mod tests {
             &triangulation,
             &replacement_vertices
         ));
-        assert!(!removal_candidate_is_committable(
+        assert!(!removal_candidate_is_sampleable(
             &triangulation,
-            v0,
             &replacement_vertices
         ));
     }
@@ -2119,12 +2348,21 @@ mod tests {
             triangulation.face_count(),
         );
 
-        let result = system.attempt_31_move(&mut triangulation);
+        let mut removed = false;
+        for _ in 0..64 {
+            match system.attempt_31_move(&mut triangulation) {
+                MoveResult::Success => {
+                    removed = true;
+                    break;
+                }
+                MoveResult::Rejected(_) | MoveResult::GeometricViolation => {}
+                other => panic!("unexpected toroidal removal result: {other:?}"),
+            }
+        }
 
-        assert_eq!(
-            result,
-            MoveResult::Success,
-            "periodic toroidal Move31Remove should apply with upstream offset-aware flips"
+        assert!(
+            removed,
+            "sampleable periodic toroidal Move31Remove sites should include upstream offset-aware successes"
         );
         assert_eq!(system.stats.moves_31_accepted, 1);
         assert_eq!(
@@ -2160,20 +2398,46 @@ mod tests {
 
         assert!(
             proposal_site_count(&triangulation, MoveType::Move31Remove) > 0,
-            "initial toroidal CDT should expose committable inverse-volume sites"
+            "initial toroidal CDT should expose sampleable inverse-volume sites"
         );
         assert!(proposal_site_count(&triangulation, MoveType::Move13Add) > 0);
 
-        let insert = system.attempt_13_move(&mut triangulation);
-        assert_eq!(insert, MoveResult::Success);
+        let mut inserted = false;
+        for _ in 0..64 {
+            match system.attempt_13_move(&mut triangulation) {
+                MoveResult::Success => {
+                    inserted = true;
+                    break;
+                }
+                MoveResult::Rejected(_) | MoveResult::CausalityViolation => {}
+                other => panic!("unexpected toroidal insertion result: {other:?}"),
+            }
+        }
+        assert!(
+            inserted,
+            "sampleable toroidal insertion sites should include successes"
+        );
 
         assert!(
             proposal_site_count(&triangulation, MoveType::Move31Remove) > 0,
-            "a toroidal spacelike-link split should expose at least one committable inverse site"
+            "a toroidal spacelike-link split should expose at least one sampleable inverse site"
         );
 
-        let removal = system.attempt_31_move(&mut triangulation);
-        assert_eq!(removal, MoveResult::Success);
+        let mut removed = false;
+        for _ in 0..64 {
+            match system.attempt_31_move(&mut triangulation) {
+                MoveResult::Success => {
+                    removed = true;
+                    break;
+                }
+                MoveResult::Rejected(_) | MoveResult::GeometricViolation => {}
+                other => panic!("unexpected toroidal removal result: {other:?}"),
+            }
+        }
+        assert!(
+            removed,
+            "sampleable toroidal inverse sites should include successes"
+        );
         triangulation
             .validate()
             .expect("proposal-counted toroidal inverse move should preserve CDT invariants");
@@ -2193,10 +2457,9 @@ mod tests {
 
         let result = system.attempt_31_move(&mut triangulation);
 
-        assert_eq!(
-            result,
-            MoveResult::GeometricViolation,
-            "minimal periodic toroidal slices should not expose removable volume candidates"
+        assert!(
+            matches!(result, MoveResult::CausalityViolation),
+            "minimal periodic toroidal slices should reject volume removal causally, got {result:?}"
         );
         assert_eq!(system.stats.moves_31_attempted, 1);
         assert_eq!(system.stats.moves_31_accepted, 0);

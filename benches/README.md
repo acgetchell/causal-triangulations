@@ -28,6 +28,8 @@ CDT workflows that should stay comparable across releases:
 - generating open-boundary and toroidal CDT triangulations;
 - validating generated triangulations;
 - attempting individual ergodic move types;
+- iterating proposal-site candidates through public move-attempt and single-step
+  Metropolis proposal paths;
 - executing ten random-move sweeps, where each sweep attempts one move per
   current simplex;
 - running short Metropolis simulations sized as ten initial sweeps.
@@ -126,6 +128,13 @@ cargo bench -- --save-baseline my_baseline
   - `random_move_selection`: Random move type selection
   - `random_move_attempt`: Complete random move attempt
 - **Use Case**: Optimizing Monte Carlo move proposal
+
+The CI suite also includes `cdt_proposal_site_move_attempts_2d` and
+`cdt_single_metropolis_proposal_2d`. These benchmarks exercise the public paths
+that iterate explicit proposal sites, apply a selected site on a cloned proposed
+state, and, for Metropolis proposals, compute reverse-site counts for the
+Hastings ratio. They are the first place to check before adding a
+crate-internal benchmark hook for isolated proposal-site enumeration.
 
 ### 6. Metropolis Simulation (`metropolis_simulation`)
 

@@ -130,10 +130,20 @@ mod integration_tests {
             MoveResult::Success,
             "periodic toroidal local dynamics should accept a volume-increasing move"
         );
-        assert_eq!(
-            local_moves.attempt_31_move(&mut inverse_fixture),
-            MoveResult::Success,
-            "periodic toroidal local dynamics should accept the inverse volume move after growth"
+        let mut inverse_accepted = false;
+        for _ in 0..64 {
+            match local_moves.attempt_31_move(&mut inverse_fixture) {
+                MoveResult::Success => {
+                    inverse_accepted = true;
+                    break;
+                }
+                MoveResult::Rejected(_) | MoveResult::GeometricViolation => {}
+                other => panic!("unexpected toroidal inverse move result: {other:?}"),
+            }
+        }
+        assert!(
+            inverse_accepted,
+            "periodic toroidal local dynamics should include an accepted inverse volume move after growth"
         );
         inverse_fixture
             .validate()

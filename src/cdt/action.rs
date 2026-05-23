@@ -5,7 +5,7 @@
 //! This module implements the discrete Einstein-Hilbert action used in CDT,
 //! which is based on the Regge calculus formulation of general relativity.
 
-use crate::errors::{CdtError, CdtResult};
+use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
 use serde::{Deserialize, Serialize};
 
 /// Calculates the 2D Regge Action for a given triangulation.
@@ -116,9 +116,12 @@ impl ActionConfig {
     /// assert!(ActionConfig::new(f64::NAN, 1.0, 0.1).validate().is_err());
     /// ```
     pub fn validate(&self) -> CdtResult<()> {
-        validate_coupling("coupling_0", self.coupling_0)?;
-        validate_coupling("coupling_2", self.coupling_2)?;
-        validate_coupling("cosmological_constant", self.cosmological_constant)
+        validate_coupling(ConfigurationSetting::Coupling0, self.coupling_0)?;
+        validate_coupling(ConfigurationSetting::Coupling2, self.coupling_2)?;
+        validate_coupling(
+            ConfigurationSetting::CosmologicalConstant,
+            self.cosmological_constant,
+        )
     }
 
     /// Calculates the action for given simplex counts.
@@ -147,12 +150,12 @@ impl ActionConfig {
 }
 
 /// Rejects non-finite action couplings before they can poison action/log-probability math.
-fn validate_coupling(setting: &str, value: f64) -> CdtResult<()> {
+fn validate_coupling(setting: ConfigurationSetting, value: f64) -> CdtResult<()> {
     if value.is_finite() {
         Ok(())
     } else {
         Err(CdtError::InvalidConfiguration {
-            setting: setting.to_string(),
+            setting,
             provided_value: value.to_string(),
             expected: "finite".to_string(),
         })
