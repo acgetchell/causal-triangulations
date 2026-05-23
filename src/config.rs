@@ -431,10 +431,12 @@ impl CdtConfig {
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::prelude::errors::CdtResult;
     /// use causal_triangulations::prelude::config::{
     ///     CdtConfig, CdtConfigOverrides, DimensionOverride,
     /// };
     ///
+    /// fn main() -> CdtResult<()> {
     /// let base = CdtConfig::new(10, 2);
     /// let overrides = CdtConfigOverrides {
     ///     dimension: Some(DimensionOverride::Clear),
@@ -442,13 +444,19 @@ impl CdtConfig {
     ///     ..CdtConfigOverrides::default()
     /// };
     ///
-    /// let merged = base.merge_with_override(&overrides);
+    /// let merged = base.merge_with_override(&overrides)?;
     /// assert_eq!(merged.dimension, None);
     /// assert_eq!(merged.vertices, 24);
     /// assert_eq!(merged.timeslices, 2);
+    /// # Ok(())
+    /// }
     /// ```
-    #[must_use]
-    pub fn merge_with_override(&self, overrides: &CdtConfigOverrides) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidConfiguration`] if an override volume profile cannot
+    /// be represented by the `u32` vertex or time-slice counts stored in [`CdtConfig`].
+    pub fn merge_with_override(&self, overrides: &CdtConfigOverrides) -> CdtResult<Self> {
         let mut merged = self.clone();
 
         if let Some(dimension_override) = overrides.dimension {
@@ -474,10 +482,25 @@ impl CdtConfig {
         // merged config can pair stale vertex/time-slice totals with new slices.
         match &overrides.volume_profile {
             Some(Some(profile)) => {
-                merged.vertices = profile
-                    .iter()
-                    .fold(0_u32, |total, &vertices| total.saturating_add(vertices));
-                merged.timeslices = u32::try_from(profile.len()).unwrap_or(u32::MAX);
+                let profile_vertices = profile.iter().try_fold(0_u32, |total, &vertices| {
+                    total.checked_add(vertices).ok_or_else(|| {
+                        invalid_config(
+                            ConfigurationSetting::Vertices,
+                            &format!("{profile:?}"),
+                            &"volume profile sum <= u32::MAX",
+                        )
+                    })
+                })?;
+                let profile_timeslices = u32::try_from(profile.len()).map_err(|err| {
+                    invalid_config(
+                        ConfigurationSetting::Timeslices,
+                        &profile.len(),
+                        &format!("volume profile length must fit in u32: {err}"),
+                    )
+                })?;
+
+                merged.vertices = profile_vertices;
+                merged.timeslices = profile_timeslices;
                 merged.volume_profile = Some(profile.clone());
             }
             Some(None) => merged.volume_profile = None,
@@ -532,7 +555,7 @@ impl CdtConfig {
             merged.output_json.clone_from(output_json);
         }
 
-        merged
+        Ok(merged)
     }
 
     /// Resolves a candidate path against a base directory, expanding user home references
@@ -1861,7 +1884,9 @@ mod tests {
             ..CdtConfigOverrides::default()
         };
 
-        let merged = base.merge_with_override(&overrides);
+        let merged = base
+            .merge_with_override(&overrides)
+            .expect("override merge should succeed");
 
         assert_eq!(merged.dimension, None);
         assert_eq!(merged.dimension(), 2);
@@ -1893,7 +1918,9 @@ mod tests {
             ..CdtConfigOverrides::default()
         };
 
-        let merged = base.merge_with_override(&overrides);
+        let merged = base
+            .merge_with_override(&overrides)
+            .expect("override merge should succeed");
 
         assert_eq!(merged.vertices, 15);
         assert_eq!(merged.timeslices, 3);
@@ -1921,7 +1948,9 @@ mod tests {
             ..CdtConfigOverrides::default()
         };
 
-        let merged = base.merge_with_override(&overrides);
+        let merged = base
+            .merge_with_override(&overrides)
+            .expect("override merge should succeed");
 
         assert_eq!(merged.seed, None);
     }
@@ -1939,7 +1968,9 @@ mod tests {
             ..CdtConfigOverrides::default()
         };
 
-        let merged = base.merge_with_override(&overrides);
+        let merged = base
+            .merge_with_override(&overrides)
+            .expect("override merge should succeed");
 
         assert_eq!(merged.volume_profile, None);
         assert_eq!(merged.vertices, 15);
@@ -1954,9 +1985,35 @@ mod tests {
             ..CdtConfigOverrides::default()
         };
 
-        let merged = base.merge_with_override(&overrides);
+        let merged = base
+            .merge_with_override(&overrides)
+            .expect("override merge should succeed");
         assert_eq!(merged.dimension, None);
         assert_eq!(merged.dimension(), 2); // dimension() defaults to 2 when None
+    }
+
+    #[test]
+    fn test_merge_with_override_rejects_volume_profile_vertex_overflow() {
+        let base = CdtConfig::new(10, 2);
+        let overrides = CdtConfigOverrides {
+            volume_profile: Some(Some(vec![u32::MAX, 1])),
+            ..CdtConfigOverrides::default()
+        };
+
+        let result = base.merge_with_override(&overrides);
+
+        assert!(
+            matches!(
+                result,
+                Err(CdtError::InvalidConfiguration {
+                    setting: ConfigurationSetting::Vertices,
+                    ref provided_value,
+                    ref expected,
+                }) if provided_value == "[4294967295, 1]"
+                    && expected == "volume profile sum <= u32::MAX"
+            ),
+            "{result:?}"
+        );
     }
 
     #[test]

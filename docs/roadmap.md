@@ -22,6 +22,8 @@ The v0.1.0 foundation work focuses on making the crate a usable, validated 1+1 C
   ([#141](https://github.com/acgetchell/causal-triangulations/issues/141))
 - [ ] Track release-readiness gates for the first public release
   ([#140](https://github.com/acgetchell/causal-triangulations/issues/140))
+- [ ] Audit public doctests for fallible error handling
+  ([#151](https://github.com/acgetchell/causal-triangulations/issues/151))
 
 ## 1+1 Maturity
 
