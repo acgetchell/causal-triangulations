@@ -141,8 +141,9 @@ pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimen
 pub use cdt::results::{Measurement, SimulationResultsBackend};
 pub use config::{CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, TestConfig};
 pub use errors::{
-    BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CheckpointOperation,
-    CheckpointResumeReason, DelaunayValidationLevel, OutputFormat,
+    BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
+    CheckpointOperation, CheckpointResumeReason, DelaunayValidationLevel,
+    MetropolisMoveApplicationFailure, OutputFormat,
 };
 
 use crate::util::saturating_usize_to_u32;
@@ -196,21 +197,28 @@ pub mod prelude {
     /// Focused exports for crate error handling.
     ///
     /// ```
-    /// use causal_triangulations::prelude::errors::CdtError;
+    /// use causal_triangulations::prelude::errors::{
+    ///     BackendMutationOperation, CdtError, MetropolisMoveApplicationFailure,
+    /// };
     /// use causal_triangulations::prelude::moves::MoveType;
     ///
     /// let err = CdtError::MetropolisMoveApplicationFailed {
     ///     step: 3,
     ///     move_type: MoveType::Move31Remove,
     ///     attempts: 8,
-    ///     last_failure: "no geometrically valid candidate site found".to_string(),
+    ///     source: MetropolisMoveApplicationFailure::BackendMutation {
+    ///         operation: BackendMutationOperation::RemoveVertex,
+    ///         target: "vertex VertexKey(7v1)".to_string(),
+    ///         detail: "backend reported invalid vertex key".to_string(),
+    ///     },
     /// };
     /// assert!(format!("{err}").contains("Metropolis accepted Move31Remove"));
     /// ```
     pub mod errors {
         pub use crate::errors::{
-            BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CheckpointOperation,
-            CheckpointResumeReason, DelaunayValidationLevel, OutputFormat,
+            BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck,
+            CdtValidationFailure, CheckpointOperation, CheckpointResumeReason,
+            DelaunayValidationLevel, MetropolisMoveApplicationFailure, OutputFormat,
         };
     }
 

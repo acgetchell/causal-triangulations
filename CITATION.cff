@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "causal-triangulations: A Causal Dynamical Triangulation library for quantum gravity research"
+version: 0.0.1
+url: "https://github.com/acgetchell/causal-triangulations"
+repository-code: "https://github.com/acgetchell/causal-triangulations"
+authors:
+  - family-names: "Getchell"
+    given-names: "Adam"
+    email: "adam@adamgetchell.org"
+    orcid: "https://orcid.org/0000-0002-0797-0021"
+keywords:
+  - "causal-dynamical-triangulations"
+  - "quantum-gravity"
+  - "simulation"
+  - "spacetime"
+  - "triangulation"
+abstract: >-
+  Rust crate providing Causal Dynamical Triangulations for quantum gravity
+  research. The library implements validated 1+1 CDT construction, foliation
+  checks, Metropolis-Hastings sampling over causal local moves, Regge action
+  calculation, simulation outputs, checkpoints, and observables including volume
+  profiles, Hausdorff-dimension estimates, and spectral-dimension estimates.
+  It builds on Delaunay triangulation primitives, keeps geometry and CDT domain
+  logic separated, and provides a command-line binary plus focused public APIs
+  for simulation and analysis workflows. Written in safe Rust with no unsafe
+  code.
+license: BSD-3-Clause

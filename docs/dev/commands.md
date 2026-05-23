@@ -250,8 +250,8 @@ just shell-fix         # Format (mutating)
 
 ## YAML Validation
 
-YAML files are checked with `yamllint` and formatted with `dprint` using the
-Rust-native `pretty_yaml` plugin.
+YAML and `CITATION.cff` files are checked with `yamllint` and formatted with
+`dprint` using the Rust-native `pretty_yaml` plugin.
 
 Commands:
 
@@ -262,6 +262,18 @@ just yaml-fix          # Format (mutating)
 
 Compatibility aliases remain available as granular recipes:
 `just yaml-lint` and `just yaml-fmt-check`.
+
+---
+
+## CITATION.cff Validation
+
+Citation metadata should pass both YAML style linting and CFF schema validation.
+
+Run:
+
+```bash
+just citation-check
+```
 
 ---
 
@@ -326,6 +338,47 @@ The smaller CI regression benchmark contract runs through the `perf` Cargo profi
 ```bash
 just bench-ci
 ```
+
+For manual large-scale toroidal 1+1 CDT move-kernel debugging, run the parameterized slow-test harness through the `perf` Cargo profile:
+
+```bash
+just debug-large-scale-1p1 512 16 10
+```
+
+Named scale probes are also available:
+
+```bash
+just debug-large-scale-1p1-512
+just debug-large-scale-1p1-1024
+```
+
+The arguments are total vertices, timeslices, and sweeps. The umbrella recipe runs the curated large-scale debug case set:
+
+```bash
+just perf-large-scale-debug
+```
+
+The umbrella recipe currently runs `512/16/10` and `1024/32/1` cases. It is intentionally manual and long-running; use the parameterized
+`debug-large-scale-1p1` recipe directly when you only need a smaller smoke probe.
+
+These debug recipes do not enable volume fixing. Volume drift in the reported final vertex and simplex counts is expected when `(1,3)` and `(3,1)` moves are
+accepted. Treat these runs as unfixed-volume move-kernel stress tests, not as fixed-volume CDT production ensembles. Future fixed-volume recipes should be
+explicitly labeled because quadratic volume fixing samples a modified ensemble; see Ambjørn et al.,
+[The Semiclassical Limit of Causal Dynamical Triangulations](https://arxiv.org/abs/1102.3929), and
+[The phase structure of Causal Dynamical Triangulations with toroidal spatial topology](https://arxiv.org/abs/1802.10434).
+
+For unfixed-volume debug runs, the cosmological constant is the volume-control coupling. If a large-scale recipe grows or shrinks too aggressively, tune the
+action parameters rather than interpreting the run as a failed fixed-volume simulation.
+
+The recipes set per-case environment variables, and the Rust harness also accepts these variables directly:
+
+| Variable | Description |
+| -------- | ----------- |
+| `CDT_LARGE_DEBUG_VERTICES` / `CDT_LARGE_DEBUG_VERTICES_1P1` | Total vertex count |
+| `CDT_LARGE_DEBUG_TIMESLICES` / `CDT_LARGE_DEBUG_TIMESLICES_1P1` | Number of periodic time slices |
+| `CDT_LARGE_DEBUG_SWEEPS` / `CDT_LARGE_DEBUG_SWEEPS_1P1` | Sweep count; one sweep attempts one move per current simplex |
+| `CDT_LARGE_DEBUG_SEED` / `CDT_LARGE_DEBUG_SEED_1P1` | RNG seed, decimal or `0x` hexadecimal |
+| `CDT_LARGE_DEBUG_MAX_RUNTIME_SECS` | Optional wall-clock cap checked between sweeps; `0` disables it |
 
 To compile benchmarks and release-profile integration tests without running them:
 

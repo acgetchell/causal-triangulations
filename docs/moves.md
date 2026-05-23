@@ -14,10 +14,12 @@ Enumerates the available move types:
 
 - `Move22` — (2,2) move: flip the shared edge between two triangles, preserving vertex count; causality-aware — the CDT layer validates and rejects moves that
   break causal layering
-- `Move13Add` — (1,3) move: insert a new vertex by subdividing one triangle into three; when the triangulation is foliated, the inserted vertex receives the
-  time label that keeps all replacement triangles causal
-- `Move31Remove` — (3,1) move: remove a degree-3 vertex by merging three triangles into one when the replacement triangle is causal and the removal does not
-  empty a time slice
+- `Move13Add` — (1,3) move: insert a new vertex by adding local CDT volume; open-boundary and unfoliated runs subdivide one triangle into three, while
+  toroidal foliated runs split a spacelike link by subdividing an adjacent face and flipping the original spacelike link away. Inserted vertices receive the
+  time label needed to keep the replacement simplices causal.
+- `Move31Remove` — (3,1) move: remove a vertex by collapsing local CDT volume; open-boundary and unfoliated runs remove a degree-3 vertex when the replacement
+  triangle is causal and no time slice is emptied, while toroidal foliated runs use the inverse flip-then-collapse path for degree-4 spacelike-link-split
+  configurations.
 - `EdgeFlip` — API-compatible alias for the 2D k=2 edge flip used by `Move22`; it records separate statistics but uses the same causal prechecks
 
 ### `MoveResult`
@@ -35,15 +37,18 @@ Returned by each `attempt_*` method:
 
 ### `MoveStatistics`
 
-Tracks per-move-type attempt and acceptance counts. Fields: `moves_22_attempted` / `moves_22_accepted`, `moves_13_attempted` / `moves_13_accepted`,
-`moves_31_attempted` / `moves_31_accepted`, `edge_flips_attempted` / `edge_flips_accepted`.
+Tracks per-move-type attempts, accepted moves, and hard failures. Attempts count every selected proposal. Accepted counts include only moves that committed and
+validated successfully. Hard failures are distinct from ordinary proposal rejections: they remain in the attempt denominator, do not increment accepted counts,
+and are reported through the `*_hard_failed` fields and `total_hard_failures()`.
 
 Key methods:
 
 - `record_attempt(MoveType)` — increment the attempt counter
-- `record_success(MoveType)` — increment the acceptance counter
-- `acceptance_rate(MoveType) -> f64` — ratio for a single move type
-- `total_acceptance_rate() -> f64` — ratio across all move types
+- `record_success(MoveType)` — increment the committed-and-validated acceptance counter
+- `record_hard_failure(MoveType)` — increment post-mutation invariant failure telemetry without treating the move as accepted
+- `acceptance_rate(MoveType) -> f64` — accepted / attempted ratio for a single move type
+- `total_acceptance_rate() -> f64` — accepted / attempted ratio across all move types
+- `total_hard_failures() -> u64` — total hard failures across all move types
 
 ### `ErgodicsSystem`
 
@@ -79,12 +84,33 @@ not clone the triangulation. If a selected mutation or required post-mutation sy
 non-success `MoveResult`. Toroidal post-move topology or closed-ring foliation failures are treated as rollbackable local-site rejections, because the candidate
 site was geometrically editable but would break the periodic CDT contract.
 
-The Metropolis loop accepts or rejects a move type before calling these mutating kernels. If an accepted application fails at its selected site, the simulation
-retries at another random site from the restored triangulation. Exhausting those retries is recorded as a rejected proposal; hard backend mutation failures
-still return `CdtError::MetropolisMoveApplicationFailed`. See `docs/metropolis.md`.
+The Metropolis loop first clones the current triangulation and plans a concrete move on that cloned triangulation; see `src/cdt/metropolis.rs`. It then performs
+the accept/reject decision from the proposed move metadata; see `docs/metropolis.md`. Only accepted proposals swap the cloned, mutated state into the live
+simulation. Failed applications on the cloned state are retried from the restored clone state, exhausted retries are recorded as rejected proposals, and hard
+backend mutation or invariant-refresh failures still return `CdtError::MetropolisMoveApplicationFailed`.
+
+## Ensemble And Volume Fixing
+
+Current CDT simulations do not add a volume-fixing term. The `(1,3)` and `(3,1)` kernels are genuine volume-changing proposals, so accepted moves may change
+the total number of vertices and simplices over time. The resulting Markov chain should therefore be interpreted as sampling the unfixed-volume ensemble
+specified by the configured action, cosmological term, proposal probabilities, and Metropolis-Hastings acceptance rule.
+
+This is a valid 1+1 CDT setting rather than an implementation accident. Israel and Lindner use a 1+1 CDT Monte Carlo model where add/remove moves satisfy
+detailed balance and the cosmological constant controls whether the universe size is stable, shrinking, or diverging:
+[Quantum gravity on a laptop: 1+1 Dimensional Causal Dynamical Triangulation simulation](https://doi.org/10.1016/j.rinp.2012.10.001).
+
+For unfixed-volume runs, tune the cosmological constant rather than expecting the move kernels to preserve volume. The cosmological constant is conjugate to
+the lattice volume term, so changing it changes the relative acceptance of volume-increasing and volume-decreasing trajectories through the ordinary action
+difference. The current binary exposes this as `--cosmological-constant`, and programmatic callers set it through `ActionConfig`.
+
+Approximate volume fixing is also standard in higher-dimensional CDT when the scientific goal is a finite-size ensemble at a chosen lattice volume. In that
+case the fixing term is part of the sampled action, for example a quadratic penalty around a target volume, and detailed balance is with respect to the
+modified ensemble. See Ambjørn et al.,
+[The Semiclassical Limit of Causal Dynamical Triangulations](https://arxiv.org/abs/1102.3929), and the toroidal topology study,
+[The phase structure of Causal Dynamical Triangulations with toroidal spatial topology](https://arxiv.org/abs/1802.10434). This crate does not implement volume
+fixing yet; if added, it should be explicit and opt-in.
 
 ## Planned Work
 
 - [ ] Weight `select_random_move()` by available application sites per move type to remove uniform-sampling chain bias
-- [ ] Weight accepted move-site retries by available local sites instead of bounded random retries
 - [ ] Broaden per-kernel toroidal move-site tests around periodic boundary simplices

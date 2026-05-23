@@ -55,6 +55,70 @@ See [`docs/roadmap.md`](docs/roadmap.md) for current direction, near-term candid
 - **Zero-cost abstractions** for performance-critical geometry operations
 - **Rich ecosystem** for scientific computing and parallel processing
 
+## 📋 Running The Binary
+
+The crate installs a `cdt` binary. Use it to construct an initial 1+1 CDT triangulation, optionally run the Metropolis move loop, and write analysis-friendly
+CSV/JSON output.
+
+```bash
+# Build the binary
+cargo build --release
+
+# Show all supported options
+./target/release/cdt --help
+
+# Build an open-boundary triangulation and record the initial measurement
+./target/release/cdt --vertices-per-slice 4 --timeslices 5 --output-json open-boundary-summary.json
+
+# Run a periodic toroidal simulation and write both output formats
+./target/release/cdt \
+  --vertices-per-slice 8 \
+  --timeslices 6 \
+  --topology toroidal \
+  --steps 200 \
+  --thermalization-steps 20 \
+  --measurement-frequency 10 \
+  --temperature 1.5 \
+  --seed 105 \
+  --simulate \
+  --output-csv toroidal-measurements.csv \
+  --output-json toroidal-summary.json
+```
+
+Prefer `--vertices-per-slice` for regular initial data; the binary computes the total initial vertex count as `vertices_per_slice × timeslices`. `--vertices`
+is still accepted when you already know the total, but it must divide evenly by `--timeslices`. Open-boundary runs require at least 4 vertices per slice and
+toroidal runs require at least 3 vertices per slice. Without `--simulate`, the binary only builds the initial triangulation and writes the step-0 measurement.
+
+### Ensemble And Volume Behavior
+
+Current simulations do not apply volume fixing. Volume-changing moves may change the total number of vertices and simplices during a run, so the sampled
+ensemble is the unfixed-volume ensemble defined by the configured CDT action and Metropolis-Hastings proposal rules. This is intentional for now: in 1+1 CDT,
+unfixed-volume simulations controlled by the cosmological constant are a standard toy-model setting, as in Israel and Lindner,
+[Quantum gravity on a laptop: 1+1 Dimensional Causal Dynamical Triangulation simulation](https://doi.org/10.1016/j.rinp.2012.10.001).
+
+In an unfixed-volume ensemble, the cosmological constant is the coupling that controls volume growth or shrinkage because it is conjugate to the lattice
+volume term in the action. Use `--cosmological-constant` to tune that behavior. Values too far from the useful finite-volume regime can drive runs toward
+minimum-volume configurations or toward rapid growth; this is expected physics for the unfixed ensemble, not volume fixing.
+Automated λ-scan utilities for finding practical finite-volume windows are planned as [#143](https://github.com/acgetchell/causal-triangulations/issues/143);
+for v0.1.0, tune `--cosmological-constant` manually and inspect the reported volume and acceptance diagnostics.
+
+Higher-dimensional CDT studies often use explicit approximate volume fixing for finite-size numerical work. For example, Ambjørn et al. discuss quadratic
+volume fixing in [The Semiclassical Limit of Causal Dynamical Triangulations](https://arxiv.org/abs/1102.3929), and the toroidal phase-structure study uses
+quadratic volume fixing in [The phase structure of Causal Dynamical Triangulations with toroidal spatial topology](https://arxiv.org/abs/1802.10434). This
+crate may add such a mode later, but it should be opt-in because it samples a modified action rather than the current bare unfixed-volume ensemble.
+
+### Ready-to-Use Scripts
+
+The `examples/scripts/` directory contains research workflows:
+
+- **`basic_simulation.sh`** - Simple simulation command
+- **`parameter_sweep.sh`** - Temperature sweep setup
+- **`performance_test.sh`** - Construction and simulation timing across system sizes
+
+For detailed documentation, sample output, and usage instructions for each script, see [examples/scripts/README.md](examples/scripts/README.md).
+
+For comprehensive CLI documentation and advanced usage patterns, see [`docs/CLI_EXAMPLES.md`](docs/CLI_EXAMPLES.md).
+
 ## 🧩 Ecosystem
 
 This crate is part of a broader Rust ecosystem for computational geometry and simulation:
@@ -71,6 +135,43 @@ The long-term design separates:
 - **Physics** (CDT-specific dynamics and observables)
 
 Within this crate, `src/geometry/` is the backend interface layer over `delaunay`, while `src/cdt/` is the CDT domain layer.
+
+## 📋 Benchmarking
+
+Comprehensive performance benchmarks using [Criterion]:
+
+```bash
+# Run all benchmarks
+cargo bench
+
+# Specific benchmark categories
+cargo bench triangulation_creation
+cargo bench metropolis_simulation
+cargo bench action_calculations
+
+# CI regression benchmark contract
+just bench-ci
+
+# Performance regression testing
+just perf-check          # Check for performance regressions
+just perf-baseline       # Save performance baseline
+just perf-report         # Generate detailed performance report
+just perf-trends 7       # Analyze performance trends over 7 days
+```
+
+See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/PERFORMANCE_TESTING.md`](docs/PERFORMANCE_TESTING.md) for comprehensive
+performance testing workflow documentation.
+
+## 🛣️ Roadmap
+
+The high-level roadmap, including 1+1 maturity work, future 2+1 and 3+1 CDT topology tracks, observables, dual/Voronoi geometry, visualization, and non-goals,
+lives in [`docs/roadmap.md`](docs/roadmap.md).
+
+## Design notes
+
+- **Separation of concerns**: geometry primitives (Delaunay/Voronoi) are decoupled from CDT dynamics.
+- **Foliation‑aware data model**: explicit time labels; space‑like vs time‑like edges encoded in types.
+- **Testing**: unit + property tests for invariants (e.g., move reversibility, manifoldness).
 
 ## 🤝 How to Contribute
 
@@ -115,99 +216,6 @@ to install them.
 - `just tag v0.1.0` - Create an annotated git tag from changelog content
 - `just perf-help` - Show performance analysis commands (`perf-baseline`, `perf-check`, etc.)
 
-## 📋 Examples
-
-### Library Usage
-
-See [`examples/basic_cdt.rs`](examples/basic_cdt.rs) for a complete working example:
-
-```rust
-use causal_triangulations::prelude::action::ActionConfig;
-use causal_triangulations::prelude::errors::CdtResult;
-use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
-use causal_triangulations::prelude::triangulation::CdtTriangulation;
-
-fn main() -> CdtResult<()> {
-    // Create a foliated open-boundary CDT strip.
-    let triangulation = CdtTriangulation::from_cdt_strip(8, 4)?;
-
-    // Configure and run the Monte Carlo simulation.
-    let metropolis_config = MetropolisConfig::new(1.0, 1000, 100, 10);
-    let action_config = ActionConfig::default();
-    let algorithm = MetropolisAlgorithm::new(metropolis_config, action_config);
-
-    let results = algorithm.run(triangulation)?;
-    println!("Acceptance rate: {:.3}", results.acceptance_rate());
-    println!("Average action: {:.3}", results.average_action());
-    Ok(())
-}
-```
-
-### Command Line Interface
-
-```bash
-# Build the binary
-cargo build --release
-
-# Build a triangulation and record the initial measurement
-./target/release/cdt --vertices 20 --timeslices 10 --steps 2000
-
-# Configure a parameter sweep with simulation enabled
-./target/release/cdt \
-  --vertices 50 --timeslices 12 \
-  --temperature 1.5 --coupling-0 0.8 \
-  --steps 5000 --simulate
-```
-
-### Ready-to-Use Scripts
-
-The `examples/scripts/` directory contains research workflows:
-
-- **`basic_simulation.sh`** - Simple simulation command
-- **`parameter_sweep.sh`** - Temperature sweep setup
-- **`performance_test.sh`** - Construction and simulation timing across system sizes
-
-For detailed documentation, sample output, and usage instructions for each script, see [examples/scripts/README.md](examples/scripts/README.md).
-
-For comprehensive CLI documentation and advanced usage patterns, see [`docs/CLI_EXAMPLES.md`](docs/CLI_EXAMPLES.md).
-
-## 📋 Benchmarking
-
-Comprehensive performance benchmarks using [Criterion]:
-
-```bash
-# Run all benchmarks
-cargo bench
-
-# Specific benchmark categories
-cargo bench triangulation_creation
-cargo bench metropolis_simulation
-cargo bench action_calculations
-
-# CI regression benchmark contract
-just bench-ci
-
-# Performance regression testing
-just perf-check          # Check for performance regressions
-just perf-baseline       # Save performance baseline
-just perf-report         # Generate detailed performance report
-just perf-trends 7       # Analyze performance trends over 7 days
-```
-
-See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/PERFORMANCE_TESTING.md`](docs/PERFORMANCE_TESTING.md) for comprehensive
-performance testing workflow documentation.
-
-## 🛣️ Roadmap
-
-The high-level roadmap, including 1+1 maturity work, future 2+1 and 3+1 CDT topology tracks, observables, dual/Voronoi geometry, visualization, and non-goals,
-lives in [`docs/roadmap.md`](docs/roadmap.md).
-
-## Design notes
-
-- **Separation of concerns**: geometry primitives (Delaunay/Voronoi) are decoupled from CDT dynamics.
-- **Foliation‑aware data model**: explicit time labels; space‑like vs time‑like edges encoded in types.
-- **Testing**: unit + property tests for invariants (e.g., move reversibility, manifoldness).
-
 For comprehensive guidelines on contributing, development environment setup, testing, and code organization, please see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 This includes information about:
@@ -229,6 +237,23 @@ This includes foundational work on:
 - Computational geometry and Delaunay triangulations
 - Discrete approaches to general relativity
 
+## 🤖 AI Agents
+
+This repository contains an `AGENTS.md` file, which defines the canonical rules and invariants for all AI coding assistants and autonomous agents working on
+this codebase.
+
+AI tools (including ChatGPT, Claude, CodeRabbit, Codex, and WARP) are expected to read and follow `AGENTS.md` when proposing or applying changes.
+
+Portions of this library were developed with the assistance of these AI tools:
+
+- [ChatGPT]
+- [Claude]
+- [CodeRabbit]
+- [Codex]
+- [WARP]
+
+> All code was written and/or reviewed and validated by the author.
+
 ## 📝 License
 
 This project's license is specified in [LICENSE](LICENSE).
@@ -238,6 +263,11 @@ This project's license is specified in [LICENSE](LICENSE).
 [Rust]: https://rust-lang.org
 [Delaunay triangulation]: https://crates.io/crates/delaunay
 [Criterion]: https://github.com/bheisler/criterion.rs
+[ChatGPT]: https://openai.com/chatgpt
+[Claude]: https://www.anthropic.com/claude
+[CodeRabbit]: https://coderabbit.ai/
+[Codex]: https://openai.com/codex/
+[WARP]: https://www.warp.dev
 [ci-badge]: https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml/badge.svg
 [ci-workflow]: https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml
 [clippy-badge]: https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml/badge.svg

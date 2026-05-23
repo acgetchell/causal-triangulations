@@ -49,10 +49,10 @@ _ensure-cargo-nextest:
         exit 1
     fi
 
-_ensure-jq:
+_ensure-dprint:
     #!/usr/bin/env bash
     set -euo pipefail
-    command -v jq >/dev/null || { echo "❌ 'jq' not found. See 'just setup' or install: brew install jq"; exit 1; }
+    command -v dprint >/dev/null || { echo "❌ 'dprint' not found. See 'just setup' or install: brew install dprint"; exit 1; }
 
 _ensure-git-cliff:
     #!/usr/bin/env bash
@@ -63,10 +63,10 @@ _ensure-git-cliff:
         exit 1
     }
 
-_ensure-dprint:
+_ensure-jq:
     #!/usr/bin/env bash
     set -euo pipefail
-    command -v dprint >/dev/null || { echo "❌ 'dprint' not found. See 'just setup' or install: brew install dprint"; exit 1; }
+    command -v jq >/dev/null || { echo "❌ 'jq' not found. See 'just setup' or install: brew install jq"; exit 1; }
 
 _ensure-rumdl:
     #!/usr/bin/env bash
@@ -127,16 +127,16 @@ bench:
 bench-ci:
     cargo bench --profile perf --bench ci_performance_suite
 
-# Smoke-test benchmark harnesses with minimal samples; not for performance data.
-bench-smoke:
-    cargo bench --workspace --bench cdt_benchmarks -- --sample-size 10 --measurement-time 1 --warm-up-time 1 --noplot
-    cargo bench --workspace --bench ci_performance_suite -- --sample-size 10 --measurement-time 1 --warm-up-time 1 --noplot
-
 # Compile benchmarks without running them, treating warnings as errors.
 # This catches bench/release-profile-only warnings (e.g. debug_assertions-gated unused vars)
 # that won't show up in normal debug-profile `cargo test` / `cargo clippy` runs.
 bench-compile:
     RUSTFLAGS='-D warnings' cargo bench --workspace --no-run
+
+# Smoke-test benchmark harnesses with minimal samples; not for performance data.
+bench-smoke:
+    cargo bench --workspace --bench cdt_benchmarks -- --sample-size 10 --measurement-time 1 --warm-up-time 1 --noplot
+    cargo bench --workspace --bench ci_performance_suite -- --sample-size 10 --measurement-time 1 --warm-up-time 1 --noplot
 
 # Compile benchmarks and release-profile Rust test binaries without running.
 bench-test-compile: bench-compile _ensure-cargo-nextest
@@ -164,6 +164,9 @@ changelog: _ensure-git-cliff _ensure-rumdl python-sync
     fi
     rumdl fmt --silent CHANGELOG.md "${archive_files[@]}"
 
+changelog-tag version:
+    just tag {{version}}
+
 changelog-unreleased version: _ensure-git-cliff _ensure-rumdl python-sync
     #!/usr/bin/env bash
     set -euo pipefail
@@ -177,15 +180,6 @@ changelog-unreleased version: _ensure-git-cliff _ensure-rumdl python-sync
         done < <(find docs/archive/changelog -name '*.md' -print0)
     fi
     rumdl fmt --silent CHANGELOG.md "${archive_files[@]}"
-
-tag version: python-sync
-    uv run tag-release {{version}}
-
-tag-force version: python-sync
-    uv run tag-release {{version}} --force
-
-changelog-tag version:
-    just tag {{version}}
 
 changelog-update: changelog
     @echo "📝 Changelog updated successfully!"
@@ -215,6 +209,10 @@ ci-baseline tag="ci":
 ci-slow: ci test-slow
     @echo "✅ CI + slow tests passed!"
 
+# Validate CITATION.cff against the Citation File Format schema.
+citation-check: _ensure-uv
+    uvx --from cffconvert==2.0.0 cffconvert --validate -i CITATION.cff
+
 # Clean build artifacts
 clean:
     cargo clean
@@ -243,6 +241,15 @@ coverage-ci: _ensure-cargo-llvm-cov
 
 coverage-report *args: _ensure-uv
     uv run coverage_report {{args}}
+
+debug-large-scale-1p1 vertices="512" timeslices="16" sweeps="10" max_secs="1800" seed="0xCD710139": _ensure-cargo-nextest
+    CDT_LARGE_DEBUG_VERTICES_1P1={{ vertices }} CDT_LARGE_DEBUG_TIMESLICES_1P1={{ timeslices }} CDT_LARGE_DEBUG_SWEEPS_1P1={{ sweeps }} CDT_LARGE_DEBUG_SEED_1P1={{ seed }} CDT_LARGE_DEBUG_MAX_RUNTIME_SECS={{ max_secs }} cargo nextest run --cargo-profile perf --features slow-tests --test large_scale_debug debug_large_scale_1p1 -- --exact --nocapture
+
+debug-large-scale-1p1-1024 max_secs="1800":
+    just debug-large-scale-1p1 1024 32 1 {{ max_secs }}
+
+debug-large-scale-1p1-512 max_secs="1800":
+    just debug-large-scale-1p1 512 16 10 {{ max_secs }}
 
 # Default recipe shows available commands
 default:
@@ -302,6 +309,8 @@ help-workflows:
     @echo "Benchmark System:"
     @echo "  just bench              # Run all benchmarks"
     @echo "  just bench-ci           # Run CI regression benchmarks with the perf profile"
+    @echo "  just debug-large-scale-1p1 # Run one toroidal 1+1 CDT debug case"
+    @echo "  just perf-large-scale-debug # Run curated large-scale CDT debug cases"
     @echo "  just bench-smoke        # Smoke-test benchmark harnesses with minimal samples"
     @echo "  just bench-compile      # Compile benchmarks without running"
     @echo "  just bench-test-compile # Compile benches + release integration tests without running"
@@ -335,8 +344,8 @@ lint: lint-code lint-docs lint-config
 # Code linting: Rust (fmt-check, clippy, docs, Semgrep) + Python (ruff, ty) + Shell scripts
 lint-code: fmt-check clippy doc-check semgrep semgrep-test python-lint shell-lint
 
-# Configuration validation: JSON, TOML, YAML, GitHub Actions workflows
-lint-config: validate-json toml-check yaml-check action-lint
+# Configuration validation: JSON, TOML, YAML/CFF, GitHub Actions workflows
+lint-config: validate-json toml-check yaml-check citation-check action-lint
 
 # Documentation linting: Markdown + spell checking
 lint-docs: markdown-check spell-check
@@ -391,6 +400,55 @@ markdown-fix: _ensure-rumdl
     fi
 
 markdown-lint: markdown-check
+
+perf-baseline tag="": _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag_value="{{tag}}"
+    if [ -n "$tag_value" ]; then
+        uv run performance-analysis --save-baseline --tag "$tag_value"
+    else
+        uv run performance-analysis --save-baseline
+    fi
+
+perf-check threshold="10.0": _ensure-uv
+    uv run performance-analysis --threshold {{threshold}}
+
+perf-compare file: _ensure-uv
+    uv run performance-analysis --compare "{{file}}"
+
+perf-help:
+    @echo "Performance Analysis Commands:"
+    @echo "  just perf-baseline [tag]    # Save current performance as baseline (optionally tagged)"
+    @echo "  just perf-check [threshold] # Check for regressions (default: 10% threshold)"
+    @echo "  just perf-report [file]     # Generate performance report"
+    @echo "  just perf-trends [days]     # Analyze trends over N days (default: 7)"
+    @echo "  just perf-compare <file>    # Compare with specific baseline file"
+    @echo ""
+    @echo "Examples:"
+    @echo "  just perf-baseline v1.0.0   # Save tagged baseline"
+    @echo "  just perf-check 5.0         # Check with 5% threshold"
+    @echo "  just perf-report my_report.md # Save report to specific file"
+    @echo "  just perf-trends 30         # Analyze last 30 days"
+
+perf-large-scale-debug max_secs="1800":
+    just debug-large-scale-1p1-512 {{ max_secs }}
+    just debug-large-scale-1p1-1024 {{ max_secs }}
+
+perf-report file="": _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    file_value="{{file}}"
+    if [ -n "$file_value" ]; then
+        uv run performance-analysis --report "$file_value"
+    else
+        timestamp=$(date +"%Y%m%d_%H%M%S")
+        uv run performance-analysis --report "performance_report_${timestamp}.md"
+        echo "📄 Report saved to: performance_report_${timestamp}.md"
+    fi
+
+perf-trends days="7": _ensure-uv
+    uv run performance-analysis --trends {{days}}
 
 publish-check: _ensure-jq
     #!/usr/bin/env bash
@@ -450,54 +508,6 @@ publish-check: _ensure-jq
     echo ""
     echo "✅ Publish check passed!"
 
-perf-baseline tag="": _ensure-uv
-    #!/usr/bin/env bash
-    set -euo pipefail
-    tag_value="{{tag}}"
-    if [ -n "$tag_value" ]; then
-        uv run performance-analysis --save-baseline --tag "$tag_value"
-    else
-        uv run performance-analysis --save-baseline
-    fi
-
-perf-check threshold="10.0": _ensure-uv
-    uv run performance-analysis --threshold {{threshold}}
-
-perf-compare file: _ensure-uv
-    uv run performance-analysis --compare "{{file}}"
-
-perf-help:
-    @echo "Performance Analysis Commands:"
-    @echo "  just perf-baseline [tag]    # Save current performance as baseline (optionally tagged)"
-    @echo "  just perf-check [threshold] # Check for regressions (default: 10% threshold)"
-    @echo "  just perf-report [file]     # Generate performance report"
-    @echo "  just perf-trends [days]     # Analyze trends over N days (default: 7)"
-    @echo "  just perf-compare <file>    # Compare with specific baseline file"
-    @echo ""
-    @echo "Examples:"
-    @echo "  just perf-baseline v1.0.0   # Save tagged baseline"
-    @echo "  just perf-check 5.0         # Check with 5% threshold"
-    @echo "  just perf-report my_report.md # Save report to specific file"
-    @echo "  just perf-trends 30         # Analyze last 30 days"
-
-perf-report file="": _ensure-uv
-    #!/usr/bin/env bash
-    set -euo pipefail
-    file_value="{{file}}"
-    if [ -n "$file_value" ]; then
-        uv run performance-analysis --report "$file_value"
-    else
-        timestamp=$(date +"%Y%m%d_%H%M%S")
-        uv run performance-analysis --report "performance_report_${timestamp}.md"
-        echo "📄 Report saved to: performance_report_${timestamp}.md"
-    fi
-
-perf-trends days="7": _ensure-uv
-    uv run performance-analysis --trends {{days}}
-
-python-sync: _ensure-uv
-    uv sync --group dev
-
 python-check: _ensure-uv
     uv run ruff format --check scripts/
     uv run ruff check scripts/
@@ -510,8 +520,25 @@ python-fix: _ensure-uv
 
 python-lint: python-check
 
+python-sync: _ensure-uv
+    uv sync --group dev
+
 python-typecheck: _ensure-uv
     uv run ty check scripts/
+
+# Running the binary
+run *args:
+    cargo run --bin cdt {{args}}
+
+run-example:
+    cargo run --bin cdt -- -v 32 -t 3
+
+run-release *args:
+    cargo run --release --bin cdt {{args}}
+
+# Run example simulation script
+run-simulation:
+    ./examples/scripts/basic_simulation.sh
 
 # Repository-owned Semgrep rules for project-specific diagnostics.
 semgrep: _ensure-uv
@@ -537,20 +564,6 @@ semgrep-test: _ensure-uv
     done < <(find tests/semgrep -type f ! -name '*.fixed' -print0)
 
     uv run semgrep scan --test --strict --config "$config_dir" tests/semgrep
-
-# Running the binary
-run *args:
-    cargo run --bin cdt {{args}}
-
-run-example:
-    cargo run --bin cdt -- -v 32 -t 3
-
-run-release *args:
-    cargo run --release --bin cdt {{args}}
-
-# Run example simulation script
-run-simulation:
-    ./examples/scripts/basic_simulation.sh
 
 # cspell:ignore oldname newname
 
@@ -738,6 +751,8 @@ shell-check: _ensure-shellcheck _ensure-shfmt
         echo "No shell files found to check."
     fi
 
+shell-fix: shell-fmt
+
 # Shell scripts: format (mutating)
 shell-fmt: _ensure-shfmt
     #!/usr/bin/env bash
@@ -755,8 +770,6 @@ shell-fmt: _ensure-shfmt
     # Note: justfiles are not shell scripts and are excluded from shellcheck
 
 shell-lint: shell-check
-
-shell-fix: shell-fmt
 
 # Spell check (typos)
 spell-check: _ensure-typos
@@ -796,6 +809,12 @@ spell-check: _ensure-typos
         echo "No modified files to spell-check."
     fi
 
+tag version: python-sync
+    uv run tag-release {{version}}
+
+tag-force version: python-sync
+    uv run tag-release {{version}} --force
+
 # Testing: fast tests (lib via nextest + rustdoc doctests via cargo test)
 test: test-lib test-doc
 
@@ -803,24 +822,21 @@ test: test-lib test-doc
 test-all: test test-integration test-python
     @echo "✅ All tests passed!"
 
-test-lib: _ensure-cargo-nextest
-    cargo nextest run --lib --verbose
+test-cli: _ensure-cargo-nextest
+    cargo nextest run --test cli --verbose
 
 # Doctests must stay on cargo test; nextest does not run rustdoc doctests.
 test-doc:
     cargo test --doc --verbose
 
-test-integration: _ensure-cargo-nextest
-    cargo nextest run -E 'kind(test)' --verbose
-
-test-slow: _ensure-cargo-nextest
-    cargo nextest run -E 'kind(test)' --features slow-tests --verbose
-
 test-examples: _ensure-cargo-nextest
     cargo nextest run --examples --verbose --no-tests pass
 
-test-cli: _ensure-cargo-nextest
-    cargo nextest run --test cli --verbose
+test-integration: _ensure-cargo-nextest
+    cargo nextest run --tests --verbose
+
+test-lib: _ensure-cargo-nextest
+    cargo nextest run --lib --verbose
 
 test-python: _ensure-uv
     uv run python -m pytest
@@ -829,19 +845,12 @@ test-release: _ensure-cargo-nextest
     cargo nextest run --release --workspace
     cargo test --doc --release
 
-# File validation
-validate-json: _ensure-jq
-    #!/usr/bin/env bash
-    set -euo pipefail
-    files=()
-    while IFS= read -r -d '' file; do
-        files+=("$file")
-    done < <(git ls-files -z '*.json')
-    if [ "${#files[@]}" -gt 0 ]; then
-        printf '%s\0' "${files[@]}" | xargs -0 -n1 jq empty
-    else
-        echo "No JSON files found to validate."
-    fi
+test-slow: _ensure-cargo-nextest
+    cargo nextest run --tests --features slow-tests --verbose
+
+toml-check: toml-fmt-check toml-lint
+
+toml-fix: toml-fmt
 
 toml-fmt: _ensure-taplo
     #!/usr/bin/env bash
@@ -885,12 +894,22 @@ toml-lint: _ensure-taplo
         echo "No TOML files found to lint."
     fi
 
-toml-check: toml-fmt-check toml-lint
-
-toml-fix: toml-fmt
-
 unused-deps: _ensure-cargo-machete
     cargo machete
+
+# File validation
+validate-json: _ensure-jq
+    #!/usr/bin/env bash
+    set -euo pipefail
+    files=()
+    while IFS= read -r -d '' file; do
+        files+=("$file")
+    done < <(git ls-files -z '*.json')
+    if [ "${#files[@]}" -gt 0 ]; then
+        printf '%s\0' "${files[@]}" | xargs -0 -n1 jq empty
+    else
+        echo "No JSON files found to validate."
+    fi
 
 yaml-check: yaml-fmt-check yaml-lint
 
@@ -900,9 +919,9 @@ yaml-fix: _ensure-dprint
     files=()
     while IFS= read -r -d '' file; do
         files+=("$file")
-    done < <(git ls-files -z '*.yml' '*.yaml')
+    done < <(git ls-files -z '*.yml' '*.yaml' 'CITATION.cff')
     if [ "${#files[@]}" -gt 0 ]; then
-        echo "📝 dprint fmt (YAML, ${#files[@]} files)"
+        echo "📝 dprint fmt (YAML/CFF, ${#files[@]} files)"
         dprint fmt --incremental=false "${files[@]}"
     else
         echo "No YAML files found to format."
@@ -914,9 +933,9 @@ yaml-fmt-check: _ensure-dprint
     files=()
     while IFS= read -r -d '' file; do
         files+=("$file")
-    done < <(git ls-files -z '*.yml' '*.yaml')
+    done < <(git ls-files -z '*.yml' '*.yaml' 'CITATION.cff')
     if [ "${#files[@]}" -gt 0 ]; then
-        echo "🔍 dprint check (YAML, ${#files[@]} files)"
+        echo "🔍 dprint check (YAML/CFF, ${#files[@]} files)"
         dprint check --incremental=false "${files[@]}"
     else
         echo "No YAML files found to check."
@@ -928,9 +947,9 @@ yaml-lint: _ensure-yamllint
     files=()
     while IFS= read -r -d '' file; do
         files+=("$file")
-    done < <(git ls-files -z '*.yml' '*.yaml')
+    done < <(git ls-files -z '*.yml' '*.yaml' 'CITATION.cff')
     if [ "${#files[@]}" -gt 0 ]; then
-        echo "🔍 yamllint (${#files[@]} files)"
+        echo "🔍 yamllint (${#files[@]} YAML/CFF files)"
         yamllint --strict -c .yamllint "${files[@]}"
     else
         echo "No YAML files found to lint."

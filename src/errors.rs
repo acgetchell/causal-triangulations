@@ -131,6 +131,146 @@ impl fmt::Display for CdtValidationCheck {
     }
 }
 
+/// Structured detail for crate-owned CDT validation failures.
+///
+/// This refines [`CdtError::ValidationFailed`] beyond a coarse
+/// [`CdtValidationCheck`] so callers can inspect common CDT invariant failures
+/// without parsing display text. Variants still keep string diagnostics where
+/// the source is an upstream backend message or an opaque backend handle.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::errors::CdtValidationFailure;
+///
+/// let failure = CdtValidationFailure::InvalidCdtTriangle {
+///     face: "FaceKey(3v1)".to_string(),
+///     spacelike_edges: 3,
+///     timelike_edges: 0,
+/// };
+///
+/// assert!(format!("{failure}").contains("spacelike=3"));
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CdtValidationFailure {
+    /// Generic backend geometry validation failed with an upstream diagnostic.
+    BackendGeometry {
+        /// Upstream geometry validation diagnostic.
+        detail: String,
+    },
+    /// Face vertices could not be resolved through the geometry backend.
+    FaceVerticesUnavailable {
+        /// Face being validated.
+        face: String,
+        /// Lower-level face-vertex lookup diagnostic.
+        detail: String,
+    },
+    /// A face had the wrong number of vertices for a CDT triangle.
+    FaceVertexCount {
+        /// Face being validated.
+        face: String,
+        /// Number of vertices observed.
+        actual: usize,
+        /// Number of vertices expected.
+        expected: usize,
+    },
+    /// A vertex in a foliated triangulation was missing its time label.
+    MissingVertexTimeLabel {
+        /// Vertex missing its time label.
+        vertex: String,
+    },
+    /// A triangle had the wrong spacelike/timelike edge pattern.
+    InvalidCdtTriangle {
+        /// Face being validated.
+        face: String,
+        /// Number of spacelike edges observed.
+        spacelike_edges: u8,
+        /// Number of timelike edges observed.
+        timelike_edges: u8,
+    },
+    /// Coordinate lookup failed while assigning foliation labels.
+    VertexCoordinateReadFailed {
+        /// Vertex whose coordinates could not be read.
+        vertex: String,
+        /// Lower-level coordinate lookup diagnostic.
+        detail: String,
+    },
+    /// A vertex coordinate did not have enough dimensions for foliation assignment.
+    VertexCoordinateDimension {
+        /// Vertex whose coordinate dimensionality was invalid.
+        vertex: String,
+        /// Number of coordinates observed.
+        actual: usize,
+        /// Minimum number of coordinates expected.
+        expected_minimum: usize,
+    },
+    /// A foliated face was not classifiable as a strict Up or Down CDT simplex.
+    NonStrictSimplex {
+        /// Face being classified.
+        face: String,
+    },
+    /// Local ergodic-move candidate geometry failed a post-mutation invariant.
+    ErgodicMoveCandidateGeometry {
+        /// Diagnostic for the failed local candidate.
+        detail: String,
+    },
+}
+
+impl fmt::Display for CdtValidationFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BackendGeometry { detail } | Self::ErgodicMoveCandidateGeometry { detail } => {
+                formatter.write_str(detail)
+            }
+            Self::FaceVerticesUnavailable { face, detail } => {
+                write!(
+                    formatter,
+                    "failed to resolve vertices for face {face}: {detail}"
+                )
+            }
+            Self::FaceVertexCount {
+                face,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "face {face} has {actual} vertices, expected {expected}"
+            ),
+            Self::MissingVertexTimeLabel { vertex } => write!(
+                formatter,
+                "vertex {vertex} has no time label in a foliated triangulation"
+            ),
+            Self::InvalidCdtTriangle {
+                face,
+                spacelike_edges,
+                timelike_edges,
+            } => write!(
+                formatter,
+                "invalid CDT triangle at face {face}: spacelike={spacelike_edges}, timelike={timelike_edges}"
+            ),
+            Self::VertexCoordinateReadFailed { vertex, detail } => {
+                write!(
+                    formatter,
+                    "failed to read coordinates for vertex {vertex}: {detail}"
+                )
+            }
+            Self::VertexCoordinateDimension {
+                vertex,
+                actual,
+                expected_minimum,
+            } => write!(
+                formatter,
+                "vertex {vertex} has {actual} coordinates, expected ≥ {expected_minimum}"
+            ),
+            Self::NonStrictSimplex { face } => write!(
+                formatter,
+                "face {face} is not a strict CDT simplex (expected Up or Down)"
+            ),
+        }
+    }
+}
+
 /// Category explaining why a checkpoint could not be resumed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -215,6 +355,171 @@ impl fmt::Display for CheckpointResumeReason {
     }
 }
 
+/// Lower-level source for a Metropolis-accepted move that could not be applied.
+///
+/// [`CdtError::MetropolisMoveApplicationFailed`] uses this enum to preserve the
+/// category and structured context of a hard failure after Metropolis has
+/// accepted a move type. It is intentionally smaller than recursively storing a
+/// full [`CdtError`] while still giving callers typed branches for backend,
+/// validation, topology, foliation, and causality failures.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::errors::{
+///     BackendMutationOperation, MetropolisMoveApplicationFailure,
+/// };
+///
+/// let failure = MetropolisMoveApplicationFailure::BackendMutation {
+///     operation: BackendMutationOperation::RemoveVertex,
+///     target: "vertex VertexKey(7v1)".to_string(),
+///     detail: "backend reported invalid vertex key".to_string(),
+/// };
+///
+/// assert!(format!("{failure}").contains("remove_vertex"));
+/// ```
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum MetropolisMoveApplicationFailure {
+    /// A backend payload or topology edit failed while applying the accepted move.
+    #[error("backend mutation failed [{operation}] on {target}: {detail}")]
+    BackendMutation {
+        /// Mutation operation being attempted.
+        operation: BackendMutationOperation,
+        /// Human-readable target handle.
+        target: String,
+        /// Additional failure detail.
+        detail: String,
+    },
+    /// A backend mutation failed, then rollback of staged payloads also failed.
+    #[error(
+        "backend mutation failed [{operation}] on {target}: {detail}; rollback failed: {rollback_errors}"
+    )]
+    BackendRollback {
+        /// Mutation operation being attempted when the first failure occurred.
+        operation: BackendMutationOperation,
+        /// Human-readable target handle for the first failure.
+        target: String,
+        /// Primary mutation failure detail.
+        detail: String,
+        /// Rollback failure details for one or more payloads.
+        rollback_errors: String,
+    },
+    /// Upstream Delaunay validation rejected the evolved geometry.
+    #[error("Delaunay validation failed [{level}]: {detail}")]
+    DelaunayValidation {
+        /// Cumulative upstream validation level being enforced.
+        level: DelaunayValidationLevel,
+        /// Upstream validation diagnostic.
+        detail: String,
+    },
+    /// CDT validation rejected the evolved triangulation.
+    #[error("validation failed [{check}]: {failure}")]
+    Validation {
+        /// Validation check that failed.
+        check: CdtValidationCheck,
+        /// Structured validation failure detail.
+        failure: CdtValidationFailure,
+    },
+    /// Topology metadata did not match the evolved backend Euler characteristic.
+    #[error(
+        "topology mismatch for {topology}: Euler characteristic χ={euler_characteristic}, expected one of {expected_euler_characteristics:?} (V={vertices}, E={edges}, F={faces})"
+    )]
+    TopologyMismatch {
+        /// Topology requested by CDT metadata.
+        topology: CdtTopology,
+        /// Observed Euler characteristic from the backend.
+        euler_characteristic: i128,
+        /// Accepted Euler characteristics for the requested topology.
+        expected_euler_characteristics: Vec<i128>,
+        /// Backend vertex count at validation time.
+        vertices: usize,
+        /// Backend edge count at validation time.
+        edges: usize,
+        /// Backend face count at validation time.
+        faces: usize,
+    },
+    /// Foliation bookkeeping or validation failed.
+    #[error("foliation validation failed: {0}")]
+    Foliation(FoliationError),
+    /// A post-mutation edge violated CDT causality.
+    #[error("{}", format_causality_violation(*time_0, *time_1, *step_distance))]
+    CausalityViolation {
+        /// Time label of the first endpoint.
+        time_0: u32,
+        /// Time label of the second endpoint.
+        time_1: u32,
+        /// Topology-aware temporal step distance between the two labels.
+        step_distance: u32,
+    },
+    /// A hard failure reached the Metropolis boundary through an unexpected error category.
+    #[error("unexpected accepted-move failure: {detail}")]
+    Unexpected {
+        /// Lower-level error text retained for diagnostics.
+        detail: String,
+    },
+}
+
+impl From<CdtError> for MetropolisMoveApplicationFailure {
+    fn from(error: CdtError) -> Self {
+        match error {
+            CdtError::BackendMutationFailed {
+                operation,
+                target,
+                detail,
+            } => Self::BackendMutation {
+                operation,
+                target,
+                detail,
+            },
+            CdtError::BackendRollbackFailed {
+                operation,
+                target,
+                detail,
+                rollback_errors,
+            } => Self::BackendRollback {
+                operation,
+                target,
+                detail,
+                rollback_errors,
+            },
+            CdtError::DelaunayValidationFailed { level, detail } => {
+                Self::DelaunayValidation { level, detail }
+            }
+            CdtError::ValidationFailed { check, failure } => Self::Validation { check, failure },
+            CdtError::TopologyMismatch {
+                topology,
+                euler_characteristic,
+                expected_euler_characteristics,
+                vertices,
+                edges,
+                faces,
+            } => Self::TopologyMismatch {
+                topology,
+                euler_characteristic,
+                expected_euler_characteristics,
+                vertices,
+                edges,
+                faces,
+            },
+            CdtError::Foliation(error) => Self::Foliation(error),
+            CdtError::CausalityViolation {
+                time_0,
+                time_1,
+                step_distance,
+            } => Self::CausalityViolation {
+                time_0,
+                time_1,
+                step_distance,
+            },
+            CdtError::MetropolisMoveApplicationFailed { source, .. } => source,
+            error => Self::Unexpected {
+                detail: error.to_string(),
+            },
+        }
+    }
+}
+
 /// Main error type for CDT operations.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
@@ -281,8 +586,13 @@ pub enum CdtError {
         expected: String,
     },
     /// Metropolis accepted a move, but a hard backend or invariant failure stopped application.
+    ///
+    /// The [`Self::MetropolisMoveApplicationFailed::source`] field keeps the
+    /// lower-level failure category as [`MetropolisMoveApplicationFailure`] so
+    /// callers can distinguish backend mutation, validation, topology,
+    /// foliation, and causality failures without parsing the rendered message.
     #[error(
-        "Metropolis accepted {move_type:?} at step {step}, but applying it failed after {attempts} attempts; last failure: {last_failure}"
+        "Metropolis accepted {move_type:?} at step {step}, but applying it failed after {attempts} attempts; source: {source}"
     )]
     MetropolisMoveApplicationFailed {
         /// Monte Carlo step whose accepted move could not be applied.
@@ -292,7 +602,7 @@ pub enum CdtError {
         /// Number of application attempts made before failing.
         attempts: usize,
         /// Most specific lower-level rejection or failure observed.
-        last_failure: String,
+        source: MetropolisMoveApplicationFailure,
     },
     /// Constructed triangulation metadata is internally inconsistent.
     #[error(
@@ -308,13 +618,17 @@ pub enum CdtError {
         /// Expected constraint for the metadata field.
         expected: String,
     },
-    /// Validation of a constructed triangulation failed
-    #[error("Validation failed [{check}]: {detail}")]
+    /// Validation of a constructed triangulation failed.
+    ///
+    /// The [`Self::ValidationFailed::check`] field identifies the broad
+    /// validation phase, while [`Self::ValidationFailed::failure`] carries the
+    /// typed invariant failure within that phase.
+    #[error("Validation failed [{check}]: {failure}")]
     ValidationFailed {
         /// Validation check that failed.
         check: CdtValidationCheck,
-        /// Human-readable description of the failure
-        detail: String,
+        /// Structured validation failure detail.
+        failure: CdtValidationFailure,
     },
     /// Topology metadata does not match the backend Euler characteristic.
     #[error(
@@ -720,13 +1034,87 @@ mod tests {
     fn test_validation_failed_error() {
         let error = CdtError::ValidationFailed {
             check: CdtValidationCheck::Geometry,
-            detail: "backend reported invalid triangulation structure".to_string(),
+            failure: CdtValidationFailure::BackendGeometry {
+                detail: "backend reported invalid triangulation structure".to_string(),
+            },
         };
         let display = format!("{error}");
         assert_eq!(
             display,
             "Validation failed [geometry]: backend reported invalid triangulation structure"
         );
+    }
+
+    #[test]
+    fn cdt_validation_failure_display_covers_structured_variants() {
+        let cases = [
+            (
+                CdtValidationFailure::BackendGeometry {
+                    detail: "backend rejected structure".to_string(),
+                },
+                "backend rejected structure",
+            ),
+            (
+                CdtValidationFailure::FaceVerticesUnavailable {
+                    face: "FaceKey(3v1)".to_string(),
+                    detail: "backend reported invalid simplex key".to_string(),
+                },
+                "failed to resolve vertices for face FaceKey(3v1): backend reported invalid simplex key",
+            ),
+            (
+                CdtValidationFailure::FaceVertexCount {
+                    face: "FaceKey(3v1)".to_string(),
+                    actual: 4,
+                    expected: 3,
+                },
+                "face FaceKey(3v1) has 4 vertices, expected 3",
+            ),
+            (
+                CdtValidationFailure::MissingVertexTimeLabel {
+                    vertex: "VertexKey(7v1)".to_string(),
+                },
+                "vertex VertexKey(7v1) has no time label in a foliated triangulation",
+            ),
+            (
+                CdtValidationFailure::InvalidCdtTriangle {
+                    face: "FaceKey(3v1)".to_string(),
+                    spacelike_edges: 3,
+                    timelike_edges: 0,
+                },
+                "invalid CDT triangle at face FaceKey(3v1): spacelike=3, timelike=0",
+            ),
+            (
+                CdtValidationFailure::VertexCoordinateReadFailed {
+                    vertex: "VertexKey(7v1)".to_string(),
+                    detail: "missing vertex".to_string(),
+                },
+                "failed to read coordinates for vertex VertexKey(7v1): missing vertex",
+            ),
+            (
+                CdtValidationFailure::VertexCoordinateDimension {
+                    vertex: "VertexKey(7v1)".to_string(),
+                    actual: 1,
+                    expected_minimum: 2,
+                },
+                "vertex VertexKey(7v1) has 1 coordinates, expected ≥ 2",
+            ),
+            (
+                CdtValidationFailure::NonStrictSimplex {
+                    face: "FaceKey(3v1)".to_string(),
+                },
+                "face FaceKey(3v1) is not a strict CDT simplex (expected Up or Down)",
+            ),
+            (
+                CdtValidationFailure::ErgodicMoveCandidateGeometry {
+                    detail: "candidate edge has no adjacent faces".to_string(),
+                },
+                "candidate edge has no adjacent faces",
+            ),
+        ];
+
+        for (failure, expected) in cases {
+            assert_eq!(failure.to_string(), expected);
+        }
     }
 
     #[test]
@@ -801,16 +1189,169 @@ mod tests {
 
     #[test]
     fn test_metropolis_move_application_failed_error() {
+        let source = MetropolisMoveApplicationFailure::BackendMutation {
+            operation: BackendMutationOperation::SetVertexData,
+            target: "vertex VertexKey(123v1)".to_string(),
+            detail: "backend reported invalid vertex key".to_string(),
+        };
         let error = CdtError::MetropolisMoveApplicationFailed {
             step: 17,
             move_type: MoveType::Move31Remove,
             attempts: 8,
-            last_failure: "no geometrically valid candidate site found".to_string(),
+            source: source.clone(),
         };
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Metropolis accepted Move31Remove at step 17, but applying it failed after 8 attempts; last failure: no geometrically valid candidate site found"
+            "Metropolis accepted Move31Remove at step 17, but applying it failed after 8 attempts; source: backend mutation failed [set_vertex_data] on vertex VertexKey(123v1): backend reported invalid vertex key"
+        );
+        assert_eq!(
+            Error::source(&error).map(ToString::to_string),
+            Some(source.to_string())
+        );
+    }
+
+    #[test]
+    fn metropolis_move_application_failure_preserves_backend_mutation_fields() {
+        let failure = MetropolisMoveApplicationFailure::from(CdtError::BackendMutationFailed {
+            operation: BackendMutationOperation::RemoveVertex,
+            target: "vertex VertexKey(7v1)".to_string(),
+            detail: "backend reported invalid vertex key".to_string(),
+        });
+
+        let MetropolisMoveApplicationFailure::BackendMutation {
+            operation,
+            target,
+            detail,
+        } = failure
+        else {
+            panic!("expected backend mutation failure source");
+        };
+
+        assert_eq!(operation, BackendMutationOperation::RemoveVertex);
+        assert_eq!(target, "vertex VertexKey(7v1)");
+        assert_eq!(detail, "backend reported invalid vertex key");
+    }
+
+    #[test]
+    fn metropolis_move_application_failure_preserves_validation_fields() {
+        let validation_failure = CdtValidationFailure::InvalidCdtTriangle {
+            face: "FaceKey(3v1)".to_string(),
+            spacelike_edges: 3,
+            timelike_edges: 0,
+        };
+        let failure = MetropolisMoveApplicationFailure::from(CdtError::ValidationFailed {
+            check: CdtValidationCheck::Causality,
+            failure: validation_failure.clone(),
+        });
+
+        let MetropolisMoveApplicationFailure::Validation { check, failure } = failure else {
+            panic!("expected validation failure source");
+        };
+
+        assert_eq!(check, CdtValidationCheck::Causality);
+        assert_eq!(failure, validation_failure);
+    }
+
+    #[test]
+    fn metropolis_move_application_failure_preserves_structured_sources() {
+        let cases = [
+            (
+                CdtError::BackendRollbackFailed {
+                    operation: BackendMutationOperation::FlipEdge,
+                    target: "edge EdgeKey(5v1)".to_string(),
+                    detail: "flip failed".to_string(),
+                    rollback_errors: "rollback failed".to_string(),
+                },
+                MetropolisMoveApplicationFailure::BackendRollback {
+                    operation: BackendMutationOperation::FlipEdge,
+                    target: "edge EdgeKey(5v1)".to_string(),
+                    detail: "flip failed".to_string(),
+                    rollback_errors: "rollback failed".to_string(),
+                },
+            ),
+            (
+                CdtError::DelaunayValidationFailed {
+                    level: DelaunayValidationLevel::Three,
+                    detail: "invalid triangulation".to_string(),
+                },
+                MetropolisMoveApplicationFailure::DelaunayValidation {
+                    level: DelaunayValidationLevel::Three,
+                    detail: "invalid triangulation".to_string(),
+                },
+            ),
+            (
+                CdtError::TopologyMismatch {
+                    topology: CdtTopology::Toroidal,
+                    euler_characteristic: 1,
+                    expected_euler_characteristics: vec![0],
+                    vertices: 3,
+                    edges: 3,
+                    faces: 1,
+                },
+                MetropolisMoveApplicationFailure::TopologyMismatch {
+                    topology: CdtTopology::Toroidal,
+                    euler_characteristic: 1,
+                    expected_euler_characteristics: vec![0],
+                    vertices: 3,
+                    edges: 3,
+                    faces: 1,
+                },
+            ),
+            (
+                CdtError::Foliation(FoliationError::EmptySlice { slice: 3 }),
+                MetropolisMoveApplicationFailure::Foliation(FoliationError::EmptySlice {
+                    slice: 3,
+                }),
+            ),
+            (
+                CdtError::CausalityViolation {
+                    time_0: 0,
+                    time_1: 2,
+                    step_distance: 2,
+                },
+                MetropolisMoveApplicationFailure::CausalityViolation {
+                    time_0: 0,
+                    time_1: 2,
+                    step_distance: 2,
+                },
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(MetropolisMoveApplicationFailure::from(error), expected);
+        }
+    }
+
+    #[test]
+    fn metropolis_move_application_failure_from_wrapper_preserves_source() {
+        let source = MetropolisMoveApplicationFailure::BackendMutation {
+            operation: BackendMutationOperation::RemoveVertex,
+            target: "vertex VertexKey(7v1)".to_string(),
+            detail: "backend reported invalid vertex key".to_string(),
+        };
+        let failure =
+            MetropolisMoveApplicationFailure::from(CdtError::MetropolisMoveApplicationFailed {
+                step: 17,
+                move_type: MoveType::Move31Remove,
+                attempts: 8,
+                source: source.clone(),
+            });
+
+        assert_eq!(failure, source);
+    }
+
+    #[test]
+    fn metropolis_move_application_failure_unexpected_retains_diagnostic() {
+        let failure = MetropolisMoveApplicationFailure::from(CdtError::UnsupportedDimension(3));
+
+        let MetropolisMoveApplicationFailure::Unexpected { detail } = failure else {
+            panic!("expected unexpected failure source");
+        };
+
+        assert_eq!(
+            detail,
+            "Unsupported dimension: 3. Only 2D is currently supported"
         );
     }
 

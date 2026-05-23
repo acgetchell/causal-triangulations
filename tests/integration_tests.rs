@@ -7,6 +7,7 @@
 
 use approx::{abs_diff_eq, assert_relative_eq};
 use causal_triangulations::prelude::action::ActionConfig;
+use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveResult};
 use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
 use causal_triangulations::prelude::triangulation::{
     CdtTopology, CdtTriangulation, TriangulationQuery,
@@ -65,11 +66,12 @@ mod integration_tests {
 
     #[test]
     fn test_toroidal_metropolis_accepts_periodic_moves_and_preserves_topology() {
-        const STEPS: u32 = 200;
+        const STEPS: u32 = 80;
 
-        let triangulation = CdtTriangulation::from_toroidal_cdt(8, 6).expect("build toroidal CDT");
+        let triangulation = CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
         assert_eq!(triangulation.metadata().topology, CdtTopology::Toroidal);
         assert_eq!(triangulation.geometry().euler_characteristic(), 0);
+        let initial_profile = triangulation.volume_profile();
         triangulation
             .validate_topology()
             .expect("initial toroidal topology is valid");
@@ -88,6 +90,15 @@ mod integration_tests {
         assert!(
             results.move_stats().total_accepted() > 0,
             "periodic toroidal simulation should accept at least one move"
+        );
+        assert!(
+            results.move_stats().moves_13_accepted > 0,
+            "periodic toroidal simulation should accept at least one volume-increasing move"
+        );
+        assert_ne!(
+            results.triangulation().volume_profile(),
+            initial_profile,
+            "periodic toroidal volume moves should change the final volume profile"
         );
         assert_eq!(
             results.triangulation().metadata().topology,
@@ -110,6 +121,23 @@ mod integration_tests {
             .triangulation()
             .validate_simplex_classification()
             .expect("final toroidal simplex classification remains valid");
+
+        let mut local_moves = ErgodicsSystem::with_seed(0);
+        let mut inverse_fixture =
+            CdtTriangulation::from_toroidal_cdt(8, 8).expect("build toroidal inverse fixture");
+        assert_eq!(
+            local_moves.attempt_13_move(&mut inverse_fixture),
+            MoveResult::Success,
+            "periodic toroidal local dynamics should accept a volume-increasing move"
+        );
+        assert_eq!(
+            local_moves.attempt_31_move(&mut inverse_fixture),
+            MoveResult::Success,
+            "periodic toroidal local dynamics should accept the inverse volume move after growth"
+        );
+        inverse_fixture
+            .validate()
+            .expect("direct grow-then-inverse toroidal dynamics preserve invariants");
     }
 
     #[test]

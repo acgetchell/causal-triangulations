@@ -23,6 +23,10 @@ fn temp_output_dir(name: &str) -> PathBuf {
     ))
 }
 
+fn cdt_command() -> Command {
+    Command::new(assert_cmd::cargo::cargo_bin!("cdt"))
+}
+
 /// Returns the current test thread name with path separators and
 /// reserved characters removed.
 fn safe_thread_name() -> String {
@@ -40,7 +44,7 @@ fn safe_thread_name() -> String {
 
 #[test]
 fn exit_success() {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+    let mut cmd = cdt_command();
     cmd.arg("-v");
     cmd.arg("36");
     cmd.arg("-t");
@@ -50,7 +54,7 @@ fn exit_success() {
 
 #[test]
 fn cdt_cli_args() {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+    let mut cmd = cdt_command();
 
     cmd.arg("-v");
     cmd.arg("36");
@@ -65,7 +69,7 @@ fn cdt_cli_args() {
 
 #[test]
 fn cdt_cli_no_args() {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+    let mut cmd = cdt_command();
 
     cmd.assert().failure().stderr(predicate::str::contains(
         "error: the following required arguments were not provided:",
@@ -73,8 +77,43 @@ fn cdt_cli_no_args() {
 }
 
 #[test]
+fn cdt_cli_help_documents_readme_usage() {
+    let mut cmd = cdt_command();
+
+    cmd.arg("--help");
+
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Run 1+1-dimensional Causal Dynamical Triangulations simulations",
+        ))
+        .stdout(predicate::str::contains(
+            "Vertices per spatial slice; total vertices are computed",
+        ))
+        .stdout(predicate::str::contains("--vertices-per-slice"))
+        .stdout(predicate::str::contains("--topology <TOPOLOGY>"))
+        .stdout(predicate::str::contains("toroidal"))
+        .stdout(predicate::str::contains("--output-json <PATH>"));
+}
+
+#[test]
+fn cdt_cli_rejects_ambiguous_vertex_count_inputs() {
+    let mut cmd = cdt_command();
+
+    cmd.arg("--vertices").arg("12");
+    cmd.arg("--vertices-per-slice").arg("4");
+    cmd.arg("--timeslices").arg("3");
+
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "the argument '--vertices <VERTICES>' cannot be used with '--vertices-per-slice <VERTICES_PER_SLICE>'",
+        ));
+}
+
+#[test]
 fn cdt_cli_invalid_args() {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+    let mut cmd = cdt_command();
 
     cmd.arg("-v");
     cmd.arg("36");
@@ -90,7 +129,7 @@ fn cdt_cli_invalid_args() {
 
 #[test]
 fn cdt_cli_rejects_unimplemented_dimension_at_parse_time() {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+    let mut cmd = cdt_command();
 
     cmd.arg("-v");
     cmd.arg("36");
@@ -108,9 +147,9 @@ fn cdt_cli_rejects_unimplemented_dimension_at_parse_time() {
 fn cdt_cli_invalid_measurement_frequency_zero() {
     // Note: This would be caught by clap's range validation now,
     // but we test the error message for completeness
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+    let mut cmd = cdt_command();
 
-    cmd.arg("--vertices").arg("12");
+    cmd.arg("--vertices-per-slice").arg("4");
     cmd.arg("--timeslices").arg("3");
     cmd.arg("--measurement-frequency").arg("0");
 
@@ -121,9 +160,9 @@ fn cdt_cli_invalid_measurement_frequency_zero() {
 
 #[test]
 fn cdt_cli_invalid_measurement_frequency_too_large() {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+    let mut cmd = cdt_command();
 
-    cmd.arg("--vertices").arg("12");
+    cmd.arg("--vertices-per-slice").arg("4");
     cmd.arg("--timeslices").arg("3");
     cmd.arg("--steps").arg("100");
     cmd.arg("--measurement-frequency").arg("200");
@@ -136,9 +175,9 @@ fn cdt_cli_invalid_measurement_frequency_too_large() {
 
 #[test]
 fn cdt_cli_runs_simulation_with_real_moves() {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+    let mut cmd = cdt_command();
 
-    cmd.arg("--vertices").arg("12");
+    cmd.arg("--vertices-per-slice").arg("4");
     cmd.arg("--timeslices").arg("3");
     cmd.arg("--steps").arg("20");
     cmd.arg("--thermalization-steps").arg("15");
@@ -155,9 +194,9 @@ fn cdt_cli_writes_configured_outputs() {
     let output_dir = temp_output_dir("outputs");
     let csv_path = output_dir.join("measurements.csv");
     let json_path = output_dir.join("summary.json");
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+    let mut cmd = cdt_command();
 
-    cmd.arg("--vertices").arg("12");
+    cmd.arg("--vertices-per-slice").arg("4");
     cmd.arg("--timeslices").arg("3");
     cmd.arg("--steps").arg("4");
     cmd.arg("--thermalization-steps").arg("0");
@@ -181,8 +220,54 @@ fn cdt_cli_writes_configured_outputs() {
 }
 
 #[test]
+fn cdt_cli_readme_toroidal_simulation_command_writes_json() {
+    let output_dir = temp_output_dir("readme-toroidal");
+    let json_path = output_dir.join("toroidal-summary.json");
+    let mut cmd = cdt_command();
+
+    cmd.arg("--vertices-per-slice").arg("4");
+    cmd.arg("--timeslices").arg("3");
+    cmd.arg("--topology").arg("toroidal");
+    cmd.arg("--steps").arg("20");
+    cmd.arg("--thermalization-steps").arg("0");
+    cmd.arg("--measurement-frequency").arg("5");
+    cmd.arg("--temperature").arg("1.5");
+    cmd.arg("--seed").arg("105");
+    cmd.arg("--simulate");
+    cmd.arg("--output-json").arg(&json_path);
+    cmd.env("RUST_LOG", "error");
+
+    cmd.assert().success();
+
+    let json = fs::read_to_string(&json_path).expect("JSON output should be readable");
+    let parsed: Value = from_str(&json).expect("summary should parse");
+    fs::remove_dir_all(&output_dir).expect("temporary output directory should be removable");
+
+    assert_eq!(parsed["config"]["vertices"], 12);
+    assert_eq!(parsed["config"]["timeslices"], 3);
+    assert_eq!(parsed["config"]["topology"], "toroidal");
+    assert_eq!(parsed["config"]["simulate"], true);
+    assert_eq!(parsed["final_triangulation"]["topology"], "toroidal");
+    assert_eq!(parsed["final_triangulation"]["time_slices"], 3);
+    assert_eq!(
+        parsed["steps"]
+            .as_array()
+            .expect("steps should be an array")
+            .len(),
+        20
+    );
+    assert_eq!(
+        parsed["measurements"]
+            .as_array()
+            .expect("measurements should be an array")
+            .len(),
+        5
+    );
+}
+
+#[test]
 fn cdt_cli_rejects_missing_post_thermalization_measurement() {
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+    let mut cmd = cdt_command();
 
     cmd.arg("--vertices").arg("12");
     cmd.arg("--timeslices").arg("3");
@@ -199,7 +284,7 @@ fn cdt_cli_rejects_missing_post_thermalization_measurement() {
 #[test]
 fn cdt_cli_invalid_vertices_too_few() {
     // This should be caught by clap's range validation
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+    let mut cmd = cdt_command();
 
     cmd.arg("--vertices").arg("2");
     cmd.arg("--timeslices").arg("3");
@@ -212,7 +297,7 @@ fn cdt_cli_invalid_vertices_too_few() {
 #[test]
 fn cdt_cli_invalid_timeslices_zero() {
     // This should be caught by clap's range validation
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+    let mut cmd = cdt_command();
 
     cmd.arg("--vertices").arg("10");
     cmd.arg("--timeslices").arg("0");
@@ -225,7 +310,7 @@ fn cdt_cli_invalid_timeslices_zero() {
 #[test]
 fn cdt_cli_config_validation_comprehensive() {
     // Test a complex scenario with valid parameters to ensure our validation doesn't break normal usage
-    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("cdt"));
+    let mut cmd = cdt_command();
 
     cmd.arg("--vertices").arg("12");
     cmd.arg("--timeslices").arg("3");

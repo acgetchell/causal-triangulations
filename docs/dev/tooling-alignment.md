@@ -83,6 +83,8 @@ The useful `justfile` updates ported from `delaunay` are:
 - `bench-test-compile`, which layers release-profile integration-test compilation on top of the existing warning-denying benchmark compile check;
 - opt-in release hygiene recipes `unused-deps` and `publish-check`, kept outside the default `lint` and `ci` paths so they are available before releases without
   making routine validation slower or more tool-dependent;
+- `citation-check`, using `cffconvert` through `uvx`, and inclusion of `CITATION.cff` in YAML/CFF formatting and linting so research-software citation metadata
+  is schema-validated before release;
 - `rumdl` Markdown checking, `dprint`/`pretty_yaml` YAML formatting, check/fix aliases, and a corrected rename/copy note in `spell-check`.
 - repository-owned Semgrep rules that keep user-facing `just check` examples before `just fix` examples and enforce SHA-pinned, allowlisted GitHub Actions with
   readable version comments. Dependabot remains the update path for pinned external actions, with review focused on preserving both the SHA and readable version

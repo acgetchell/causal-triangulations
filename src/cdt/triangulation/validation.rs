@@ -3,7 +3,9 @@
 //! Whole-triangulation validation and causality checks.
 
 use super::CdtTriangulation;
-use crate::errors::{CdtError, CdtResult, CdtValidationCheck, DelaunayValidationLevel};
+use crate::errors::{
+    CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, DelaunayValidationLevel,
+};
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::DelaunayError;
 use crate::geometry::traits::TriangulationQuery;
@@ -203,18 +205,21 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 );
                 CdtError::ValidationFailed {
                     check: CdtValidationCheck::Causality,
-                    detail: "failed to resolve face vertices".to_string(),
+                    failure: CdtValidationFailure::FaceVerticesUnavailable {
+                        face: format!("{:?}", face.simplex_key()),
+                        detail: err.to_string(),
+                    },
                 }
             })?;
 
             if verts.len() != 3 {
                 return Err(CdtError::ValidationFailed {
                     check: CdtValidationCheck::Causality,
-                    detail: format!(
-                        "face {:?} has {} vertices, expected 3",
-                        face.simplex_key(),
-                        verts.len(),
-                    ),
+                    failure: CdtValidationFailure::FaceVertexCount {
+                        face: format!("{:?}", face.simplex_key()),
+                        actual: verts.len(),
+                        expected: 3,
+                    },
                 });
             }
 
@@ -229,10 +234,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     );
                     CdtError::ValidationFailed {
                         check: CdtValidationCheck::Causality,
-                        detail: format!(
-                            "vertex {:?} has no time label in a foliated triangulation",
-                            verts[0].vertex_key(),
-                        ),
+                        failure: CdtValidationFailure::MissingVertexTimeLabel {
+                            vertex: format!("{:?}", verts[0].vertex_key()),
+                        },
                     }
                 })?;
             let t1 = self
@@ -246,10 +250,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     );
                     CdtError::ValidationFailed {
                         check: CdtValidationCheck::Causality,
-                        detail: format!(
-                            "vertex {:?} has no time label in a foliated triangulation",
-                            verts[1].vertex_key(),
-                        ),
+                        failure: CdtValidationFailure::MissingVertexTimeLabel {
+                            vertex: format!("{:?}", verts[1].vertex_key()),
+                        },
                     }
                 })?;
             let t2 = self
@@ -263,10 +266,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     );
                     CdtError::ValidationFailed {
                         check: CdtValidationCheck::Causality,
-                        detail: format!(
-                            "vertex {:?} has no time label in a foliated triangulation",
-                            verts[2].vertex_key(),
-                        ),
+                        failure: CdtValidationFailure::MissingVertexTimeLabel {
+                            vertex: format!("{:?}", verts[2].vertex_key()),
+                        },
                     }
                 })?;
 
@@ -291,12 +293,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
             if !(spacelike == 1 && timelike == 2) {
                 return Err(CdtError::ValidationFailed {
                     check: CdtValidationCheck::Causality,
-                    detail: format!(
-                        "invalid CDT triangle at face {:?}: spacelike={}, timelike={}",
-                        face.simplex_key(),
-                        spacelike,
-                        timelike
-                    ),
+                    failure: CdtValidationFailure::InvalidCdtTriangle {
+                        face: format!("{:?}", face.simplex_key()),
+                        spacelike_edges: spacelike,
+                        timelike_edges: timelike,
+                    },
                 });
             }
         }
@@ -482,11 +483,15 @@ mod tests {
 
         assert!(matches!(
             result,
-            Err(CdtError::ValidationFailed { ref check, ref detail })
+            Err(CdtError::ValidationFailed {
+                ref check,
+                failure: CdtValidationFailure::InvalidCdtTriangle {
+                    spacelike_edges: 3,
+                    timelike_edges: 0,
+                    ..
+                },
+            })
                 if *check == CdtValidationCheck::Causality
-                    && detail.contains("invalid CDT triangle")
-                    && detail.contains("spacelike=3")
-                    && detail.contains("timelike=0")
         ));
     }
 

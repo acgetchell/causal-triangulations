@@ -9,7 +9,7 @@ echo "=== CDT Parameter Sweep Example ==="
 echo
 
 # Configuration
-VERTICES=20
+VERTICES_PER_SLICE=4
 TIMESLICES=8
 STEPS=2000
 OUTPUT_DIR="sweep_results"
@@ -28,7 +28,7 @@ echo
 
 # Run parameter sweep
 echo "Starting parameter sweep over ${#TEMPERATURES[@]} temperature values..."
-echo "Fixed parameters: $VERTICES vertices, $TIMESLICES timeslices, $STEPS steps"
+echo "Fixed parameters: $VERTICES_PER_SLICE vertices/slice, $TIMESLICES timeslices, $STEPS steps"
 echo
 
 for temp in "${TEMPERATURES[@]}"; do
@@ -39,7 +39,7 @@ for temp in "${TEMPERATURES[@]}"; do
 
 	# Run simulation and save output
 	RUST_LOG=info ./target/release/cdt \
-		--vertices $VERTICES \
+		--vertices-per-slice $VERTICES_PER_SLICE \
 		--timeslices $TIMESLICES \
 		--temperature "$temp" \
 		--steps $STEPS \

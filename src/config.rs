@@ -12,9 +12,11 @@
 use crate::cdt::action::ActionConfig;
 use crate::cdt::metropolis::MetropolisConfig;
 use crate::errors::{CdtError, CdtResult};
-use clap::{Parser, ValueEnum};
+use clap::error::ErrorKind;
+use clap::{ArgGroup, Error as ClapError, Parser, ValueEnum};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
+use std::ffi::OsString;
 use std::fmt::{self, Display};
 use std::path::{Component, Path, PathBuf};
 
@@ -55,62 +57,58 @@ impl fmt::Display for CdtTopology {
 
 /// Main configuration structure for CDT simulations.
 ///
-/// This combines all configuration options for the CDT simulation,
-/// including triangulation generation, action calculation, and
-/// Metropolis algorithm parameters.
-#[derive(Parser, Debug, Clone, Serialize, Deserialize)]
-#[command(author, version, about, long_about = None)]
+/// This combines the canonical runtime options for CDT construction,
+/// action calculation, and Metropolis sampling. Command-line parsing may derive
+/// some of these values from more ergonomic inputs; for example,
+/// `--vertices-per-slice` is converted into the total [`Self::vertices`] count.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CdtConfig {
-    /// Dimensionality of the triangulation
-    #[arg(short, long, value_parser = clap::value_parser!(u8).range(2..3))]
+    /// Dimensionality of the triangulation.
     pub dimension: Option<u8>,
 
-    /// Number of vertices in the initial triangulation
-    #[arg(short, long, value_parser = clap::value_parser!(u32).range(3..))]
+    /// Total number of vertices in the initial triangulation.
+    ///
+    /// This is the canonical runtime count. For regular initial CDT data it
+    /// must divide evenly by [`Self::timeslices`]; the binary's
+    /// `--vertices-per-slice` option computes this total before constructing
+    /// `CdtConfig`.
     pub vertices: u32,
 
-    /// Number of timeslices in the triangulation
-    #[arg(short, long, value_parser = clap::value_parser!(u32).range(1..))]
+    /// Number of time slices in the initial triangulation.
     pub timeslices: u32,
 
-    /// Temperature for Metropolis algorithm
-    #[arg(long, default_value = "1.0")]
+    /// Temperature for the Metropolis acceptance rule.
     pub temperature: f64,
 
-    /// Number of Monte Carlo steps to execute
-    #[arg(long, default_value = "1000")]
+    /// Number of Monte Carlo proposals to evaluate when simulation is enabled.
     pub steps: u32,
 
-    /// Number of thermalization steps (before measurements begin)
-    #[arg(long, default_value = "100")]
+    /// Number of initial simulation steps to exclude from measurements.
     pub thermalization_steps: u32,
 
-    /// Measurement frequency (take measurement every N steps)
-    #[arg(long, default_value = "10", value_parser = clap::value_parser!(u32).range(1..))]
+    /// Measurement frequency, in simulation steps.
     pub measurement_frequency: u32,
 
-    /// Coupling constant κ₀ for vertices in the action
-    #[arg(long, default_value = "1.0")]
+    /// Coupling constant κ₀ for vertices in the action.
     pub coupling_0: f64,
 
-    /// Coupling constant κ₂ for triangles in the action
-    #[arg(long, default_value = "1.0")]
+    /// Coupling constant κ₂ for triangles in the action.
     pub coupling_2: f64,
 
-    /// Cosmological constant λ in the action
-    #[arg(long, default_value = "0.1")]
+    /// Cosmological constant λ in the action.
+    ///
+    /// Current simulations do not apply volume fixing. In the unfixed-volume
+    /// ensemble this coupling controls volume growth or shrinkage through the
+    /// ordinary action difference.
     pub cosmological_constant: f64,
 
     /// Run the full CDT Metropolis simulation after constructing the initial triangulation.
-    #[arg(long, default_value_t = false)]
     pub simulate: bool,
 
-    /// Optional RNG seed for reproducible simulations
-    #[arg(long)]
+    /// Optional RNG seed for reproducible simulations.
     pub seed: Option<u64>,
 
-    /// Topology and boundary conditions for triangulation generation
-    #[arg(long, value_enum, default_value_t = CdtTopology::default())]
+    /// Topology and boundary conditions for triangulation generation.
     pub topology: CdtTopology,
 
     /// Write per-measurement simulation data to a CSV file.
@@ -119,7 +117,6 @@ pub struct CdtConfig {
     /// [`CdtConfig::resolve_path`]. Parent directories are created when output
     /// is written. [`crate::run_simulation`] rejects configurations where CSV
     /// and JSON output paths resolve to the same file.
-    #[arg(long, value_name = "PATH")]
     pub output_csv: Option<PathBuf>,
 
     /// Write simulation metadata and aggregate summary data to a JSON file.
@@ -128,8 +125,173 @@ pub struct CdtConfig {
     /// [`CdtConfig::resolve_path`]. Parent directories are created when output
     /// is written. [`crate::run_simulation`] rejects configurations where CSV
     /// and JSON output paths resolve to the same file.
-    #[arg(long, value_name = "PATH")]
     pub output_json: Option<PathBuf>,
+}
+
+/// Command-line arguments accepted by the `cdt` binary.
+#[derive(Parser)]
+#[command(
+    author,
+    version,
+    about = "Run 1+1-dimensional Causal Dynamical Triangulations simulations",
+    long_about = "Run 1+1-dimensional Causal Dynamical Triangulations simulations.\n\nConstruct a foliated CDT triangulation, optionally run the Metropolis move loop, and write measurement summaries. Prefer --vertices-per-slice for regular initial data; --vertices remains available when the total initial vertex count is already known.",
+    group = ArgGroup::new("vertex_count")
+        .required(true)
+        .args(["vertices", "vertices_per_slice"])
+)]
+struct CdtCliArgs {
+    #[arg(
+        short,
+        long,
+        help = "Triangulation dimension; currently only 2 is implemented",
+        value_parser = clap::value_parser!(u8).range(2..3)
+    )]
+    dimension: Option<u8>,
+
+    #[arg(
+        short,
+        long,
+        help = "Total initial vertex count; must divide evenly by --timeslices",
+        value_parser = clap::value_parser!(u32).range(3..)
+    )]
+    vertices: Option<u32>,
+
+    #[arg(
+        long,
+        help = "Vertices per spatial slice; total vertices are computed as this value times --timeslices",
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    vertices_per_slice: Option<u32>,
+
+    #[arg(
+        short,
+        long,
+        help = "Number of time slices; open-boundary requires at least 2, toroidal at least 3",
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    timeslices: u32,
+
+    #[arg(long, default_value = "1.0", help = "Positive Metropolis temperature")]
+    temperature: f64,
+
+    #[arg(
+        long,
+        default_value = "1000",
+        help = "Number of Metropolis proposals to evaluate when --simulate is set"
+    )]
+    steps: u32,
+
+    #[arg(
+        long,
+        default_value = "100",
+        help = "Number of initial simulation steps to exclude from measurements"
+    )]
+    thermalization_steps: u32,
+
+    #[arg(
+        long,
+        default_value = "10",
+        help = "Record one measurement every N simulation steps",
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    measurement_frequency: u32,
+
+    #[arg(
+        long,
+        default_value = "1.0",
+        help = "Regge action vertex coupling kappa_0"
+    )]
+    coupling_0: f64,
+
+    #[arg(
+        long,
+        default_value = "1.0",
+        help = "Regge action triangle coupling kappa_2"
+    )]
+    coupling_2: f64,
+
+    #[arg(
+        long,
+        default_value = "0.1",
+        help = "Regge action cosmological constant lambda"
+    )]
+    cosmological_constant: f64,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Run the Metropolis move loop after constructing the initial triangulation"
+    )]
+    simulate: bool,
+
+    #[arg(long, help = "RNG seed for reproducible move selection and acceptance")]
+    seed: Option<u64>,
+
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = CdtTopology::default(),
+        help = "Topology and boundary conditions for the initial triangulation"
+    )]
+    topology: CdtTopology,
+
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Write per-measurement simulation data to a CSV file",
+        long_help = "Write per-measurement simulation data to a CSV file. Relative paths are resolved from the current working directory, and parent directories are created when output is written."
+    )]
+    output_csv: Option<PathBuf>,
+
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Write run metadata, aggregate summaries, and final triangulation data to JSON",
+        long_help = "Write run metadata, aggregate summaries, and final triangulation data to JSON. Relative paths are resolved from the current working directory, and parent directories are created when output is written."
+    )]
+    output_json: Option<PathBuf>,
+}
+
+impl CdtCliArgs {
+    /// Converts parsed CLI arguments into the canonical runtime configuration.
+    fn into_config(self) -> Result<CdtConfig, ClapError> {
+        let vertices = if let Some(vertices) = self.vertices {
+            vertices
+        } else {
+            let vertices_per_slice = self
+                .vertices_per_slice
+                .expect("required clap group should set one vertex count");
+            vertices_per_slice
+                .checked_mul(self.timeslices)
+                .ok_or_else(|| {
+                    ClapError::raw(
+                        ErrorKind::ValueValidation,
+                        format!(
+                            "--vertices-per-slice ({vertices_per_slice}) × --timeslices ({}) exceeds u32::MAX",
+                            self.timeslices
+                        ),
+                    )
+                })?
+        };
+
+        Ok(CdtConfig {
+            dimension: self.dimension,
+            vertices,
+            timeslices: self.timeslices,
+            temperature: self.temperature,
+            steps: self.steps,
+            thermalization_steps: self.thermalization_steps,
+            measurement_frequency: self.measurement_frequency,
+            coupling_0: self.coupling_0,
+            coupling_2: self.coupling_2,
+            cosmological_constant: self.cosmological_constant,
+            simulate: self.simulate,
+            seed: self.seed,
+            topology: self.topology,
+            output_csv: self.output_csv,
+            output_json: self.output_json,
+        })
+    }
 }
 
 /// Controls how dimension overrides are applied when merging configuration.
@@ -478,7 +640,11 @@ pub(crate) fn validate_schedule(
 }
 
 impl CdtConfig {
-    /// Builds a new instance of `CdtConfig` from command line arguments.
+    /// Builds a new instance of `CdtConfig` from command-line arguments.
+    ///
+    /// This uses the binary-facing CLI parser and exits the process with
+    /// Clap's diagnostic when parsing fails. Prefer [`Self::try_from_args`] in
+    /// tests or embedding contexts that need structured errors.
     ///
     /// # Examples
     ///
@@ -489,7 +655,9 @@ impl CdtConfig {
     /// ```
     #[must_use]
     pub fn from_args() -> Self {
-        Self::parse()
+        CdtCliArgs::parse()
+            .into_config()
+            .unwrap_or_else(|err| err.exit())
     }
 
     /// Parses a `CdtConfig` from an explicit argument iterator without exiting
@@ -501,8 +669,9 @@ impl CdtConfig {
     ///
     /// # Errors
     ///
-    /// Returns [`clap::Error`] when required arguments are missing or any value
-    /// fails Clap validation.
+    /// Returns [`clap::Error`] when required arguments are missing, when any
+    /// value fails Clap validation, or when `--vertices-per-slice ×
+    /// --timeslices` overflows `u32`.
     ///
     /// # Examples
     ///
@@ -511,8 +680,8 @@ impl CdtConfig {
     ///
     /// let config = CdtConfig::try_from_args([
     ///     "cdt",
-    ///     "--vertices",
-    ///     "16",
+    ///     "--vertices-per-slice",
+    ///     "4",
     ///     "--timeslices",
     ///     "4",
     /// ])
@@ -521,15 +690,19 @@ impl CdtConfig {
     /// assert_eq!(config.vertices, 16);
     /// assert_eq!(config.timeslices, 4);
     /// ```
-    pub fn try_from_args<I, T>(args: I) -> Result<Self, clap::Error>
+    pub fn try_from_args<I, T>(args: I) -> Result<Self, ClapError>
     where
         I: IntoIterator<Item = T>,
-        T: Into<std::ffi::OsString> + Clone,
+        T: Into<OsString> + Clone,
     {
-        Self::try_parse_from(args)
+        CdtCliArgs::try_parse_from(args)?.into_config()
     }
 
-    /// Creates a new `CdtConfig` with specified basic parameters and default action parameters.
+    /// Creates a new configuration from total vertices and time slices.
+    ///
+    /// The `vertices` argument is the total initial vertex count, not a
+    /// per-slice count. Call [`Self::validate`] before running a simulation to
+    /// check topology-specific divisibility and per-slice minimums.
     ///
     /// # Examples
     ///
@@ -861,6 +1034,45 @@ mod tests {
         assert_eq!(config.timeslices, 3);
         assert!(config.simulate);
         assert_eq!(config.seed, Some(42));
+    }
+
+    #[test]
+    fn try_from_args_computes_total_vertices_from_vertices_per_slice() {
+        let config = CdtConfig::try_from_args([
+            "cdt",
+            "--vertices-per-slice",
+            "8",
+            "--timeslices",
+            "6",
+            "--topology",
+            "toroidal",
+        ])
+        .expect("per-slice CLI arguments should parse");
+
+        assert_eq!(config.vertices, 48);
+        assert_eq!(config.timeslices, 6);
+        assert_eq!(config.topology, CdtTopology::Toroidal);
+    }
+
+    #[test]
+    fn try_from_args_rejects_vertices_per_slice_overflow() {
+        let vertices_per_slice = u32::MAX.to_string();
+        let error = CdtConfig::try_from_args([
+            "cdt",
+            "--vertices-per-slice",
+            &vertices_per_slice,
+            "--timeslices",
+            "2",
+        ])
+        .expect_err("overflowed per-slice total should be a parse error");
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert!(
+            error
+                .to_string()
+                .contains("--vertices-per-slice (4294967295) × --timeslices (2) exceeds u32::MAX"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
