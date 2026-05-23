@@ -209,6 +209,10 @@ ci-baseline tag="ci":
 ci-slow: ci test-slow
     @echo "✅ CI + slow tests passed!"
 
+# Validate CITATION.cff against the Citation File Format schema.
+citation-check: _ensure-uv
+    uvx --from cffconvert==2.0.0 cffconvert --validate -i CITATION.cff
+
 # Clean build artifacts
 clean:
     cargo clean
@@ -340,8 +344,8 @@ lint: lint-code lint-docs lint-config
 # Code linting: Rust (fmt-check, clippy, docs, Semgrep) + Python (ruff, ty) + Shell scripts
 lint-code: fmt-check clippy doc-check semgrep semgrep-test python-lint shell-lint
 
-# Configuration validation: JSON, TOML, YAML, GitHub Actions workflows
-lint-config: validate-json toml-check yaml-check action-lint
+# Configuration validation: JSON, TOML, YAML/CFF, GitHub Actions workflows
+lint-config: validate-json toml-check yaml-check citation-check action-lint
 
 # Documentation linting: Markdown + spell checking
 lint-docs: markdown-check spell-check
@@ -829,7 +833,7 @@ test-examples: _ensure-cargo-nextest
     cargo nextest run --examples --verbose --no-tests pass
 
 test-integration: _ensure-cargo-nextest
-    cargo nextest run -E 'kind(test)' --verbose
+    cargo nextest run --tests --verbose
 
 test-lib: _ensure-cargo-nextest
     cargo nextest run --lib --verbose
@@ -842,7 +846,7 @@ test-release: _ensure-cargo-nextest
     cargo test --doc --release
 
 test-slow: _ensure-cargo-nextest
-    cargo nextest run -E 'kind(test)' --features slow-tests --verbose
+    cargo nextest run --tests --features slow-tests --verbose
 
 toml-check: toml-fmt-check toml-lint
 
@@ -915,9 +919,9 @@ yaml-fix: _ensure-dprint
     files=()
     while IFS= read -r -d '' file; do
         files+=("$file")
-    done < <(git ls-files -z '*.yml' '*.yaml')
+    done < <(git ls-files -z '*.yml' '*.yaml' 'CITATION.cff')
     if [ "${#files[@]}" -gt 0 ]; then
-        echo "📝 dprint fmt (YAML, ${#files[@]} files)"
+        echo "📝 dprint fmt (YAML/CFF, ${#files[@]} files)"
         dprint fmt --incremental=false "${files[@]}"
     else
         echo "No YAML files found to format."
@@ -929,9 +933,9 @@ yaml-fmt-check: _ensure-dprint
     files=()
     while IFS= read -r -d '' file; do
         files+=("$file")
-    done < <(git ls-files -z '*.yml' '*.yaml')
+    done < <(git ls-files -z '*.yml' '*.yaml' 'CITATION.cff')
     if [ "${#files[@]}" -gt 0 ]; then
-        echo "🔍 dprint check (YAML, ${#files[@]} files)"
+        echo "🔍 dprint check (YAML/CFF, ${#files[@]} files)"
         dprint check --incremental=false "${files[@]}"
     else
         echo "No YAML files found to check."
@@ -943,9 +947,9 @@ yaml-lint: _ensure-yamllint
     files=()
     while IFS= read -r -d '' file; do
         files+=("$file")
-    done < <(git ls-files -z '*.yml' '*.yaml')
+    done < <(git ls-files -z '*.yml' '*.yaml' 'CITATION.cff')
     if [ "${#files[@]}" -gt 0 ]; then
-        echo "🔍 yamllint (${#files[@]} files)"
+        echo "🔍 yamllint (${#files[@]} YAML/CFF files)"
         yamllint --strict -c .yamllint "${files[@]}"
     else
         echo "No YAML files found to lint."

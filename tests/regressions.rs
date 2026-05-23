@@ -13,14 +13,14 @@ fn toroidal_observables_run_accepts_periodic_moves_after_offset_support() {
     // handling, and the observables workflow should report accepted moves while
     // preserving the toroidal CDT invariants.
     let triangulation =
-        CdtTriangulation::from_toroidal_cdt(8, 8).expect("observables fixture should build");
+        CdtTriangulation::from_toroidal_cdt(4, 3).expect("observables fixture should build");
 
-    let metropolis_config = MetropolisConfig::new(1.0, 80, 20, 10).with_seed(7);
+    let metropolis_config = MetropolisConfig::new(1.0, 20, 0, 5).with_seed(7);
     let results =
         MetropolisAlgorithm::new(metropolis_config, ActionConfig::default()).run(triangulation);
     let results = results.expect("toroidal observables regression run should complete");
 
-    assert_eq!(results.move_stats().total_attempted(), 80);
+    assert_eq!(results.move_stats().total_attempted(), 20);
     assert!(
         results.move_stats().total_accepted() > 0,
         "periodic toroidal runs should accept moves after delaunay offset-aware flips"

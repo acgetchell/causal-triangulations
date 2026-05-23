@@ -235,6 +235,23 @@ This includes foundational work on:
 - Computational geometry and Delaunay triangulations
 - Discrete approaches to general relativity
 
+## 🤖 AI Agents
+
+This repository contains an `AGENTS.md` file, which defines the canonical rules and invariants for all AI coding assistants and autonomous agents working on
+this codebase.
+
+AI tools (including ChatGPT, Claude, CodeRabbit, Codex, and WARP) are expected to read and follow `AGENTS.md` when proposing or applying changes.
+
+Portions of this library were developed with the assistance of these AI tools:
+
+- [ChatGPT]
+- [Claude]
+- [CodeRabbit]
+- [Codex]
+- [WARP]
+
+> All code was written and/or reviewed and validated by the author.
+
 ## 📝 License
 
 This project's license is specified in [LICENSE](LICENSE).
@@ -244,6 +261,11 @@ This project's license is specified in [LICENSE](LICENSE).
 [Rust]: https://rust-lang.org
 [Delaunay triangulation]: https://crates.io/crates/delaunay
 [Criterion]: https://github.com/bheisler/criterion.rs
+[ChatGPT]: https://openai.com/chatgpt
+[Claude]: https://www.anthropic.com/claude
+[CodeRabbit]: https://coderabbit.ai/
+[Codex]: https://openai.com/codex/
+[WARP]: https://www.warp.dev
 [ci-badge]: https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml/badge.svg
 [ci-workflow]: https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml
 [clippy-badge]: https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml/badge.svg

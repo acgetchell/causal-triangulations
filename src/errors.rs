@@ -512,6 +512,7 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
                 time_1,
                 step_distance,
             },
+            CdtError::MetropolisMoveApplicationFailed { source, .. } => source,
             error => Self::Unexpected {
                 detail: error.to_string(),
             },
@@ -1250,6 +1251,94 @@ mod tests {
 
         assert_eq!(check, CdtValidationCheck::Causality);
         assert_eq!(failure, validation_failure);
+    }
+
+    #[test]
+    fn metropolis_move_application_failure_preserves_structured_sources() {
+        let cases = [
+            (
+                CdtError::BackendRollbackFailed {
+                    operation: BackendMutationOperation::FlipEdge,
+                    target: "edge EdgeKey(5v1)".to_string(),
+                    detail: "flip failed".to_string(),
+                    rollback_errors: "rollback failed".to_string(),
+                },
+                MetropolisMoveApplicationFailure::BackendRollback {
+                    operation: BackendMutationOperation::FlipEdge,
+                    target: "edge EdgeKey(5v1)".to_string(),
+                    detail: "flip failed".to_string(),
+                    rollback_errors: "rollback failed".to_string(),
+                },
+            ),
+            (
+                CdtError::DelaunayValidationFailed {
+                    level: DelaunayValidationLevel::Three,
+                    detail: "invalid triangulation".to_string(),
+                },
+                MetropolisMoveApplicationFailure::DelaunayValidation {
+                    level: DelaunayValidationLevel::Three,
+                    detail: "invalid triangulation".to_string(),
+                },
+            ),
+            (
+                CdtError::TopologyMismatch {
+                    topology: CdtTopology::Toroidal,
+                    euler_characteristic: 1,
+                    expected_euler_characteristics: vec![0],
+                    vertices: 3,
+                    edges: 3,
+                    faces: 1,
+                },
+                MetropolisMoveApplicationFailure::TopologyMismatch {
+                    topology: CdtTopology::Toroidal,
+                    euler_characteristic: 1,
+                    expected_euler_characteristics: vec![0],
+                    vertices: 3,
+                    edges: 3,
+                    faces: 1,
+                },
+            ),
+            (
+                CdtError::Foliation(FoliationError::EmptySlice { slice: 3 }),
+                MetropolisMoveApplicationFailure::Foliation(FoliationError::EmptySlice {
+                    slice: 3,
+                }),
+            ),
+            (
+                CdtError::CausalityViolation {
+                    time_0: 0,
+                    time_1: 2,
+                    step_distance: 2,
+                },
+                MetropolisMoveApplicationFailure::CausalityViolation {
+                    time_0: 0,
+                    time_1: 2,
+                    step_distance: 2,
+                },
+            ),
+        ];
+
+        for (error, expected) in cases {
+            assert_eq!(MetropolisMoveApplicationFailure::from(error), expected);
+        }
+    }
+
+    #[test]
+    fn metropolis_move_application_failure_from_wrapper_preserves_source() {
+        let source = MetropolisMoveApplicationFailure::BackendMutation {
+            operation: BackendMutationOperation::RemoveVertex,
+            target: "vertex VertexKey(7v1)".to_string(),
+            detail: "backend reported invalid vertex key".to_string(),
+        };
+        let failure =
+            MetropolisMoveApplicationFailure::from(CdtError::MetropolisMoveApplicationFailed {
+                step: 17,
+                move_type: MoveType::Move31Remove,
+                attempts: 8,
+                source: source.clone(),
+            });
+
+        assert_eq!(failure, source);
     }
 
     #[test]

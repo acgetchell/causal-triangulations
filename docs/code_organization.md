@@ -141,6 +141,7 @@ causal-triangulations/
 ├── CHANGELOG.md
 ├── CODE_OF_CONDUCT.md
 ├── CONTRIBUTING.md
+├── CITATION.cff
 ├── Cargo.lock
 ├── Cargo.toml
 ├── LICENSE

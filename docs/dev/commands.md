@@ -250,8 +250,8 @@ just shell-fix         # Format (mutating)
 
 ## YAML Validation
 
-YAML files are checked with `yamllint` and formatted with `dprint` using the
-Rust-native `pretty_yaml` plugin.
+YAML and `CITATION.cff` files are checked with `yamllint` and formatted with
+`dprint` using the Rust-native `pretty_yaml` plugin.
 
 Commands:
 
@@ -262,6 +262,18 @@ just yaml-fix          # Format (mutating)
 
 Compatibility aliases remain available as granular recipes:
 `just yaml-lint` and `just yaml-fmt-check`.
+
+---
+
+## CITATION.cff Validation
+
+Citation metadata should pass both YAML style linting and CFF schema validation.
+
+Run:
+
+```bash
+just citation-check
+```
 
 ---
 

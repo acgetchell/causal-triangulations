@@ -875,6 +875,11 @@ impl ErgodicsSystem {
             if !flip_is_causal(triangulation, &adjacent) {
                 continue;
             }
+            if !candidate_mutation_succeeds(triangulation, |candidate| {
+                candidate.flip_edge(edge.clone()).is_ok()
+            }) {
+                continue;
+            }
 
             causal_candidate_count += 1;
             if self.rng.random_range(0..causal_candidate_count) == 0 {
@@ -1456,6 +1461,8 @@ fn removal_candidate_is_causal(
 ///
 /// The Metropolis-Hastings proposal ratio uses this to account for asymmetric
 /// forward and reverse site multiplicities for volume-changing CDT moves.
+/// Counts include only sites that pass the same deterministic pre-mutation
+/// guards as the mutating executor.
 pub(crate) fn proposal_site_count(
     triangulation: &CdtTriangulation2D,
     move_type: MoveType,
@@ -1476,6 +1483,9 @@ fn edge_flip_site_count(triangulation: &CdtTriangulation2D) -> usize {
                 return false;
             };
             flip_is_causal(triangulation, &adjacent)
+                && candidate_mutation_succeeds(triangulation, |candidate| {
+                    candidate.flip_edge(edge.clone()).is_ok()
+                })
         })
         .count()
 }
@@ -1489,8 +1499,24 @@ fn insertion_site_count(triangulation: &CdtTriangulation2D) -> usize {
         .geometry()
         .faces()
         .filter(|face| {
-            centroid(triangulation, face).is_some()
-                && insertion_label(triangulation, face).is_some()
+            let Some(point) = centroid(triangulation, face) else {
+                return false;
+            };
+            let Some(label) = insertion_label(triangulation, face) else {
+                return false;
+            };
+
+            candidate_mutation_succeeds(triangulation, |candidate| {
+                let Ok(subdivision) = candidate.subdivide_face(face.clone(), &point) else {
+                    return false;
+                };
+                if let InsertionLabel::Label(label) = label {
+                    return candidate
+                        .set_vertex_data(&subdivision.new_vertex, Some(label))
+                        .is_ok();
+                }
+                true
+            })
         })
         .count()
 }
@@ -1503,7 +1529,19 @@ fn toroidal_insertion_site_count(triangulation: &CdtTriangulation2D) -> usize {
             let Ok(Some(adjacent)) = geometry.edge_adjacent_faces(edge) else {
                 return false;
             };
-            toroidal_insertion_candidate(triangulation, edge.clone(), &adjacent).is_some()
+            let Some(insert) = toroidal_insertion_candidate(triangulation, edge.clone(), &adjacent)
+            else {
+                return false;
+            };
+            candidate_mutation_succeeds(triangulation, |candidate| {
+                let Ok(subdivision) = candidate.subdivide_face(insert.face, &insert.point) else {
+                    return false;
+                };
+                candidate
+                    .set_vertex_data(&subdivision.new_vertex, Some(insert.label))
+                    .is_ok()
+                    && candidate.flip_edge(insert.edge).is_ok()
+            })
         })
         .count()
 }
@@ -1513,7 +1551,15 @@ fn removal_site_count(triangulation: &CdtTriangulation2D) -> usize {
         return triangulation
             .geometry()
             .vertices()
-            .filter(|vertex| toroidal_removal_candidate(triangulation, vertex.clone()).is_some())
+            .filter(|vertex| {
+                let Some(remove) = toroidal_removal_candidate(triangulation, vertex.clone()) else {
+                    return false;
+                };
+                candidate_mutation_succeeds(triangulation, |candidate| {
+                    candidate.flip_edge(remove.flip_edge).is_ok()
+                        && candidate.remove_vertex(remove.vertex).is_ok()
+                })
+            })
             .count();
     }
 
@@ -1525,8 +1571,26 @@ fn removal_site_count(triangulation: &CdtTriangulation2D) -> usize {
                 return false;
             };
             removal_candidate_is_causal(triangulation, vertex, &neighbors)
+                && candidate_mutation_succeeds(triangulation, |candidate| {
+                    candidate.remove_vertex(vertex.clone()).is_ok()
+                })
         })
         .count()
+}
+
+/// Tests a candidate mutation on a clone before counting or sampling the site.
+///
+/// Proposal-site accounting must count only local sites that can actually
+/// commit through the same backend mutation path as the executor. Running the
+/// operation on a cloned triangulation keeps the live state unchanged while
+/// filtering out sites that pass CDT-local guards but would still be rejected by
+/// the geometry backend.
+fn candidate_mutation_succeeds(
+    triangulation: &CdtTriangulation2D,
+    operation: impl FnOnce(&mut CdtTriangulation2D) -> bool,
+) -> bool {
+    let mut candidate = triangulation.clone();
+    operation(&mut candidate)
 }
 
 fn is_toroidal_foliated(triangulation: &CdtTriangulation2D) -> bool {
