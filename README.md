@@ -99,6 +99,8 @@ unfixed-volume simulations controlled by the cosmological constant are a standar
 In an unfixed-volume ensemble, the cosmological constant is the coupling that controls volume growth or shrinkage because it is conjugate to the lattice
 volume term in the action. Use `--cosmological-constant` to tune that behavior. Values too far from the useful finite-volume regime can drive runs toward
 minimum-volume configurations or toward rapid growth; this is expected physics for the unfixed ensemble, not volume fixing.
+Automated λ-scan utilities for finding practical finite-volume windows are planned as [#143](https://github.com/acgetchell/causal-triangulations/issues/143);
+for v0.1.0, tune `--cosmological-constant` manually and inspect the reported volume and acceptance diagnostics.
 
 Higher-dimensional CDT studies often use explicit approximate volume fixing for finite-size numerical work. For example, Ambjørn et al. discuss quadratic
 volume fixing in [The Semiclassical Limit of Causal Dynamical Triangulations](https://arxiv.org/abs/1102.3929), and the toroidal phase-structure study uses

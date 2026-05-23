@@ -14,7 +14,7 @@ use crate::geometry::CdtTriangulation2D;
 use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
 };
-use crate::geometry::traits::{EdgeAdjacentFaces, TriangulationQuery};
+use crate::geometry::traits::{EdgeAdjacentFaces, TriangulationMut, TriangulationQuery};
 use rand::{RngExt, SeedableRng, rngs::Xoshiro256PlusPlus};
 use serde::{Deserialize, Serialize};
 use std::array;
@@ -519,6 +519,9 @@ impl ErgodicsSystem {
             let Some(label) = insertion_label(triangulation, &face) else {
                 continue;
             };
+            if !insertion_candidate_is_committable(triangulation, &face, &point, label) {
+                continue;
+            }
 
             causal_candidate_count += 1;
             if self.rng.random_range(0..causal_candidate_count) == 0 {
@@ -593,6 +596,9 @@ impl ErgodicsSystem {
             else {
                 continue;
             };
+            if !toroidal_insertion_candidate_is_committable(triangulation, &candidate) {
+                continue;
+            }
 
             causal_candidate_count += 1;
             if self.rng.random_range(0..causal_candidate_count) == 0 {
@@ -711,6 +717,9 @@ impl ErgodicsSystem {
             if !removal_candidate_is_causal(triangulation, &vertex, &neighbors) {
                 continue;
             }
+            if !removal_candidate_is_committable(triangulation, &vertex, &neighbors) {
+                continue;
+            }
 
             causal_candidate_count += 1;
             if self.rng.random_range(0..causal_candidate_count) == 0 {
@@ -754,6 +763,9 @@ impl ErgodicsSystem {
             let Some(candidate) = toroidal_removal_candidate(triangulation, vertex) else {
                 continue;
             };
+            if !toroidal_removal_candidate_is_committable(triangulation, &candidate) {
+                continue;
+            }
 
             candidate_count += 1;
             if self.rng.random_range(0..candidate_count) == 0 {
@@ -872,12 +884,7 @@ impl ErgodicsSystem {
                 continue;
             };
             geometric_candidate_seen = true;
-            if !flip_is_causal(triangulation, &adjacent) {
-                continue;
-            }
-            if !candidate_mutation_succeeds(triangulation, |candidate| {
-                candidate.flip_edge(edge.clone()).is_ok()
-            }) {
+            if !edge_flip_candidate_is_committable(triangulation, &edge, &adjacent) {
                 continue;
             }
 
@@ -1069,6 +1076,21 @@ fn flip_is_causal(
         && cdt_vertex_triple(triangulation, [endpoint_1, opposite_0, opposite_1])
 }
 
+/// Checks whether a k=2 edge flip passes the cheap deterministic edit guards.
+fn edge_flip_candidate_is_committable(
+    triangulation: &CdtTriangulation2D,
+    edge: &DelaunayEdgeHandle,
+    adjacent: &EdgeAdjacentFaces<DelaunayVertexHandle, DelaunayFaceHandle>,
+) -> bool {
+    let (opposite_0, opposite_1) = &adjacent.opposite_vertices;
+    triangulation.geometry().can_flip_edge(edge)
+        && flip_is_causal(triangulation, adjacent)
+        && !edge_exists_between(triangulation, opposite_0, opposite_1)
+        && candidate_mutation_succeeds(triangulation, |candidate| {
+            candidate.flip_edge(edge.clone()).is_ok()
+        })
+}
+
 /// Finds the inserted vertex label that makes a `(1,3)` subdivision causal.
 ///
 /// The candidate label must keep all three replacement triangles valid CDT
@@ -1085,6 +1107,27 @@ fn insertion_label(
     }
 
     causal_insertion_label(triangulation, face)
+}
+
+/// Checks coordinate-level backend preconditions for face subdivision.
+fn insertion_candidate_is_committable(
+    triangulation: &CdtTriangulation2D,
+    face: &DelaunayFaceHandle,
+    point: &[f64; 2],
+    label: InsertionLabel,
+) -> bool {
+    point.iter().all(|coordinate| coordinate.is_finite())
+        && candidate_mutation_succeeds(triangulation, |candidate| {
+            let Ok(subdivision) = candidate.subdivide_face(face.clone(), point) else {
+                return false;
+            };
+            if let InsertionLabel::Label(label) = label {
+                return candidate
+                    .set_vertex_data(&subdivision.new_vertex, Some(label))
+                    .is_ok();
+            }
+            true
+        })
 }
 
 /// Returns the previous and next labels around the toroidal time circle.
@@ -1160,6 +1203,27 @@ fn toroidal_insertion_candidate(
         point,
         label: endpoint_0_label,
     })
+}
+
+/// Checks backend-local preconditions for the toroidal spacelike-link split.
+fn toroidal_insertion_candidate_is_committable(
+    triangulation: &CdtTriangulation2D,
+    candidate: &ToroidalInsertionCandidate,
+) -> bool {
+    candidate
+        .point
+        .iter()
+        .all(|coordinate| coordinate.is_finite())
+        && candidate_mutation_succeeds(triangulation, |dry_run| {
+            let Ok(subdivision) = dry_run.subdivide_face(candidate.face.clone(), &candidate.point)
+            else {
+                return false;
+            };
+            dry_run
+                .set_vertex_data(&subdivision.new_vertex, Some(candidate.label))
+                .is_ok()
+                && dry_run.flip_edge(candidate.edge.clone()).is_ok()
+        })
 }
 
 /// Finds a CDT-valid inserted vertex label without topology-specific guards.
@@ -1297,6 +1361,22 @@ fn edge_exists_between(
         })
 }
 
+/// Returns true when a live face already spans exactly the three vertices.
+fn face_exists_with_vertices(
+    triangulation: &CdtTriangulation2D,
+    vertices: &[DelaunayVertexHandle; 3],
+) -> bool {
+    triangulation.geometry().faces().any(|face| {
+        triangulation
+            .geometry()
+            .face_vertices(&face)
+            .is_ok_and(|face_vertices| {
+                face_vertices.len() == 3
+                    && vertices.iter().all(|vertex| face_vertices.contains(vertex))
+            })
+    })
+}
+
 /// Checks whether two opposite vertices match an unordered pair.
 fn opposites_match_pair(
     adjacent: &EdgeAdjacentFaces<DelaunayVertexHandle, DelaunayFaceHandle>,
@@ -1384,6 +1464,30 @@ fn toroidal_removal_candidate(
     }
 
     None
+}
+
+/// Checks whether collapsing a degree-3 vertex would duplicate an existing face.
+fn removal_candidate_is_committable(
+    triangulation: &CdtTriangulation2D,
+    vertex: &DelaunayVertexHandle,
+    neighbors: &[DelaunayVertexHandle; 3],
+) -> bool {
+    !face_exists_with_vertices(triangulation, neighbors)
+        && candidate_mutation_succeeds(triangulation, |candidate| {
+            candidate.remove_vertex(vertex.clone()).is_ok()
+        })
+}
+
+/// Checks backend-local preconditions for the toroidal flip-then-collapse move.
+fn toroidal_removal_candidate_is_committable(
+    triangulation: &CdtTriangulation2D,
+    candidate: &ToroidalRemovalCandidate,
+) -> bool {
+    triangulation.geometry().can_flip_edge(&candidate.flip_edge)
+        && candidate_mutation_succeeds(triangulation, |dry_run| {
+            dry_run.flip_edge(candidate.flip_edge.clone()).is_ok()
+                && dry_run.remove_vertex(candidate.vertex.clone()).is_ok()
+        })
 }
 
 /// Collects the three distinct neighboring vertices around a removable vertex.
@@ -1482,10 +1586,7 @@ fn edge_flip_site_count(triangulation: &CdtTriangulation2D) -> usize {
             let Ok(Some(adjacent)) = geometry.edge_adjacent_faces(edge) else {
                 return false;
             };
-            flip_is_causal(triangulation, &adjacent)
-                && candidate_mutation_succeeds(triangulation, |candidate| {
-                    candidate.flip_edge(edge.clone()).is_ok()
-                })
+            edge_flip_candidate_is_committable(triangulation, edge, &adjacent)
         })
         .count()
 }
@@ -1506,17 +1607,7 @@ fn insertion_site_count(triangulation: &CdtTriangulation2D) -> usize {
                 return false;
             };
 
-            candidate_mutation_succeeds(triangulation, |candidate| {
-                let Ok(subdivision) = candidate.subdivide_face(face.clone(), &point) else {
-                    return false;
-                };
-                if let InsertionLabel::Label(label) = label {
-                    return candidate
-                        .set_vertex_data(&subdivision.new_vertex, Some(label))
-                        .is_ok();
-                }
-                true
-            })
+            insertion_candidate_is_committable(triangulation, face, &point, label)
         })
         .count()
 }
@@ -1533,15 +1624,7 @@ fn toroidal_insertion_site_count(triangulation: &CdtTriangulation2D) -> usize {
             else {
                 return false;
             };
-            candidate_mutation_succeeds(triangulation, |candidate| {
-                let Ok(subdivision) = candidate.subdivide_face(insert.face, &insert.point) else {
-                    return false;
-                };
-                candidate
-                    .set_vertex_data(&subdivision.new_vertex, Some(insert.label))
-                    .is_ok()
-                    && candidate.flip_edge(insert.edge).is_ok()
-            })
+            toroidal_insertion_candidate_is_committable(triangulation, &insert)
         })
         .count()
 }
@@ -1555,10 +1638,7 @@ fn removal_site_count(triangulation: &CdtTriangulation2D) -> usize {
                 let Some(remove) = toroidal_removal_candidate(triangulation, vertex.clone()) else {
                     return false;
                 };
-                candidate_mutation_succeeds(triangulation, |candidate| {
-                    candidate.flip_edge(remove.flip_edge).is_ok()
-                        && candidate.remove_vertex(remove.vertex).is_ok()
-                })
+                toroidal_removal_candidate_is_committable(triangulation, &remove)
             })
             .count();
     }
@@ -1571,20 +1651,17 @@ fn removal_site_count(triangulation: &CdtTriangulation2D) -> usize {
                 return false;
             };
             removal_candidate_is_causal(triangulation, vertex, &neighbors)
-                && candidate_mutation_succeeds(triangulation, |candidate| {
-                    candidate.remove_vertex(vertex.clone()).is_ok()
-                })
+                && removal_candidate_is_committable(triangulation, vertex, &neighbors)
         })
         .count()
 }
 
-/// Tests a candidate mutation on a clone before counting or sampling the site.
+/// Tests a candidate mutation on a cloned triangulation before counting or sampling it.
 ///
-/// Proposal-site accounting must count only local sites that can actually
-/// commit through the same backend mutation path as the executor. Running the
-/// operation on a cloned triangulation keeps the live state unchanged while
-/// filtering out sites that pass CDT-local guards but would still be rejected by
-/// the geometry backend.
+/// Metropolis-Hastings site counts must include only sites that can actually
+/// commit through the same backend mutation path as the executor. Cheap local
+/// guards run first where possible, and this dry-run catches remaining backend
+/// constraints without mutating the live state.
 fn candidate_mutation_succeeds(
     triangulation: &CdtTriangulation2D,
     operation: impl FnOnce(&mut CdtTriangulation2D) -> bool,
@@ -1886,6 +1963,64 @@ mod tests {
     }
 
     #[test]
+    fn proposal_site_count_matches_open_boundary_move_availability() {
+        let mut system = ErgodicsSystem::new();
+        let mut triangulation = single_triangle();
+
+        assert_eq!(proposal_site_count(&triangulation, MoveType::Move22), 0);
+        assert_eq!(proposal_site_count(&triangulation, MoveType::EdgeFlip), 0);
+        assert_eq!(proposal_site_count(&triangulation, MoveType::Move13Add), 1);
+        assert_eq!(
+            proposal_site_count(&triangulation, MoveType::Move31Remove),
+            0
+        );
+
+        let insert = system.attempt_13_move(&mut triangulation);
+        assert_eq!(insert, MoveResult::Success);
+        assert_eq!(proposal_site_count(&triangulation, MoveType::Move13Add), 3);
+        assert_eq!(
+            proposal_site_count(&triangulation, MoveType::Move31Remove),
+            1
+        );
+
+        let removal = system.attempt_31_move(&mut triangulation);
+        assert_eq!(removal, MoveResult::Success);
+        assert_eq!(proposal_site_count(&triangulation, MoveType::Move13Add), 1);
+        assert_eq!(
+            proposal_site_count(&triangulation, MoveType::Move31Remove),
+            0
+        );
+    }
+
+    #[test]
+    fn removal_committable_guard_rejects_existing_replacement_face() {
+        let triangulation = single_triangle();
+        let face = triangulation
+            .geometry()
+            .faces()
+            .next()
+            .expect("triangle fixture should have one face");
+        let vertices = triangulation
+            .geometry()
+            .face_vertices(&face)
+            .expect("triangle face should resolve vertices");
+        let [v0, v1, v2] = vertices.as_slice() else {
+            panic!("triangle fixture face should have exactly three vertices");
+        };
+        let replacement_vertices = [v0.clone(), v1.clone(), v2.clone()];
+
+        assert!(face_exists_with_vertices(
+            &triangulation,
+            &replacement_vertices
+        ));
+        assert!(!removal_candidate_is_committable(
+            &triangulation,
+            v0,
+            &replacement_vertices
+        ));
+    }
+
+    #[test]
     fn move_31_removes_degree_three() {
         let mut system = ErgodicsSystem::new();
         let mut triangulation = single_triangle();
@@ -2015,6 +2150,33 @@ mod tests {
         triangulation.validate().expect(
             "accepted periodic toroidal Move31Remove should preserve evolved CDT invariants",
         );
+    }
+
+    #[test]
+    fn proposal_site_count_tracks_toroidal_inverse_sites() {
+        let mut system = ErgodicsSystem::with_seed(0);
+        let mut triangulation =
+            CdtTriangulation2D::from_toroidal_cdt(8, 8).expect("build toroidal CDT");
+
+        assert!(
+            proposal_site_count(&triangulation, MoveType::Move31Remove) > 0,
+            "initial toroidal CDT should expose committable inverse-volume sites"
+        );
+        assert!(proposal_site_count(&triangulation, MoveType::Move13Add) > 0);
+
+        let insert = system.attempt_13_move(&mut triangulation);
+        assert_eq!(insert, MoveResult::Success);
+
+        assert!(
+            proposal_site_count(&triangulation, MoveType::Move31Remove) > 0,
+            "a toroidal spacelike-link split should expose at least one committable inverse site"
+        );
+
+        let removal = system.attempt_31_move(&mut triangulation);
+        assert_eq!(removal, MoveResult::Success);
+        triangulation
+            .validate()
+            .expect("proposal-counted toroidal inverse move should preserve CDT invariants");
     }
 
     #[test]

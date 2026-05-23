@@ -7,6 +7,7 @@
 
 use approx::{abs_diff_eq, assert_relative_eq};
 use causal_triangulations::prelude::action::ActionConfig;
+use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveResult};
 use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
 use causal_triangulations::prelude::triangulation::{
     CdtTopology, CdtTriangulation, TriangulationQuery,
@@ -120,6 +121,23 @@ mod integration_tests {
             .triangulation()
             .validate_simplex_classification()
             .expect("final toroidal simplex classification remains valid");
+
+        let mut local_moves = ErgodicsSystem::with_seed(0);
+        let mut inverse_fixture =
+            CdtTriangulation::from_toroidal_cdt(8, 8).expect("build toroidal inverse fixture");
+        assert_eq!(
+            local_moves.attempt_13_move(&mut inverse_fixture),
+            MoveResult::Success,
+            "periodic toroidal local dynamics should accept a volume-increasing move"
+        );
+        assert_eq!(
+            local_moves.attempt_31_move(&mut inverse_fixture),
+            MoveResult::Success,
+            "periodic toroidal local dynamics should accept the inverse volume move after growth"
+        );
+        inverse_fixture
+            .validate()
+            .expect("direct grow-then-inverse toroidal dynamics preserve invariants");
     }
 
     #[test]
