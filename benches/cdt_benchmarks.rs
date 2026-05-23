@@ -12,7 +12,8 @@
 use causal_triangulations::prelude::action::ActionConfig;
 use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveStatistics, MoveType};
 use causal_triangulations::prelude::simulation::{
-    Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep, SimulationResultsBackend,
+    Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep, ProposalStatistics,
+    SimulationResultsBackend,
 };
 use causal_triangulations::prelude::triangulation::{CdtTriangulation2D, TriangulationQuery};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -290,6 +291,7 @@ fn bench_simulation_analysis(c: &mut Criterion) {
         config,
         action_config,
         MoveStatistics::new(),
+        ProposalStatistics::new(),
         vec![
             MonteCarloStep {
                 step: 1,

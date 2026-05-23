@@ -423,6 +423,11 @@ impl CdtConfig {
     /// unchanged. When an override value is provided, it replaces the corresponding field in
     /// the returned configuration.
     ///
+    /// A provided volume profile is an atomic override for its derived counts:
+    /// the returned configuration recomputes `vertices` from the profile sum and
+    /// `timeslices` from the profile length, even if those scalar fields were
+    /// also present in the override set.
+    ///
     /// # Examples
     ///
     /// ```
@@ -465,8 +470,18 @@ impl CdtConfig {
             merged.timeslices = timeslices;
         }
 
-        if let Some(volume_profile) = &overrides.volume_profile {
-            merged.volume_profile.clone_from(volume_profile);
+        // Profiles are atomic overrides for their derived counts; otherwise a
+        // merged config can pair stale vertex/time-slice totals with new slices.
+        match &overrides.volume_profile {
+            Some(Some(profile)) => {
+                merged.vertices = profile
+                    .iter()
+                    .fold(0_u32, |total, &vertices| total.saturating_add(vertices));
+                merged.timeslices = u32::try_from(profile.len()).unwrap_or(u32::MAX);
+                merged.volume_profile = Some(profile.clone());
+            }
+            Some(None) => merged.volume_profile = None,
+            None => {}
         }
 
         if let Some(temperature) = overrides.temperature {
@@ -1880,7 +1895,8 @@ mod tests {
 
         let merged = base.merge_with_override(&overrides);
 
-        assert_eq!(merged.timeslices, 5);
+        assert_eq!(merged.vertices, 15);
+        assert_eq!(merged.timeslices, 3);
         assert_eq!(merged.volume_profile, Some(vec![4, 6, 5]));
         assert_eq!(merged.steps, 250);
         assert_eq!(merged.thermalization_steps, 25);

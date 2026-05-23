@@ -230,6 +230,10 @@ impl SimulationResultsBackend {
     /// use the same data shape but avoid revalidating immediately after the run has
     /// already checked its final CDT invariants.
     ///
+    /// The supplied [`MoveStatistics`] and [`ProposalStatistics`] are preserved
+    /// verbatim so serialized or externally reconstructed telemetry keeps the
+    /// same wire shape as results produced by the Metropolis runner.
+    ///
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if `config` is not a
@@ -248,7 +252,8 @@ impl SimulationResultsBackend {
     /// ```
     /// use causal_triangulations::prelude::moves::MoveStatistics;
     /// use causal_triangulations::prelude::simulation::{
-    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisConfig, SimulationResultsBackend,
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisConfig, ProposalStatistics,
+    ///     SimulationResultsBackend,
     /// };
     /// use std::time::Duration;
     ///
@@ -258,6 +263,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         MoveStatistics::new(),
+    ///         ProposalStatistics::new(),
     ///         vec![],
     ///         vec![],
     ///         Duration::from_millis(0),
@@ -267,10 +273,15 @@ impl SimulationResultsBackend {
     ///     Ok(())
     /// }
     /// ```
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "public constructor mirrors the serialized simulation result components"
+    )]
     pub fn new(
         config: MetropolisConfig,
         action_config: ActionConfig,
         move_stats: MoveStatistics,
+        proposal_stats: ProposalStatistics,
         steps: Vec<MonteCarloStep>,
         measurements: Vec<Measurement>,
         elapsed_time: Duration,
@@ -283,7 +294,7 @@ impl SimulationResultsBackend {
             config,
             action_config,
             move_stats,
-            proposal_stats: ProposalStatistics::new(),
+            proposal_stats,
             steps,
             measurements,
             elapsed_time,
@@ -322,6 +333,7 @@ impl SimulationResultsBackend {
     ///         config.clone(),
     ///         ActionConfig::default(),
     ///         MoveStatistics::new(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::ZERO,
@@ -353,6 +365,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         action_config.clone(),
     ///         MoveStatistics::new(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::ZERO,
@@ -384,6 +397,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         move_stats,
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::ZERO,
@@ -439,6 +453,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         MoveStatistics::new(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::ZERO,
@@ -469,6 +484,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         MoveStatistics::new(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::ZERO,
@@ -500,6 +516,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         MoveStatistics::new(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         elapsed,
@@ -530,6 +547,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         MoveStatistics::new(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::ZERO,
@@ -561,6 +579,7 @@ impl SimulationResultsBackend {
     ///     let results = SimulationResultsBackend::new(
     ///         config,
     ///         ActionConfig::default(),
+    ///         Default::default(),
     ///         Default::default(),
     ///         vec![],
     ///         vec![],
@@ -607,6 +626,7 @@ impl SimulationResultsBackend {
     ///     let results = SimulationResultsBackend::new(
     ///         config,
     ///         ActionConfig::default(),
+    ///         Default::default(),
     ///         Default::default(),
     ///         vec![],
     ///         vec![],
@@ -655,6 +675,7 @@ impl SimulationResultsBackend {
     ///     let results = SimulationResultsBackend::new(
     ///         config,
     ///         ActionConfig::default(),
+    ///         Default::default(),
     ///         Default::default(),
     ///         vec![],
     ///         vec![
@@ -720,6 +741,7 @@ impl SimulationResultsBackend {
     ///     let results = SimulationResultsBackend::new(
     ///         config,
     ///         ActionConfig::default(),
+    ///         Default::default(),
     ///         Default::default(),
     ///         vec![],
     ///         vec![
@@ -789,6 +811,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         Default::default(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::from_millis(0),
@@ -829,6 +852,7 @@ impl SimulationResultsBackend {
     ///         MetropolisConfig::new(1.0, 1, 0, 1),
     ///         ActionConfig::default(),
     ///         Default::default(),
+    ///         Default::default(),
     ///         vec![],
     ///         vec![],
     ///         Duration::from_millis(0),
@@ -867,6 +891,7 @@ impl SimulationResultsBackend {
     ///     let results = SimulationResultsBackend::new(
     ///         config,
     ///         ActionConfig::default(),
+    ///         Default::default(),
     ///         Default::default(),
     ///         vec![],
     ///         vec![],
@@ -1150,6 +1175,17 @@ mod tests {
         let mut move_stats = MoveStatistics::new();
         move_stats.record_attempt(MoveType::Move22);
         move_stats.record_success(MoveType::Move22);
+        let proposal_stats = ProposalStatistics {
+            move_family_proposals: 2,
+            observed_forward_sites: 7,
+            no_site_proposals: 1,
+            site_causality_rejections: 0,
+            site_geometric_rejections: 0,
+            site_backend_rejections: 0,
+            metropolis_rejections: 0,
+            accepted_transitions: 1,
+            hard_failures: 0,
+        };
         let step = MonteCarloStep {
             step: 2,
             move_type: MoveType::Move22,
@@ -1167,6 +1203,7 @@ mod tests {
             config.clone(),
             action_config.clone(),
             move_stats,
+            proposal_stats.clone(),
             vec![step],
             vec![measurement],
             elapsed,
@@ -1178,6 +1215,7 @@ mod tests {
         assert_eq!(results.action_config(), &action_config);
         assert_eq!(results.move_stats().total_attempted(), 1);
         assert_eq!(results.move_stats().total_accepted(), 1);
+        assert_eq!(results.proposal_stats(), &proposal_stats);
         assert_eq!(results.steps()[0].step, 2);
         assert_eq!(results.measurements()[0].volume_profile, vec![4, 4, 4]);
         assert_eq!(results.elapsed_time(), elapsed);
@@ -1193,6 +1231,7 @@ mod tests {
             MetropolisConfig::new(0.0, 1, 0, 1),
             ActionConfig::default(),
             MoveStatistics::new(),
+            ProposalStatistics::new(),
             vec![],
             vec![],
             Duration::ZERO,
@@ -1221,6 +1260,7 @@ mod tests {
             MetropolisConfig::new(1.0, 1, 0, 1),
             ActionConfig::new(f64::NAN, 0.0, 0.0),
             MoveStatistics::new(),
+            ProposalStatistics::new(),
             vec![],
             vec![],
             Duration::ZERO,
@@ -1259,6 +1299,7 @@ mod tests {
             MetropolisConfig::new(1.0, 1, 0, 1),
             ActionConfig::default(),
             MoveStatistics::new(),
+            ProposalStatistics::new(),
             vec![],
             vec![],
             Duration::ZERO,
@@ -1280,6 +1321,7 @@ mod tests {
             MetropolisConfig::new(1.0, 1, 0, 1),
             ActionConfig::default(),
             MoveStatistics::new(),
+            ProposalStatistics::new(),
             vec![],
             vec![],
             Duration::ZERO,
@@ -1311,6 +1353,7 @@ mod tests {
             MetropolisConfig::new(1.0, 1, 0, 1),
             ActionConfig::default(),
             MoveStatistics::new(),
+            ProposalStatistics::new(),
             vec![],
             vec![],
             Duration::ZERO,

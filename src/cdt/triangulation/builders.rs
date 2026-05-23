@@ -120,6 +120,78 @@ pub(super) fn validate_strip_counts(
     Ok(())
 }
 
+/// Computes the open-strip triangle count used to validate profiled builder output.
+///
+/// The count is checked before foliation construction so a backend mesh with
+/// mismatched topology cannot be paired with the caller's requested profile.
+fn open_profile_face_count(profile: &[u32]) -> CdtResult<u32> {
+    let (&first_slice, rest) =
+        profile
+            .split_first()
+            .ok_or_else(|| CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::EmptyVolumeProfile,
+                provided_value: "[]".to_string(),
+                expected_range: "at least one time slice".to_string(),
+            })?;
+    let last_slice = rest.last().copied().unwrap_or(first_slice);
+    let total_vertices = profile.iter().try_fold(0_u32, |total, &vertices| {
+        total
+            .checked_add(vertices)
+            .ok_or_else(|| CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::VertexCountOverflow,
+                provided_value: format!("{profile:?}"),
+                expected_range: "sum ≤ u32::MAX".to_string(),
+            })
+    })?;
+    let slice_count =
+        u32::try_from(profile.len()).map_err(|err| CdtError::InvalidGenerationParameters {
+            issue: GenerationParameterIssue::VolumeProfileLengthOverflow,
+            provided_value: profile.len().to_string(),
+            expected_range: format!("length must fit in u32: {err}"),
+        })?;
+
+    total_vertices
+        .checked_mul(2)
+        .and_then(|faces| faces.checked_sub(first_slice))
+        .and_then(|faces| faces.checked_sub(last_slice))
+        .and_then(|faces| faces.checked_sub(slice_count.checked_mul(2)?))
+        .and_then(|faces| faces.checked_add(2))
+        .ok_or_else(|| CdtError::InvalidGenerationParameters {
+            issue: GenerationParameterIssue::SimplexCountOverflow,
+            provided_value: format!("{profile:?}"),
+            expected_range: "open-strip face count must fit in u32".to_string(),
+        })
+}
+
+/// Verifies that a profiled open-boundary builder returned the requested mesh size.
+///
+/// This protects [`CdtTriangulation::from_cdt_strip_profile`] from constructing
+/// foliation metadata for a backend whose vertex or face topology does not
+/// match the requested spatial volume profile.
+fn validate_profile_strip_counts(
+    backend: &DelaunayBackend2D,
+    total_vertices: u32,
+    expected_vertices: usize,
+    expected_faces: usize,
+    coordinate_max: f64,
+) -> CdtResult<()> {
+    if backend.vertex_count() != expected_vertices || backend.face_count() != expected_faces {
+        return Err(strip_generation_error(
+            total_vertices,
+            coordinate_max,
+            format!(
+                "build_delaunay2_with_data()/from_cdt_strip_profile() produced {} vertices and {} faces, expected {} vertices and {} faces",
+                backend.vertex_count(),
+                backend.face_count(),
+                expected_vertices,
+                expected_faces,
+            ),
+        ));
+    }
+
+    Ok(())
+}
+
 /// Builds a CDT-level generation error for periodic toroidal construction failures.
 const fn toroidal_generation_error(
     total_vertices: u32,
@@ -706,7 +778,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// than two slices, any slice has fewer than four vertices, or derived counts
     /// overflow.
     /// Returns [`CdtError::DelaunayGenerationFailed`] if coordinate storage cannot
-    /// be reserved or if the Delaunay constructor rejects the profiled point data.
+    /// be reserved, if the Delaunay constructor rejects the profiled point data,
+    /// or if the generated backend vertex or face count does not match the
+    /// requested profile.
     /// Returns [`CdtError::DelaunayValidationFailed`] if the constructed backend
     /// fails the Level 1-4 Delaunay validator. Returns [`CdtError::TopologyMismatch`],
     /// [`CdtError::Foliation`], [`CdtError::CausalityViolation`], or
@@ -728,13 +802,27 @@ impl CdtTriangulation<DelaunayBackend2D> {
     pub fn from_cdt_strip_profile(volume_profile: &[u32]) -> CdtResult<Self> {
         let (total_vertices, num_slices) =
             validate_spatial_profile(volume_profile, 2, 4, "open-boundary topology")?;
-        let vertex_specs = open_profile_vertices(volume_profile, total_vertices)?;
-        let dt = build_delaunay2_with_data(&vertex_specs).map_err(|error| {
-            remap_strip_generation_error(error, total_vertices, f64::from(num_slices))
+        let coordinate_max = f64::from(num_slices);
+        let expected_vertices = usize::try_from(total_vertices).map_err(|err| {
+            strip_generation_error(total_vertices, coordinate_max, err.to_string())
         })?;
+        let expected_faces =
+            usize::try_from(open_profile_face_count(volume_profile)?).map_err(|err| {
+                strip_generation_error(total_vertices, coordinate_max, err.to_string())
+            })?;
+        let vertex_specs = open_profile_vertices(volume_profile, total_vertices)?;
+        let dt = build_delaunay2_with_data(&vertex_specs)
+            .map_err(|error| remap_strip_generation_error(error, total_vertices, coordinate_max))?;
         let backend = validated_backend(dt)?;
+        validate_profile_strip_counts(
+            &backend,
+            total_vertices,
+            expected_vertices,
+            expected_faces,
+            coordinate_max,
+        )?;
         let slice_sizes = profile_slice_sizes(volume_profile, |err| {
-            strip_generation_error(total_vertices, f64::from(num_slices), err)
+            strip_generation_error(total_vertices, coordinate_max, err)
         })?;
 
         let foliation =
@@ -1451,13 +1539,65 @@ mod tests {
             .expect("nonuniform Delaunay strip should build");
 
         assert_eq!(tri.vertex_count(), 15);
-        assert!(tri.face_count() > 0);
+        assert_eq!(tri.face_count(), 17);
         assert_eq!(tri.slice_sizes(), &[4, 6, 5]);
         assert_eq!(tri.volume_profile().len(), 3);
         assert!(tri.validate_topology().is_ok());
         assert!(tri.validate_foliation().is_ok());
         assert!(tri.validate_causality_delaunay().is_ok());
         assert!(tri.validate_simplex_classification().is_ok());
+    }
+
+    #[test]
+    fn test_open_profile_face_count_matches_open_strip_topology() {
+        assert_eq!(
+            open_profile_face_count(&[4, 4]).expect("regular two-slice strip should count"),
+            6
+        );
+        assert_eq!(
+            open_profile_face_count(&[4, 4, 4]).expect("regular three-slice strip should count"),
+            12
+        );
+        assert_eq!(
+            open_profile_face_count(&[4, 6, 5]).expect("nonuniform strip should count"),
+            17
+        );
+    }
+
+    #[test]
+    fn test_open_profile_face_count_rejects_empty_profile() {
+        let result = open_profile_face_count(&[]);
+
+        assert!(matches!(
+            result,
+            Err(CdtError::InvalidGenerationParameters {
+                ref issue,
+                ref provided_value,
+                ref expected_range,
+            }) if *issue == GenerationParameterIssue::EmptyVolumeProfile
+                && provided_value == "[]"
+                && expected_range == "at least one time slice"
+        ));
+    }
+
+    #[test]
+    fn test_profile_strip_count_validation_rejects_backend_count_mismatch() {
+        let tri = CdtTriangulation::from_cdt_strip_profile(&[4, 6, 5])
+            .expect("nonuniform Delaunay strip should build");
+        let result = validate_profile_strip_counts(tri.geometry(), 15, 16, 18, 3.0);
+
+        assert!(matches!(
+            result,
+            Err(CdtError::DelaunayGenerationFailed {
+                vertex_count: 15,
+                coordinate_range: (0.0, 3.0),
+                attempt: 1,
+                ref underlying_error,
+            }) if underlying_error
+                .contains("build_delaunay2_with_data()/from_cdt_strip_profile()")
+                && underlying_error.contains("produced 15 vertices and 17 faces")
+                && underlying_error.contains("expected 16 vertices and 18 faces")
+        ));
     }
 
     #[test]

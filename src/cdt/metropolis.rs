@@ -1486,11 +1486,9 @@ fn run_one_step(
         });
 
     let action_before = state.current_action;
-    let mut delta_action = proposed_delta_action(
-        &algorithm.action_config,
-        simplex_counts(&state.triangulation),
-        move_type,
-    );
+    // A selected move family is not yet a concrete proposal; self-loop outcomes
+    // such as no usable site or a rejected sampled site must not report a ΔS.
+    let mut delta_action = None;
 
     let mut accepted = false;
     let mut action_after = None;
