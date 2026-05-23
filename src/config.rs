@@ -11,7 +11,7 @@
 
 use crate::cdt::action::ActionConfig;
 use crate::cdt::metropolis::MetropolisConfig;
-use crate::errors::{CdtError, CdtResult};
+use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
 use clap::error::ErrorKind;
 use clap::{ArgGroup, Error as ClapError, Parser, ValueEnum};
 use dirs::home_dir;
@@ -60,7 +60,8 @@ impl fmt::Display for CdtTopology {
 /// This combines the canonical runtime options for CDT construction,
 /// action calculation, and Metropolis sampling. Command-line parsing may derive
 /// some of these values from more ergonomic inputs; for example,
-/// `--vertices-per-slice` is converted into the total [`Self::vertices`] count.
+/// `--vertices-per-slice` is converted into the total [`Self::vertices`] count
+/// and `--volume-profile` records explicit per-slice initial spatial volumes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CdtConfig {
     /// Dimensionality of the triangulation.
@@ -76,6 +77,13 @@ pub struct CdtConfig {
 
     /// Number of time slices in the initial triangulation.
     pub timeslices: u32,
+
+    /// Optional explicit initial spatial volume profile, in vertices per time slice.
+    ///
+    /// When present, this vector has exactly [`Self::timeslices`] entries and its
+    /// sum equals [`Self::vertices`]. It represents general nonuniform CDT
+    /// initial data. When absent, initialization uses regular equal-size slices.
+    pub volume_profile: Option<Vec<u32>>,
 
     /// Temperature for the Metropolis acceptance rule.
     pub temperature: f64,
@@ -134,10 +142,10 @@ pub struct CdtConfig {
     author,
     version,
     about = "Run 1+1-dimensional Causal Dynamical Triangulations simulations",
-    long_about = "Run 1+1-dimensional Causal Dynamical Triangulations simulations.\n\nConstruct a foliated CDT triangulation, optionally run the Metropolis move loop, and write measurement summaries. Prefer --vertices-per-slice for regular initial data; --vertices remains available when the total initial vertex count is already known.",
+    long_about = "Run 1+1-dimensional Causal Dynamical Triangulations simulations.\n\nConstruct a foliated CDT triangulation, optionally run the Metropolis move loop, and write measurement summaries. Prefer --vertices-per-slice for regular initial data or --volume-profile for explicit nonuniform initial slice volumes; --vertices remains available when the total initial vertex count is already known.",
     group = ArgGroup::new("vertex_count")
         .required(true)
-        .args(["vertices", "vertices_per_slice"])
+        .args(["vertices", "vertices_per_slice", "volume_profile"])
 )]
 struct CdtCliArgs {
     #[arg(
@@ -167,9 +175,18 @@ struct CdtCliArgs {
         short,
         long,
         help = "Number of time slices; open-boundary requires at least 2, toroidal at least 3",
+        required_unless_present = "volume_profile",
         value_parser = clap::value_parser!(u32).range(1..)
     )]
-    timeslices: u32,
+    timeslices: Option<u32>,
+
+    #[arg(
+        long,
+        value_name = "N0,N1,...",
+        help = "Explicit vertices per time slice for nonuniform initial spatial volume",
+        long_help = "Explicit vertices per time slice for nonuniform initial spatial volume, for example 8,10,7,9. If --timeslices is also supplied it must match the number of profile entries."
+    )]
+    volume_profile: Option<String>,
 
     #[arg(long, default_value = "1.0", help = "Positive Metropolis temperature")]
     temperature: f64,
@@ -255,29 +272,65 @@ struct CdtCliArgs {
 impl CdtCliArgs {
     /// Converts parsed CLI arguments into the canonical runtime configuration.
     fn into_config(self) -> Result<CdtConfig, ClapError> {
-        let vertices = if let Some(vertices) = self.vertices {
-            vertices
+        let (vertices, timeslices, volume_profile) = if let Some(raw_profile) = self.volume_profile
+        {
+            let profile = parse_volume_profile(&raw_profile).map_err(|err| {
+                ClapError::raw(
+                    ErrorKind::ValueValidation,
+                    format!("invalid --volume-profile: {err}"),
+                )
+            })?;
+            let profile_slices = u32::try_from(profile.len()).map_err(|err| {
+                ClapError::raw(
+                    ErrorKind::ValueValidation,
+                    format!("--volume-profile has too many entries for u32 timeslices: {err}"),
+                )
+            })?;
+            let timeslices = self.timeslices.unwrap_or(profile_slices);
+            if timeslices != profile_slices {
+                return Err(ClapError::raw(
+                    ErrorKind::ValueValidation,
+                    format!(
+                        "--timeslices ({timeslices}) must match --volume-profile entry count ({profile_slices})"
+                    ),
+                ));
+            }
+            let vertices = profile.iter().try_fold(0_u32, |total, &volume| {
+                total.checked_add(volume).ok_or_else(|| {
+                    ClapError::raw(
+                        ErrorKind::ValueValidation,
+                        "--volume-profile total vertices exceed u32::MAX",
+                    )
+                })
+            })?;
+            (vertices, timeslices, Some(profile))
         } else {
-            let vertices_per_slice = self
-                .vertices_per_slice
-                .expect("required clap group should set one vertex count");
-            vertices_per_slice
-                .checked_mul(self.timeslices)
-                .ok_or_else(|| {
+            let timeslices = self
+                .timeslices
+                .expect("required clap arguments should set timeslices without a volume profile");
+            let vertices = if let Some(vertices) = self.vertices {
+                vertices
+            } else {
+                let vertices_per_slice = self
+                    .vertices_per_slice
+                    .expect("required clap group should set one vertex count");
+                vertices_per_slice.checked_mul(timeslices).ok_or_else(|| {
                     ClapError::raw(
                         ErrorKind::ValueValidation,
                         format!(
-                            "--vertices-per-slice ({vertices_per_slice}) × --timeslices ({}) exceeds u32::MAX",
-                            self.timeslices
+                            "--vertices-per-slice ({vertices_per_slice}) × --timeslices ({timeslices}) exceeds u32::MAX"
                         ),
                     )
                 })?
+            };
+            (vertices, timeslices, None)
         };
 
         Ok(CdtConfig {
             dimension: self.dimension,
             vertices,
-            timeslices: self.timeslices,
+            timeslices,
+            volume_profile,
             temperature: self.temperature,
             steps: self.steps,
             thermalization_steps: self.thermalization_steps,
@@ -315,6 +368,16 @@ pub struct CdtConfigOverrides {
     pub vertices: Option<u32>,
     /// Optional override for the timeslice count.
     pub timeslices: Option<u32>,
+    /// Optional override for the explicit initial spatial volume profile.
+    ///
+    /// `None` leaves the base profile unchanged, `Some(None)` clears it so
+    /// regular equal-size slices are used, and `Some(Some(profile))` replaces it
+    /// with explicit per-slice volumes.
+    #[expect(
+        clippy::option_option,
+        reason = "None=no override, Some(None)=clear profile, Some(Some(v))=set profile"
+    )]
+    pub volume_profile: Option<Option<Vec<u32>>>,
     /// Optional override for the temperature.
     pub temperature: Option<f64>,
     /// Optional override for the total number of steps.
@@ -400,6 +463,10 @@ impl CdtConfig {
 
         if let Some(timeslices) = overrides.timeslices {
             merged.timeslices = timeslices;
+        }
+
+        if let Some(volume_profile) = &overrides.volume_profile {
+            merged.volume_profile.clone_from(volume_profile);
         }
 
         if let Some(temperature) = overrides.temperature {
@@ -549,7 +616,7 @@ fn normalize_components(path: &Path) -> PathBuf {
 
 /// Builds a typed configuration error from displayable values without duplicating field names.
 fn invalid_config(
-    setting: &str,
+    setting: ConfigurationSetting,
     provided_value: &impl Display,
     expected: &impl Display,
 ) -> CdtError {
@@ -557,20 +624,55 @@ fn invalid_config(
 }
 
 /// Preserves already-formatted validation values when shared validators produce owned strings.
-fn invalid_config_parts(setting: &str, provided_value: String, expected: String) -> CdtError {
+const fn invalid_config_parts(
+    setting: ConfigurationSetting,
+    provided_value: String,
+    expected: String,
+) -> CdtError {
     CdtError::InvalidConfiguration {
-        setting: setting.to_string(),
+        setting,
         provided_value,
         expected,
     }
 }
 
 /// Rejects non-finite action couplings before they can poison action/log-probability math.
-fn validate_coupling(setting: &str, value: f64) -> CdtResult<()> {
+fn validate_coupling(setting: ConfigurationSetting, value: f64) -> CdtResult<()> {
     if value.is_finite() {
         Ok(())
     } else {
         Err(invalid_config(setting, &value, &"finite"))
+    }
+}
+
+/// Parses a comma-separated spatial volume profile from the CLI.
+fn parse_volume_profile(raw: &str) -> Result<Vec<u32>, String> {
+    let mut profile = Vec::new();
+
+    for (index, entry) in raw.split(',').enumerate() {
+        let trimmed = entry.trim();
+        if trimmed.is_empty() {
+            return Err(format!("volume profile entry {} is empty", index + 1));
+        }
+        let volume = trimmed.parse::<u32>().map_err(|err| {
+            format!(
+                "volume profile entry {} ({trimmed}) is not a positive integer: {err}",
+                index + 1
+            )
+        })?;
+        if volume == 0 {
+            return Err(format!(
+                "volume profile entry {} must be at least 1",
+                index + 1
+            ));
+        }
+        profile.push(volume);
+    }
+
+    if profile.is_empty() {
+        Err("volume profile must contain at least one entry".to_string())
+    } else {
+        Ok(profile)
     }
 }
 
@@ -580,27 +682,31 @@ pub(crate) fn validate_schedule(
     steps: u32,
     thermalization_steps: u32,
     measurement_frequency: u32,
-    mut error_for: impl FnMut(&str, String, String) -> CdtError,
+    mut error_for: impl FnMut(ConfigurationSetting, String, String) -> CdtError,
 ) -> CdtResult<()> {
-    let mut invalid = |setting: &str, provided_value: String, expected: String| {
+    let mut invalid = |setting: ConfigurationSetting, provided_value: String, expected: String| {
         Err(error_for(setting, provided_value, expected))
     };
 
     if !temperature.is_finite() || temperature <= 0.0 {
         return invalid(
-            "temperature",
+            ConfigurationSetting::Temperature,
             temperature.to_string(),
             "finite and positive".to_string(),
         );
     }
 
     if steps == 0 {
-        return invalid("steps", steps.to_string(), "≥ 1".to_string());
+        return invalid(
+            ConfigurationSetting::Steps,
+            steps.to_string(),
+            "≥ 1".to_string(),
+        );
     }
 
     if measurement_frequency == 0 {
         return invalid(
-            "measurement_frequency",
+            ConfigurationSetting::MeasurementFrequency,
             measurement_frequency.to_string(),
             "≥ 1".to_string(),
         );
@@ -608,7 +714,7 @@ pub(crate) fn validate_schedule(
 
     if measurement_frequency > steps {
         return invalid(
-            "measurement_frequency",
+            ConfigurationSetting::MeasurementFrequency,
             measurement_frequency.to_string(),
             format!("≤ steps ({steps})"),
         );
@@ -616,7 +722,7 @@ pub(crate) fn validate_schedule(
 
     if thermalization_steps > steps {
         return invalid(
-            "thermalization_steps",
+            ConfigurationSetting::ThermalizationSteps,
             thermalization_steps.to_string(),
             format!("≤ steps ({steps})"),
         );
@@ -628,7 +734,7 @@ pub(crate) fn validate_schedule(
 
     if first_post_thermalization_measurement > u64::from(steps) {
         return invalid(
-            "measurement schedule",
+            ConfigurationSetting::MeasurementSchedule,
             format!(
                 "steps={steps}, thermalization_steps={thermalization_steps}, measurement_frequency={measurement_frequency}"
             ),
@@ -670,8 +776,9 @@ impl CdtConfig {
     /// # Errors
     ///
     /// Returns [`clap::Error`] when required arguments are missing, when any
-    /// value fails Clap validation, or when `--vertices-per-slice ×
-    /// --timeslices` overflows `u32`.
+    /// value fails Clap validation, when `--vertices-per-slice × --timeslices`
+    /// overflows `u32`, or when `--volume-profile` cannot be parsed or does not
+    /// match an explicitly supplied `--timeslices` count.
     ///
     /// # Examples
     ///
@@ -720,6 +827,7 @@ impl CdtConfig {
             dimension: Some(2),
             vertices,
             timeslices,
+            volume_profile: None,
             temperature: 1.0,
             steps: 1000,
             thermalization_steps: 100,
@@ -809,12 +917,9 @@ impl CdtConfig {
     /// action couplings or temperature are non-finite, if the measurement
     /// schedule cannot produce a post-thermalization measurement, or if topology
     /// constraints on time slices, total vertices, or per-slice vertices are not
-    /// satisfied.
-    /// Open-boundary topology additionally requires `timeslices ≥ 2`,
-    /// `vertices ≥ 4 · timeslices`, and `vertices` evenly divisible by
-    /// `timeslices` so each spatial slice carries the same `N ≥ 4` vertices.
-    /// Toroidal topology requires the analogous `timeslices ≥ 3` and `N ≥ 3`
-    /// constraints.
+    /// satisfied. Regular equal-slice initialization requires `vertices` to be
+    /// divisible by `timeslices`; explicit [`Self::volume_profile`] initialization
+    /// instead requires the profile length and sum to match the configured counts.
     ///
     /// # Examples
     ///
@@ -826,66 +931,35 @@ impl CdtConfig {
     /// ```
     pub fn validate(&self) -> CdtResult<()> {
         if self.vertices < 3 {
-            return Err(invalid_config("vertices", &self.vertices, &"≥ 3"));
+            return Err(invalid_config(
+                ConfigurationSetting::Vertices,
+                &self.vertices,
+                &"≥ 3",
+            ));
         }
 
         if self.timeslices == 0 {
-            return Err(invalid_config("timeslices", &self.timeslices, &"≥ 1"));
+            return Err(invalid_config(
+                ConfigurationSetting::Timeslices,
+                &self.timeslices,
+                &"≥ 1",
+            ));
         }
 
         if let Some(dim) = self.dimension
             && dim != 2
         {
-            return Err(invalid_config("dimension", &dim, &"2"));
+            return Err(invalid_config(ConfigurationSetting::Dimension, &dim, &"2"));
         }
 
-        validate_coupling("coupling_0", self.coupling_0)?;
-        validate_coupling("coupling_2", self.coupling_2)?;
-        validate_coupling("cosmological_constant", self.cosmological_constant)?;
+        validate_coupling(ConfigurationSetting::Coupling0, self.coupling_0)?;
+        validate_coupling(ConfigurationSetting::Coupling2, self.coupling_2)?;
+        validate_coupling(
+            ConfigurationSetting::CosmologicalConstant,
+            self.cosmological_constant,
+        )?;
 
-        let (minimum_slices, minimum_vertices_per_slice, topology_label) = match self.topology {
-            CdtTopology::OpenBoundary => (2, 4, "open-boundary topology"),
-            CdtTopology::Toroidal => (3, 3, "toroidal topology"),
-        };
-
-        if self.timeslices < minimum_slices {
-            return Err(invalid_config_parts(
-                "timeslices",
-                self.timeslices.to_string(),
-                format!("≥ {minimum_slices} for {topology_label}"),
-            ));
-        }
-        if !self.vertices.is_multiple_of(self.timeslices) {
-            return Err(invalid_config_parts(
-                "vertices",
-                self.vertices.to_string(),
-                format!(
-                    "divisible by timeslices ({}) for {topology_label}",
-                    self.timeslices
-                ),
-            ));
-        }
-        let min_total = self
-            .timeslices
-            .checked_mul(minimum_vertices_per_slice)
-            .ok_or_else(|| {
-                invalid_config_parts(
-                    "timeslices",
-                    self.timeslices.to_string(),
-                    format!(
-                        "{minimum_vertices_per_slice} · timeslices must fit in u32 for {topology_label}"
-                    ),
-                )
-            })?;
-        if self.vertices < min_total {
-            return Err(invalid_config_parts(
-                "vertices",
-                self.vertices.to_string(),
-                format!(
-                    "≥ {minimum_vertices_per_slice} · timeslices ({min_total}) for {topology_label}"
-                ),
-            ));
-        }
+        self.validate_volume_constraints()?;
 
         validate_schedule(
             self.temperature,
@@ -896,6 +970,123 @@ impl CdtConfig {
                 invalid_config_parts(setting, provided_value, expected)
             },
         )
+    }
+
+    /// Validates topology-specific initial volume constraints.
+    ///
+    /// Regular configurations require equal slice divisibility and minimum
+    /// per-slice volume; explicit profiles are delegated to the profile-aware
+    /// validator so count and shape errors remain distinguishable.
+    fn validate_volume_constraints(&self) -> CdtResult<()> {
+        let (minimum_slices, minimum_vertices_per_slice, topology_label) = match self.topology {
+            CdtTopology::OpenBoundary => (2, 4, "open-boundary topology"),
+            CdtTopology::Toroidal => (3, 3, "toroidal topology"),
+        };
+
+        if self.timeslices < minimum_slices {
+            return Err(invalid_config_parts(
+                ConfigurationSetting::Timeslices,
+                self.timeslices.to_string(),
+                format!("≥ {minimum_slices} for {topology_label}"),
+            ));
+        }
+
+        if let Some(profile) = &self.volume_profile {
+            return self.validate_explicit_volume_profile(
+                profile,
+                minimum_vertices_per_slice,
+                topology_label,
+            );
+        }
+
+        if !self.vertices.is_multiple_of(self.timeslices) {
+            return Err(invalid_config_parts(
+                ConfigurationSetting::Vertices,
+                self.vertices.to_string(),
+                format!(
+                    "divisible by timeslices ({}) for {topology_label}",
+                    self.timeslices
+                ),
+            ));
+        }
+
+        let min_total = self
+            .timeslices
+            .checked_mul(minimum_vertices_per_slice)
+            .ok_or_else(|| {
+                invalid_config_parts(
+                    ConfigurationSetting::Timeslices,
+                    self.timeslices.to_string(),
+                    format!(
+                        "{minimum_vertices_per_slice} · timeslices must fit in u32 for {topology_label}"
+                    ),
+                )
+            })?;
+        if self.vertices < min_total {
+            return Err(invalid_config_parts(
+                ConfigurationSetting::Vertices,
+                self.vertices.to_string(),
+                format!(
+                    "≥ {minimum_vertices_per_slice} · timeslices ({min_total}) for {topology_label}"
+                ),
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Validates that an explicit volume profile matches configured counts.
+    ///
+    /// This checks profile length, per-slice minima, sum overflow, and agreement
+    /// with the top-level total vertex count before construction begins.
+    fn validate_explicit_volume_profile(
+        &self,
+        profile: &[u32],
+        minimum_vertices_per_slice: u32,
+        topology_label: &str,
+    ) -> CdtResult<()> {
+        let expected_len = usize::try_from(self.timeslices).map_err(|err| {
+            invalid_config_parts(
+                ConfigurationSetting::Timeslices,
+                self.timeslices.to_string(),
+                format!("must fit usize for volume profile validation: {err}"),
+            )
+        })?;
+        if profile.len() != expected_len {
+            return Err(invalid_config_parts(
+                ConfigurationSetting::VolumeProfile,
+                format!("{} entries", profile.len()),
+                format!("{} entries for configured timeslices", self.timeslices),
+            ));
+        }
+
+        let mut total = 0_u32;
+        for (slice, &volume) in profile.iter().enumerate() {
+            if volume < minimum_vertices_per_slice {
+                return Err(invalid_config_parts(
+                    ConfigurationSetting::VolumeProfile,
+                    format!("slice {slice} has {volume}"),
+                    format!("each slice ≥ {minimum_vertices_per_slice} for {topology_label}"),
+                ));
+            }
+            total = total.checked_add(volume).ok_or_else(|| {
+                invalid_config_parts(
+                    ConfigurationSetting::VolumeProfile,
+                    format!("{profile:?}"),
+                    "sum must fit in u32".to_string(),
+                )
+            })?;
+        }
+
+        if total != self.vertices {
+            return Err(invalid_config_parts(
+                ConfigurationSetting::Vertices,
+                self.vertices.to_string(),
+                format!("sum of volume_profile ({total})"),
+            ));
+        }
+
+        Ok(())
     }
 }
 
@@ -920,6 +1111,7 @@ impl TestConfig {
             dimension: Some(2),
             vertices: 16,
             timeslices: 2,
+            volume_profile: None,
             temperature: 1.0,
             steps: 10,
             thermalization_steps: 2,
@@ -951,6 +1143,7 @@ impl TestConfig {
             dimension: Some(2),
             vertices: 64,
             timeslices: 4,
+            volume_profile: None,
             temperature: 1.0,
             steps: 100,
             thermalization_steps: 20,
@@ -982,6 +1175,7 @@ impl TestConfig {
             dimension: Some(2),
             vertices: 256,
             timeslices: 8,
+            volume_profile: None,
             temperature: 1.0,
             steps: 1000,
             thermalization_steps: 100,
@@ -1138,7 +1332,7 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "vertices" && provided_value == "2" && expected == "≥ 3"
+            }) if setting == ConfigurationSetting::Vertices && provided_value == "2" && expected == "≥ 3"
         ));
 
         let invalid_timeslices = CdtConfig {
@@ -1151,7 +1345,7 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "timeslices" && provided_value == "0" && expected == "≥ 1"
+            }) if setting == ConfigurationSetting::Timeslices && provided_value == "0" && expected == "≥ 1"
         ));
 
         let invalid_temperature = CdtConfig {
@@ -1164,7 +1358,7 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "temperature"
+            }) if setting == ConfigurationSetting::Temperature
                 && provided_value == "-1"
                 && expected == "finite and positive"
         ));
@@ -1179,7 +1373,7 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "measurement_frequency"
+            }) if setting == ConfigurationSetting::MeasurementFrequency
                 && provided_value == "0"
                 && expected == "≥ 1"
         ));
@@ -1194,7 +1388,7 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "steps" && provided_value == "0" && expected == "≥ 1"
+            }) if setting == ConfigurationSetting::Steps && provided_value == "0" && expected == "≥ 1"
         ));
 
         let invalid_dimension = CdtConfig {
@@ -1207,19 +1401,24 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "dimension" && provided_value == "4" && expected == "2"
+            }) if setting == ConfigurationSetting::Dimension && provided_value == "4" && expected == "2"
         ));
 
         for (setting, value) in [
-            ("coupling_0", f64::NAN),
-            ("coupling_2", f64::INFINITY),
-            ("cosmological_constant", f64::NEG_INFINITY),
+            (ConfigurationSetting::Coupling0, f64::NAN),
+            (ConfigurationSetting::Coupling2, f64::INFINITY),
+            (
+                ConfigurationSetting::CosmologicalConstant,
+                f64::NEG_INFINITY,
+            ),
         ] {
             let mut invalid_action_coupling = CdtConfig::new(36, 3);
             match setting {
-                "coupling_0" => invalid_action_coupling.coupling_0 = value,
-                "coupling_2" => invalid_action_coupling.coupling_2 = value,
-                "cosmological_constant" => invalid_action_coupling.cosmological_constant = value,
+                ConfigurationSetting::Coupling0 => invalid_action_coupling.coupling_0 = value,
+                ConfigurationSetting::Coupling2 => invalid_action_coupling.coupling_2 = value,
+                ConfigurationSetting::CosmologicalConstant => {
+                    invalid_action_coupling.cosmological_constant = value;
+                }
                 _ => unreachable!("test case should name a known action coupling"),
             }
             assert!(matches!(
@@ -1253,7 +1452,7 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "measurement_frequency"
+            }) if setting == ConfigurationSetting::MeasurementFrequency
                 && provided_value == "2000"
                 && expected == "≤ steps (1000)"
         ));
@@ -1303,7 +1502,7 @@ mod tests {
                 provided_value,
                 expected,
             }) => {
-                assert_eq!(setting, "measurement schedule");
+                assert_eq!(setting, ConfigurationSetting::MeasurementSchedule);
                 assert!(
                     provided_value.contains("steps=19")
                         && provided_value.contains("thermalization_steps=15")
@@ -1327,7 +1526,7 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "thermalization_steps"
+            }) if setting == ConfigurationSetting::ThermalizationSteps
                 && provided_value == "11"
                 && expected == "≤ steps (10)"
         ));
@@ -1344,7 +1543,7 @@ mod tests {
                 provided_value,
                 expected,
             }) => {
-                assert_eq!(setting, "measurement schedule");
+                assert_eq!(setting, ConfigurationSetting::MeasurementSchedule);
                 assert!(
                     provided_value.contains("steps=4294967295")
                         && provided_value.contains("thermalization_steps=4294967295")
@@ -1384,7 +1583,7 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "timeslices"
+            }) if setting == ConfigurationSetting::Timeslices
                 && provided_value == "2"
                 && expected == "≥ 3 for toroidal topology"
         ));
@@ -1402,7 +1601,7 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "vertices"
+            }) if setting == ConfigurationSetting::Vertices
                 && provided_value == "11"
                 && expected == "divisible by timeslices (3) for toroidal topology"
         ));
@@ -1420,7 +1619,7 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "vertices"
+            }) if setting == ConfigurationSetting::Vertices
                 && provided_value == "6"
                 && expected == "≥ 3 · timeslices (9) for toroidal topology"
         ));
@@ -1437,7 +1636,7 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "timeslices"
+            }) if setting == ConfigurationSetting::Timeslices
                 && provided_value == u32::MAX.to_string()
                 && expected == "3 · timeslices must fit in u32 for toroidal topology"
         ));
@@ -1468,7 +1667,7 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "timeslices"
+            }) if setting == ConfigurationSetting::Timeslices
                 && provided_value == "1"
                 && expected == "≥ 2 for open-boundary topology"
         ));
@@ -1485,7 +1684,7 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "vertices"
+            }) if setting == ConfigurationSetting::Vertices
                 && provided_value == "11"
                 && expected == "divisible by timeslices (3) for open-boundary topology"
         ));
@@ -1502,10 +1701,111 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == "vertices"
+            }) if setting == ConfigurationSetting::Vertices
                 && provided_value == "9"
                 && expected == "≥ 4 · timeslices (12) for open-boundary topology"
         ));
+    }
+
+    #[test]
+    fn test_config_validation_open_boundary_volume_profile() {
+        let valid_profile = CdtConfig {
+            vertices: 15,
+            timeslices: 3,
+            volume_profile: Some(vec![4, 6, 5]),
+            ..CdtConfig::new(12, 3)
+        };
+        assert!(
+            valid_profile.validate().is_ok(),
+            "nonuniform open-boundary profiles should not require divisible vertex counts"
+        );
+
+        let mismatched_sum = CdtConfig {
+            vertices: 14,
+            timeslices: 3,
+            volume_profile: Some(vec![4, 6, 5]),
+            ..CdtConfig::new(12, 3)
+        };
+        assert!(matches!(
+            mismatched_sum.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == ConfigurationSetting::Vertices
+                && provided_value == "14"
+                && expected == "sum of volume_profile (15)"
+        ));
+
+        let mismatched_len = CdtConfig {
+            vertices: 15,
+            timeslices: 4,
+            volume_profile: Some(vec![4, 6, 5]),
+            ..CdtConfig::new(16, 4)
+        };
+        assert!(matches!(
+            mismatched_len.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == ConfigurationSetting::VolumeProfile
+                && provided_value == "3 entries"
+                && expected == "4 entries for configured timeslices"
+        ));
+    }
+
+    #[test]
+    fn test_config_validation_toroidal_volume_profile_minimum_slice_size() {
+        let valid_profile = CdtConfig {
+            vertices: 16,
+            timeslices: 4,
+            topology: CdtTopology::Toroidal,
+            volume_profile: Some(vec![3, 4, 5, 4]),
+            ..CdtConfig::new(16, 4)
+        };
+        assert!(valid_profile.validate().is_ok());
+
+        let too_small = CdtConfig {
+            vertices: 11,
+            timeslices: 4,
+            topology: CdtTopology::Toroidal,
+            volume_profile: Some(vec![3, 2, 3, 3]),
+            ..CdtConfig::new(12, 4)
+        };
+        assert!(matches!(
+            too_small.validate(),
+            Err(CdtError::InvalidConfiguration {
+                setting,
+                provided_value,
+                expected,
+            }) if setting == ConfigurationSetting::VolumeProfile
+                && provided_value == "slice 1 has 2"
+                && expected == "each slice ≥ 3 for toroidal topology"
+        ));
+    }
+
+    #[test]
+    fn test_try_from_args_derives_counts_from_volume_profile() {
+        let config = CdtConfig::try_from_args(["cdt", "--volume-profile", "4, 6,5"])
+            .expect("volume profile CLI should derive counts");
+
+        assert_eq!(config.vertices, 15);
+        assert_eq!(config.timeslices, 3);
+        assert_eq!(config.volume_profile, Some(vec![4, 6, 5]));
+    }
+
+    #[test]
+    fn test_try_from_args_rejects_malformed_volume_profile() {
+        let error = CdtConfig::try_from_args(["cdt", "--volume-profile", "4,,5"])
+            .expect_err("empty profile entries should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("invalid --volume-profile: volume profile entry 2 is empty"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -1564,6 +1864,7 @@ mod tests {
         let base = CdtConfig::new(10, 2);
         let overrides = CdtConfigOverrides {
             timeslices: Some(5),
+            volume_profile: Some(Some(vec![4, 6, 5])),
             steps: Some(250),
             thermalization_steps: Some(25),
             measurement_frequency: Some(5),
@@ -1580,6 +1881,7 @@ mod tests {
         let merged = base.merge_with_override(&overrides);
 
         assert_eq!(merged.timeslices, 5);
+        assert_eq!(merged.volume_profile, Some(vec![4, 6, 5]));
         assert_eq!(merged.steps, 250);
         assert_eq!(merged.thermalization_steps, 25);
         assert_eq!(merged.measurement_frequency, 5);
@@ -1606,6 +1908,26 @@ mod tests {
         let merged = base.merge_with_override(&overrides);
 
         assert_eq!(merged.seed, None);
+    }
+
+    #[test]
+    fn test_merge_with_override_can_clear_volume_profile() {
+        let base = CdtConfig {
+            vertices: 15,
+            timeslices: 3,
+            volume_profile: Some(vec![4, 6, 5]),
+            ..CdtConfig::new(12, 3)
+        };
+        let overrides = CdtConfigOverrides {
+            volume_profile: Some(None),
+            ..CdtConfigOverrides::default()
+        };
+
+        let merged = base.merge_with_override(&overrides);
+
+        assert_eq!(merged.volume_profile, None);
+        assert_eq!(merged.vertices, 15);
+        assert_eq!(merged.timeslices, 3);
     }
 
     #[test]

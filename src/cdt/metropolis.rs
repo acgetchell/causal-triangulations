@@ -5,20 +5,21 @@
 //! This module implements the Monte Carlo sampling algorithm used to sample
 //! triangulation configurations according to the CDT path integral measure.
 //!
-//! The simulation accepts or rejects a proposed move type before mutating the
-//! triangulation. Accepted moves are then applied through the CDT ergodic move
-//! kernels; failed accepted applications are rolled back and retried at another
-//! randomly selected local site.
+//! The simulation selects an explicit local proposal site, applies it once on a
+//! cloned proposed state, and only swaps that state into the live chain after
+//! Metropolis-Hastings acceptance. Ordinary site failures are self-loop
+//! proposal outcomes tracked in [`crate::cdt::metropolis::ProposalStatistics`].
 
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::{
     ErgodicsSystem, MoveResult, MoveStatistics, MoveType, proposal_site_count,
 };
-use crate::cdt::results::{Measurement, SimulationResultsBackend};
+use crate::cdt::results::{Measurement, SimulationResultsBackend, SimulationResultsParts};
 use crate::cdt::triangulation::SimulationEvent;
 use crate::config::validate_schedule;
 use crate::errors::{
-    CdtError, CdtResult, CheckpointResumeReason, MetropolisMoveApplicationFailure,
+    CdtError, CdtResult, CheckpointResumeReason, ConfigurationSetting,
+    MetropolisMoveApplicationFailure,
 };
 use crate::geometry::CdtTriangulation2D;
 use crate::util::saturating_usize_to_u32;
@@ -29,8 +30,6 @@ use std::error::Error;
 use std::fmt;
 use std::hint::cold_path;
 use std::time::{Duration, Instant};
-
-const ACCEPTED_MOVE_RETRIES: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SimplexCounts {
@@ -158,9 +157,13 @@ impl MetropolisConfig {
 }
 
 /// Adapts shared schedule validation errors to the Metropolis-specific error variant.
-fn invalid_sim_config(setting: &str, provided_value: String, expected: String) -> CdtError {
+const fn invalid_sim_config(
+    setting: ConfigurationSetting,
+    provided_value: String,
+    expected: String,
+) -> CdtError {
     CdtError::InvalidSimulationConfiguration {
-        setting: setting.to_string(),
+        setting,
         provided_value,
         expected,
     }
@@ -172,7 +175,7 @@ fn validate_temperature(temperature: f64) -> CdtResult<()> {
         Ok(())
     } else {
         Err(invalid_sim_config(
-            "temperature",
+            ConfigurationSetting::Temperature,
             temperature.to_string(),
             "finite and positive".to_string(),
         ))
@@ -383,7 +386,6 @@ pub struct CdtProposalInfo {
 /// count-action level, but the bounded random local-site search did not find a
 /// concrete site where the move could be applied.
 #[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
 enum CdtProposalSiteRejection {
     /// The selected local site would violate CDT causality.
     CausalityViolation,
@@ -448,13 +450,135 @@ impl Error for CdtProposalSiteRejection {
 pub enum CdtProposalError {
     /// Constructing or applying a concrete proposal hit a hard backend or invariant failure.
     ApplicationFailed {
-        /// Accepted move type.
+        /// Move type whose concrete application failed.
         move_type: MoveType,
         /// Local-site attempt that hit the hard failure.
         attempt: usize,
         /// Typed lower-level failure observed while committing the accepted move.
         source: CdtError,
     },
+}
+
+/// Telemetry for concrete Metropolis proposal outcomes.
+///
+/// These counters describe the proposal kernel observed during a run. They are
+/// diagnostic only: detailed balance is enforced by the per-step proposal
+/// probability used in the Hastings ratio, not by accumulated empirical counts.
+///
+/// The struct is non-exhaustive so future releases can add proposal telemetry
+/// without breaking downstream code. Construct empty accumulators with
+/// [`Self::new`] or [`Default::default`], and inspect fields through shared
+/// references returned by [`CdtMcmcCheckpoint::proposal_stats`] or
+/// [`SimulationResultsBackend::proposal_stats`]. Counters saturate at
+/// `u64::MAX` instead of wrapping.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::simulation::ProposalStatistics;
+///
+/// let stats = ProposalStatistics::new();
+/// assert_eq!(stats.move_family_proposals, 0);
+/// assert_eq!(stats.accepted_transitions, 0);
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ProposalStatistics {
+    /// Number of selected move-family proposals, saturating at `u64::MAX`.
+    pub move_family_proposals: u64,
+    /// Sum of sampleable forward-site denominators observed during planning,
+    /// saturating at `u64::MAX`.
+    pub observed_forward_sites: u64,
+    /// Number of proposals with no sampleable local site, saturating at `u64::MAX`.
+    pub no_site_proposals: u64,
+    /// Number of sampled sites rejected by causal checks, saturating at `u64::MAX`.
+    pub site_causality_rejections: u64,
+    /// Number of sampled sites rejected by geometric checks, saturating at `u64::MAX`.
+    pub site_geometric_rejections: u64,
+    /// Number of sampled sites rejected by backend mutation errors, saturating at `u64::MAX`.
+    pub site_backend_rejections: u64,
+    /// Number of valid proposed transitions rejected by the Metropolis draw,
+    /// saturating at `u64::MAX`.
+    pub metropolis_rejections: u64,
+    /// Number of proposed transitions committed to the chain, saturating at `u64::MAX`.
+    pub accepted_transitions: u64,
+    /// Number of proposal attempts that hit a hard failure, saturating at `u64::MAX`.
+    pub hard_failures: u64,
+}
+
+impl ProposalStatistics {
+    /// Creates an empty proposal telemetry accumulator.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::ProposalStatistics;
+    ///
+    /// let stats = ProposalStatistics::new();
+    /// assert_eq!(stats, ProposalStatistics::default());
+    /// ```
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            move_family_proposals: 0,
+            observed_forward_sites: 0,
+            no_site_proposals: 0,
+            site_causality_rejections: 0,
+            site_geometric_rejections: 0,
+            site_backend_rejections: 0,
+            metropolis_rejections: 0,
+            accepted_transitions: 0,
+            hard_failures: 0,
+        }
+    }
+
+    /// Records one selected move family and the forward-site denominator observed for it.
+    ///
+    /// This is proposal-kernel telemetry only; the per-step Hastings ratio uses
+    /// the instantaneous site count directly rather than accumulated statistics.
+    fn record_move_family(&mut self, forward_sites: usize) {
+        self.move_family_proposals = self.move_family_proposals.saturating_add(1);
+        self.observed_forward_sites = self
+            .observed_forward_sites
+            .saturating_add(u64::try_from(forward_sites).unwrap_or(u64::MAX));
+    }
+
+    /// Records a move-family proposal with no concrete local site.
+    const fn record_no_site(&mut self) {
+        self.no_site_proposals = self.no_site_proposals.saturating_add(1);
+    }
+
+    /// Classifies a sampled-site rejection without changing chain state.
+    ///
+    /// These are ordinary self-loop proposal outcomes, not hard failures.
+    const fn record_site_rejection(&mut self, rejection: &CdtProposalSiteRejection) {
+        match rejection {
+            CdtProposalSiteRejection::CausalityViolation => {
+                self.site_causality_rejections = self.site_causality_rejections.saturating_add(1);
+            }
+            CdtProposalSiteRejection::GeometricViolation => {
+                self.site_geometric_rejections = self.site_geometric_rejections.saturating_add(1);
+            }
+            CdtProposalSiteRejection::Kernel(_) => {
+                self.site_backend_rejections = self.site_backend_rejections.saturating_add(1);
+            }
+        }
+    }
+
+    /// Records Metropolis rejection after a valid proposed transition was scored.
+    const fn record_metropolis_rejection(&mut self) {
+        self.metropolis_rejections = self.metropolis_rejections.saturating_add(1);
+    }
+
+    /// Records a proposed transition that was committed to the live chain.
+    const fn record_accepted_transition(&mut self) {
+        self.accepted_transitions = self.accepted_transitions.saturating_add(1);
+    }
+
+    /// Records an unexpected hard failure during proposal application.
+    const fn record_hard_failure(&mut self) {
+        self.hard_failures = self.hard_failures.saturating_add(1);
+    }
 }
 
 impl fmt::Display for CdtProposalError {
@@ -585,9 +709,11 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
     ) -> Result<Option<Self::Plan>, Self::Error> {
         let move_type = self.moves.select_random_move();
         let action_before = action_for(&self.action_config, state);
+        let mut proposal_stats = ProposalStatistics::new();
         let plan = match propose_concrete_plan(
             state,
             &mut self.moves,
+            &mut proposal_stats,
             &self.action_config,
             move_type,
             action_before,
@@ -700,6 +826,8 @@ pub struct CdtMcmcCheckpoint {
     current_step: u32,
     current_action: f64,
     move_stats: MoveStatistics,
+    #[serde(default)]
+    proposal_stats: ProposalStatistics,
     steps: Vec<MonteCarloStep>,
     measurements: Vec<Measurement>,
     elapsed_time: Duration,
@@ -856,6 +984,31 @@ impl CdtMcmcCheckpoint {
         &self.move_stats
     }
 
+    /// Returns accumulated proposal-kernel telemetry through the checkpoint step.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let checkpoint = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1).with_seed(13),
+    ///         ActionConfig::default(),
+    ///     )
+    ///     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    ///
+    ///     assert_eq!(checkpoint.proposal_stats().move_family_proposals, 1);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn proposal_stats(&self) -> &ProposalStatistics {
+        &self.proposal_stats
+    }
+
     /// Returns accumulated step telemetry through the checkpoint step.
     ///
     /// # Examples
@@ -931,15 +1084,16 @@ impl CdtMcmcCheckpoint {
     #[must_use]
     pub fn into_results(self) -> SimulationResultsBackend {
         let (triangulation, _, _) = self.chain.into_parts();
-        SimulationResultsBackend::from_parts(
-            self.config,
-            self.action_config,
-            self.move_stats,
-            self.steps,
-            self.measurements,
-            self.elapsed_time,
+        SimulationResultsBackend::from_parts(SimulationResultsParts {
+            config: self.config,
+            action_config: self.action_config,
+            move_stats: self.move_stats,
+            proposal_stats: self.proposal_stats,
+            steps: self.steps,
+            measurements: self.measurements,
+            elapsed_time: self.elapsed_time,
             triangulation,
-        )
+        })
     }
 }
 
@@ -950,6 +1104,7 @@ struct MetropolisRunState {
     acceptance_rng: Xoshiro256PlusPlus,
     ergodics: ErgodicsSystem,
     move_stats: MoveStatistics,
+    proposal_stats: ProposalStatistics,
     steps: Vec<MonteCarloStep>,
     measurements: Vec<Measurement>,
     elapsed_time: Duration,
@@ -1206,6 +1361,7 @@ impl MetropolisAlgorithm {
                 ErgodicsSystem::with_seed(seed.wrapping_add(0x9E37_79B9_7F4A_7C15))
             }),
             move_stats: MoveStatistics::new(),
+            proposal_stats: ProposalStatistics::new(),
             steps: Vec::new(),
             measurements,
             elapsed_time: Duration::ZERO,
@@ -1275,6 +1431,7 @@ impl MetropolisRunState {
             acceptance_rng: checkpoint.acceptance_rng,
             ergodics: checkpoint.ergodics,
             move_stats: checkpoint.move_stats,
+            proposal_stats: checkpoint.proposal_stats,
             steps: checkpoint.steps,
             measurements: checkpoint.measurements,
             elapsed_time: checkpoint.elapsed_time,
@@ -1300,6 +1457,7 @@ impl MetropolisRunState {
             current_step: self.current_step,
             current_action: self.current_action,
             move_stats: self.move_stats,
+            proposal_stats: self.proposal_stats,
             steps: self.steps,
             measurements: self.measurements,
             elapsed_time: self.elapsed_time,
@@ -1323,7 +1481,7 @@ fn run_one_step(
     state
         .triangulation
         .record_event(SimulationEvent::MoveAttempted {
-            move_type: format!("{move_type:?}"),
+            move_type,
             step: step.into(),
         });
 
@@ -1337,27 +1495,25 @@ fn run_one_step(
     let mut accepted = false;
     let mut action_after = None;
 
-    let plan = if delta_action.is_some() {
-        match propose_concrete_plan(
-            &state.triangulation,
-            &mut state.ergodics,
-            &algorithm.action_config,
-            move_type,
-            action_before,
-        ) {
-            Ok(plan) => plan,
-            Err(err) => {
-                state.move_stats.record_hard_failure(move_type);
-                return Err(accepted_move_error(
-                    step,
-                    move_type,
-                    err.attempt,
-                    err.source,
-                ));
-            }
+    let plan = match propose_concrete_plan(
+        &state.triangulation,
+        &mut state.ergodics,
+        &mut state.proposal_stats,
+        &algorithm.action_config,
+        move_type,
+        action_before,
+    ) {
+        Ok(plan) => plan,
+        Err(err) => {
+            state.move_stats.record_hard_failure(move_type);
+            state.proposal_stats.record_hard_failure();
+            return Err(accepted_move_error(
+                step,
+                move_type,
+                err.attempt,
+                err.source,
+            ));
         }
-    } else {
-        None
     };
 
     if let Some(plan) = plan {
@@ -1373,14 +1529,17 @@ fn run_one_step(
             action_after = Some(applied_action);
             state.current_action = applied_action;
             state.move_stats.record_success(move_type);
+            state.proposal_stats.record_accepted_transition();
             state
                 .triangulation
                 .record_event(SimulationEvent::MoveAccepted {
-                    move_type: format!("{move_type:?}"),
+                    move_type,
                     step: step.into(),
                     action_change: applied_action - action_before,
                 });
             validate_evolved_cdt_if_due(state)?;
+        } else {
+            state.proposal_stats.record_metropolis_rejection();
         }
     }
 
@@ -1841,28 +2000,46 @@ fn proposed_delta_action(
 fn propose_concrete_plan(
     state: &CdtTriangulation2D,
     moves: &mut ErgodicsSystem,
+    proposal_stats: &mut ProposalStatistics,
     action_config: &ActionConfig,
     move_type: MoveType,
     action_before: f64,
 ) -> Result<Option<CdtProposalPlan>, MoveApplicationError> {
     if proposed_delta_action(action_config, simplex_counts(state), move_type).is_none() {
+        proposal_stats.record_move_family(0);
+        proposal_stats.record_no_site();
         return Ok(None);
     }
-    let forward_site_count = proposal_site_count(state, move_type);
-    if forward_site_count == 0 {
+    let selection = moves.select_proposal_site(state, move_type);
+    let forward_site_count = selection.site_count;
+    proposal_stats.record_move_family(forward_site_count);
+    let Some(site) = selection.site else {
+        proposal_stats.record_no_site();
         return Ok(None);
-    }
+    };
 
     let mut proposed_state = state.clone();
-    let action_after = match apply_accepted_move(
-        &mut proposed_state,
-        moves,
-        action_config,
-        move_type,
-        action_before,
-    )? {
-        AcceptedMoveResult::Applied { action_after } => action_after,
-        AcceptedMoveResult::NoApplicableSite { .. } => return Ok(None),
+    let result = moves.apply_proposal_site(&mut proposed_state, move_type, site);
+    let action_after = match result {
+        MoveResult::Success => action_for(action_config, &proposed_state),
+        MoveResult::HardFailure(err) => {
+            return Err(MoveApplicationError {
+                attempt: 1,
+                source: err,
+            });
+        }
+        MoveResult::CausalityViolation => {
+            proposal_stats.record_site_rejection(&CdtProposalSiteRejection::CausalityViolation);
+            return Ok(None);
+        }
+        MoveResult::GeometricViolation => {
+            proposal_stats.record_site_rejection(&CdtProposalSiteRejection::GeometricViolation);
+            return Ok(None);
+        }
+        MoveResult::Rejected(err) => {
+            proposal_stats.record_site_rejection(&CdtProposalSiteRejection::Kernel(err));
+            return Ok(None);
+        }
     };
     let delta_action = action_after - action_before;
 
@@ -1931,66 +2108,10 @@ fn actions_match(left: f64, right: f64) -> bool {
     (left - right).abs() <= f64::EPSILON * scale * 8.0
 }
 
-/// Applies an already-accepted move, rolling back and retrying failed sites.
-///
-/// Retry exhaustion means the move type did not bind to a realizable local site
-/// in the bounded random search, so callers record a normal rejection. Hard
-/// backend failures still return a structured error.
-#[derive(Debug, Clone, PartialEq)]
-enum AcceptedMoveResult {
-    Applied {
-        action_after: f64,
-    },
-    NoApplicableSite {
-        last_rejection: Option<CdtProposalSiteRejection>,
-    },
-}
-
 #[derive(Debug, Clone, PartialEq)]
 struct MoveApplicationError {
     attempt: usize,
     source: CdtError,
-}
-
-fn apply_accepted_move(
-    triangulation: &mut CdtTriangulation2D,
-    moves: &mut ErgodicsSystem,
-    action_config: &ActionConfig,
-    move_type: MoveType,
-    action_before: f64,
-) -> Result<AcceptedMoveResult, MoveApplicationError> {
-    let mut last_rejection = None;
-    for attempt in 1..=ACCEPTED_MOVE_RETRIES {
-        let counts_before = simplex_counts(triangulation);
-        let result = attempt_move(moves, move_type, triangulation);
-        let rejection = match result {
-            MoveResult::Success => {
-                let action_after = action_for(action_config, triangulation);
-                return Ok(AcceptedMoveResult::Applied { action_after });
-            }
-            MoveResult::HardFailure(err) => {
-                return Err(MoveApplicationError {
-                    attempt,
-                    source: err,
-                });
-            }
-            MoveResult::CausalityViolation => CdtProposalSiteRejection::CausalityViolation,
-            MoveResult::GeometricViolation => CdtProposalSiteRejection::GeometricViolation,
-            MoveResult::Rejected(err) => CdtProposalSiteRejection::Kernel(err),
-        };
-        debug_assert_eq!(
-            simplex_counts(triangulation),
-            counts_before,
-            "failed move kernels must roll back simplex counts before returning"
-        );
-        last_rejection = Some(rejection);
-    }
-
-    debug_assert!(
-        actions_match(action_for(action_config, triangulation), action_before),
-        "failed accepted move retries must leave the triangulation rolled back"
-    );
-    Ok(AcceptedMoveResult::NoApplicableSite { last_rejection })
 }
 
 /// Builds the simulation-level error for an accepted move that could not be applied.
@@ -2009,23 +2130,6 @@ fn accepted_move_error(
         move_type,
         attempts,
         source: MetropolisMoveApplicationFailure::from(source),
-    }
-}
-
-/// Dispatches one selected move type to the ergodic move system.
-///
-/// Keeping dispatch behind this helper lets the Metropolis loop work with move
-/// proposals uniformly while the move module retains ownership of each kernel.
-fn attempt_move(
-    moves: &mut ErgodicsSystem,
-    move_type: MoveType,
-    triangulation: &mut CdtTriangulation2D,
-) -> MoveResult {
-    match move_type {
-        MoveType::Move22 => moves.attempt_22_move(triangulation),
-        MoveType::Move13Add => moves.attempt_13_move(triangulation),
-        MoveType::Move31Remove => moves.attempt_31_move(triangulation),
-        MoveType::EdgeFlip => moves.attempt_edge_flip(triangulation),
     }
 }
 
@@ -2072,10 +2176,7 @@ mod tests {
         state.move_stats.record_attempt(move_type);
         state
             .triangulation
-            .record_event(SimulationEvent::MoveAttempted {
-                move_type: format!("{move_type:?}"),
-                step: 1,
-            });
+            .record_event(SimulationEvent::MoveAttempted { move_type, step: 1 });
         state.steps.push(MonteCarloStep {
             step: 1,
             move_type,
@@ -2114,6 +2215,7 @@ mod tests {
             acceptance_rng: simulation_rng(Some(1)),
             ergodics: ErgodicsSystem::with_seed(2),
             move_stats: MoveStatistics::new(),
+            proposal_stats: ProposalStatistics::new(),
             steps: Vec::new(),
             measurements: Vec::new(),
             elapsed_time: Duration::ZERO,
@@ -2388,6 +2490,24 @@ mod tests {
             first_resumed.triangulation().slice_sizes(),
             second_resumed.triangulation().slice_sizes()
         );
+    }
+
+    #[test]
+    fn serialized_checkpoint_missing_proposal_stats_defaults_on_restore() {
+        let checkpoint = serializable_rejected_checkpoint(ActionConfig::default());
+        let mut payload = to_value(&checkpoint).expect("checkpoint should serialize");
+        payload
+            .as_object_mut()
+            .expect("checkpoint payload should be an object")
+            .remove("proposal_stats");
+
+        let restored: CdtMcmcCheckpoint =
+            from_str(&payload.to_string()).expect("legacy checkpoint should deserialize");
+
+        assert_eq!(restored.proposal_stats(), &ProposalStatistics::new());
+        MetropolisAlgorithm::new(MetropolisConfig::new(1.0, 2, 0, 1), ActionConfig::default())
+            .resume_from_checkpoint(restored)
+            .expect("legacy checkpoint with default proposal stats should resume");
     }
 
     #[test]
@@ -2711,34 +2831,104 @@ mod tests {
     }
 
     #[test]
-    fn accepted_move_retry_exhaustion_is_rejection_result_and_rolls_back() {
-        let mut triangulation =
+    fn concrete_plan_site_rejection_is_self_loop_telemetry() {
+        let triangulation =
             CdtTriangulation::from_seeded_points(3, 1, 2, 53).expect("Failed to create");
         let action_config = ActionConfig::default();
         let counts_before = simplex_counts(&triangulation);
         let action_before = action_for(&action_config, &triangulation);
         let mut moves = ErgodicsSystem::with_seed(7);
+        let mut proposal_stats = ProposalStatistics::new();
 
-        let result = apply_accepted_move(
-            &mut triangulation,
+        let result = propose_concrete_plan(
+            &triangulation,
             &mut moves,
+            &mut proposal_stats,
             &action_config,
             MoveType::Move31Remove,
             action_before,
         )
-        .expect("site retry exhaustion is an ordinary rejection result");
+        .expect("site rejection is an ordinary proposal outcome");
 
-        let AcceptedMoveResult::NoApplicableSite { last_rejection } = result else {
-            panic!("Expected NoApplicableSite");
-        };
-        assert!(matches!(
-            last_rejection,
-            Some(
-                CdtProposalSiteRejection::GeometricViolation | CdtProposalSiteRejection::Kernel(_)
-            )
-        ));
+        assert!(result.is_none());
+        assert_eq!(proposal_stats.move_family_proposals, 1);
+        assert_eq!(proposal_stats.no_site_proposals, 1);
         assert_eq!(simplex_counts(&triangulation), counts_before);
         assert_relative_eq!(action_for(&action_config, &triangulation), action_before);
+    }
+
+    #[test]
+    fn proposal_statistics_saturate_extreme_counters() {
+        let mut stats = ProposalStatistics {
+            move_family_proposals: u64::MAX,
+            observed_forward_sites: u64::MAX - 1,
+            no_site_proposals: u64::MAX,
+            site_causality_rejections: u64::MAX,
+            site_geometric_rejections: u64::MAX,
+            site_backend_rejections: u64::MAX,
+            metropolis_rejections: u64::MAX,
+            accepted_transitions: u64::MAX,
+            hard_failures: u64::MAX,
+        };
+
+        stats.record_move_family(2);
+        stats.record_no_site();
+        stats.record_site_rejection(&CdtProposalSiteRejection::CausalityViolation);
+        stats.record_site_rejection(&CdtProposalSiteRejection::GeometricViolation);
+        stats.record_site_rejection(&CdtProposalSiteRejection::Kernel(
+            CdtError::InvalidSimulationConfiguration {
+                setting: ConfigurationSetting::Steps,
+                provided_value: "0".to_string(),
+                expected: "≥ 1".to_string(),
+            },
+        ));
+        stats.record_metropolis_rejection();
+        stats.record_accepted_transition();
+        stats.record_hard_failure();
+
+        assert_eq!(stats.move_family_proposals, u64::MAX);
+        assert_eq!(stats.observed_forward_sites, u64::MAX);
+        assert_eq!(stats.no_site_proposals, u64::MAX);
+        assert_eq!(stats.site_causality_rejections, u64::MAX);
+        assert_eq!(stats.site_geometric_rejections, u64::MAX);
+        assert_eq!(stats.site_backend_rejections, u64::MAX);
+        assert_eq!(stats.metropolis_rejections, u64::MAX);
+        assert_eq!(stats.accepted_transitions, u64::MAX);
+        assert_eq!(stats.hard_failures, u64::MAX);
+    }
+
+    #[test]
+    fn run_records_proposal_statistics_for_each_selected_move_family() {
+        let config = MetropolisConfig::new(1.0, 12, 0, 1).with_seed(2);
+        let algorithm = MetropolisAlgorithm::new(config.clone(), ActionConfig::default());
+        let triangulation =
+            CdtTriangulation::from_seeded_points(3, 1, 2, 53).expect("Failed to create");
+
+        let results = algorithm
+            .run(triangulation)
+            .expect("short run should finish");
+        let proposal_stats = results.proposal_stats();
+        let classified_proposals = proposal_stats.no_site_proposals
+            + proposal_stats.site_causality_rejections
+            + proposal_stats.site_geometric_rejections
+            + proposal_stats.site_backend_rejections
+            + proposal_stats.metropolis_rejections
+            + proposal_stats.accepted_transitions
+            + proposal_stats.hard_failures;
+
+        assert_eq!(
+            proposal_stats.move_family_proposals,
+            u64::from(config.steps)
+        );
+        assert_eq!(
+            proposal_stats.move_family_proposals,
+            results.move_stats().total_attempted()
+        );
+        assert_eq!(
+            proposal_stats.accepted_transitions,
+            results.move_stats().total_accepted()
+        );
+        assert_eq!(classified_proposals, proposal_stats.move_family_proposals);
     }
 
     #[test]
@@ -2754,7 +2944,7 @@ mod tests {
                 provided_value,
                 expected,
             } => {
-                assert_eq!(setting, "measurement_frequency");
+                assert_eq!(setting, ConfigurationSetting::MeasurementFrequency);
                 assert_eq!(provided_value, "0");
                 assert_eq!(expected, "≥ 1");
             }
@@ -2774,7 +2964,7 @@ mod tests {
                 CdtError::InvalidSimulationConfiguration {
                     setting, expected, ..
                 } => {
-                    assert_eq!(setting, "temperature", "T={bad_temp}");
+                    assert_eq!(setting, ConfigurationSetting::Temperature, "T={bad_temp}");
                     assert_eq!(expected, "finite and positive", "T={bad_temp}");
                 }
                 other => panic!(
@@ -2798,7 +2988,7 @@ mod tests {
                 provided_value,
                 expected,
             } => {
-                assert_eq!(setting, "measurement schedule");
+                assert_eq!(setting, ConfigurationSetting::MeasurementSchedule);
                 assert!(
                     provided_value.contains("steps=19")
                         && provided_value.contains("thermalization_steps=15")
@@ -2825,7 +3015,7 @@ mod tests {
                 provided_value,
                 expected,
             } => {
-                assert_eq!(setting, "measurement schedule");
+                assert_eq!(setting, ConfigurationSetting::MeasurementSchedule);
                 assert!(
                     provided_value.contains("steps=4294967295")
                         && provided_value.contains("thermalization_steps=4294967295")
@@ -2870,7 +3060,7 @@ mod tests {
                 provided_value,
                 expected,
             } => {
-                assert_eq!(setting, "coupling_0");
+                assert_eq!(setting, ConfigurationSetting::Coupling0);
                 assert_eq!(provided_value, "inf");
                 assert_eq!(expected, "finite");
             }
@@ -2891,7 +3081,7 @@ mod tests {
                     provided_value: _,
                     expected,
                 } => {
-                    assert_eq!(setting, "temperature");
+                    assert_eq!(setting, ConfigurationSetting::Temperature);
                     assert_eq!(expected, "finite and positive");
                 }
                 other => panic!("Expected InvalidSimulationConfiguration, got {other:?}"),
@@ -2911,7 +3101,7 @@ mod tests {
                 provided_value: _,
                 expected,
             } => {
-                assert_eq!(setting, "coupling_0");
+                assert_eq!(setting, ConfigurationSetting::Coupling0);
                 assert_eq!(expected, "finite");
             }
             other => panic!("Expected InvalidConfiguration, got {other:?}"),
@@ -2931,7 +3121,7 @@ mod tests {
                 provided_value: _,
                 expected,
             } => {
-                assert_eq!(setting, "coupling_2");
+                assert_eq!(setting, ConfigurationSetting::Coupling2);
                 assert_eq!(expected, "finite");
             }
             other => panic!("Expected InvalidConfiguration, got {other:?}"),
@@ -2984,10 +3174,12 @@ mod tests {
         let triangulation =
             CdtTriangulation::from_toroidal_cdt(4, 3).expect("toroidal CDT should build");
         let mut moves = ErgodicsSystem::with_seed(19);
+        let mut proposal_stats = ProposalStatistics::new();
         let action_before = action_for(&action_config, &triangulation);
         let plan = propose_concrete_plan(
             &triangulation,
             &mut moves,
+            &mut proposal_stats,
             &action_config,
             MoveType::Move13Add,
             action_before,

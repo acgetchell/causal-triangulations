@@ -135,23 +135,25 @@ pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveTyp
 pub use cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType};
 pub use cdt::metropolis::{
     CdtMcmcCheckpoint, CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget,
-    MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
+    MetropolisAlgorithm, MetropolisConfig, MonteCarloStep, ProposalStatistics,
 };
 pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
 pub use cdt::results::{Measurement, SimulationResultsBackend};
 pub use config::{CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, TestConfig};
 pub use errors::{
     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
-    CheckpointOperation, CheckpointResumeReason, DelaunayValidationLevel,
-    MetropolisMoveApplicationFailure, OutputFormat,
+    CheckpointOperation, CheckpointResumeReason, ConfigurationSetting, DelaunayValidationLevel,
+    GenerationParameterIssue, MetropolisMoveApplicationFailure, OutputFormat,
+    TriangulationMetadataField,
 };
 
+use crate::cdt::results::SimulationResultsParts;
 use crate::util::saturating_usize_to_u32;
 use std::env;
 use std::time::Duration;
 
 // Trait-based triangulation (recommended)
-pub use cdt::triangulation::CdtTriangulation;
+pub use cdt::triangulation::{CdtTriangulation, SimulationEvent};
 pub use geometry::traits::TriangulationQuery;
 
 /// Prelude module for convenient imports.
@@ -218,7 +220,8 @@ pub mod prelude {
         pub use crate::errors::{
             BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck,
             CdtValidationFailure, CheckpointOperation, CheckpointResumeReason,
-            DelaunayValidationLevel, MetropolisMoveApplicationFailure, OutputFormat,
+            ConfigurationSetting, DelaunayValidationLevel, GenerationParameterIssue,
+            MetropolisMoveApplicationFailure, OutputFormat, TriangulationMetadataField,
         };
     }
 
@@ -236,7 +239,7 @@ pub mod prelude {
         pub use crate::cdt::action::{ActionConfig, compute_regge_action};
     }
 
-    /// Focused exports for CDT triangulation construction and queries.
+    /// Focused exports for CDT triangulation construction, queries, and history events.
     ///
     /// Lighter than `prelude::*` — just the types needed for building and
     /// inspecting triangulations (the most common doctest pattern).
@@ -251,12 +254,12 @@ pub mod prelude {
     /// }
     /// ```
     pub mod triangulation {
-        pub use crate::CdtTriangulation;
         pub use crate::cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType};
         pub use crate::config::CdtTopology;
         pub use crate::errors::{CdtError, CdtResult};
         pub use crate::geometry::CdtTriangulation2D;
         pub use crate::geometry::traits::TriangulationQuery;
+        pub use crate::{CdtTriangulation, SimulationEvent};
     }
 
     /// Focused exports for local CDT move kernels and move statistics.
@@ -287,9 +290,10 @@ pub mod prelude {
         pub use crate::cdt::ergodic_moves::MoveType;
         pub use crate::cdt::metropolis::{
             CdtMcmcCheckpoint, CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan,
-            CdtTarget, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
+            CdtTarget, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep, ProposalStatistics,
         };
         pub use crate::cdt::results::{Measurement, SimulationResultsBackend};
+        pub use crate::cdt::triangulation::SimulationEvent;
         pub use crate::config::{CdtConfig, CdtTopology};
         pub use crate::errors::{CdtError, CdtResult};
         pub use crate::geometry::CdtTriangulation2D;
@@ -402,11 +406,11 @@ pub mod prelude {
 ///
 /// This function uses the trait-based geometry backend system, which provides
 /// better abstraction and testability compared to legacy approaches.
-/// Open-boundary runs construct a regular foliated strip with
-/// [`CdtTriangulation::from_cdt_strip`]; toroidal runs construct a periodic
-/// mesh with [`CdtTriangulation::from_toroidal_cdt`]. In both cases,
-/// [`CdtConfig::vertices`] is the total vertex count and must divide evenly
-/// across [`CdtConfig::timeslices`].
+/// Open-boundary runs construct a foliated strip; toroidal runs construct a
+/// periodic mesh. When [`CdtConfig::volume_profile`] is present, the initial
+/// geometry uses those explicit per-slice spatial volumes. Otherwise the run
+/// uses regular equal-size slices derived from the total [`CdtConfig::vertices`]
+/// count and [`CdtConfig::timeslices`].
 ///
 /// # Arguments
 ///
@@ -421,8 +425,8 @@ pub mod prelude {
 ///
 /// Returns [`CdtError::InvalidConfiguration`] if the configuration fails validation,
 /// including invalid measurement schedules, unsupported open-boundary or
-/// toroidal slice counts, or a total vertex count that cannot be divided into
-/// regular spatial slices.
+/// toroidal slice counts, invalid regular slice counts, or inconsistent
+/// explicit spatial volume profiles.
 /// Returns [`CdtError::UnsupportedDimension`] if a validated configuration requests
 /// a simulation dimension other than 2.
 /// Returns triangulation generation, topology, foliation, or Metropolis errors
@@ -469,24 +473,35 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
     log::info!("Dimensionality: {}", config.dimension.unwrap_or(2));
     log::info!("Number of vertices: {vertices}");
     log::info!("Number of timeslices: {timeslices}");
+    if let Some(profile) = &config.volume_profile {
+        log::info!("Initial spatial volume profile: {profile:?}");
+    }
     log::info!("Topology: {:?}", config.topology);
     log::info!("Using trait-based backend system");
 
     // Create initial triangulation based on topology.
     //
-    // `config.vertices` is always the *total* vertex count. `validate()` has
-    // already checked the topology-specific divisibility and per-slice lower
-    // bounds, so we can safely divide to recover N = vertices/T per slice.
+    // `config.vertices` is always the *total* vertex count. With no explicit
+    // profile, `validate()` has checked topology-specific divisibility so we can
+    // divide to recover N = vertices/T per slice.
     let triangulation = match config.topology {
         CdtTopology::Toroidal => {
             log::info!("Constructing toroidal CDT (S¹×S¹)");
-            let vertices_per_slice = vertices / timeslices;
-            CdtTriangulation::from_toroidal_cdt(vertices_per_slice, timeslices)?
+            if let Some(profile) = &config.volume_profile {
+                CdtTriangulation::from_toroidal_cdt_profile(profile)?
+            } else {
+                let vertices_per_slice = vertices / timeslices;
+                CdtTriangulation::from_toroidal_cdt(vertices_per_slice, timeslices)?
+            }
         }
         CdtTopology::OpenBoundary => {
             log::info!("Constructing open-boundary CDT strip");
-            let vertices_per_slice = vertices / timeslices;
-            CdtTriangulation::from_cdt_strip(vertices_per_slice, timeslices)?
+            if let Some(profile) = &config.volume_profile {
+                CdtTriangulation::from_cdt_strip_profile(profile)?
+            } else {
+                let vertices_per_slice = vertices / timeslices;
+                CdtTriangulation::from_cdt_strip(vertices_per_slice, timeslices)?
+            }
         }
     };
 
@@ -522,12 +537,13 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
             .to_action_config()
             .calculate_action(vertices, edges, triangles);
 
-        SimulationResultsBackend::from_parts(
-            config.to_metropolis_config(),
-            config.to_action_config(),
-            MoveStatistics::new(),
-            vec![],
-            vec![Measurement {
+        SimulationResultsBackend::from_parts(SimulationResultsParts {
+            config: config.to_metropolis_config(),
+            action_config: config.to_action_config(),
+            move_stats: MoveStatistics::new(),
+            proposal_stats: ProposalStatistics::new(),
+            steps: vec![],
+            measurements: vec![Measurement {
                 step: 0,
                 action: initial_action,
                 vertices,
@@ -535,9 +551,9 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
                 triangles,
                 volume_profile: triangulation.volume_profile(),
             }],
-            Duration::from_millis(0),
+            elapsed_time: Duration::from_millis(0),
             triangulation,
-        )
+        })
     };
 
     write_configured_outputs(config, &results)?;
@@ -605,6 +621,7 @@ mod tests {
             dimension: Some(2),
             vertices: 36,
             timeslices: 3,
+            volume_profile: None,
             temperature: 1.0,
             steps: 10,
             thermalization_steps: 5,
@@ -735,7 +752,7 @@ mod tests {
             expected,
         }) = result
         {
-            assert_eq!(setting, "measurement_frequency");
+            assert_eq!(setting, ConfigurationSetting::MeasurementFrequency);
             assert_eq!(provided_value, "0");
             assert_eq!(expected, "≥ 1");
         } else {
@@ -761,7 +778,7 @@ mod tests {
             expected,
         }) = result
         {
-            assert_eq!(setting, "measurement_frequency");
+            assert_eq!(setting, ConfigurationSetting::MeasurementFrequency);
             assert_eq!(provided_value, "200");
             assert_eq!(expected, "≤ steps (100)");
         } else {
@@ -783,7 +800,7 @@ mod tests {
             expected,
         }) = result
         {
-            assert_eq!(setting, "vertices");
+            assert_eq!(setting, ConfigurationSetting::Vertices);
             assert_eq!(provided_value, "2");
             assert_eq!(expected, "≥ 3");
         } else {
@@ -805,7 +822,7 @@ mod tests {
             expected,
         }) = result
         {
-            assert_eq!(setting, "temperature");
+            assert_eq!(setting, ConfigurationSetting::Temperature);
             assert_eq!(provided_value, "-1");
             assert_eq!(expected, "finite and positive");
         } else {
@@ -863,6 +880,7 @@ mod tests {
             dimension: Some(2),
             vertices: 12,
             timeslices: 3,
+            volume_profile: None,
             temperature: 1.0,
             steps: 10,
             thermalization_steps: 5,
@@ -892,5 +910,56 @@ mod tests {
             results.triangulation().metadata().topology,
             CdtTopology::Toroidal
         ));
+    }
+
+    #[test]
+    fn test_run_simulation_uses_nonuniform_volume_profile() {
+        let config = CdtConfig {
+            vertices: 15,
+            timeslices: 3,
+            volume_profile: Some(vec![4, 6, 5]),
+            steps: 4,
+            thermalization_steps: 0,
+            measurement_frequency: 1,
+            ..create_test_config()
+        };
+
+        let results = run_simulation(&config).expect("profile-based simulation should run");
+
+        assert_eq!(results.triangulation().vertex_count(), 15);
+        assert_eq!(results.triangulation().slice_sizes(), &[4, 6, 5]);
+        assert_eq!(results.measurements()[0].volume_profile.len(), 3);
+        results
+            .triangulation()
+            .validate()
+            .expect("profile-based initial CDT should satisfy evolved invariants");
+    }
+
+    #[test]
+    fn test_run_simulation_uses_nonuniform_toroidal_volume_profile() {
+        let config = CdtConfig {
+            vertices: 16,
+            timeslices: 4,
+            topology: CdtTopology::Toroidal,
+            volume_profile: Some(vec![3, 4, 5, 4]),
+            steps: 4,
+            thermalization_steps: 0,
+            measurement_frequency: 1,
+            ..create_test_config()
+        };
+
+        let results =
+            run_simulation(&config).expect("toroidal profile-based simulation should run");
+
+        assert_eq!(results.triangulation().vertex_count(), 16);
+        assert_eq!(results.triangulation().slice_sizes(), &[3, 4, 5, 4]);
+        assert!(matches!(
+            results.triangulation().metadata().topology,
+            CdtTopology::Toroidal
+        ));
+        results
+            .triangulation()
+            .validate()
+            .expect("toroidal profile-based initial CDT should satisfy evolved invariants");
     }
 }

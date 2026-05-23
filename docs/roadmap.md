@@ -43,6 +43,12 @@ The post-v0.1.0 1+1 track should keep the default ensemble scientifically explic
 - Add λ scan utilities for unfixed-volume 1+1 CDT runs
   ([#143](https://github.com/acgetchell/causal-triangulations/issues/143)). These should help users tune the cosmological constant, which is conjugate to the
   lattice volume term and controls volume growth or shrinkage in unfixed-volume runs.
+- Adopt the upstream lift-aware simplex barycenter helper once `delaunay#420` ships
+  ([#147](https://github.com/acgetchell/causal-triangulations/issues/147)). This should replace the local `(1,3)` insertion-point policy while preserving the
+  existing k=1 flip delegation, and is dependency-gated cleanup for move-kernel geometry ownership rather than a new CDT ensemble.
+- Redesign public error shapes for ergonomic typed diagnostics
+  ([#149](https://github.com/acgetchell/causal-triangulations/issues/149)). This should build on the current typed category enums by evaluating richer observed
+  values, constraints, and matching patterns without blocking the v0.1.0 correctness work.
 
 ## Higher-Dimensional CDT Tracks
 

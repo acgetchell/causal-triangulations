@@ -84,10 +84,10 @@ not clone the triangulation. If a selected mutation or required post-mutation sy
 non-success `MoveResult`. Toroidal post-move topology or closed-ring foliation failures are treated as rollbackable local-site rejections, because the candidate
 site was geometrically editable but would break the periodic CDT contract.
 
-The Metropolis loop first clones the current triangulation and plans a concrete move on that cloned triangulation; see `src/cdt/metropolis.rs`. It then performs
-the accept/reject decision from the proposed move metadata; see `docs/metropolis.md`. Only accepted proposals swap the cloned, mutated state into the live
-simulation. Failed applications on the cloned state are retried from the restored clone state, exhausted retries are recorded as rejected proposals, and hard
-backend mutation or invariant-refresh failures still return `CdtError::MetropolisMoveApplicationFailed`.
+The Metropolis loop first selects an explicit local proposal site, clones the current triangulation, and applies that exact site on the cloned proposed state;
+see `src/cdt/metropolis.rs`. It then performs the accept/reject decision from the proposed move metadata; see `docs/metropolis.md`. Only accepted proposals
+swap the cloned, mutated state into the live simulation. Ordinary causal, geometric, or backend edit failures on the cloned state are self-loop proposal
+outcomes recorded in `ProposalStatistics`; hard backend mutation or invariant-refresh failures still return `CdtError::MetropolisMoveApplicationFailed`.
 
 ## Ensemble And Volume Fixing
 

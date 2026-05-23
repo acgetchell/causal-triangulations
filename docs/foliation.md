@@ -15,8 +15,9 @@ For the periodic 1+1 CDT cases:
 - **Causality constraint**: no edge may span more than one time slice (|Δt| ≤ 1)
 
 This implementation also supports open-boundary strip variants. `from_toroidal_cdt()` builds the periodic S¹ × S¹ toroidal case, while `from_cdt_strip()` builds
-open spatial-interval strip geometries over discrete time. Both constructor families use the same edge classification and causality constraint, but their
-topology metadata and boundary expectations differ.
+regular open spatial-interval strip geometries over discrete time. Profile constructors, `from_cdt_strip_profile()` and `from_toroidal_cdt_profile()`, accept
+explicit per-slice spatial volumes `N(t)` for nonuniform initial data. All constructor families use the same edge classification and causality constraint, but
+their topology metadata and boundary expectations differ.
 
 ## Architecture
 
@@ -43,13 +44,14 @@ access; CDT mutation paths are narrow so cache and foliation synchronization sta
 ## Time Label Assignment
 
 For `from_cdt_strip()` and `from_toroidal_cdt()`, time labels are assigned directly while building vertices. Vertex `(i, t)` receives label `t`, so each slice
-starts with exactly `vertices_per_slice` vertices. The constructors require their Delaunay-built simplices to span adjacent slices before returning.
+starts with exactly `vertices_per_slice` vertices. The profile constructors instead derive slice counts from the supplied `N(t)` vector, still storing each
+vertex's label as `t`. Uniform slices are therefore a regular initial condition, not a CDT requirement.
 
 `assign_foliation_by_y()` uses band-based bucketing and writes labels through the same CDT-owned label-write path.
 
 ## Delaunay Construction
 
-The open-boundary strip constructor places vertices in a lightly perturbed layered grid with:
+The regular open-boundary strip constructor places vertices in a lightly perturbed layered grid with:
 
 - **Spatial extent**: 1.0, with `vertices_per_slice` evenly spaced vertices per slice
 - **Temporal gap**: 1.0, with integer y-coordinates `0, 1, 2, ...`
@@ -57,15 +59,23 @@ The open-boundary strip constructor places vertices in a lightly perturbed layer
 
 Parameters: `vertices_per_slice ≥ 4`, `num_slices ≥ 2`.
 
+`from_cdt_strip_profile()` places each open spatial slice according to the corresponding profile entry and delegates triangulation to the Delaunay point-data
+constructor. The returned mesh must pass the same initial-constructor contract as the regular open strip: upstream Delaunay Level 1-4 validation plus CDT
+topology, foliation, causality, and strict Up/Down simplex classification.
+
 The toroidal constructor places vertices on a unit lattice in an `N × T` periodic domain and uses the upstream periodic image-point Delaunay constructor. It
 then checks the requested `V = N·T`, `E = 3·N·T`, `F = 2·N·T` toroidal counts and strict CDT classification.
+
+`from_toroidal_cdt_profile()` places each closed S¹ slice according to the corresponding profile entry and uses the periodic image-point constructor directly.
+It preserves closed spatial slices, periodic time, χ = 0, and strict CDT simplex classification for the returned initial torus.
 
 ## Initialization vs Evolution Validation
 
 Initial CDT constructors are stricter than post-move validation:
 
-- **Initialization**: `from_cdt_strip()` and `from_toroidal_cdt()` must pass upstream Delaunay Level 1-4 validation before returning. This certifies the
-  starting mesh as a valid, well-behaved PL-manifold and Delaunay triangulation.
+- **Initialization**: regular `from_cdt_strip()`, profiled `from_cdt_strip_profile()`, regular `from_toroidal_cdt()`, and
+  `from_toroidal_cdt_profile()` must pass upstream Delaunay Level 1-4 validation before returning. This certifies those starting meshes as valid,
+  well-behaved PL-manifold Delaunay triangulations.
 - **After ergodic moves / simulation completion**: `CdtTriangulation::validate()` requires upstream structural validity plus CDT topology, foliation, causality,
   and simplex-classification invariants. It intentionally does not require Level 4 Delaunay-ness, because the CDT move kernels are not expected to preserve the
   Delaunay empty-circumsphere predicate.

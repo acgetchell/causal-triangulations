@@ -70,6 +70,9 @@ cargo build --release
 # Build an open-boundary triangulation and record the initial measurement
 ./target/release/cdt --vertices-per-slice 4 --timeslices 5 --output-json open-boundary-summary.json
 
+# Build nonuniform open-boundary initial data from an explicit spatial volume profile
+./target/release/cdt --volume-profile 4,6,5 --output-json open-profile-summary.json
+
 # Run a periodic toroidal simulation and write both output formats
 ./target/release/cdt \
   --vertices-per-slice 8 \
@@ -85,9 +88,11 @@ cargo build --release
   --output-json toroidal-summary.json
 ```
 
-Prefer `--vertices-per-slice` for regular initial data; the binary computes the total initial vertex count as `vertices_per_slice × timeslices`. `--vertices`
-is still accepted when you already know the total, but it must divide evenly by `--timeslices`. Open-boundary runs require at least 4 vertices per slice and
-toroidal runs require at least 3 vertices per slice. Without `--simulate`, the binary only builds the initial triangulation and writes the step-0 measurement.
+Prefer `--vertices-per-slice` for regular equal-slice initial data; the binary computes the total initial vertex count as `vertices_per_slice × timeslices`. Use
+`--volume-profile N0,N1,...` for explicit nonuniform spatial slice volumes; when supplied without `--timeslices`, the number of profile entries defines the
+time-slice count. `--vertices` is still accepted when you already know the total for regular data, but it must divide evenly by `--timeslices`. Open-boundary
+runs require at least 4 vertices per slice and toroidal runs require at least 3 vertices per slice. Without `--simulate`, the binary only builds the initial
+triangulation and writes the step-0 measurement.
 
 ### Ensemble And Volume Behavior
 

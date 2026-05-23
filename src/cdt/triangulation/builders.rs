@@ -5,7 +5,7 @@
 use super::CdtTriangulation;
 use crate::cdt::foliation::{Foliation, FoliationError};
 use crate::config::CdtTopology;
-use crate::errors::{CdtError, CdtResult, DelaunayValidationLevel};
+use crate::errors::{CdtError, CdtResult, DelaunayValidationLevel, GenerationParameterIssue};
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::generators::{
     DelaunayTriangulation2D, build_delaunay2_with_data, build_periodic_toroidal_delaunay2,
@@ -159,6 +159,177 @@ pub(super) fn validate_toroidal_counts(
     Ok(())
 }
 
+/// Validates an explicit per-slice spatial volume profile.
+fn validate_spatial_profile(
+    profile: &[u32],
+    minimum_slices: u32,
+    minimum_vertices_per_slice: u32,
+    topology_label: &str,
+) -> CdtResult<(u32, u32)> {
+    if profile.is_empty() {
+        return Err(CdtError::InvalidGenerationParameters {
+            issue: GenerationParameterIssue::EmptyVolumeProfile,
+            provided_value: "[]".to_string(),
+            expected_range: "at least one time slice".to_string(),
+        });
+    }
+
+    let num_slices =
+        u32::try_from(profile.len()).map_err(|err| CdtError::InvalidGenerationParameters {
+            issue: GenerationParameterIssue::VolumeProfileLengthOverflow,
+            provided_value: profile.len().to_string(),
+            expected_range: format!("length must fit in u32: {err}"),
+        })?;
+    if num_slices < minimum_slices {
+        return Err(CdtError::InvalidGenerationParameters {
+            issue: GenerationParameterIssue::InsufficientNumberOfTimeSlices,
+            provided_value: num_slices.to_string(),
+            expected_range: format!("≥ {minimum_slices} for {topology_label}"),
+        });
+    }
+
+    let mut total_vertices = 0_u32;
+    for (slice, &vertices) in profile.iter().enumerate() {
+        if vertices < minimum_vertices_per_slice {
+            return Err(CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::InsufficientVerticesInVolumeProfileSlice,
+                provided_value: format!("slice {slice} has {vertices}"),
+                expected_range: format!(
+                    "each slice ≥ {minimum_vertices_per_slice} for {topology_label}"
+                ),
+            });
+        }
+        total_vertices = total_vertices.checked_add(vertices).ok_or_else(|| {
+            CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::VertexCountOverflow,
+                provided_value: format!("{profile:?}"),
+                expected_range: "sum ≤ u32::MAX".to_string(),
+            }
+        })?;
+    }
+
+    Ok((total_vertices, num_slices))
+}
+
+/// Converts a spatial volume profile to `usize` slice sizes.
+fn profile_slice_sizes(
+    profile: &[u32],
+    mut generation_failed: impl FnMut(String) -> CdtError,
+) -> CdtResult<Vec<usize>> {
+    profile
+        .iter()
+        .map(|&volume| usize::try_from(volume).map_err(|err| generation_failed(err.to_string())))
+        .collect()
+}
+
+/// Builds labeled periodic coordinates for a toroidal CDT profile.
+fn toroidal_profile_vertices(
+    profile: &[u32],
+    total_vertices: u32,
+) -> CdtResult<Vec<([f64; 2], u32)>> {
+    let expected_vertices = usize::try_from(total_vertices)
+        .map_err(|err| toroidal_generation_error(total_vertices, (0.0, 0.0), err.to_string()))?;
+    let max_slice_volume = profile.iter().copied().max().unwrap_or(1);
+    let domain_x = f64::from(max_slice_volume);
+    let mut vertex_specs = Vec::new();
+    vertex_specs.try_reserve_exact(expected_vertices).map_err(|err| {
+        toroidal_generation_error(
+            total_vertices,
+            (0.0, domain_x),
+            format!(
+                "from_toroidal_cdt_profile() failed to reserve {expected_vertices} vertex specs: {err}"
+            ),
+        )
+    })?;
+
+    for (slice, &vertices) in profile.iter().enumerate() {
+        let label = u32::try_from(slice).map_err(|err| {
+            toroidal_generation_error(total_vertices, (0.0, domain_x), err.to_string())
+        })?;
+        let spacing = domain_x / f64::from(vertices);
+        for index in 0..vertices {
+            let x = f64::from(index) * spacing;
+            let y = f64::from(label);
+            vertex_specs.push(([x, y], label));
+        }
+    }
+
+    Ok(vertex_specs)
+}
+
+/// Builds labeled open-boundary coordinates for a CDT strip profile.
+fn open_profile_vertices(profile: &[u32], total_vertices: u32) -> CdtResult<Vec<([f64; 2], u32)>> {
+    let expected_vertices = usize::try_from(total_vertices).map_err(|err| {
+        strip_generation_error(total_vertices, f64::from(total_vertices), err.to_string())
+    })?;
+    let profile_len = u32::try_from(profile.len()).map_err(|err| {
+        strip_generation_error(total_vertices, f64::from(total_vertices), err.to_string())
+    })?;
+    let max_slice_volume = profile.iter().copied().max().unwrap_or(2);
+    let min_spacing = 1.0_f64 / f64::from(max_slice_volume - 1);
+    let side_jitter = min_spacing / 4.0;
+    let interior_jitter = min_spacing / (16.0 * f64::from(profile_len));
+    let vertical_jitter = 1.0_f64 / (64.0 * f64::from(profile_len));
+    let coordinate_max = f64::from(profile_len).max(2.0);
+    let mut vertex_specs = Vec::new();
+    vertex_specs.try_reserve_exact(expected_vertices).map_err(|err| {
+        strip_generation_error(
+            total_vertices,
+            coordinate_max,
+            format!(
+                "from_cdt_strip_profile() failed to reserve {expected_vertices} vertex specs: {err}"
+            ),
+        )
+    })?;
+
+    for (slice, &vertices) in profile.iter().enumerate() {
+        let label = u32::try_from(slice).map_err(|err| {
+            strip_generation_error(total_vertices, coordinate_max, err.to_string())
+        })?;
+        let spacing = 1.0_f64 / f64::from(vertices - 1);
+        let temporal_index = f64::from(label);
+        let temporal_span = f64::from(profile_len - 1);
+        let side_arc =
+            side_jitter * temporal_index * (temporal_span - temporal_index) / temporal_span.powi(2);
+        for index in 0..vertices {
+            let x = if index == 0 || index == vertices - 1 {
+                let boundary = f64::from(index).mul_add(spacing, side_jitter);
+                if index == 0 {
+                    boundary - side_arc
+                } else {
+                    boundary + side_arc
+                }
+            } else {
+                let sign = if (index + label).is_multiple_of(2) {
+                    1.0
+                } else {
+                    -1.0
+                };
+                f64::from(index).mul_add(spacing, side_jitter) + sign * interior_jitter
+            };
+            let spatial_index = f64::from(index);
+            let arc = vertical_jitter * spatial_index * f64::from(vertices - 1 - index)
+                / f64::from((vertices - 1).pow(2));
+            let base_y = f64::from(label) + vertical_jitter;
+            let y = if slice == 0 {
+                base_y - arc
+            } else if slice + 1 == profile.len() {
+                base_y + arc
+            } else {
+                let sign = if (index + label).is_multiple_of(2) {
+                    1.0
+                } else {
+                    -1.0
+                };
+                (sign * arc).mul_add(0.5, base_y)
+            };
+            vertex_specs.push(([x, y], label));
+        }
+    }
+
+    Ok(vertex_specs)
+}
+
 impl CdtTriangulation<DelaunayBackend2D> {
     /// Re-reads current backend labels during validation so stale stored bookkeeping is detected.
     pub(super) fn live_slice_sizes_from_vertex_labels(
@@ -229,7 +400,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         if vertices < 3 {
             return Err(CdtError::InvalidGenerationParameters {
-                issue: "Insufficient vertex count".to_string(),
+                issue: GenerationParameterIssue::InsufficientVertexCount,
                 provided_value: vertices.to_string(),
                 expected_range: "≥ 3".to_string(),
             });
@@ -282,7 +453,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         if vertices < 3 {
             return Err(CdtError::InvalidGenerationParameters {
-                issue: "Insufficient vertex count".to_string(),
+                issue: GenerationParameterIssue::InsufficientVertexCount,
                 provided_value: vertices.to_string(),
                 expected_range: "≥ 3".to_string(),
             });
@@ -395,14 +566,14 @@ impl CdtTriangulation<DelaunayBackend2D> {
     pub fn from_cdt_strip(vertices_per_slice: u32, num_slices: u32) -> CdtResult<Self> {
         if vertices_per_slice < 4 {
             return Err(CdtError::InvalidGenerationParameters {
-                issue: "Insufficient vertices per slice".to_string(),
+                issue: GenerationParameterIssue::InsufficientVerticesPerSlice,
                 provided_value: vertices_per_slice.to_string(),
                 expected_range: "≥ 4".to_string(),
             });
         }
         if num_slices < 2 {
             return Err(CdtError::InvalidGenerationParameters {
-                issue: "Insufficient number of time slices".to_string(),
+                issue: GenerationParameterIssue::InsufficientNumberOfTimeSlices,
                 provided_value: num_slices.to_string(),
                 expected_range: "≥ 2".to_string(),
             });
@@ -410,7 +581,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         let total_vertices = vertices_per_slice.checked_mul(num_slices).ok_or_else(|| {
             CdtError::InvalidGenerationParameters {
-                issue: "Vertex count overflow".to_string(),
+                issue: GenerationParameterIssue::VertexCountOverflow,
                 provided_value: format!("{vertices_per_slice} × {num_slices}"),
                 expected_range: "product ≤ u32::MAX".to_string(),
             }
@@ -420,7 +591,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let temporal_quads = num_slices - 1;
         let total_quads = spatial_quads.checked_mul(temporal_quads).ok_or_else(|| {
             CdtError::InvalidGenerationParameters {
-                issue: "Simplex count overflow".to_string(),
+                issue: GenerationParameterIssue::SimplexCountOverflow,
                 provided_value: format!("{spatial_quads} × {temporal_quads}"),
                 expected_range: "product ≤ u32::MAX".to_string(),
             }
@@ -429,7 +600,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             total_quads
                 .checked_mul(2)
                 .ok_or_else(|| CdtError::InvalidGenerationParameters {
-                    issue: "Simplex count overflow".to_string(),
+                    issue: GenerationParameterIssue::SimplexCountOverflow,
                     provided_value: format!("2 × {total_quads}"),
                     expected_range: "product ≤ u32::MAX".to_string(),
                 })?;
@@ -520,6 +691,62 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(tri)
     }
 
+    /// Construct a Delaunay-backed open-boundary 1+1 CDT strip from a spatial volume profile.
+    ///
+    /// Each entry in `volume_profile` is the number of vertices on that time
+    /// slice. Unlike [`Self::from_cdt_strip`], adjacent slices may have different
+    /// spatial volumes; this represents a general nonuniform CDT initial
+    /// geometry rather than a regular fixture.
+    /// The triangulation itself is delegated to
+    /// [`crate::geometry::generators::build_delaunay2_with_data`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidGenerationParameters`] if the profile has fewer
+    /// than two slices, any slice has fewer than four vertices, or derived counts
+    /// overflow.
+    /// Returns [`CdtError::DelaunayGenerationFailed`] if coordinate storage cannot
+    /// be reserved or if the Delaunay constructor rejects the profiled point data.
+    /// Returns [`CdtError::DelaunayValidationFailed`] if the constructed backend
+    /// fails the Level 1-4 Delaunay validator. Returns [`CdtError::TopologyMismatch`],
+    /// [`CdtError::Foliation`], [`CdtError::CausalityViolation`], or
+    /// [`CdtError::ValidationFailed`] if the constructed mesh violates CDT
+    /// invariants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_cdt_strip_profile(&[4, 6, 5])?;
+    ///     assert_eq!(tri.slice_sizes(), &[4, 6, 5]);
+    ///     assert!(tri.validate_simplex_classification().is_ok());
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn from_cdt_strip_profile(volume_profile: &[u32]) -> CdtResult<Self> {
+        let (total_vertices, num_slices) =
+            validate_spatial_profile(volume_profile, 2, 4, "open-boundary topology")?;
+        let vertex_specs = open_profile_vertices(volume_profile, total_vertices)?;
+        let dt = build_delaunay2_with_data(&vertex_specs).map_err(|error| {
+            remap_strip_generation_error(error, total_vertices, f64::from(num_slices))
+        })?;
+        let backend = validated_backend(dt)?;
+        let slice_sizes = profile_slice_sizes(volume_profile, |err| {
+            strip_generation_error(total_vertices, f64::from(num_slices), err)
+        })?;
+
+        let foliation =
+            Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
+        let mut tri = Self::try_new(backend, num_slices, 2)?;
+        tri.foliation = Some(foliation);
+        tri.mark_foliation_synchronized();
+        tri.validate_initial_delaunay_cdt()?;
+
+        Ok(tri)
+    }
+
     /// Construct a foliated 1+1 CDT on a torus (S¹×S¹).
     ///
     /// Places `vertices_per_slice` vertices per time slice on a unit lattice
@@ -577,7 +804,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     pub fn from_toroidal_cdt(vertices_per_slice: u32, num_slices: u32) -> CdtResult<Self> {
         if vertices_per_slice < 3 {
             return Err(CdtError::InvalidGenerationParameters {
-                issue: "Insufficient vertices per slice".to_string(),
+                issue: GenerationParameterIssue::InsufficientVerticesPerSlice,
                 provided_value: vertices_per_slice.to_string(),
                 expected_range: "≥ 3".to_string(),
             });
@@ -587,7 +814,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             // identify (t-1, t) with (t, t+1), so each spatial edge would be
             // shared by 4 triangles instead of 2 — a non-manifold mesh.
             return Err(CdtError::InvalidGenerationParameters {
-                issue: "Insufficient number of time slices".to_string(),
+                issue: GenerationParameterIssue::InsufficientNumberOfTimeSlices,
                 provided_value: num_slices.to_string(),
                 expected_range: "≥ 3".to_string(),
             });
@@ -595,7 +822,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         let total_vertices = vertices_per_slice.checked_mul(num_slices).ok_or_else(|| {
             CdtError::InvalidGenerationParameters {
-                issue: "Vertex count overflow".to_string(),
+                issue: GenerationParameterIssue::VertexCountOverflow,
                 provided_value: format!("{vertices_per_slice} × {num_slices}"),
                 expected_range: "product ≤ u32::MAX".to_string(),
             }
@@ -604,7 +831,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             total_vertices
                 .checked_mul(2)
                 .ok_or_else(|| CdtError::InvalidGenerationParameters {
-                    issue: "Simplex count overflow".to_string(),
+                    issue: GenerationParameterIssue::SimplexCountOverflow,
                     provided_value: format!("2 × {total_vertices}"),
                     expected_range: "product ≤ u32::MAX".to_string(),
                 })?;
@@ -672,13 +899,96 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         Ok(tri)
     }
+
+    /// Construct a periodic 1+1 CDT torus from a spatial volume profile.
+    ///
+    /// Each profile entry gives the number of vertices on one closed S¹ spatial
+    /// slice. Time wraps periodically, so the final slice is adjacent to slice
+    /// zero. Unlike [`Self::from_toroidal_cdt`], adjacent slices may have
+    /// different spatial volumes.
+    /// The triangulation itself is delegated to
+    /// [`crate::geometry::generators::build_periodic_toroidal_delaunay2`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidGenerationParameters`] if the profile has fewer
+    /// than three slices, any slice has fewer than three vertices, or derived
+    /// counts overflow.
+    /// Returns [`CdtError::DelaunayGenerationFailed`] if coordinate storage cannot
+    /// be reserved, if the periodic Delaunay constructor rejects the profiled point
+    /// data, or if the resulting vertex or face counts do not match the requested
+    /// profile. Returns [`CdtError::DelaunayValidationFailed`] if the constructed
+    /// backend fails the Level 1-4 Delaunay validator. Returns
+    /// [`CdtError::TopologyMismatch`], [`CdtError::Foliation`],
+    /// [`CdtError::CausalityViolation`], or [`CdtError::ValidationFailed`] if the
+    /// constructed mesh violates CDT invariants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_toroidal_cdt_profile(&[3, 4, 5, 4])?;
+    ///     assert_eq!(tri.slice_sizes(), &[3, 4, 5, 4]);
+    ///     assert_eq!(tri.time_slices(), 4);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn from_toroidal_cdt_profile(volume_profile: &[u32]) -> CdtResult<Self> {
+        let (total_vertices, num_slices) =
+            validate_spatial_profile(volume_profile, 3, 3, "toroidal topology")?;
+        let total_simplices =
+            total_vertices
+                .checked_mul(2)
+                .ok_or_else(|| CdtError::InvalidGenerationParameters {
+                    issue: GenerationParameterIssue::SimplexCountOverflow,
+                    provided_value: format!("2 × {total_vertices}"),
+                    expected_range: "product ≤ u32::MAX".to_string(),
+                })?;
+        let expected_vertices = usize::try_from(total_vertices).map_err(|err| {
+            toroidal_generation_error(total_vertices, (0.0, 0.0), err.to_string())
+        })?;
+        let expected_faces = usize::try_from(total_simplices).map_err(|err| {
+            toroidal_generation_error(total_vertices, (0.0, 0.0), err.to_string())
+        })?;
+        let max_slice_volume = volume_profile.iter().copied().max().unwrap_or(1);
+        let domain = [f64::from(max_slice_volume), f64::from(num_slices)];
+        let coordinate_range = (0.0, domain[0].max(domain[1]) - 1.0);
+        let generation_failed = |underlying_error: String| {
+            toroidal_generation_error(total_vertices, coordinate_range, underlying_error)
+        };
+
+        let vertex_specs = toroidal_profile_vertices(volume_profile, total_vertices)?;
+        let dt = build_periodic_toroidal_delaunay2(&vertex_specs, domain)
+            .map_err(|e| remap_toroidal_generation_error(e, total_vertices))?;
+        let backend = validated_backend(dt)?;
+        validate_toroidal_counts(
+            &backend,
+            total_vertices,
+            expected_vertices,
+            expected_faces,
+            coordinate_range,
+        )?;
+
+        let slice_sizes = profile_slice_sizes(volume_profile, generation_failed)?;
+        let foliation =
+            Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
+
+        let mut tri = Self::with_topology(backend, num_slices, 2, CdtTopology::Toroidal)?;
+        tri.foliation = Some(foliation);
+        tri.mark_foliation_synchronized();
+        tri.validate_initial_delaunay_cdt()?;
+
+        Ok(tri)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cdt::foliation::{EdgeType, FoliationError, SimplexType};
-    use crate::errors::{CdtValidationCheck, CdtValidationFailure};
+    use crate::errors::{CdtValidationCheck, CdtValidationFailure, TriangulationMetadataField};
     use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
 
     /// Builds a minimal labeled Delaunay backend for constructor tests.
@@ -755,7 +1065,7 @@ mod tests {
     #[test]
     fn test_remap_toroidal_generation_error_preserves_other_errors() {
         let original = CdtError::InvalidGenerationParameters {
-            issue: "bad".to_string(),
+            issue: GenerationParameterIssue::InvalidCoordinateRange,
             provided_value: "x".to_string(),
             expected_range: "y".to_string(),
         };
@@ -894,7 +1204,7 @@ mod tests {
                 ref provided_value,
                 ref expected,
                 ..
-            }) if field == "timeslices" && provided_value == "0" && expected == "≥ 1"
+            }) if *field == TriangulationMetadataField::Timeslices && provided_value == "0" && expected == "≥ 1"
         ));
     }
 
@@ -911,7 +1221,7 @@ mod tests {
                     provided_value,
                     ..
                 }) => {
-                    assert_eq!(issue, "Insufficient vertex count");
+                    assert_eq!(issue, GenerationParameterIssue::InsufficientVertexCount);
                     assert_eq!(provided_value, count.to_string());
                 }
                 other => panic!(
@@ -932,7 +1242,7 @@ mod tests {
                 provided_value,
                 ..
             }) => {
-                assert_eq!(issue, "Insufficient vertex count");
+                assert_eq!(issue, GenerationParameterIssue::InsufficientVertexCount);
                 assert_eq!(provided_value, "2");
             }
             other => panic!("Expected InvalidGenerationParameters, got {other:?}"),
@@ -978,7 +1288,7 @@ mod tests {
                 ref provided_value,
                 ref expected,
                 ..
-            }) if field == "timeslices" && provided_value == "0" && expected == "≥ 1"
+            }) if *field == TriangulationMetadataField::Timeslices && provided_value == "0" && expected == "≥ 1"
         ));
     }
 
@@ -1090,7 +1400,7 @@ mod tests {
                 ref issue,
                 ref provided_value,
                 ref expected_range,
-            }) if issue == "Insufficient vertices per slice"
+            }) if *issue == GenerationParameterIssue::InsufficientVerticesPerSlice
                 && provided_value == "3"
                 && expected_range == "≥ 4"
         ));
@@ -1102,7 +1412,7 @@ mod tests {
                 ref issue,
                 ref provided_value,
                 ref expected_range,
-            }) if issue == "Insufficient number of time slices"
+            }) if *issue == GenerationParameterIssue::InsufficientNumberOfTimeSlices
                 && provided_value == "1"
                 && expected_range == "≥ 2"
         ));
@@ -1118,7 +1428,7 @@ mod tests {
                 ref issue,
                 ref provided_value,
                 ref expected_range,
-            }) if issue == "Simplex count overflow"
+            }) if *issue == GenerationParameterIssue::SimplexCountOverflow
                 && provided_value == "2 × 4294836224"
                 && expected_range == "product ≤ u32::MAX"
         ));
@@ -1129,11 +1439,57 @@ mod tests {
         let tri = CdtTriangulation::from_cdt_strip(4, 2).expect("Delaunay strip should build");
         assert_eq!(tri.vertex_count(), 8);
         assert_eq!(tri.face_count(), 6);
-        assert!(tri.geometry().validate_delaunay().is_ok());
         assert!(tri.validate_topology().is_ok());
         assert!(tri.validate_foliation().is_ok());
         assert!(tri.validate_causality_delaunay().is_ok());
         assert!(tri.validate_simplex_classification().is_ok());
+    }
+
+    #[test]
+    fn test_from_cdt_strip_profile_builds_nonuniform_valid_mesh() {
+        let tri = CdtTriangulation::from_cdt_strip_profile(&[4, 6, 5])
+            .expect("nonuniform Delaunay strip should build");
+
+        assert_eq!(tri.vertex_count(), 15);
+        assert!(tri.face_count() > 0);
+        assert_eq!(tri.slice_sizes(), &[4, 6, 5]);
+        assert_eq!(tri.volume_profile().len(), 3);
+        assert!(tri.validate_topology().is_ok());
+        assert!(tri.validate_foliation().is_ok());
+        assert!(tri.validate_causality_delaunay().is_ok());
+        assert!(tri.validate_simplex_classification().is_ok());
+    }
+
+    #[test]
+    fn test_from_cdt_strip_profile_rejects_invalid_profile() {
+        let result = CdtTriangulation::from_cdt_strip_profile(&[4, 3, 5]);
+
+        assert!(matches!(
+            result,
+            Err(CdtError::InvalidGenerationParameters {
+                ref issue,
+                ref provided_value,
+                ref expected_range,
+            }) if *issue == GenerationParameterIssue::InsufficientVerticesInVolumeProfileSlice
+                && provided_value == "slice 1 has 3"
+                && expected_range == "each slice ≥ 4 for open-boundary topology"
+        ));
+    }
+
+    #[test]
+    fn test_from_cdt_strip_profile_rejects_too_few_slices() {
+        let result = CdtTriangulation::from_cdt_strip_profile(&[4]);
+
+        assert!(matches!(
+            result,
+            Err(CdtError::InvalidGenerationParameters {
+                ref issue,
+                ref provided_value,
+                ref expected_range,
+            }) if *issue == GenerationParameterIssue::InsufficientNumberOfTimeSlices
+                && provided_value == "1"
+                && expected_range == "≥ 2 for open-boundary topology"
+        ));
     }
 
     #[test]
@@ -1209,6 +1565,51 @@ mod tests {
     }
 
     #[test]
+    fn test_from_toroidal_cdt_profile_builds_nonuniform_valid_mesh() {
+        let tri = CdtTriangulation::from_toroidal_cdt_profile(&[3, 4, 5, 4])
+            .expect("nonuniform toroidal CDT should build");
+
+        assert_eq!(tri.vertex_count(), 16);
+        assert_eq!(tri.face_count(), 32);
+        assert_eq!(tri.edge_count(), 48);
+        assert_eq!(tri.slice_sizes(), &[3, 4, 5, 4]);
+        assert_eq!(tri.geometry().euler_characteristic(), 0);
+        assert!(matches!(tri.metadata().topology, CdtTopology::Toroidal));
+        assert!(tri.geometry().validate_delaunay().is_ok());
+        assert!(tri.validate_topology().is_ok());
+        assert!(tri.validate_foliation().is_ok());
+        assert!(tri.validate_causality().is_ok());
+        assert!(tri.validate_simplex_classification().is_ok());
+    }
+
+    #[test]
+    fn test_from_toroidal_cdt_profile_rejects_invalid_profile() {
+        let few_slices = CdtTriangulation::from_toroidal_cdt_profile(&[3, 4]);
+        assert!(matches!(
+            few_slices,
+            Err(CdtError::InvalidGenerationParameters {
+                ref issue,
+                ref provided_value,
+                ref expected_range,
+            }) if *issue == GenerationParameterIssue::InsufficientNumberOfTimeSlices
+                && provided_value == "2"
+                && expected_range == "≥ 3 for toroidal topology"
+        ));
+
+        let small_slice = CdtTriangulation::from_toroidal_cdt_profile(&[3, 2, 3]);
+        assert!(matches!(
+            small_slice,
+            Err(CdtError::InvalidGenerationParameters {
+                ref issue,
+                ref provided_value,
+                ref expected_range,
+            }) if *issue == GenerationParameterIssue::InsufficientVerticesInVolumeProfileSlice
+                && provided_value == "slice 1 has 2"
+                && expected_range == "each slice ≥ 3 for toroidal topology"
+        ));
+    }
+
+    #[test]
     fn test_from_toroidal_cdt_initializes_delaunay_pl_manifold() {
         let tri = CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
         assert_eq!(tri.vertex_count(), 12);
@@ -1243,7 +1644,7 @@ mod tests {
                 ref issue,
                 ref provided_value,
                 ref expected_range,
-            }) if issue == "Insufficient vertices per slice"
+            }) if *issue == GenerationParameterIssue::InsufficientVerticesPerSlice
                 && provided_value == "2"
                 && expected_range == "≥ 3"
         ));
@@ -1256,7 +1657,7 @@ mod tests {
                     ref issue,
                     ref provided_value,
                     ref expected_range,
-                }) if issue == "Insufficient number of time slices"
+                }) if *issue == GenerationParameterIssue::InsufficientNumberOfTimeSlices
                     && provided_value == &slices.to_string()
                     && expected_range == "≥ 3"
             ));
@@ -1273,7 +1674,7 @@ mod tests {
                 ref issue,
                 ref provided_value,
                 ref expected_range,
-            }) if issue == "Vertex count overflow"
+            }) if *issue == GenerationParameterIssue::VertexCountOverflow
                 && provided_value == "4294967295 × 3"
                 && expected_range == "product ≤ u32::MAX"
         ));

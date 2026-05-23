@@ -194,8 +194,12 @@ through to upstream `delaunay::` APIs directly.
   wrapper methods
 - `from_cdt_strip(vertices_per_slice, num_slices)` — Delaunay-built open-boundary 1+1 CDT strip with strict Up/Down simplex classification and upstream Level
   1–4 Delaunay validation before wrapping
+- `from_cdt_strip_profile(volume_profile)` — open-boundary 1+1 CDT strip from explicit nonuniform per-slice vertex counts; builds labeled point data and
+  delegates triangulation to the Delaunay constructor before strict initial validation
 - `from_toroidal_cdt(vertices_per_slice, num_slices)` — periodic Delaunay S¹×S¹ toroidal CDT (χ = 0) with upstream Level 1–4 validation before wrapping;
   requires `vertices_per_slice ≥ 3` and `num_slices ≥ 3`
+- `from_toroidal_cdt_profile(volume_profile)` — periodic S¹×S¹ toroidal CDT from explicit per-slice vertex counts, preserving closed spatial slices and
+  periodic time
 - `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`
 - Validation: constructors require upstream Delaunay Level 1–4 validation for initial meshes; `validate()` is the post-move/final-state contract and requires
@@ -215,16 +219,16 @@ The implementation is split into child modules under `src/cdt/triangulation/`:
 - `OpenBoundary` (default) — finite strip with boundary, χ ∈ {1, 2}
 - `Toroidal` — periodic in space and time, S¹×S¹, χ = 0
 - Wired through `CdtConfig.topology`, `CdtConfigOverrides.topology`, the CLI `--topology` flag, and `CdtMetadata.topology`
-- `run_simulation()` dispatches on topology: `Toroidal` → `from_toroidal_cdt`, `OpenBoundary` → `from_cdt_strip`; `vertices` is the total vertex count and must
-  divide evenly across `timeslices`
+- `run_simulation()` dispatches on topology and profile mode: regular `Toroidal` → `from_toroidal_cdt`, regular `OpenBoundary` → `from_cdt_strip`, and explicit
+  `CdtConfig.volume_profile` → the matching profile constructor; `vertices` is always the total vertex count
 
 ### `cdt/metropolis.rs` — Metropolis move ordering
 
-`MetropolisAlgorithm::run()` proposes a move type, plans a concrete local transition on a cloned triangulation, computes `ΔS` and the forward/reverse
-Metropolis-Hastings site-count ratio, accepts or rejects the concrete proposal, and only replaces the live triangulation after acceptance. Planning failures are
-rolled back inside the move kernels; retry exhaustion is recorded as a rejection, while hard backend failures remain structured errors. Toroidal move
-finalization rejects and rolls back candidate sites that would violate χ = 0 or the closed-S¹ per-slice foliation invariant. See `docs/metropolis.md` for the
-detailed ordering.
+`MetropolisAlgorithm::run()` proposes a move type, samples an explicit local proposal site from the same universe used for proposal counts, plans that site on a
+cloned triangulation, computes `ΔS` and the forward/reverse Metropolis-Hastings site-count ratio, accepts or rejects the concrete proposal, and only replaces
+the live triangulation after acceptance. Ordinary causal, geometric, and backend edit failures are self-loop proposal outcomes recorded in
+`ProposalStatistics`; hard backend failures remain structured errors. Toroidal move finalization rejects and rolls back candidate sites that would violate χ =
+0 or the closed-S¹ per-slice foliation invariant. See `docs/metropolis.md` for the detailed ordering and detailed-balance contract.
 
 ### `cdt/results.rs` — Simulation outputs
 

@@ -12,6 +12,8 @@
 //! 4. Ten-sweep random-move workloads, where each sweep attempts one move per
 //!    current simplex.
 //! 5. Short Metropolis runs sized as ten initial sweeps.
+//! 6. Public proposal-site iteration paths used by move attempts and one-step
+//!    Metropolis proposal planning.
 
 use causal_triangulations::prelude::action::ActionConfig;
 use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveStatistics, MoveType};
@@ -99,6 +101,27 @@ const SWEEP_FIXTURES: &[CdtFixture] = &[
     },
 ];
 
+const PROPOSAL_FIXTURES: &[CdtFixture] = &[
+    CdtFixture {
+        name: "open_strip_medium",
+        topology: TopologyFixture::OpenStrip,
+        vertices_per_slice: 20,
+        time_slices: 10,
+    },
+    CdtFixture {
+        name: "toroidal_medium",
+        topology: TopologyFixture::Toroidal,
+        vertices_per_slice: 12,
+        time_slices: 10,
+    },
+    CdtFixture {
+        name: "toroidal_probe",
+        topology: TopologyFixture::Toroidal,
+        vertices_per_slice: 32,
+        time_slices: 16,
+    },
+];
+
 impl CdtFixture {
     /// Builds the requested CDT topology for a benchmark fixture.
     fn build(self) -> CdtTriangulation2D {
@@ -114,6 +137,21 @@ impl CdtFixture {
     }
 }
 
+/// Attempts one selected move type through the public move API.
+fn attempt_selected_move(
+    ergodics: &mut ErgodicsSystem,
+    move_type: MoveType,
+    triangulation: &mut CdtTriangulation2D,
+) {
+    let result = match move_type {
+        MoveType::Move22 => ergodics.attempt_22_move(triangulation),
+        MoveType::Move13Add => ergodics.attempt_13_move(triangulation),
+        MoveType::Move31Remove => ergodics.attempt_31_move(triangulation),
+        MoveType::EdgeFlip => ergodics.attempt_edge_flip(triangulation),
+    };
+    black_box(result);
+}
+
 /// Materializes a fixture once so benchmarks can use stable size metadata.
 fn prepare_fixture(fixture: CdtFixture) -> PreparedFixture {
     let triangulation = fixture.build();
@@ -125,6 +163,15 @@ fn prepare_fixture(fixture: CdtFixture) -> PreparedFixture {
         vertices,
         simplices,
     }
+}
+
+/// Runs one Metropolis proposal step through the public simulation driver.
+fn run_single_metropolis_proposal(triangulation: CdtTriangulation2D) {
+    let config = MetropolisConfig::new(1.0, 1, 0, 1).with_seed(BENCH_SEED);
+    let results = MetropolisAlgorithm::new(config, ActionConfig::default())
+        .run(triangulation)
+        .expect("single-step Metropolis proposal workload should run");
+    black_box(results.proposal_stats());
 }
 
 /// Converts Criterion throughput element counts without silently truncating.
@@ -249,14 +296,71 @@ fn bench_cdt_move_attempts(c: &mut Criterion) {
                         )
                     },
                     |(mut ergodics, mut triangulation)| {
-                        let result = match move_type {
-                            MoveType::Move22 => ergodics.attempt_22_move(&mut triangulation),
-                            MoveType::Move13Add => ergodics.attempt_13_move(&mut triangulation),
-                            MoveType::Move31Remove => ergodics.attempt_31_move(&mut triangulation),
-                            MoveType::EdgeFlip => ergodics.attempt_edge_flip(&mut triangulation),
-                        };
-                        black_box(result)
+                        attempt_selected_move(&mut ergodics, move_type, &mut triangulation);
                     },
+                    BatchSize::LargeInput,
+                );
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmarks proposal-site iteration through public move-attempt APIs.
+fn bench_cdt_proposal_site_move_attempts(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cdt_proposal_site_move_attempts_2d");
+
+    for &fixture in PROPOSAL_FIXTURES {
+        let prepared = prepare_fixture(fixture);
+        group.throughput(Throughput::Elements(usize_to_u64(prepared.simplices)));
+        for move_type in [
+            MoveType::Move22,
+            MoveType::Move13Add,
+            MoveType::Move31Remove,
+            MoveType::EdgeFlip,
+        ] {
+            group.bench_with_input(
+                BenchmarkId::new(
+                    format!("{}_{move_type:?}", prepared.fixture.name),
+                    prepared.simplices,
+                ),
+                &move_type,
+                |b, &move_type| {
+                    b.iter_batched(
+                        || {
+                            (
+                                ErgodicsSystem::with_seed(BENCH_SEED),
+                                prepared.triangulation.clone(),
+                            )
+                        },
+                        |(mut ergodics, mut triangulation)| {
+                            attempt_selected_move(&mut ergodics, move_type, &mut triangulation);
+                        },
+                        BatchSize::LargeInput,
+                    );
+                },
+            );
+        }
+    }
+
+    group.finish();
+}
+
+/// Benchmarks one public Metropolis proposal step, including cloned planning and reverse counts.
+fn bench_cdt_single_metropolis_proposal(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cdt_single_metropolis_proposal_2d");
+
+    for &fixture in PROPOSAL_FIXTURES {
+        let prepared = prepare_fixture(fixture);
+        group.throughput(Throughput::Elements(usize_to_u64(prepared.simplices)));
+        group.bench_with_input(
+            BenchmarkId::new(prepared.fixture.name, prepared.simplices),
+            &prepared,
+            |b, prepared| {
+                b.iter_batched(
+                    || prepared.triangulation.clone(),
+                    run_single_metropolis_proposal,
                     BatchSize::LargeInput,
                 );
             },
@@ -332,6 +436,8 @@ criterion_group!(
         bench_cdt_generation,
         bench_cdt_validation,
         bench_cdt_move_attempts,
+        bench_cdt_proposal_site_move_attempts,
+        bench_cdt_single_metropolis_proposal,
         bench_cdt_random_move_sweeps,
         bench_cdt_metropolis_ten_sweeps
 );

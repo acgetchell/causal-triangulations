@@ -7,6 +7,7 @@ use crate::cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType, cl
 use crate::config::CdtTopology;
 use crate::errors::{
     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
+    GenerationParameterIssue,
 };
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
@@ -300,7 +301,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     pub fn assign_foliation_by_y(&mut self, num_slices: u32) -> CdtResult<()> {
         if num_slices == 0 {
             return Err(CdtError::InvalidGenerationParameters {
-                issue: "Number of slices must be positive".to_string(),
+                issue: GenerationParameterIssue::NonPositiveSliceCount,
                 provided_value: "0".to_string(),
                 expected_range: "≥ 1".to_string(),
             });
@@ -1024,6 +1025,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::TriangulationMetadataField;
     use crate::geometry::generators::build_delaunay2_with_data;
     use std::thread;
     use std::time::Duration;
@@ -1238,7 +1240,7 @@ mod tests {
                 topology,
                 ref provided_value,
                 ref expected,
-            }) if field == "timeslices"
+            }) if *field == TriangulationMetadataField::Timeslices
                 && topology == CdtTopology::Toroidal
                 && provided_value == "2"
                 && expected == "≥ 3"

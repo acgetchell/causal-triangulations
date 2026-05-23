@@ -7,7 +7,7 @@
 //! that directly imports from the `delaunay` crate (see
 //! `docs/dev/rust.md § Geometry Backend Isolation`).
 
-use crate::errors::{CdtError, CdtResult};
+use crate::errors::{CdtError, CdtResult, GenerationParameterIssue};
 pub use delaunay::TopologyGuarantee;
 use delaunay::geometry::kernel::AdaptiveKernel;
 use delaunay::geometry::point::Point;
@@ -36,12 +36,12 @@ fn generate_delaunay2_vertex_build_error(
 
 /// Builds a consistent typed validation error for generator argument checks.
 fn invalid_generation_parameters(
-    issue: &str,
+    issue: GenerationParameterIssue,
     provided_value: String,
     expected_range: &str,
 ) -> CdtError {
     CdtError::InvalidGenerationParameters {
-        issue: issue.to_string(),
+        issue,
         provided_value,
         expected_range: expected_range.to_string(),
     }
@@ -54,7 +54,7 @@ fn validate_coordinate_range(coordinate_range: (f64, f64)) -> CdtResult<()> {
         Ok(())
     } else {
         Err(invalid_generation_parameters(
-            "Invalid coordinate range",
+            GenerationParameterIssue::InvalidCoordinateRange,
             format!("[{min}, {max}]"),
             "finite min < max",
         ))
@@ -67,7 +67,7 @@ fn validate_explicit_coordinates(coords_with_data: &[([f64; 2], u32)]) -> CdtRes
         for (axis, value) in coord.iter().copied().enumerate() {
             if !value.is_finite() {
                 return Err(invalid_generation_parameters(
-                    "Non-finite vertex coordinate",
+                    GenerationParameterIssue::NonFiniteVertexCoordinate,
                     format!("vertex {vertex_index} axis {axis} = {value}"),
                     "finite coordinate values",
                 ));
@@ -82,7 +82,7 @@ fn validate_toroidal_domain(domain: [f64; 2]) -> CdtResult<()> {
     for (axis, period) in domain.into_iter().enumerate() {
         if !period.is_finite() || period <= 0.0 {
             return Err(invalid_generation_parameters(
-                "Invalid toroidal domain",
+                GenerationParameterIssue::InvalidToroidalDomain,
                 format!("axis {axis} period {period}"),
                 "finite and positive periods",
             ));
@@ -122,7 +122,7 @@ pub fn generate_delaunay2(
     // Validate parameters before attempting generation
     if number_of_vertices < 3 {
         return Err(invalid_generation_parameters(
-            "Insufficient vertex count",
+            GenerationParameterIssue::InsufficientVertexCount,
             number_of_vertices.to_string(),
             "≥ 3",
         ));
@@ -763,7 +763,7 @@ mod tests {
                         ref issue,
                         ref provided_value,
                         ref expected_range,
-                    }) if issue == "Invalid toroidal domain"
+                    }) if *issue == GenerationParameterIssue::InvalidToroidalDomain
                         && provided_value == expected_value
                         && expected_range == "finite and positive periods"
                 ),
@@ -788,7 +788,7 @@ mod tests {
                     ref issue,
                     ref provided_value,
                     ref expected_range,
-                }) if issue == "Non-finite vertex coordinate"
+                }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
                     && provided_value == "vertex 1 axis 1 = -inf"
                     && expected_range == "finite coordinate values"
             ),
@@ -853,7 +853,7 @@ mod tests {
                 provided_value,
                 expected_range,
             } => {
-                assert_eq!(issue, "Insufficient vertex count");
+                assert_eq!(issue, GenerationParameterIssue::InsufficientVertexCount);
                 assert_eq!(provided_value, "2");
                 assert_eq!(expected_range, "≥ 3");
             }
@@ -872,7 +872,7 @@ mod tests {
                 provided_value,
                 expected_range,
             } => {
-                assert_eq!(issue, "Invalid coordinate range");
+                assert_eq!(issue, GenerationParameterIssue::InvalidCoordinateRange);
                 assert_eq!(provided_value, "[10, 5]");
                 assert_eq!(expected_range, "finite min < max");
             }
@@ -887,7 +887,7 @@ mod tests {
 
         match result.unwrap_err() {
             CdtError::InvalidGenerationParameters { issue, .. } => {
-                assert_eq!(issue, "Invalid coordinate range");
+                assert_eq!(issue, GenerationParameterIssue::InvalidCoordinateRange);
             }
             _ => panic!("Expected InvalidGenerationParameters error"),
         }
@@ -904,7 +904,7 @@ mod tests {
                         ref issue,
                         ref expected_range,
                         ..
-                    }) if issue == "Invalid coordinate range"
+                    }) if *issue == GenerationParameterIssue::InvalidCoordinateRange
                         && expected_range == "finite min < max"
                 ),
                 "non-finite range {range:?} should be rejected, got {result:?}"
@@ -924,7 +924,7 @@ mod tests {
                     ref issue,
                     ref provided_value,
                     ref expected_range,
-                }) if issue == "Non-finite vertex coordinate"
+                }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
                     && provided_value == "vertex 1 axis 1 = NaN"
                     && expected_range == "finite coordinate values"
             ),
@@ -949,7 +949,7 @@ mod tests {
                     ref issue,
                     ref provided_value,
                     ref expected_range,
-                }) if issue == "Non-finite vertex coordinate"
+                }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
                     && provided_value == "vertex 2 axis 1 = -inf"
                     && expected_range == "finite coordinate values"
             ),
@@ -979,7 +979,7 @@ mod tests {
                     ref issue,
                     ref provided_value,
                     ref expected_range,
-                }) if issue == "Non-finite vertex coordinate"
+                }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
                     && provided_value == "vertex 1 axis 0 = inf"
                     && expected_range == "finite coordinate values"
             ),
@@ -1006,7 +1006,7 @@ mod tests {
                         ref issue,
                         ref provided_value,
                         ref expected_range,
-                    }) if issue == "Invalid toroidal domain"
+                    }) if *issue == GenerationParameterIssue::InvalidToroidalDomain
                         && provided_value == expected_value
                         && expected_range == "finite and positive periods"
                 ),
