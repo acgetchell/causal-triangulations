@@ -11,11 +11,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Implement 2D CDT ergodic moves [#55](https://github.com/acgetchell/causal-triangulations/pull/55)
 - Adopt delayed CDT proposals
+- Adopt checked Delaunay v0.7.7 APIs
+- Resolve periodic toroidal moves with Simplex APIs
+- Complete 1+1 toroidal CDT sampling
+- Add proposal-site accounting and profiled CDT starts
 - Harden foliation validation and unify backend payload APIs
+- Enforce CDT and backend invariants
+- Harden CDT telemetry and profiled initialization
+- Reject volume-profile override overflows
 - Align tooling and CDT error APIs
+- Align repository tooling with MCMC
 
 ### Merged Pull Requests
 
+- Replace Node formatters with Rust-native checks [#129](https://github.com/acgetchell/causal-triangulations/pull/129)
 - Add toroidal topology infrastructure [#61](https://github.com/acgetchell/causal-triangulations/pull/61)
 - Implement foliation for 1+1 CDT [#57](https://github.com/acgetchell/causal-triangulations/pull/57)
 - Harden foliation causality checks and backend data mutation [#57](https://github.com/acgetchell/causal-triangulations/pull/57)
@@ -31,7 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Include badges for the Crates.io version, download statistics, and
   Docs.rs documentation to improve project visibility and provide quick
   access to package metadata and API docs.
-
 - Migrate DelaunayBackend to upstream key-based handles [#54](https://github.com/acgetchell/causal-triangulations/pull/54)
   [`da3ba1d`](https://github.com/acgetchell/causal-triangulations/commit/da3ba1d48d17491b26c579cadf0818ec745ee3ea)
 
@@ -55,7 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Update and consolidate tests: 27 backend tests covering all query
     methods, invalid-handle error variants, dimension, Euler
     characteristic, face-neighbor symmetry, and thread safety
-
 - Integrate markov-chain-monte-carlo crate for Metropolis-Hastings
   [`33b6ae5`](https://github.com/acgetchell/causal-triangulations/commit/33b6ae50c8fa93b39833e4cd2b4d2f590b57ab1a)
 
@@ -104,7 +111,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - 50 new tests (7 foliation unit, 21 integration, 1 proptest, 11 util,
     1 error display, 9 pre-existing updated)
-
 - Store time labels as vertex data, mirroring CDT++ vertex-&gt;info()
   [`1817018`](https://github.com/acgetchell/causal-triangulations/commit/18170189f1899aba1893077f5df8f882a5ad8cdf)
 
@@ -150,7 +156,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   capture the initial state at step 0, refines measurement boundary
   validation to prevent overflows, and improves the reliability of edge
   endpoint resolution for hand-built geometries.
-
 - Add toroidal topology infrastructure [#61](https://github.com/acgetchell/causal-triangulations/pull/61)
   [`c0972a2`](https://github.com/acgetchell/causal-triangulations/commit/c0972a2f986153f9c4c9472d90422e70f41d1ede)
 
@@ -169,7 +174,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Update delaunay to 0.7.5, markov-chain-monte-carlo to 0.2.0
   - Migrate Chain field access to accessor methods (state(), log_prob(),
     into_state())
-
 - Complete toroidal CDT generation with topology-aware validation
   [`8d5c6bf`](https://github.com/acgetchell/causal-triangulations/commit/8d5c6bf3992cfe4135fef6a5e2a78e05a7dde63b)
 - [**breaking**] Implement 2D CDT ergodic moves [#55](https://github.com/acgetchell/causal-triangulations/pull/55)
@@ -193,6 +197,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Update `markov-chain-monte-carlo` to 0.3.0 and replace the legacy mutation-first CDT proposal adapter with delayed-commit planning.
   - Treat accepted moves that cannot find a realizable local site as ordinary proposal rejections while preserving hard backend failures as typed errors.
   - Add public delayed-proposal telemetry and error types, deterministic Metropolis benchmarking, stricter rustdoc link checks, and tolerant float assertions.
+- Implement explicit CDT strip construction [`ed4b7e6`](https://github.com/acgetchell/causal-triangulations/commit/ed4b7e6c0f7a5a17a07706467b683dc362a5f625)
+
+  - Replace the placeholder strip constructor with deterministic layered connectivity, direct time labels, overflow checks, and strict CDT validation.
+  - Persist Up/Down cell classifications for explicit strip and toroidal constructors while preserving backend payloads on mutation failures.
+  - Update foliation documentation for explicit open-boundary strips and toroidal meshes.
+  - Tighten benchmark tooling diagnostics and Python exception boundaries so stdout remains data-only and broad support-script catches stay blocked.
+- Feat!(cdt): add dimensional observables [`bf3ffb1`](https://github.com/acgetchell/causal-triangulations/commit/bf3ffb146cf511873c7f2107ebc7113f6e5a0218)
+- Add simulation output and resumable checkpoints
+  [`99a7ba9`](https://github.com/acgetchell/causal-triangulations/commit/99a7ba93cfff7289ae10f4f7a7addb89a15266db)
+
+  - Add CSV measurement and JSON summary output paths for configured simulation runs.
+  - Add serde-backed CDT triangulation and MCMC checkpoints with validated resume state, preserved RNG streams, and typed checkpoint errors.
+  - Add an output-and-checkpoint example with semantic example validation through `just examples-validate`.
+  - Document output files, resumable checkpoints, example validation, and Rust review guidance updates.
+- [**breaking**] Adopt checked Delaunay v0.7.7 APIs
+  [`ad0d31a`](https://github.com/acgetchell/causal-triangulations/commit/ad0d31a874efd82e9ea2f34f518ae4c1875af37e)
+
+  - Upgrade to delaunay 0.7.7 and route backend construction through checked, topology-aware validation.
+  - Harden CDT initialization, checkpoint restore, and mutation paths so invalid Delaunay state is rejected with typed errors.
+  - Replace public simulation result fields with constructors and accessors, and add typed output/checkpoint/backend operation categories.
+  - Move mock backend fixtures into the testing prelude and widen Euler characteristic arithmetic to i128.
+- Feat!(tooling): add repository hygiene workflows
+  [`b775761`](https://github.com/acgetchell/causal-triangulations/commit/b775761965b50dfadecab3bd032c6eb51d3174ad)
+- [**breaking**] Resolve periodic toroidal moves with Simplex APIs
+  [`82717b9`](https://github.com/acgetchell/causal-triangulations/commit/82717b9665e17da25635751004a128c46141c54d)
+
+  - Update to delaunay 0.7.8 and use the upstream Simplex terminology across CDT geometry wrappers, foliation classification, docs, examples, and tests.
+  - Finalize accepted local moves through evolved-CDT validation so invalid toroidal mutations roll back while offset-aware periodic moves can apply.
+  - Harden release and benchmark support scripts around missing metadata, Windows path fallbacks, unsized benchmark sorting, and legacy baseline lookup.
+- [**breaking**] Complete 1+1 toroidal CDT sampling
+  [`c83b665`](https://github.com/acgetchell/causal-triangulations/commit/c83b6655c551589af0d73d1ac53b1365a1942031)
+
+  - Support toroidal volume-changing CDT moves that preserve χ = 0, foliation, and closed spatial slices.
+  - Plan concrete Metropolis-Hastings proposals before acceptance and weight forward/reverse local-site counts for detailed balance.
+  - Add hard-failure move telemetry and typed validation/application failure details for sampler diagnostics.
+  - Document binary usage, unfixed-volume ensemble behavior, large-scale debug workflows, and release-roadmap scope.
+- [**breaking**] Add proposal-site accounting and profiled CDT starts
+  [`1839f30`](https://github.com/acgetchell/causal-triangulations/commit/1839f30dbbea07813c231015a7ad1681301b2d4e)
+
+  - Add explicit spatial volume profiles for CLI/configuration, initial CDT construction, simulation output, and documentation.
+  - Plan Metropolis proposals through sampled local move sites and apply the Hastings correction from forward and reverse site counts.
+  - Add proposal-kernel telemetry with saturating counters for no-site outcomes, site rejections, Metropolis rejections, accepted transitions, and hard
+    failures.
+  - Replace stringly validation and history fields with typed error categories and move enums.
+  - Document detailed-balance semantics and add proposal-site benchmark coverage.
 
 ### Changed
 
@@ -249,6 +298,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     single-slice foliation, and larger grid scaling
 
   - Update docs/dev/rust.md with doctest and re-export guidance
+
 - Improve foliation robustness and add acausal edge classification
   [`1385793`](https://github.com/acgetchell/causal-triangulations/commit/1385793a88b72493b344f450d2ab6cc511644905)
 
@@ -313,6 +363,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Enhance causality validation in tests by using a foliated cylinder setup
   [`e61932f`](https://github.com/acgetchell/causal-triangulations/commit/e61932f4ffbc8fdf27d43e4b0bc84fb2d8f085ff)
+
 - Reformat vertex time label access in triangulation tests
   [`37ed0e9`](https://github.com/acgetchell/causal-triangulations/commit/37ed0e9903907e2605eb3d2f8b6fd6af7abd3d48)
 
@@ -349,6 +400,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - replace legacy payload mutation/read paths with key-based backend helpers across triangulation logic
   - centralize metadata mutation and cache invalidation bookkeeping behind dedicated update helpers
   - make the provisional point-set strip constructor internal and align strip property tests with the explicit-strip placeholder path
+
 - Track foliation synchronization and harden time-slice assignment
   [`e1c3b8a`](https://github.com/acgetchell/causal-triangulations/commit/e1c3b8aa6b7afb10b1f177b7a4a6e2977b44092e)
 
@@ -382,6 +434,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Import `rand::RngExt` trait for random number utilities
   [`ea094f2`](https://github.com/acgetchell/causal-triangulations/commit/ea094f239f7e4cbb06c0bf3777eea465ad9dfd28)
 
+- Refactor!(cdt): remove mutable triangulation escape hatches
+  [`a289361`](https://github.com/acgetchell/causal-triangulations/commit/a289361abff0b4c70606c207f07542279e614c60)
+
+- Refactor!(cdt): split triangulation modules and harden invariants
+  [`aa08007`](https://github.com/acgetchell/causal-triangulations/commit/aa08007cdb662d9e8863c4954a9294501f7dee0b)
+
 ### Dependencies
 
 - Bump actions/cache from 5.0.1 to 5.0.4 [`063c3fc`](https://github.com/acgetchell/causal-triangulations/commit/063c3fc7601935b9399be2105e5359e1a39fade9)
@@ -409,6 +467,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump actions/upload-artifact from 7.0.0 to 7.0.1
   [`c0ec7f6`](https://github.com/acgetchell/causal-triangulations/commit/c0ec7f66bebffed177731f16a1362980a98e15f0)
 - Bump actions/cache from 5.0.4 to 5.0.5 [`74ff03a`](https://github.com/acgetchell/causal-triangulations/commit/74ff03a02a5d8d10a68846c92d1a2936512b8796)
+- Bump taiki-e/install-action from 2.75.24 to 2.77.1
+  [`8c5b755`](https://github.com/acgetchell/causal-triangulations/commit/8c5b7556dc41a49c5278abfb6fc5060d8da5a5b2)
+- Bump taiki-e/install-action from 2.77.1 to 2.77.6
+  [`718681b`](https://github.com/acgetchell/causal-triangulations/commit/718681b74f8da79895e8bad94cb0f5cad7707d50)
+- Bump actions-rust-lang/setup-rust-toolchain [`effbbd4`](https://github.com/acgetchell/causal-triangulations/commit/effbbd42c174396063c3ec5f72a8565d22f7cf62)
+- Bump assert_cmd in the dependencies group [`035bfcc`](https://github.com/acgetchell/causal-triangulations/commit/035bfcc63d3375ee09ed33185ec285e7f0f0dae5)
+- Bump urllib3 in the uv group across 1 directory
+  [`6d436aa`](https://github.com/acgetchell/causal-triangulations/commit/6d436aa50d86d7fe74caa0898765204aea45570f)
+- Bump idna in the uv group across 1 directory [`df3480f`](https://github.com/acgetchell/causal-triangulations/commit/df3480f961e06c566dade7a3850e88b8d26c73bd)
+- Bump taiki-e/install-action from 2.77.6 to 2.79.2
+  [`6f611ff`](https://github.com/acgetchell/causal-triangulations/commit/6f611ff1fd8fcc00ffe9a8bf1835da777893aa28)
+- Bump codecov/codecov-action from 6.0.0 to 6.0.1
+  [`3847062`](https://github.com/acgetchell/causal-triangulations/commit/38470624f992c3fca087228d663fd6dcf8af864d)
+- Bump serde_json [`1780261`](https://github.com/acgetchell/causal-triangulations/commit/1780261e6f13fc4f222f02ae220145cb0ca8c6a4)
+
+### Documentation
+
+- Clarify CDT-owned mutation boundaries [`60730b6`](https://github.com/acgetchell/causal-triangulations/commit/60730b6a3e6d3a1b88bb08fdd309fd0ac5c2c118)
+
+  - Describe foliation label writes through CDT-owned helper paths instead of backend mutation APIs.
+  - Document rollback boundaries for mutating ergodic move helpers.
+  - Cover legacy `std::f64` non-finite defaults in the Semgrep fixture.
+- Clarify geometry backend move responsibilities
+  [`6a0eb2b`](https://github.com/acgetchell/causal-triangulations/commit/6a0eb2b53494bc4bae594449f2f131e5a7e1930b)
+
+  - Document that src/geometry/ wraps upstream Delaunay operations through crate-owned traits.
+  - Spell out its conversion, validation, and error translation role between Delaunay and CDT geometry types.
 
 ### Fixed
 
@@ -439,7 +524,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generation error with the computed bounds of the input vertices. This
   improves diagnostic visibility for failed triangulation attempts by
   providing the actual spatial extent of the processed data.
-
 - Harden toroidal CDT validation and run_simulation semantics
   [`9240252`](https://github.com/acgetchell/causal-triangulations/commit/924025206f57276cb6879850a70a6a7181fe4854)
 
@@ -466,7 +550,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     both topologies. Toroidal branch now divides by timeslices to recover
     vertices_per_slice. Lib test asserts vertices=12, timeslices=3 yields
     a 12-vertex (not 36-vertex) toroidal triangulation.
-
 - Harden CDT invariants and repository rules [`800f2fb`](https://github.com/acgetchell/causal-triangulations/commit/800f2fb99f3be4aaf834b6334a620d677694dd83)
 
   - Centralize toroidal time-slice validation through the metadata write path so foliation assignment cannot bypass topology invariants.
@@ -530,6 +613,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Delaunay 2D backends to efficiently query adjacent facets for edges,
   improving performance and correctness of topological mutations.
   Refs: #55
+- Validate stored foliation after backend mutation
+  [`7040ff9`](https://github.com/acgetchell/causal-triangulations/commit/7040ff914c11d9e9d20be7ba904e79136bd5dba0)
+
+  - Keep live foliation queries and cell classification active when mutable backend access invalidates sync bookkeeping without removing the foliation.
+  - Clarify periodic and open-boundary CDT foliation docs, including `from_toroidal_cdt()` and `from_cdt_strip()` behavior.
+- Harden from_cdt_strip generation [`cdbf363`](https://github.com/acgetchell/causal-triangulations/commit/cdbf3632412bf3e3939be426a10eeb6640b6f248)
+
+  - Reserve explicit strip construction buffers fallibly and report CDT generation errors with strip context when allocation fails.
+  - Keep strip triangles in fixed-size cells until the backend boundary and reject generated backends whose vertex or face counts differ from the requested
+    strip.
+- Update simulation history modification timestamps
+  [`76cd209`](https://github.com/acgetchell/causal-triangulations/commit/76cd209888d19df2c983f5b5d9e05b7a8d94514e)
+
+  - Refresh `last_modified` when recording simulation events so metadata reflects history-only CDT updates.
+  - Warm triangulation caches explicitly in cache invalidation coverage.
+  - Measure metadata cache invalidation without including triangulation construction cost.
+- Preserve toroidal invariants during moves [`e4a398b`](https://github.com/acgetchell/causal-triangulations/commit/e4a398b9b3a261c8ddd3b9ef5eb4eff1183c1741)
+
+  - Reject toroidal candidate edits that would break chi = 0 or the closed-S1
+    foliation contract before recording move success.
+
+  - Document the toroidal Metropolis invariant contract and refresh stale testing,
+    move, foliation, and crate-level documentation.
+
+  - Replace the retired TODO document with a high-level roadmap for release
+    direction and follow-up work.
+- [**breaking**] Enforce CDT and backend invariants
+  [`3225000`](https://github.com/acgetchell/causal-triangulations/commit/32250003139e8bcbc95e3d88ad86fff58e1e9e7c)
+
+  - Build open-boundary simulations from foliated CDT strips and validate regular per-slice configuration before simulation startup.
+  - Validate topology in CdtTriangulation::with_topology before publishing wrapped backends.
+  - Make TriangulationMut::clear and reserve_capacity fallible so unsupported or failed backend operations cannot silently succeed.
+  - Add typed coordinate and reservation errors, and update docs and examples toward foliated CDT constructors.
+- Harden output and checkpoint serialization [`45bc9e0`](https://github.com/acgetchell/causal-triangulations/commit/45bc9e0f8f1d2bfd7d3310da97cf655da64d55b5)
+
+  - Reject invalid checkpoint state at serde boundaries, including empty foliation bookkeeping and invalid toroidal periods.
+  - Prevent CSV and JSON outputs from resolving to the same file before writing either artifact.
+  - Align serialized topology names with CLI vocabulary and report equilibrium-only average action in JSON summaries.
+  - Avoid preallocating simulation step history from the full configured step count.
+- Fix!(cdt): enforce Delaunay initialization invariants
+  [`55cdbd4`](https://github.com/acgetchell/causal-triangulations/commit/55cdbd4e1d8a01823a6677f08f01580228db785b)
+- Fix!(geometry): reject structurally invalid Delaunay edits
+  [`3f5a857`](https://github.com/acgetchell/causal-triangulations/commit/3f5a8579bbc0ac0a31045d9883da313ade470765)
+- Normalize CDT validation check tokens [`f7c3605`](https://github.com/acgetchell/causal-triangulations/commit/f7c3605934f76ef37907e3b626a6b6a0f9bcfb1c)
+
+  - Emit `ergodic_move_candidate_geometry` consistently with the other
+    `CdtValidationCheck` display identifiers.
+
+  - Keep validation regression coverage deterministic for structural Delaunay
+    rollback and checkpointed Metropolis runs.
+- Harden move failures and result deserialization
+  [`5685f1b`](https://github.com/acgetchell/causal-triangulations/commit/5685f1b0dca0deffbe1fcbaa1c17d339b9da656a)
+
+  - Propagate post-mutation CDT invariant failures as hard move errors instead of candidate rejections.
+  - Reject toroidal `(1,3)` subdivisions before mutation while preserving inverse `(3,1)` coverage.
+  - Validate simulation result deserialization through the checked constructor so invalid configs or final triangulations fail to load.
+  - Report inserted-vertex label failures with the matching backend mutation operation and document `adjacent_faces` query cost.
+- Harden benchmark and changelog tooling [`9100099`](https://github.com/acgetchell/causal-triangulations/commit/910009968bd3c82e7e3f7be6d6a0a19f5ed799d4)
+
+  - Prefer Criterion new estimates over stale base entries during fallback discovery so each benchmark id appears once.
+  - Restrict changelog release-heading preservation to SemVer headings so bracketed commit-body headings are demoted.
+  - Normalize non-Rust tooling to 160 columns with Markdown reflow and a raw line-length guard.
+  - Document GitHub releases with the tag string as the release title.
+- Harden toroidal proposal accounting [`9c6acb9`](https://github.com/acgetchell/causal-triangulations/commit/9c6acb9c806dabe40d2e9c2998d64f8512a58c76)
+
+  - Count only move sites that can commit through the deterministic backend mutation path, and carry the forward site count into Metropolis-Hastings
+    proposal-ratio scoring.
+  - Reject resumable checkpoints with nonzero hard-failure counters and preserve structured Metropolis move failure sources across error conversions.
+  - Document clone-plan-commit move ordering, unfixed-volume sampling, proposal-ratio correction, citation metadata, references, AI tooling, and release
+    validation recipes.
+- Correct 1+1 toroidal proposal accounting [`8f3f96b`](https://github.com/acgetchell/causal-triangulations/commit/8f3f96b5802c8205397c39008778dd27e4418a94)
+
+  - Count only backend-committable CDT move sites when computing Metropolis-Hastings proposal ratios.
+  - Keep toroidal grow and inverse local moves aligned with the same deterministic committability checks used by the mutating kernels.
+  - Document manual cosmological-constant tuning for v0.1.0 until automated lambda-scan utilities land.
+- [**breaking**] Harden CDT telemetry and profiled initialization
+  [`f7f7244`](https://github.com/acgetchell/causal-triangulations/commit/f7f7244549822bf71581bd4619a84ef2139fdd73)
+
+  - Preserve supplied proposal statistics when constructing simulation results.
+  - Leave Metropolis step delta_action unset for self-loop proposals without a concrete plan.
+  - Validate profiled open-boundary strip vertex and face counts before constructing foliation metadata.
+  - Recompute vertex and timeslice counts when merging volume-profile overrides.
+- [**breaking**] Reject volume-profile override overflows
+  [`c5a3206`](https://github.com/acgetchell/causal-triangulations/commit/c5a32069aba33ee0e6bb0404259131d46d60cf6d)
+
+  - Make CdtConfig::merge_with_override fail on volume-profile count overflow instead of clamping derived vertices and timeslices.
+  - Preserve profile-derived configuration invariants before post-merge validation runs.
+  - Track the v0.1.0 public doctest error-handling audit in the roadmap.
 
 ### Maintenance
 
@@ -544,15 +715,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - [Changelog](https://github.com/pytest-dev/pytest/blob/main/CHANGELOG.rst)
   - [Commits](https://github.com/pytest-dev/pytest/compare/9.0.2...9.0.3)
 
-  ---
+---
+
   updated-dependencies:
 
-  - dependency-name: pytest
-    dependency-version: 9.0.3
-    dependency-type: direct:development
-    dependency-group: uv
+- dependency-name: pytest
+  dependency-version: 9.0.3
+  dependency-type: direct:development
+  dependency-group: uv
   ...
-
 - [**breaking**] Align tooling and CDT error APIs
   [`bc3630b`](https://github.com/acgetchell/causal-triangulations/commit/bc3630b212ea55d0c6a52073cf6cfc3e85a61527)
 
@@ -583,6 +754,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Remove the Codacy coverage upload from the Codecov workflow while repo access is unavailable.
   - Handle git command timeouts in the release tag CLI error path.
   - Add regression coverage for release timeout handling and targeted geometry coverage gaps.
+- [**breaking**] Align repository tooling with MCMC
+  [`f7e6464`](https://github.com/acgetchell/causal-triangulations/commit/f7e6464eabac157b9378bd304462935b4221f014)
+
+  - Add explicit CodeQL, rustfmt, Python, Semgrep, and changelog tooling configuration adapted for CDT.
+  - Modernize changelog generation with the MCMC-style git-cliff template and no-temporary-tag release flow while preserving CDT release-series archiving.
+  - Harden Python support scripts against malformed benchmark, coverage, Criterion, and release-tag inputs.
+  - Update repository guidance, release docs, command docs, and tooling comparison notes for the new workflows.
+- Replace Node formatters with Rust-native checks [#129](https://github.com/acgetchell/causal-triangulations/pull/129)
+  [`40a8e74`](https://github.com/acgetchell/causal-triangulations/commit/40a8e744672b556a1a87fec312acca405eb11997)
+
+  - Move Markdown checks to rumdl and keep legacy documentation exclusions explicit.
+  - Limit dprint to YAML formatting with the pretty_yaml plugin and add check/fix aliases for TOML, YAML, and shell tooling.
+  - Enforce workflow action pinning, allowlisting, and version comments with Semgrep fixtures.
+  - Document the Rust-native tooling setup and check-before-fix workflow guidance.
+
+### Performance
+
+- Speed up Rust validation workflows [`25ada46`](https://github.com/acgetchell/causal-triangulations/commit/25ada46c8ccc18561f439959dc15e1e65b3b8fbf)
+
+  - Run runnable Rust unit, integration, CLI, slow, example, and release test recipes with cargo nextest while keeping rustdoc doctests on cargo test.
+  - Build release examples once and execute the compiled binaries for validated example runs.
+  - Install pinned cargo-nextest in CI and document the validation split.
+- Add CDT CI performance suite [`f449c0b`](https://github.com/acgetchell/causal-triangulations/commit/f449c0be8318b5b9a3a99bfa0b667f56d5d9ce0b)
+
+  - Add a perf-profile Criterion suite for CDT generation, validation, move attempts, ten-sweep random-move workloads, and short Metropolis runs.
+  - Wire benchmark analysis and baseline comparison tooling to use stable Criterion benchmark IDs from the new suite.
+  - Keep Linux, macOS, and Windows CI coverage while speeding Windows Rust validation with nextest.
+  - Align coverage and changelog tooling with the Delaunay refresh, including cargo-llvm-cov 0.8.7 and archive heading normalization.
 
 ## [0.0.1] - 2026-03-23
 
@@ -596,12 +795,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Updated the CI workflow to include macOS and Windows platforms in addition to Ubuntu.
   - Added a Kani CI workflow that runs on pull requests and pushes.
   - Updated cspell.json with additional words, including "acgetchell".
+
 - Add test kani formal verification [`84edb8c`](https://github.com/acgetchell/causal-triangulations/commit/84edb8c62a17eed6aa725dca26cf43b17b7d6408)
+
 - Add GitHub workflows for code coverage and Kani Rust Verifier
   [`eb07352`](https://github.com/acgetchell/causal-triangulations/commit/eb07352ade62f0a9212c6a307242958fbb472fba)
+
 - Add Codecov badge to README.md [`d7adf30`](https://github.com/acgetchell/causal-triangulations/commit/d7adf306080f0fac4a1ecabcd2e7cc78bf503df6)
+
 - Add verification module for Kani configuration
   [`39646c0`](https://github.com/acgetchell/causal-triangulations/commit/39646c09a8be071968cc32a89d88451efedc8090)
+
 - Add command line argument for number of vertices
   [`0b89a88`](https://github.com/acgetchell/causal-triangulations/commit/0b89a88dec5218f2c3ffb082dc2df7b6a8e65f32)
 
@@ -609,6 +813,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   minimum value allowed is 3.
 
 - Added useful and passing Kani verification [`a78c792`](https://github.com/acgetchell/causal-triangulations/commit/a78c79240114c3cb5f7dd5babf4295a30d7ae11c)
+
 - Add support for timeslices in CLI [`a5c704d`](https://github.com/acgetchell/causal-triangulations/commit/a5c704d248010194851cb6ba7ca2a8a16d541e8e)
 
   This commit adds support for specifying the number of timeslices in the command-line interface (CLI). The `Config` struct now includes a `timeslices` field,
@@ -622,7 +827,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add print statement to display the number of triangles
   [`de1ce9d`](https://github.com/acgetchell/causal-triangulations/commit/de1ce9db574e0308fc9aa7c23b74787af83d796f)
+
 - Add clippy and kani CI badges to README.md [`78246de`](https://github.com/acgetchell/causal-triangulations/commit/78246def33d843ebd036426873e944f9312a46ef)
+
 - Add generate_random_delaunay2 function [`c79e2b0`](https://github.com/acgetchell/causal-triangulations/commit/c79e2b0d5d0ba43638cb3dfac890ef4030cb5522)
 
   This commit adds the `generate_random_delaunay2` function to the codebase. This function generates a random Delaunay triangulation with a specified number of
@@ -634,9 +841,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The implementation of this function includes changes to multiple files, including `src/lib.rs` and `src/triangulation.rs`.
 
 - Add triangulation2 [`628aff1`](https://github.com/acgetchell/causal-triangulations/commit/628aff1121305e5bea34b044c0ea58dfb5047baa)
+
 - Add Security audit badge [`0cc6efd`](https://github.com/acgetchell/causal-triangulations/commit/0cc6efd41d83a8e3affc817bdc20e57f90b8f26f)
+
 - Add .codecov.yml and update dependencies in Cargo.lock
   [`a2aa78a`](https://github.com/acgetchell/causal-triangulations/commit/a2aa78af4416890f1058ada9e22aadcff6ca9cab)
+
 - Configures Dependabot for GitHub Actions and Cargo
   [`f072a82`](https://github.com/acgetchell/causal-triangulations/commit/f072a8283cc57039fa0afcfb1f0394a398fb9d94)
 
@@ -668,7 +878,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Basic command line argument handling via `clap`.
 
   Also includes basic utility functions and integrates `approx` for
-  testing.  The `justfile` is updated to run toml validation from the
+  testing. The `justfile` is updated to run toml validation from the
   `scripts` directory, and a python version constraint is set.
 
 - Configures logging and error handling [`45df1b3`](https://github.com/acgetchell/causal-triangulations/commit/45df1b341a1becde7c0dd2226389ea2f4c3f94c5)
@@ -698,7 +908,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Performance analysis scripts and workflow [`e1cf749`](https://github.com/acgetchell/causal-triangulations/commit/e1cf7491e860fa98f94de2ed8782dcebf6897f18)
 
   Adds Python scripts and Justfile recipes for performance
-  analysis, baselining, and reporting.  Includes CI integration
+  analysis, baselining, and reporting. Includes CI integration
   for performance monitoring and regression detection.
   Also adds property-based tests for core algorithms using proptest.
 
@@ -794,10 +1004,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Cargo.toml, removal of the old triangulation module, and
   implementation of a basic triangle generation function. Also adds a
   `.justfile` for development workflows and a `rust-toolchain.toml` for
-  consistent Rust versions.  This is an internal change to improve
+  consistent Rust versions. This is an internal change to improve
   maintainability and prepare for more advanced triangulation
   features.
-
 - Refactors triangulation and updates dependencies
   [`0601450`](https://github.com/acgetchell/causal-triangulations/commit/0601450132252508ddf3c6a4d3b698903eb5bdd9)
 
@@ -808,7 +1017,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Also, updates dependencies and fixes markdownlint settings.
   Adds words to the spell check dictionary.
   Removes the old triangulation files.
-
 - Refactors Kani workflow and updates dependencies
   [`aab33e2`](https://github.com/acgetchell/causal-triangulations/commit/aab33e259e60cd4cf219575c2c4343f0ac75a270)
 
@@ -820,7 +1028,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This is an internal change to improve workflow maintainability.
 
   Adds a TODO document to track improvements and technical debt.
-
 - Refactors triangulation and simulation architecture
   [`4d56e07`](https://github.com/acgetchell/causal-triangulations/commit/4d56e0734122c3dac90eb8f65637c386af116bbf)
 
@@ -833,7 +1040,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for a well-architected simulation. The changes include a new
   `moves.md` document detailing the new approach as well as
   integration tests.
-
 - Refactors triangulation backend with trait-based geometry
   [`c05f637`](https://github.com/acgetchell/causal-triangulations/commit/c05f6378f63176003a4644c50d27ac825b5e4be8)
 
@@ -850,7 +1056,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   No functional changes. Migration from legacy `CausalTriangulation`
   to new `CdtTriangulation` is recommended.
-
 - Improves test coverage and adds Kani proofs [`16aae91`](https://github.com/acgetchell/causal-triangulations/commit/16aae91b8c09630f7c3670c6b7d9e898c981517f)
 
   Enhances the testing framework by adding a new testing guide,
@@ -859,7 +1064,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   code, especially in critical areas like the Regge action
   calculation. Also updates `.gitignore` and cspell to accommodate
   new test-related files and terms. (Internal change)
-
 - 🔧 Build System: Integrates criterion for benchmarking
   [`9891b8b`](https://github.com/acgetchell/causal-triangulations/commit/9891b8bb423f4bafb25e3a65e076dabdda9e4266)
 - Refactors triangulation creation and simulation runs
@@ -872,7 +1076,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the simulation execution and reducing redundancy.
   These changes enhance the overall structure and maintainability
   of the CDT simulation framework.
-
 - Enhances testing and performance infrastructure
   [`fc513ac`](https://github.com/acgetchell/causal-triangulations/commit/fc513aca4bf90ca1f0c5d65a3d94141ee8604019)
 
@@ -882,7 +1085,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   adds coverage reporting, and includes new CI checks.
   Includes updates to `.gitignore` and `justfile`
   to support new tooling. (Internal change)
-
 - Improves clippy-sarif tooling installation and cache
   [`4c455c9`](https://github.com/acgetchell/causal-triangulations/commit/4c455c93980883fc24ad33301268673417462c36)
 
@@ -893,7 +1095,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   This change also updates dependencies in `Cargo.lock` and uses `dirs`
   crate instead of env vars for resolving paths, which is more reliable.
-
 - Pre-merge fixes [`0f6ec5a`](https://github.com/acgetchell/causal-triangulations/commit/0f6ec5ab36bd5b32b07eb37d35325f09eaddb59e)
 - Improves changelog generation and performance analysis
   [`8e04d89`](https://github.com/acgetchell/causal-triangulations/commit/8e04d89260bf9c26172423ad9c53e9fa016a2412)
@@ -904,7 +1105,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   infinite ratios and refining trend analysis, and adds project root argument.
   These changes enhance the robustness and clarity of both changelog
   creation and performance assessment processes.
-
 - Update tooling and backend compatibility [`5aa1ee8`](https://github.com/acgetchell/causal-triangulations/commit/5aa1ee82eebf822753a0668878f11c732407e77a)
 
   - Refactor delaunay backend for v0.5.1 API compatibility
@@ -932,21 +1132,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Merge remote-tracking branch 'origin/main' [`c36740a`](https://github.com/acgetchell/causal-triangulations/commit/c36740ae85b5a1ded6556d8a4ecdc6cfa1401552)
 - Update use of delaunay crate [`c4eef3c`](https://github.com/acgetchell/causal-triangulations/commit/c4eef3cb55537a4900fa56428ea456dbc276b895)
 
-  **Added**
+## Added
 
-  - Taplo-based TOML formatting/linting (`just toml-fmt`, `just toml-fmt-check`, `just toml-lint`) and wired into `lint-config`.
-  - Synced `scripts/` tooling and a full `scripts/tests/` suite (benchmarking, changelog utilities, hardware utils, etc.).
+- Taplo-based TOML formatting/linting (`just toml-fmt`, `just toml-fmt-check`, `just toml-lint`) and wired into `lint-config`.
+- Synced `scripts/` tooling and a full `scripts/tests/` suite (benchmarking, changelog utilities, hardware utils, etc.).
 
-  **Changed**
+## Changed
 
-  - GitHub Actions `.github/workflows/ci.yml` now installs required tools and runs `just ci` on Linux/macOS (Windows keeps cargo build/test).
-  - `just ci` now includes JSON validation and taplo TOML checks to keep CI coverage up to date.
-  - Updated docs/config (README/CONTRIBUTING/cspell/pyproject/toolchain) to reflect the current workflows and tooling.
+- GitHub Actions `.github/workflows/ci.yml` now installs required tools and runs `just ci` on Linux/macOS (Windows keeps cargo build/test).
+- `just ci` now includes JSON validation and taplo TOML checks to keep CI coverage up to date.
+- Updated docs/config (README/CONTRIBUTING/cspell/pyproject/toolchain) to reflect the current workflows and tooling.
 
-  **Fixed**
+## Fixed
 
-  - Resolved delaunay backend and util.rs mismatches and updated to current version of delaunay crate
-  - Resolved Ruff/test issues in synced Python tooling; improved shell/yaml CI robustness.
+- Resolved delaunay backend and util.rs mismatches and updated to current version of delaunay crate
+
+- Resolved Ruff/test issues in synced Python tooling; improved shell/yaml CI robustness.
+
 - Improve triangulation backend and tooling [`ee00f97`](https://github.com/acgetchell/causal-triangulations/commit/ee00f970642157f57c517be745a06e16115a6f1c)
 
   Refactors the triangulation backend for better
@@ -958,6 +1160,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Adding a taplo config to mirror Cargo TOML philosophy
   - Adding mypy to the python tooling
   - Adding more complete CI with fix and check commands
+
 - Improve changelog tooling and cache invalidation
   [`6563a84`](https://github.com/acgetchell/causal-triangulations/commit/6563a8444880a780a3e8cd6961f1276f648b0f9f)
 
@@ -965,14 +1168,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Add 125KB tag-message boundary coverage for changelog truncation
   - Add Delaunay edge-cache invalidation helper and clarify mutation/caching expectations
   - Tighten tooling/config (action-lint prep, remove ruff F841 ignore) and small script/test cleanups
+
 - Install actionlint and harden scripts [`aed2f48`](https://github.com/acgetchell/causal-triangulations/commit/aed2f48de0247f02da22385a154d8d772eb4238f)
 
-  - CI: install actionlint (v1.7.9) on Linux/macOS runners
-  - changelog-utils: centralize tag-annotation size limit and add repo URL fallback for CHANGELOG links
-  - changelog-utils: allow overriding breaking-change API tokens via env
-  - hardware-utils: refactor hardware comparison to satisfy Ruff complexity rules
-  - performance-analysis: use explicit UTF-8 for file I/O
-  - mypy: relax overrides for test modules; update affected tests/docs
+- CI: install actionlint (v1.7.9) on Linux/macOS runners
+
+- changelog-utils: centralize tag-annotation size limit and add repo URL fallback for CHANGELOG links
+
+- changelog-utils: allow overriding breaking-change API tokens via env
+
+- hardware-utils: refactor hardware comparison to satisfy Ruff complexity rules
+
+- performance-analysis: use explicit UTF-8 for file I/O
+
+- mypy: relax overrides for test modules; update affected tests/docs
+
 - Refactors performance analysis and adds type checking
   [`47a6f4d`](https://github.com/acgetchell/causal-triangulations/commit/47a6f4d6fcdb9a34fc82862381c1f2009bc91efe)
 
@@ -1047,6 +1257,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     script validation.
 
   - Simplifies and consolidates installation of necessary tools.
+
 - Improves CI/audit workflows and scripts [`7f7b32c`](https://github.com/acgetchell/causal-triangulations/commit/7f7b32cc77e01214bc421a5533511aba24bbe498)
 
   Updates CI and audit workflows for better reliability and tooling.
@@ -1100,6 +1311,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Rename crate to causal-triangulations and upgrade to delaunay v0.7.2
   [`cbc5935`](https://github.com/acgetchell/causal-triangulations/commit/cbc59350f028a50a2e48b271271b3575404a1b8a)
+
 - Remove Kani and update dev documentation [`a48c38a`](https://github.com/acgetchell/causal-triangulations/commit/a48c38afae9499bae184d0bee68b4a28075d5e8d)
 
   Remove Kani formal verification
@@ -1165,6 +1377,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - Update Cargo.lock from cargo update (51 packages)
   - Update justfile, Python scripts, and dev docs
+
 - Separate is_valid from is_delaunay, add test coverage, harden test guards
   [`c0c8236`](https://github.com/acgetchell/causal-triangulations/commit/c0c82364cf202792033d6e545148037c9ae8d0a3)
 
@@ -1257,7 +1470,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   conform to the Delaunay criteria, improving the robustness and
   correctness of the triangulation process. Adds tests for Delaunay
   validation.
-
 - Action linearity check overflow and Tds deprecation
   [`803ab24`](https://github.com/acgetchell/causal-triangulations/commit/803ab248babed019b6aa583100b20ca576a22774)
 
@@ -1269,7 +1481,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   guiding users towards the trait-based backend API for better
   abstraction and maintainability. The legacy code remains for
   backward compatibility but its usage is discouraged.
-
 - Validates config and handles CLI arg parsing errors
   [`cde9605`](https://github.com/acgetchell/causal-triangulations/commit/cde960597cd5a77f604f3847621da0e814c99a9e)
 
@@ -1281,7 +1492,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Also updates auto-changelog config and benchmark names for clarity.
   The CI workflow is modified to target the `examples/scripts` directory
   for linting and formatting checks.
-
 - Fix config.rs and other script errors [`916d103`](https://github.com/acgetchell/causal-triangulations/commit/916d1036db4d3d0293dbf09460ceeb2139557c3b)
 - Fix changelog_utils and performance_analysis and update CHANGELOG.md
   [`38162bd`](https://github.com/acgetchell/causal-triangulations/commit/38162bdef4deacba9e5213088e06c867c14dcc16)
@@ -1296,7 +1506,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directories and then filters to only include files under "new" or
   "base" directories. This ensures that the analyzer correctly
   parses the performance data from criterion benchmark results.
-
 - Handles exceptions when getting CPU info, Kani, CI hardening
   [`da415a5`](https://github.com/acgetchell/causal-triangulations/commit/da415a534742de9bf2a405926b37513188aaa289)
 
@@ -1321,7 +1530,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ignore unused functions [`6c43277`](https://github.com/acgetchell/causal-triangulations/commit/6c4327750792c9fe11efb01f26a156115c3460b9)
 
   These should get replaced by https://github.com/acgetchell/d-delaunay
-
 - Add missed unused function [`fe7670c`](https://github.com/acgetchell/causal-triangulations/commit/fe7670c5c403923b7cfcfce5b972edc0a228687c)
 - Update dependencies [`5ed0203`](https://github.com/acgetchell/causal-triangulations/commit/5ed02038c76311c7a1582549608373759c75dc4a)
 - Remove Node.js/markdownlint infrastructure and fix stale docs
@@ -1352,7 +1560,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - docs/testing.md: update test counts (155 unit, 8 integration, 10 CLI,
     408 Python); fix coverage reference (`just coverage` → HTML,
     `cargo tarpaulin --out Json` → JSON for `just coverage-report`)
-
 - Remove auto-changelog artifacts and restrict kani-full to manual
   [`6dc7269`](https://github.com/acgetchell/causal-triangulations/commit/6dc726979edeb200bb2000aea75f271effcab7c6)
 

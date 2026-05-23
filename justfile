@@ -162,7 +162,11 @@ changelog: _ensure-git-cliff _ensure-rumdl python-sync
             archive_files+=("$file")
         done < <(find docs/archive/changelog -name '*.md' -print0)
     fi
-    rumdl fmt --silent CHANGELOG.md "${archive_files[@]}"
+    if ((${#archive_files[@]})); then
+        rumdl fmt --silent CHANGELOG.md "${archive_files[@]}"
+    else
+        rumdl fmt --silent CHANGELOG.md
+    fi
 
 changelog-tag version:
     just tag {{version}}
@@ -179,7 +183,11 @@ changelog-unreleased version: _ensure-git-cliff _ensure-rumdl python-sync
             archive_files+=("$file")
         done < <(find docs/archive/changelog -name '*.md' -print0)
     fi
-    rumdl fmt --silent CHANGELOG.md "${archive_files[@]}"
+    if ((${#archive_files[@]})); then
+        rumdl fmt --silent CHANGELOG.md "${archive_files[@]}"
+    else
+        rumdl fmt --silent CHANGELOG.md
+    fi
 
 changelog-update: changelog
     @echo "📝 Changelog updated successfully!"

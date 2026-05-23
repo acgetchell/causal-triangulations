@@ -358,6 +358,92 @@ pub struct ErgodicsSystem {
     pub stats: MoveStatistics,
     /// Random number generator
     rng: Xoshiro256PlusPlus,
+    /// Authoritative cached local-site universes for proposal sampling.
+    #[serde(skip)]
+    site_cache: MoveSiteCache,
+}
+
+#[derive(Clone, Default)]
+struct MoveSiteCache {
+    move_22: MoveFamilySites,
+    move_13_add: MoveFamilySites,
+    move_31_remove: MoveFamilySites,
+    edge_flip: MoveFamilySites,
+}
+
+/// Cached sampleable sites for one move family on one triangulation instance version.
+///
+/// The instance identity prevents reusing sites across distinct triangulation
+/// values whose modification counters happen to match. The modification count
+/// keeps ordinary self-loop proposal outcomes cheap while accepted mutations
+/// force the next sample to rebuild stale local handles.
+#[derive(Clone, Default)]
+struct MoveFamilySites {
+    instance_id: Option<u64>,
+    modification_count: Option<u64>,
+    sites: Vec<ProposalSite>,
+    geometric_candidate_seen: bool,
+}
+
+impl MoveSiteCache {
+    /// Rebuilds the selected move-family cache for a new triangulation version.
+    fn ensure_current(&mut self, triangulation: &CdtTriangulation2D, move_type: MoveType) {
+        let instance_id = triangulation.instance_id();
+        let modification_count = triangulation.metadata().modification_count;
+        let family = self.family(move_type);
+        if family.instance_id == Some(instance_id)
+            && family.modification_count == Some(modification_count)
+        {
+            return;
+        }
+
+        *self.family_mut(move_type) =
+            Self::collect_family(triangulation, move_type, instance_id, modification_count);
+    }
+
+    /// Returns cached sites for one move family.
+    const fn family(&self, move_type: MoveType) -> &MoveFamilySites {
+        match move_type {
+            MoveType::Move22 => &self.move_22,
+            MoveType::Move13Add => &self.move_13_add,
+            MoveType::Move31Remove => &self.move_31_remove,
+            MoveType::EdgeFlip => &self.edge_flip,
+        }
+    }
+
+    /// Returns mutable cached sites for one move family.
+    const fn family_mut(&mut self, move_type: MoveType) -> &mut MoveFamilySites {
+        match move_type {
+            MoveType::Move22 => &mut self.move_22,
+            MoveType::Move13Add => &mut self.move_13_add,
+            MoveType::Move31Remove => &mut self.move_31_remove,
+            MoveType::EdgeFlip => &mut self.edge_flip,
+        }
+    }
+
+    /// Counts one cached move family after synchronizing with the triangulation.
+    fn site_count(&mut self, triangulation: &CdtTriangulation2D, move_type: MoveType) -> usize {
+        self.ensure_current(triangulation, move_type);
+        self.family(move_type).sites.len()
+    }
+
+    /// Materializes every sampleable site for one move family.
+    fn collect_family(
+        triangulation: &CdtTriangulation2D,
+        move_type: MoveType,
+        instance_id: u64,
+        modification_count: u64,
+    ) -> MoveFamilySites {
+        let mut sites = Vec::new();
+        let geometric_candidate_seen =
+            visit_proposal_sites(triangulation, move_type, |site| sites.push(site));
+        MoveFamilySites {
+            instance_id: Some(instance_id),
+            modification_count: Some(modification_count),
+            sites,
+            geometric_candidate_seen,
+        }
+    }
 }
 
 /// Labeling instruction for a vertex inserted by a `(1,3)` proposal.
@@ -374,6 +460,7 @@ pub(crate) enum InsertionLabel {
 ///
 /// The candidate keeps both backend operations together: subdivide the chosen
 /// face at `point`, label the new vertex, then flip the original spacelike edge.
+#[derive(Clone)]
 pub(crate) struct ToroidalInsertionCandidate {
     edge: DelaunayEdgeHandle,
     face: DelaunayFaceHandle,
@@ -385,6 +472,7 @@ pub(crate) struct ToroidalInsertionCandidate {
 ///
 /// The vertex cannot be collapsed directly in periodic CDT; the stored edge is
 /// flipped first to expose the inverse local volume move.
+#[derive(Clone)]
 pub(crate) struct ToroidalRemovalCandidate {
     vertex: DelaunayVertexHandle,
     flip_edge: DelaunayEdgeHandle,
@@ -395,6 +483,7 @@ pub(crate) struct ToroidalRemovalCandidate {
 /// Metropolis planning samples one of these after counting the same site
 /// universe used in the Hastings correction, so selection and denominator
 /// semantics remain aligned.
+#[derive(Clone)]
 pub(crate) enum ProposalSite {
     EdgeFlip(DelaunayEdgeHandle),
     FaceSubdivision {
@@ -434,6 +523,7 @@ impl ErgodicsSystem {
         Self {
             stats: MoveStatistics::new(),
             rng: rand::make_rng(),
+            site_cache: MoveSiteCache::default(),
         }
     }
 
@@ -453,6 +543,7 @@ impl ErgodicsSystem {
         Self {
             stats: MoveStatistics::new(),
             rng: Xoshiro256PlusPlus::seed_from_u64(seed),
+            site_cache: MoveSiteCache::default(),
         }
     }
 
@@ -480,29 +571,30 @@ impl ErgodicsSystem {
         }
     }
 
-    /// Samples one concrete proposal site from the same universe used for proposal counts.
+    /// Samples one concrete proposal site from the same cached universe used for proposal counts.
     ///
-    /// Reservoir sampling avoids allocating candidate lists while preserving a
-    /// uniform draw over the deterministic visitor order used by
-    /// [`proposal_site_count`].
+    /// The cache materializes the deterministic visitor output once per
+    /// triangulation version, so counting and uniform sampling cannot drift
+    /// apart for the Metropolis-Hastings proposal ratio.
     pub(crate) fn select_proposal_site(
         &mut self,
         triangulation: &CdtTriangulation2D,
         move_type: MoveType,
     ) -> ProposalSiteSelection {
-        let mut site_count = 0;
-        let mut selected_site = None;
-        let geometric_candidate_seen = visit_proposal_sites(triangulation, move_type, |site| {
-            site_count += 1;
-            if self.rng.random_range(0..site_count) == 0 {
-                selected_site = Some(site);
-            }
-        });
+        self.site_cache.ensure_current(triangulation, move_type);
+        let family = self.site_cache.family(move_type);
+        let site_count = family.sites.len();
+        let selected_site = if site_count == 0 {
+            None
+        } else {
+            let index = self.rng.random_range(0..site_count);
+            Some(family.sites[index].clone())
+        };
 
         ProposalSiteSelection {
             site_count,
             site: selected_site,
-            geometric_candidate_seen,
+            geometric_candidate_seen: family.geometric_candidate_seen,
         }
     }
 
@@ -1587,9 +1679,7 @@ pub(crate) fn proposal_site_count(
     triangulation: &CdtTriangulation2D,
     move_type: MoveType,
 ) -> usize {
-    let mut site_count = 0;
-    visit_proposal_sites(triangulation, move_type, |_| site_count += 1);
-    site_count
+    MoveSiteCache::default().site_count(triangulation, move_type)
 }
 
 /// Visits every sampleable proposal site for one move family.
@@ -2161,6 +2251,252 @@ mod tests {
             proposal_site_count(&triangulation, MoveType::Move31Remove)
         );
         assert!(removal_selection.site.is_some());
+    }
+
+    #[test]
+    fn proposal_site_cache_records_no_site_self_loops_without_mutating() {
+        let mut system = ErgodicsSystem::with_seed(11);
+        let triangulation = single_triangle();
+        let counts_before = (
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+            triangulation.metadata().modification_count,
+        );
+
+        let empty_selection = system.select_proposal_site(&triangulation, MoveType::Move31Remove);
+        assert_eq!(empty_selection.site_count, 0);
+        assert!(empty_selection.site.is_none());
+        let cached_family = system.site_cache.family(MoveType::Move31Remove);
+        assert_eq!(cached_family.instance_id, Some(triangulation.instance_id()));
+        assert_eq!(
+            cached_family.modification_count,
+            Some(triangulation.metadata().modification_count)
+        );
+
+        let retry_selection = system.select_proposal_site(&triangulation, MoveType::Move31Remove);
+        assert_eq!(retry_selection.site_count, 0);
+        assert!(retry_selection.site.is_none());
+        assert_eq!(
+            (
+                triangulation.vertex_count(),
+                triangulation.edge_count(),
+                triangulation.face_count(),
+                triangulation.metadata().modification_count,
+            ),
+            counts_before
+        );
+        assert_eq!(
+            system
+                .site_cache
+                .family(MoveType::Move31Remove)
+                .modification_count,
+            Some(counts_before.3)
+        );
+    }
+
+    #[test]
+    fn proposal_site_cache_refreshes_after_accepted_mutation() {
+        let mut system = ErgodicsSystem::with_seed(11);
+        let mut triangulation = single_triangle();
+        let initial_modification_count = triangulation.metadata().modification_count;
+
+        let insertion_selection = system.select_proposal_site(&triangulation, MoveType::Move13Add);
+        assert_eq!(
+            system
+                .site_cache
+                .family(MoveType::Move13Add)
+                .modification_count,
+            Some(initial_modification_count)
+        );
+        assert_eq!(insertion_selection.site_count, 1);
+        let Some(insertion_site) = insertion_selection.site else {
+            panic!("single triangle should expose one insertion site");
+        };
+
+        let result =
+            system.apply_proposal_site(&mut triangulation, MoveType::Move13Add, insertion_site);
+        assert_eq!(result, MoveResult::Success);
+        let mutated_modification_count = triangulation.metadata().modification_count;
+        assert!(mutated_modification_count > initial_modification_count);
+        assert_eq!(
+            system
+                .site_cache
+                .family(MoveType::Move13Add)
+                .modification_count,
+            Some(initial_modification_count),
+            "accepted mutations leave the old cache stale until the next selection"
+        );
+
+        let removal_selection = system.select_proposal_site(&triangulation, MoveType::Move31Remove);
+        assert_eq!(
+            system
+                .site_cache
+                .family(MoveType::Move31Remove)
+                .modification_count,
+            Some(mutated_modification_count)
+        );
+        assert_eq!(
+            removal_selection.site_count,
+            proposal_site_count(&triangulation, MoveType::Move31Remove)
+        );
+        assert!(removal_selection.site.is_some());
+    }
+
+    #[test]
+    fn proposal_site_cache_remains_current_after_ordinary_rejection() {
+        let mut system = ErgodicsSystem::with_seed(11);
+        let mut triangulation = single_triangle();
+        let counts_before = (
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+            triangulation.metadata().modification_count,
+        );
+
+        let insertion_selection = system.select_proposal_site(&triangulation, MoveType::Move13Add);
+        let Some(insertion_site) = insertion_selection.site else {
+            panic!("single triangle should expose one insertion site");
+        };
+        let cached_modification_count = system
+            .site_cache
+            .family(MoveType::Move13Add)
+            .modification_count;
+
+        let result =
+            system.apply_proposal_site(&mut triangulation, MoveType::Move22, insertion_site);
+        assert_eq!(result, MoveResult::GeometricViolation);
+        assert_eq!(
+            (
+                triangulation.vertex_count(),
+                triangulation.edge_count(),
+                triangulation.face_count(),
+                triangulation.metadata().modification_count,
+            ),
+            counts_before
+        );
+
+        let retry_selection = system.select_proposal_site(&triangulation, MoveType::Move13Add);
+        assert_eq!(
+            system
+                .site_cache
+                .family(MoveType::Move13Add)
+                .modification_count,
+            cached_modification_count
+        );
+        assert_eq!(retry_selection.site_count, insertion_selection.site_count);
+        assert!(retry_selection.site.is_some());
+    }
+
+    #[test]
+    fn proposal_site_cache_tracks_cloned_proposed_states_by_modification_count() {
+        let mut system = ErgodicsSystem::with_seed(11);
+        let original = single_triangle();
+
+        let insertion_selection = system.select_proposal_site(&original, MoveType::Move13Add);
+        assert_eq!(
+            system
+                .site_cache
+                .family(MoveType::Move13Add)
+                .modification_count,
+            Some(original.metadata().modification_count)
+        );
+        let Some(insertion_site) = insertion_selection.site else {
+            panic!("single triangle should expose one insertion site");
+        };
+
+        let mut proposed_state = original.clone();
+        let result =
+            system.apply_proposal_site(&mut proposed_state, MoveType::Move13Add, insertion_site);
+        assert_eq!(result, MoveResult::Success);
+        assert_ne!(
+            proposed_state.metadata().modification_count,
+            original.metadata().modification_count
+        );
+
+        let proposed_selection =
+            system.select_proposal_site(&proposed_state, MoveType::Move31Remove);
+        assert_eq!(
+            system
+                .site_cache
+                .family(MoveType::Move31Remove)
+                .modification_count,
+            Some(proposed_state.metadata().modification_count)
+        );
+        assert!(proposed_selection.site.is_some());
+
+        let original_selection = system.select_proposal_site(&original, MoveType::Move13Add);
+        assert_eq!(
+            system
+                .site_cache
+                .family(MoveType::Move13Add)
+                .modification_count,
+            Some(original.metadata().modification_count)
+        );
+        assert_eq!(
+            original_selection.site_count,
+            insertion_selection.site_count
+        );
+    }
+
+    #[test]
+    fn proposal_site_cache_refreshes_for_distinct_triangulation_sources() {
+        let mut system = ErgodicsSystem::with_seed(11);
+        let first = single_triangle();
+        let second = single_triangle();
+        assert_eq!(
+            first.metadata().modification_count,
+            second.metadata().modification_count
+        );
+
+        let first_selection = system.select_proposal_site(&first, MoveType::Move13Add);
+        let first_instance_id = system
+            .site_cache
+            .family(MoveType::Move13Add)
+            .instance_id
+            .expect("selection should populate cache instance identity");
+        assert_eq!(first_selection.site_count, 1);
+
+        let second_selection = system.select_proposal_site(&second, MoveType::Move13Add);
+        assert_eq!(
+            system.site_cache.family(MoveType::Move13Add).instance_id,
+            Some(second.instance_id())
+        );
+        assert_ne!(
+            first_instance_id,
+            system
+                .site_cache
+                .family(MoveType::Move13Add)
+                .instance_id
+                .expect("second selection should populate cache instance identity")
+        );
+        assert_eq!(second_selection.site_count, first_selection.site_count);
+    }
+
+    #[test]
+    fn proposal_site_cache_refreshes_for_cloned_triangulation_instances() {
+        let mut system = ErgodicsSystem::with_seed(11);
+        let original = single_triangle();
+        let cloned = original.clone();
+        assert_eq!(
+            original.metadata().modification_count,
+            cloned.metadata().modification_count
+        );
+        assert_ne!(original.instance_id(), cloned.instance_id());
+
+        let original_selection = system.select_proposal_site(&original, MoveType::Move13Add);
+        assert_eq!(
+            system.site_cache.family(MoveType::Move13Add).instance_id,
+            Some(original.instance_id())
+        );
+        assert_eq!(original_selection.site_count, 1);
+
+        let cloned_selection = system.select_proposal_site(&cloned, MoveType::Move13Add);
+        assert_eq!(
+            system.site_cache.family(MoveType::Move13Add).instance_id,
+            Some(cloned.instance_id())
+        );
+        assert_eq!(cloned_selection.site_count, original_selection.site_count);
     }
 
     #[test]
