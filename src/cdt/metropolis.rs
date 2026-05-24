@@ -301,6 +301,13 @@ pub struct CdtProposalPlan {
     action_after: Option<f64>,
     delta_action: Option<f64>,
     forward_site_count: usize,
+    /// Reverse proposal-site denominator for the realized proposed state.
+    ///
+    /// This is the number of valid inverse-move local sites used to normalize
+    /// the reverse proposal probability in the Metropolis-Hastings site-count
+    /// ratio. It is a count of sites and must be greater than zero for a
+    /// realized proposal to have finite reverse weight.
+    reverse_site_count: usize,
     proposed_state: CdtTriangulation2D,
 }
 
@@ -2040,6 +2047,7 @@ fn propose_concrete_plan(
         }
     };
     let delta_action = action_after - action_before;
+    let reverse_site_count = proposal_site_count(&proposed_state, reverse_move_type(move_type));
 
     Ok(Some(CdtProposalPlan {
         move_type,
@@ -2047,6 +2055,7 @@ fn propose_concrete_plan(
         action_after: Some(action_after),
         delta_action: Some(delta_action),
         forward_site_count,
+        reverse_site_count,
         proposed_state,
     }))
 }
@@ -2057,8 +2066,7 @@ fn concrete_log_q_ratio(_state: &CdtTriangulation2D, plan: &CdtProposalPlan) -> 
         return f64::NEG_INFINITY;
     }
 
-    let reverse_sites =
-        proposal_site_count(&plan.proposed_state, reverse_move_type(plan.move_type));
+    let reverse_sites = plan.reverse_site_count;
     if reverse_sites == 0 {
         return f64::NEG_INFINITY;
     }
@@ -3222,6 +3230,7 @@ mod tests {
             action_after: None,
             delta_action: None,
             forward_site_count: 0,
+            reverse_site_count: 0,
             proposed_state: triangulation.clone(),
         };
 
@@ -3270,6 +3279,7 @@ mod tests {
             action_after: Some(action_after),
             delta_action: Some(action_after - action_before),
             forward_site_count: proposal_site_count(&triangulation, MoveType::Move13Add),
+            reverse_site_count: proposal_site_count(&proposed_state, MoveType::Move31Remove),
             proposed_state,
         };
         let mut rng = StdRng::seed_from_u64(11);

@@ -3,7 +3,8 @@
 //! Regression tests for previously observed CDT failures.
 
 use causal_triangulations::{
-    ActionConfig, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    ActionConfig, CdtTriangulation, ErgodicsSystem, MetropolisAlgorithm, MetropolisConfig,
+    MoveResult,
 };
 
 #[test]
@@ -45,4 +46,41 @@ fn toroidal_observables_run_accepts_periodic_moves_after_offset_support() {
         results.spectral_dimension_estimate().is_some(),
         "observables workflow should still report a spectral estimate"
     );
+}
+
+#[test]
+fn proposal_site_cache_does_not_reuse_sites_for_replaced_triangulation_instances() {
+    // Regression for causal-triangulations#148: proposal-site cache identity
+    // must distinguish fresh triangulation instances, even when a new state
+    // occupies the same local variable and has the same public modification
+    // count as the cached state.
+    let mut system = ErgodicsSystem::with_seed(11);
+    let mut triangulation =
+        CdtTriangulation::from_toroidal_cdt(4, 3).expect("toroidal fixture should build");
+    assert_eq!(triangulation.metadata().modification_count, 0);
+
+    let first_result = system.attempt_13_move(&mut triangulation);
+    assert!(
+        !matches!(
+            first_result,
+            MoveResult::Rejected(_) | MoveResult::HardFailure(_)
+        ),
+        "initial toroidal move should not hit a hard proposal failure: {first_result:?}"
+    );
+    triangulation
+        .validate()
+        .expect("initial cached triangulation should remain valid");
+
+    triangulation = CdtTriangulation::from_cdt_strip(4, 3).expect("strip fixture should build");
+    assert_eq!(triangulation.metadata().modification_count, 0);
+
+    let second_result = system.attempt_13_move(&mut triangulation);
+    assert_eq!(
+        second_result,
+        MoveResult::Success,
+        "fresh strip state should rebuild its face-subdivision sites instead of reusing stale toroidal insertion sites"
+    );
+    triangulation
+        .validate()
+        .expect("fresh strip move should preserve CDT invariants");
 }

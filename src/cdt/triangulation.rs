@@ -13,6 +13,8 @@ use crate::geometry::DelaunayBackend2D;
 use crate::geometry::traits::TriangulationQuery;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 mod builders;
@@ -20,9 +22,23 @@ mod foliation;
 mod moves;
 mod validation;
 
+static NEXT_TRIANGULATION_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Returns a fresh process-local identity for transient triangulation caches.
+fn next_triangulation_instance_id() -> u64 {
+    let instance_id = NEXT_TRIANGULATION_INSTANCE_ID.fetch_add(1, Ordering::Relaxed);
+    assert_ne!(
+        instance_id,
+        u64::MAX,
+        "triangulation instance id counter exhausted"
+    );
+    instance_id
+}
+
 /// CDT-specific triangulation wrapper - completely geometry-agnostic
-#[derive(Debug, Clone)]
 pub struct CdtTriangulation<B> {
+    /// Process-local identity used only to reject stale transient caches.
+    instance_id: u64,
     geometry: B,
     /// CDT metadata (time slices, dimension, history)
     metadata: CdtMetadata,
@@ -31,6 +47,34 @@ pub struct CdtTriangulation<B> {
     foliation: Option<Foliation>,
     /// Modification counter value when foliation bookkeeping was last synchronized.
     foliation_synced_at_modification: Option<u64>,
+}
+
+impl<B: fmt::Debug> fmt::Debug for CdtTriangulation<B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CdtTriangulation")
+            .field("geometry", &self.geometry)
+            .field("metadata", &self.metadata)
+            .field("cache", &self.cache)
+            .field("foliation", &self.foliation)
+            .field(
+                "foliation_synced_at_modification",
+                &self.foliation_synced_at_modification,
+            )
+            .finish_non_exhaustive()
+    }
+}
+
+impl<B: Clone> Clone for CdtTriangulation<B> {
+    fn clone(&self) -> Self {
+        Self {
+            instance_id: next_triangulation_instance_id(),
+            geometry: self.geometry.clone(),
+            metadata: self.metadata.clone(),
+            cache: self.cache.clone(),
+            foliation: self.foliation.clone(),
+            foliation_synced_at_modification: self.foliation_synced_at_modification,
+        }
+    }
 }
 
 /// Metadata describing the CDT foliation, topology, and simulation history.
@@ -190,6 +234,7 @@ impl<'de> Deserialize<'de> for CdtTriangulation<DelaunayBackend2D> {
             .as_ref()
             .map(|_| serialized.metadata.modification_count);
         let tri = Self {
+            instance_id: next_triangulation_instance_id(),
             geometry: serialized.geometry,
             metadata: CdtMetadata {
                 time_slices: serialized.metadata.time_slices,
@@ -373,6 +418,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         };
 
         Self {
+            instance_id: next_triangulation_instance_id(),
             geometry,
             metadata: CdtMetadata {
                 time_slices,
@@ -527,6 +573,12 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     #[must_use]
     pub const fn metadata(&self) -> &CdtMetadata {
         &self.metadata
+    }
+
+    /// Returns the transient process-local identity used for cache invalidation.
+    #[must_use]
+    pub(crate) const fn instance_id(&self) -> u64 {
+        self.instance_id
     }
 
     /// Cached edge count with automatic invalidation.

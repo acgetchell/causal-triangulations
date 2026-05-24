@@ -24,6 +24,9 @@ The v0.1.0 foundation work focuses on making the crate a usable, validated 1+1 C
   ([#140](https://github.com/acgetchell/causal-triangulations/issues/140))
 - [ ] Audit public doctests for fallible error handling
   ([#151](https://github.com/acgetchell/causal-triangulations/issues/151))
+- [ ] Use chunked Metropolis sweeps in large-scale 1+1 CDT debug runs
+  ([#152](https://github.com/acgetchell/causal-triangulations/issues/152)). The v0.1.0 scientific-utility bar requires the large-scale debug path to exercise
+  Metropolis CDT behavior with literature-style sweeps sized from the current simplex count, not only the raw move kernel.
 
 ## 1+1 Maturity
 
@@ -51,14 +54,20 @@ The post-v0.1.0 1+1 track should keep the default ensemble scientifically explic
 - Redesign public error shapes for ergonomic typed diagnostics
   ([#149](https://github.com/acgetchell/causal-triangulations/issues/149)). This should build on the current typed category enums by evaluating richer observed
   values, constraints, and matching patterns without blocking the v0.1.0 correctness work.
+- Align the local chunked Metropolis API with the upstream resumable sampler pattern
+  ([#153](https://github.com/acgetchell/causal-triangulations/issues/153)). This is 1+1 stabilization after the v0.1.0 scientific workflow is functional:
+  `markov-chain-monte-carlo#60` should guide API convergence, but it should not block the local CDT behavior needed for v0.1.0.
 
 ## Higher-Dimensional CDT Tracks
 
 The next CDT dimensions should advance as explicit topology tracks rather than a generic higher-dimensional bucket:
 
-- 2+1 CDT with spherical spatial slices (S²) and toroidal spatial slices (T²), including constructor fixtures, foliation validation, local move kernels,
-  Metropolis sampling, and topology-specific regression tests. The current v0.2.0 scoped issue is 2+1 toroidal CDT triangulations
-  ([#144](https://github.com/acgetchell/causal-triangulations/issues/144)).
+- v0.2.0 should focus on 2+1 CDT with toroidal spatial slices (T²), including constructor fixtures, foliation validation, local move kernels, Metropolis
+  sampling, and topology-specific regression tests. The current scoped issue is 2+1 toroidal CDT triangulations
+  ([#144](https://github.com/acgetchell/causal-triangulations/issues/144)). This keeps the 2+1 milestone useful without blocking on backend spherical-topology
+  support.
+- v0.3.0 should add 2+1 CDT with spherical spatial slices (S²) after spherical topology lands in the `delaunay` crate. Treat this as a separate topology track
+  rather than as a prerequisite for the first usable 2+1 toroidal release.
 - 3+1 CDT with spherical spatial slices (S³) and toroidal spatial slices (T³), following the same staged path after the required geometry-backend operations and
   invariants are available
 - Periodic-time variants where the topology contract is well defined and the backend can validate the corresponding Euler/Poincaré-style invariants cleanly

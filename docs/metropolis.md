@@ -5,15 +5,15 @@
 For each step:
 
 1. Select a move type with `ErgodicsSystem::select_random_move()`.
-2. Enumerate the sampleable local sites for that move type and select one site uniformly from that same site universe. If no site exists, record the step as a
-   self-loop proposal and continue without changing the live triangulation.
+2. Read the cached sampleable local sites for that move type, rebuilding the cache first if the triangulation cache key changed, and select one site uniformly
+   from that same site universe. If no site exists, record the step as a self-loop proposal and continue without changing the live triangulation.
 3. Compute the proposed action change from the concrete proposal's simplex-count delta:
    - `(2,2)` / edge flip: `ΔN0 = 0`, `ΔN1 = 0`, `ΔN2 = 0`
    - `(1,3)`: `ΔN0 = +1`, `ΔN1 = +3`, `ΔN2 = +2`
    - `(3,1)`: `ΔN0 = -1`, `ΔN1 = -3`, `ΔN2 = -2`
 4. Apply the selected site once on a cloned proposed state. Ordinary causal, geometric, or backend edit failures are self-loop proposal outcomes; the live
    triangulation is unchanged.
-5. Count the forward sites for the selected move type and the reverse sites for the inverse move type on the proposed state.
+5. Count the forward sites from the cached selected move-family set and count the reverse sites for the inverse move type on the proposed state.
 6. Accept successful transitions with the Metropolis-Hastings probability
    `min(1, exp(-ΔS / T + log(q(current | proposed) / q(proposed | current))))`. For equal move-family weights this adds
    `log(forward_site_count / reverse_site_count)` to the ordinary action term, so `(1,3)` and `(3,1)` proposals account for their different site
@@ -59,6 +59,12 @@ after the move. This corrects proposal asymmetry for detailed balance without ad
 The proposal-site universe must be the same for sampling and counting. If the sampler can choose a site, that site belongs in the denominator used for the
 proposal probability, even if applying it later returns an ordinary geometric, causal, or backend rejection.
 
+`ErgodicsSystem` owns this proposal-site universe as a per-move-family cache keyed by `(instance_id, modification_count)`. The instance identity prevents
+cross-instance reuse when distinct triangulations have colliding modification counts, while the modification count keeps ordinary self-loop outcomes cheap.
+Forward counts are therefore the cached set length, and forward sampling is uniform over the same cached vector. Accepted mutations replace or mutate the
+triangulation, causing the next proposal to rebuild before sampling stale handles. Proposed-state reverse counts are computed from a fresh cache for the cloned
+proposed state using that same `(instance_id, modification_count)` validity check.
+
 This is the ordinary Metropolis-Hastings proposal-ratio correction: it uses the actual proposal kernel, not empirical acceptance counts from the run. Hastings'
 original Markov-chain sampling paper gives the general acceptance rule, and Brunekreef, Görlich, and Loll describe CDT Monte Carlo moves together with their
 detailed-balance equations. See [REFERENCES.md](../REFERENCES.md) for the full citations.
@@ -71,7 +77,7 @@ requiring at least one accepted periodic move, and checking final topology, foli
 A CDT proposal is represented by an explicit local site selected from the current triangulation:
 
 1. Choose a move family `m` from the configured move-family distribution.
-2. Enumerate the sampleable local sites `S_m(x)` for the current triangulation `x`.
+2. Read or rebuild the cached sampleable local sites `S_m(x)` for the current triangulation `x`.
 3. Select one site uniformly and apply that exact site to the cloned proposed state.
 4. Treat ordinary local or backend rejections as self-loop proposals, not hard failures.
 5. Score successful transitions with the Metropolis-Hastings proposal ratio for the actual proposal kernel.
