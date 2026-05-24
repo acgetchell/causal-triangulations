@@ -198,7 +198,9 @@ Key principle:
 - **Unsafe code**: forbidden (`#![forbid(unsafe_code)]`)
 - **Architecture**: `src/geometry/` is the backend interface layer for the `delaunay` crate; `src/cdt/` is the CDT domain layer. Direct `use delaunay::` imports
   are restricted to `src/geometry/` (`backends/delaunay.rs` and `generators.rs`); CDT modules use the trait-based abstractions, crate-owned Delaunay handles,
-  generator utilities, and `DelaunayBackend2D` type alias (see `docs/dev/rust.md § Geometry Backend Isolation`)
+  generator utilities, and `DelaunayBackend2D` type alias (see `docs/dev/rust.md § Geometry Backend Isolation`). Generic Metropolis-Hastings and sampler
+  mechanics should similarly be delegated to the `markov-chain-monte-carlo` crate through thin CDT adapters such as `Target` and `DelayedProposal`;
+  CDT-local generic sampler logic must be issue-linked to an upstream API gap (see `docs/dev/rust.md § MCMC Backend Isolation`)
 - **Modules**: `src/cdt/` (CDT logic: moves, action, Metropolis, foliation, observables, results, triangulation child modules), `src/geometry/` (geometry
   abstractions and backends), `src/config.rs` (simulation configuration)
 - **Foliation**: `src/cdt/foliation.rs` defines foliation bookkeeping and edge/simplex classification. Time labels are stored as vertex data; `from_cdt_strip`

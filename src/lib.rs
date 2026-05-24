@@ -283,7 +283,9 @@ pub mod prelude {
     ///
     /// This prelude includes [`run_simulation`], the Metropolis runner, delayed
     /// proposal adapter, telemetry structs, result containers, and typed
-    /// proposal errors needed by MCMC workflows.
+    /// proposal errors needed by MCMC workflows. It also includes the
+    /// triangulation query trait so callers can inspect final or checkpointed
+    /// states returned by simulation APIs.
     /// Observable estimators live in [`crate::prelude::observables`].
     pub mod simulation {
         pub use crate::cdt::action::{ActionConfig, compute_regge_action};
@@ -297,6 +299,7 @@ pub mod prelude {
         pub use crate::config::{CdtConfig, CdtTopology};
         pub use crate::errors::{CdtError, CdtResult};
         pub use crate::geometry::CdtTriangulation2D;
+        pub use crate::geometry::traits::TriangulationQuery;
         pub use crate::{CdtTriangulation, run_simulation};
     }
 

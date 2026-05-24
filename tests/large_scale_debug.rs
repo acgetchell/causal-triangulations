@@ -9,14 +9,14 @@
 //! `just debug-large-scale-*` and `just perf-large-scale-debug` recipes.
 
 #[cfg(feature = "slow-tests")]
-use causal_triangulations::prelude::moves::ErgodicsSystem;
-use causal_triangulations::prelude::moves::{MoveStatistics, MoveType};
-use causal_triangulations::prelude::triangulation::{
-    CdtTopology, CdtTriangulation2D, TriangulationQuery,
-};
+use std::time::Instant;
 use std::{env, time::Duration};
-#[cfg(feature = "slow-tests")]
-use std::{hint::black_box, time::Instant};
+
+use causal_triangulations::prelude::moves::{MoveStatistics, MoveType};
+use causal_triangulations::prelude::simulation::{
+    ActionConfig, CdtMcmcCheckpoint, CdtTopology, CdtTriangulation2D, MetropolisAlgorithm,
+    MetropolisConfig, ProposalStatistics, TriangulationQuery,
+};
 
 const DEFAULT_TOTAL_VERTICES: u32 = 512;
 const DEFAULT_TIMESLICES: u32 = 16;
@@ -31,6 +31,54 @@ struct MoveAcceptanceCounts {
     move_13: u64,
     move_31: u64,
     edge_flip: u64,
+}
+
+#[derive(Clone, Copy, Default)]
+struct ProposalOutcomeCounts {
+    proposals: u64,
+    accepted: u64,
+    rejected: u64,
+    no_site: u64,
+    site_rejections: u64,
+    metropolis_rejections: u64,
+    hard_failures: u64,
+}
+
+impl ProposalOutcomeCounts {
+    /// Captures cumulative proposal-kernel counters.
+    const fn from_stats(stats: &ProposalStatistics) -> Self {
+        let site_rejections = stats
+            .site_causality_rejections
+            .saturating_add(stats.site_geometric_rejections)
+            .saturating_add(stats.site_backend_rejections);
+        let rejected = stats
+            .no_site_proposals
+            .saturating_add(site_rejections)
+            .saturating_add(stats.metropolis_rejections)
+            .saturating_add(stats.hard_failures);
+        Self {
+            proposals: stats.move_family_proposals,
+            accepted: stats.accepted_transitions,
+            rejected,
+            no_site: stats.no_site_proposals,
+            site_rejections,
+            metropolis_rejections: stats.metropolis_rejections,
+            hard_failures: stats.hard_failures,
+        }
+    }
+
+    /// Returns per-sweep proposal deltas relative to the previous cumulative snapshot.
+    const fn delta_since(self, previous: Self) -> Self {
+        Self {
+            proposals: self.proposals - previous.proposals,
+            accepted: self.accepted - previous.accepted,
+            rejected: self.rejected - previous.rejected,
+            no_site: self.no_site - previous.no_site,
+            site_rejections: self.site_rejections - previous.site_rejections,
+            metropolis_rejections: self.metropolis_rejections - previous.metropolis_rejections,
+            hard_failures: self.hard_failures - previous.hard_failures,
+        }
+    }
 }
 
 impl MoveAcceptanceCounts {
@@ -148,6 +196,37 @@ fn assert_toroidal_invariants(triangulation: &CdtTriangulation2D) {
     assert_eq!(triangulation.geometry().euler_characteristic(), 0);
 }
 
+/// Builds a chunk configuration for one unfixed-volume Metropolis debug sweep.
+fn sweep_config(attempts: usize, seed: u64) -> MetropolisConfig {
+    let steps = u32::try_from(attempts).expect("sweep attempt count should fit in u32");
+    MetropolisConfig::new(1.0, steps, 0, 1).with_seed(seed)
+}
+
+/// Runs one Metropolis chunk and keeps resumable checkpoint state for the next sweep.
+fn run_metropolis_sweep(
+    checkpoint: Option<CdtMcmcCheckpoint>,
+    triangulation: Option<CdtTriangulation2D>,
+    attempts: usize,
+    seed: u64,
+    action_config: &ActionConfig,
+) -> CdtMcmcCheckpoint {
+    let algorithm = MetropolisAlgorithm::new(sweep_config(attempts, seed), action_config.clone());
+    checkpoint.map_or_else(
+        || {
+            algorithm
+                .run_to_checkpoint(
+                    triangulation.expect("initial triangulation is required for the first sweep"),
+                )
+                .expect("large-scale Metropolis sweep should run")
+        },
+        |checkpoint| {
+            algorithm
+                .resume_to_checkpoint(checkpoint)
+                .expect("large-scale Metropolis sweep should resume")
+        },
+    )
+}
+
 /// Reads the accepted counter for one move type.
 const fn accepted_count(stats: &MoveStatistics, move_type: MoveType) -> u64 {
     match move_type {
@@ -160,6 +239,10 @@ const fn accepted_count(stats: &MoveStatistics, move_type: MoveType) -> u64 {
 
 #[cfg(feature = "slow-tests")]
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "debug harness keeps setup, chunk execution, and printed telemetry together"
+)]
 fn debug_large_scale_1p1() {
     let total_vertices = env_u32_prefer(
         "CDT_LARGE_DEBUG_VERTICES_1P1",
@@ -185,57 +268,92 @@ fn debug_large_scale_1p1() {
     let runtime_cap = optional_runtime_cap();
 
     let started_at = Instant::now();
-    let mut triangulation = CdtTriangulation2D::from_toroidal_cdt(vertices_per_slice, timeslices)
+    let triangulation = CdtTriangulation2D::from_toroidal_cdt(vertices_per_slice, timeslices)
         .expect("large-scale toroidal CDT fixture should build");
-    let mut ergodics = ErgodicsSystem::with_seed(seed);
     let initial_profile = triangulation.volume_profile();
     let mut expected_attempts = 0_u64;
     let mut previous_acceptance = MoveAcceptanceCounts::default();
+    let mut previous_proposals = ProposalOutcomeCounts::default();
     let mut previous_elapsed = Duration::ZERO;
     let expected_vertices =
         usize::try_from(total_vertices).expect("vertex count should fit in usize");
+    let action_config = ActionConfig::default();
+    let mut checkpoint: Option<CdtMcmcCheckpoint> = None;
+    let mut pending_initial_triangulation = Some(triangulation);
 
-    assert_eq!(triangulation.vertex_count(), expected_vertices);
-    assert_toroidal_invariants(&triangulation);
+    let initial_triangulation = pending_initial_triangulation
+        .as_ref()
+        .expect("initial triangulation is available before the first sweep");
+    assert_eq!(initial_triangulation.vertex_count(), expected_vertices);
+    assert_toroidal_invariants(initial_triangulation);
 
     println!(
-        "1+1 toroidal CDT large-scale debug: vertices={total_vertices}, timeslices={timeslices}, \
-         vertices_per_slice={vertices_per_slice}, initial_simplices={}, sweeps={sweeps}, seed=0x{seed:X}",
-        triangulation.face_count()
+        "1+1 toroidal CDT large-scale Metropolis debug: vertices={total_vertices}, timeslices={timeslices}, \
+         vertices_per_slice={vertices_per_slice}, initial_simplices={}, sweeps={sweeps}, seed=0x{seed:X}, \
+         ensemble=unfixed-volume",
+        initial_triangulation.face_count()
     );
 
     for sweep in 1..=sweeps {
-        let attempts = triangulation.face_count();
+        let attempts = checkpoint.as_ref().map_or_else(
+            || {
+                pending_initial_triangulation
+                    .as_ref()
+                    .expect("initial triangulation is available before the first sweep")
+                    .face_count()
+            },
+            |checkpoint| checkpoint.triangulation().face_count(),
+        );
         expected_attempts += u64::try_from(attempts).expect("attempt count should fit in u64");
 
-        for _ in 0..attempts {
-            let result = ergodics.attempt_random_move(&mut triangulation);
-            black_box(result);
-        }
+        checkpoint = Some(run_metropolis_sweep(
+            checkpoint,
+            pending_initial_triangulation.take(),
+            attempts,
+            seed,
+            &action_config,
+        ));
 
-        assert_toroidal_invariants(&triangulation);
-        let acceptance = MoveAcceptanceCounts::from_stats(&ergodics.stats);
+        let checkpoint_ref = checkpoint
+            .as_ref()
+            .expect("Metropolis sweep should produce a checkpoint");
+        let triangulation = checkpoint_ref.triangulation();
+        assert_toroidal_invariants(triangulation);
+        let acceptance = MoveAcceptanceCounts::from_stats(checkpoint_ref.move_stats());
         let sweep_acceptance = acceptance.delta_since(previous_acceptance);
+        let proposals = ProposalOutcomeCounts::from_stats(checkpoint_ref.proposal_stats());
+        let sweep_proposals = proposals.delta_since(previous_proposals);
         let elapsed = started_at.elapsed();
         let sweep_elapsed = elapsed.saturating_sub(previous_elapsed);
         println!(
-            "sweep {sweep}/{sweeps}: sweep_attempts={attempts}, final_vertices={}, final_simplices={}, \
+            "sweep {sweep}/{sweeps}: sweep_proposals={}, final_vertices={}, final_edges={}, final_simplices={}, \
+             final_volume_profile={:?}, \
              sweep_accepted={} (Move22={}, Move13Add={}, Move31Remove={}, EdgeFlip={}), \
-             sweep_hard_failures={}, total_accepted={}, total_attempted={}, total_hard_failures={}, \
+             sweep_rejected={}, sweep_no_site={}, sweep_site_rejections={}, sweep_metropolis_rejections={}, \
+             sweep_hard_failures={}, total_accepted={}, total_proposals={}, total_rejected={}, total_hard_failures={}, \
              sweep_elapsed={sweep_elapsed:?}, total_elapsed={elapsed:?}",
+            sweep_proposals.proposals,
             triangulation.vertex_count(),
+            triangulation.edge_count(),
             triangulation.face_count(),
+            triangulation.volume_profile(),
             sweep_acceptance.total,
             sweep_acceptance.move_22,
             sweep_acceptance.move_13,
             sweep_acceptance.move_31,
             sweep_acceptance.edge_flip,
+            sweep_proposals.rejected,
+            sweep_proposals.no_site,
+            sweep_proposals.site_rejections,
+            sweep_proposals.metropolis_rejections,
             sweep_acceptance.hard_failures,
             acceptance.total,
-            expected_attempts,
+            proposals.proposals,
+            proposals.rejected,
             acceptance.hard_failures,
         );
         previous_acceptance = acceptance;
+        previous_proposals = proposals;
         previous_elapsed = elapsed;
 
         if let Some(cap) = runtime_cap {
@@ -247,22 +365,28 @@ fn debug_large_scale_1p1() {
         }
     }
 
-    assert_eq!(ergodics.stats.total_attempted(), expected_attempts);
-    assert!(
-        ergodics.stats.total_accepted() > 0,
-        "large-scale random sweeps should accept at least one move"
+    let checkpoint = checkpoint.expect("at least one sweep should run");
+    let triangulation = checkpoint.triangulation();
+    assert_eq!(checkpoint.move_stats().total_attempted(), expected_attempts);
+    assert_eq!(
+        checkpoint.proposal_stats().move_family_proposals,
+        expected_attempts
     );
     assert!(
-        ergodics.stats.moves_13_accepted > 0,
-        "large-scale random sweeps should exercise toroidal Move13Add"
+        checkpoint.move_stats().total_accepted() > 0,
+        "large-scale Metropolis sweeps should accept at least one move"
     );
     assert!(
-        ergodics.stats.moves_31_accepted > 0,
-        "large-scale random sweeps should exercise toroidal Move31Remove"
+        checkpoint.move_stats().moves_13_accepted > 0,
+        "large-scale Metropolis sweeps should exercise toroidal Move13Add"
+    );
+    assert!(
+        checkpoint.move_stats().moves_31_accepted > 0,
+        "large-scale Metropolis sweeps should exercise toroidal Move31Remove"
     );
     assert_ne!(
         triangulation.volume_profile(),
         initial_profile,
-        "large-scale random sweeps should change the toroidal volume profile"
+        "large-scale Metropolis sweeps should change the toroidal volume profile"
     );
 }

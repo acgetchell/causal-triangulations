@@ -362,13 +362,14 @@ The umbrella recipe currently runs `512/16/10` and `1024/32/1` cases. It is inte
 `debug-large-scale-1p1` recipe directly when you only need a smaller smoke probe.
 
 These debug recipes do not enable volume fixing. Volume drift in the reported final vertex and simplex counts is expected when `(1,3)` and `(3,1)` moves are
-accepted. Treat these runs as unfixed-volume move-kernel stress tests, not as fixed-volume CDT production ensembles. Future fixed-volume recipes should be
+accepted. Treat these runs as unfixed-volume Metropolis debug sweeps, not as fixed-volume CDT production ensembles. Future fixed-volume recipes should be
 explicitly labeled because quadratic volume fixing samples a modified ensemble; see Ambjørn et al.,
 [The Semiclassical Limit of Causal Dynamical Triangulations](https://arxiv.org/abs/1102.3929), and
 [The phase structure of Causal Dynamical Triangulations with toroidal spatial topology](https://arxiv.org/abs/1802.10434).
 
-For unfixed-volume debug runs, the cosmological constant is the volume-control coupling. If a large-scale recipe grows or shrinks too aggressively, tune the
-action parameters rather than interpreting the run as a failed fixed-volume simulation.
+For unfixed-volume Metropolis debug runs, each sweep is sized from the current number of top-dimensional simplices at the start of that sweep, then executed as
+one checkpoint-preserving Metropolis chunk. The cosmological constant is the volume-control coupling. If a large-scale recipe grows or shrinks too aggressively,
+tune the action parameters rather than interpreting the run as a failed fixed-volume simulation.
 
 The recipes set per-case environment variables, and the Rust harness also accepts these variables directly:
 

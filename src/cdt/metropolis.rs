@@ -794,10 +794,12 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
 /// both RNG streams, and the ergodic move system.
 ///
 /// In-memory checkpoints can be resumed directly with
-/// [`MetropolisAlgorithm::resume_from_checkpoint`]. Serialized checkpoints
-/// restore through the embedded [`CdtTriangulation2D`]'s checked serde path, so
-/// deserialization also requires the stored backend triangulation to satisfy the
-/// current Delaunay reconstruction invariants.
+/// [`MetropolisAlgorithm::resume_from_checkpoint`] when callers want cumulative
+/// results, or [`MetropolisAlgorithm::resume_to_checkpoint`] when chunked
+/// drivers need another resumable checkpoint. Serialized checkpoints restore
+/// through the embedded [`CdtTriangulation2D`]'s checked serde path, so
+/// deserialization also requires the stored backend triangulation to satisfy
+/// the current Delaunay reconstruction invariants.
 ///
 /// # Examples
 ///
@@ -865,6 +867,36 @@ impl CdtMcmcCheckpoint {
     /// ```
     pub const fn chain(&self) -> &ChainCheckpoint<CdtTriangulation2D> {
         &self.chain
+    }
+
+    /// Returns the checkpointed triangulation state.
+    ///
+    /// This accessor is intended for chunked drivers that need to inspect the
+    /// current volume before deciding how many additional Metropolis proposals
+    /// to run.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    ///     TriangulationQuery,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let checkpoint = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1).with_seed(13),
+    ///         ActionConfig::default(),
+    ///     )
+    ///     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    ///
+    ///     assert_eq!(checkpoint.triangulation().vertex_count(), 12);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn triangulation(&self) -> &CdtTriangulation2D {
+        self.chain.state()
     }
 
     /// Returns the Metropolis configuration used when the checkpoint was made.
@@ -1189,9 +1221,11 @@ impl MetropolisAlgorithm {
     /// Run the simulation and return both the final results and checkpoint.
     ///
     /// The returned checkpoint can be resumed in memory with
-    /// [`Self::resume_from_checkpoint`]. If callers serialize it, successful
-    /// deserialization also depends on the embedded triangulation passing the
-    /// backend's checked reconstruction.
+    /// [`Self::resume_from_checkpoint`] when callers want cumulative results,
+    /// or [`Self::resume_to_checkpoint`] when chunked drivers need another
+    /// resumable checkpoint. If callers serialize it, successful deserialization
+    /// also depends on the embedded triangulation passing the backend's checked
+    /// reconstruction.
     ///
     /// # Errors
     ///
@@ -1237,10 +1271,11 @@ impl MetropolisAlgorithm {
     /// [`ChainCheckpoint`] and stores CDT-specific proposal state, telemetry,
     /// and RNG streams beside it.
     ///
-    /// Direct in-memory resume does not reserialize the triangulation. Serialized
-    /// restore uses checked backend reconstruction, so snapshots whose evolved
-    /// geometry is no longer Delaunay-valid may fail to deserialize even though
-    /// the in-memory checkpoint can still be resumed.
+    /// Direct in-memory resume through [`Self::resume_from_checkpoint`] or
+    /// [`Self::resume_to_checkpoint`] does not reserialize the triangulation.
+    /// Serialized restore uses checked backend reconstruction, so snapshots
+    /// whose evolved geometry is no longer Delaunay-valid may fail to
+    /// deserialize even though the in-memory checkpoint can still be resumed.
     ///
     /// # Errors
     ///
@@ -1329,6 +1364,58 @@ impl MetropolisAlgorithm {
         &self,
         checkpoint: CdtMcmcCheckpoint,
     ) -> CdtResult<SimulationResultsBackend> {
+        self.resume_to_checkpoint(checkpoint)
+            .map(CdtMcmcCheckpoint::into_results)
+    }
+
+    /// Continue a checkpoint for this algorithm's configured step count.
+    ///
+    /// `self.config.steps` is interpreted as an additional number of steps, and
+    /// the returned checkpoint remains resumable. This supports chunked drivers
+    /// such as sweep-based debug runs that size each chunk from the current
+    /// triangulation volume while preserving RNG streams, counters,
+    /// measurements, and checkpoint-compatible continuation state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidSimulationConfiguration`] if the resumed
+    /// Metropolis configuration is invalid, [`CdtError::InvalidConfiguration`]
+    /// if the action configuration is invalid, or
+    /// [`CdtError::CheckpointResumeFailed`] if the checkpoint is incompatible
+    /// with this algorithm or internally inconsistent. Returns
+    /// [`CdtError::MetropolisMoveApplicationFailed`] or validation errors for
+    /// failures during resumed sampling.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let action = ActionConfig::default();
+    ///     let checkpoint = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 2, 0, 1).with_seed(13),
+    ///         action.clone(),
+    ///     )
+    ///     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    ///
+    ///     let checkpoint = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 3, 0, 1).with_seed(999),
+    ///         action,
+    ///     )
+    ///     .resume_to_checkpoint(checkpoint)?;
+    ///
+    ///     assert_eq!(checkpoint.current_step(), 5);
+    ///     assert_eq!(checkpoint.config().steps, 5);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn resume_to_checkpoint(
+        &self,
+        checkpoint: CdtMcmcCheckpoint,
+    ) -> CdtResult<CdtMcmcCheckpoint> {
         self.config.validate()?;
         self.action_config.validate()?;
         validate_resume_compatible(self, &checkpoint)?;
@@ -1346,9 +1433,7 @@ impl MetropolisAlgorithm {
 
         let mut state = MetropolisRunState::from_checkpoint(checkpoint)?;
         self.run_steps(&mut state, self.config.steps)?;
-        state
-            .into_checkpoint(result_config, self.action_config.clone())
-            .map(CdtMcmcCheckpoint::into_results)
+        state.into_checkpoint(result_config, self.action_config.clone())
     }
 
     fn initial_state(&self, mut triangulation: CdtTriangulation2D) -> MetropolisRunState {
@@ -2159,6 +2244,96 @@ mod tests {
         }
     }
 
+    type CanonicalVertexSignature = (Option<u32>, Vec<u64>);
+    type CanonicalFaceSignature = (Option<i32>, Vec<CanonicalVertexSignature>);
+
+    fn canonical_vertex_signatures(
+        triangulation: &CdtTriangulation2D,
+    ) -> Vec<CanonicalVertexSignature> {
+        let geometry = triangulation.geometry();
+        let mut vertices = geometry
+            .vertices()
+            .map(|vertex| {
+                let coordinates = geometry
+                    .vertex_coordinates(&vertex)
+                    .expect("test vertex coordinates should resolve")
+                    .into_iter()
+                    .map(f64::to_bits)
+                    .collect();
+                (
+                    geometry.vertex_data_by_key(vertex.vertex_key()),
+                    coordinates,
+                )
+            })
+            .collect::<Vec<_>>();
+        vertices.sort();
+        vertices
+    }
+
+    fn canonical_face_signatures(
+        triangulation: &CdtTriangulation2D,
+    ) -> Vec<CanonicalFaceSignature> {
+        let geometry = triangulation.geometry();
+        let mut faces = geometry
+            .faces()
+            .map(|face| {
+                let mut vertices = geometry
+                    .face_vertices(&face)
+                    .expect("test face vertices should resolve")
+                    .into_iter()
+                    .map(|vertex| {
+                        let coordinates = geometry
+                            .vertex_coordinates(&vertex)
+                            .expect("test face vertex coordinates should resolve")
+                            .into_iter()
+                            .map(f64::to_bits)
+                            .collect();
+                        (
+                            geometry.vertex_data_by_key(vertex.vertex_key()),
+                            coordinates,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                vertices.sort();
+                (geometry.simplex_data_by_key(face.simplex_key()), vertices)
+            })
+            .collect::<Vec<_>>();
+        faces.sort();
+        faces
+    }
+
+    fn assert_canonical_triangulations_match(
+        left: &CdtTriangulation2D,
+        right: &CdtTriangulation2D,
+    ) {
+        assert_eq!(left.vertex_count(), right.vertex_count());
+        assert_eq!(left.edge_count(), right.edge_count());
+        assert_eq!(left.face_count(), right.face_count());
+        assert_eq!(left.slice_sizes(), right.slice_sizes());
+        assert_eq!(left.volume_profile(), right.volume_profile());
+        assert_eq!(left.metadata().time_slices, right.metadata().time_slices);
+        assert_eq!(left.metadata().dimension, right.metadata().dimension);
+        assert_eq!(left.metadata().topology, right.metadata().topology);
+        assert_eq!(
+            left.metadata().modification_count,
+            right.metadata().modification_count
+        );
+        assert_eq!(
+            to_value(&left.metadata().simulation_history)
+                .expect("left simulation history should serialize"),
+            to_value(&right.metadata().simulation_history)
+                .expect("right simulation history should serialize")
+        );
+        assert_eq!(
+            canonical_vertex_signatures(left),
+            canonical_vertex_signatures(right)
+        );
+        assert_eq!(
+            canonical_face_signatures(left),
+            canonical_face_signatures(right)
+        );
+    }
+
     fn short_checkpoint() -> CdtMcmcCheckpoint {
         let triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
@@ -2228,8 +2403,8 @@ mod tests {
         }
     }
 
-    fn assert_checkpoint_resume_failed(
-        result: CdtResult<SimulationResultsBackend>,
+    fn assert_checkpoint_resume_failed<T>(
+        result: CdtResult<T>,
         expected_reason: CheckpointResumeReason,
         expected_detail: &str,
     ) {
@@ -2499,6 +2674,57 @@ mod tests {
     }
 
     #[test]
+    fn chunked_checkpoint_resume_matches_one_shot_seeded_run() {
+        let action_config = ActionConfig::default();
+        let one_shot = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 10, 0, 1).with_seed(19),
+            action_config.clone(),
+        )
+        .run(CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build"))
+        .expect("one-shot run should complete");
+
+        let prefix = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 4, 0, 1).with_seed(19),
+            action_config.clone(),
+        )
+        .run_to_checkpoint(
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build"),
+        )
+        .expect("prefix run should checkpoint");
+
+        let chunked_checkpoint = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 6, 0, 1).with_seed(999),
+            action_config,
+        )
+        .resume_to_checkpoint(prefix)
+        .expect("chunked checkpoint resume should complete");
+        let chunked = chunked_checkpoint.into_results();
+
+        assert_eq!(chunked.config().steps, 10);
+        assert_eq!(
+            to_value(one_shot.steps()).expect("steps should serialize"),
+            to_value(chunked.steps()).expect("steps should serialize")
+        );
+        assert_eq!(
+            to_value(one_shot.measurements()).expect("measurements should serialize"),
+            to_value(chunked.measurements()).expect("measurements should serialize")
+        );
+        assert_eq!(
+            to_value(one_shot.move_stats()).expect("move stats should serialize"),
+            to_value(chunked.move_stats()).expect("move stats should serialize")
+        );
+        assert_eq!(
+            to_value(one_shot.proposal_stats()).expect("proposal stats should serialize"),
+            to_value(chunked.proposal_stats()).expect("proposal stats should serialize")
+        );
+        assert_canonical_triangulations_match(one_shot.triangulation(), chunked.triangulation());
+        assert_eq!(
+            one_shot.triangulation().volume_profile(),
+            chunked.triangulation().volume_profile()
+        );
+    }
+
+    #[test]
     fn serialized_checkpoint_missing_proposal_stats_defaults_on_restore() {
         let checkpoint = serializable_rejected_checkpoint(ActionConfig::default());
         let mut payload = to_value(&checkpoint).expect("checkpoint should serialize");
@@ -2526,6 +2752,21 @@ mod tests {
 
         assert_checkpoint_resume_failed(
             algorithm.resume_from_checkpoint(checkpoint),
+            CheckpointResumeReason::IncompatibleActionConfiguration,
+            "action configuration",
+        );
+    }
+
+    #[test]
+    fn resume_to_checkpoint_rejects_incompatible_action_config() {
+        let checkpoint = short_checkpoint();
+        let algorithm = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 2, 0, 1).with_seed(999),
+            ActionConfig::new(2.0, 1.0, 0.1),
+        );
+
+        assert_checkpoint_resume_failed(
+            algorithm.resume_to_checkpoint(checkpoint),
             CheckpointResumeReason::IncompatibleActionConfiguration,
             "action configuration",
         );

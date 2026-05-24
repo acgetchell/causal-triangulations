@@ -230,8 +230,8 @@ documented:
 - `prelude::moves` for local ergodic move kernels, move results, move types, and move statistics
 - `prelude::action` for standalone action configuration and Regge action calculations
 - `prelude::errors` for crate error types and typed error-category enums needed to pattern-match failures
-- `prelude::simulation` for Metropolis/action simulation workflows, proposal types, simulation result types, and telemetry needed to inspect or debug
-  simulations
+- `prelude::simulation` for Metropolis/action simulation workflows, proposal types, simulation result types, telemetry, and triangulation query traits needed to
+  inspect or debug simulations
 - `prelude::observables` for user-facing analysis APIs that measure triangulations or derived physical observables, such as volume profiles, Hausdorff-dimension
   estimators, and spectral-dimension estimators
 - `prelude::testing` for fixture-only helpers such as the mock backend and its typed error categories
@@ -331,6 +331,38 @@ No module outside `src/geometry/` may import from the `delaunay` crate directly.
 - Generator utilities from `crate::geometry::generators`
 
 This ensures the `delaunay` crate can be upgraded or replaced without touching CDT logic.
+
+---
+
+## MCMC Backend Isolation
+
+`markov-chain-monte-carlo` is the upstream owner of generic Monte Carlo mechanics. CDT code should treat it as the sampler backend in the same way
+`src/geometry/` treats `delaunay` as the triangulation backend.
+
+Delegate generic sampler work to upstream APIs such as `Target`, `DelayedProposal`, `Chain`, `Sampler`, and their successors whenever the API supports it:
+
+- Metropolis-Hastings accept/reject decisions
+- proposal-ratio application
+- chain accepted/rejected counters
+- delayed-proposal commit ordering
+- RNG-driven acceptance draws
+- checkpoint-compatible sampler continuation mechanics
+
+CDT may own thin domain adapters and result plumbing:
+
+- action-to-log-probability mapping (`CdtTarget`)
+- valid CDT proposal-site enumeration and topology/foliation validation (`CdtProposal`)
+- CDT-specific telemetry, measurements, and event history
+- conversion between upstream sampler state and CDT result/checkpoint types
+
+Do not add new local generic M-H loops, direct `exp(log_alpha)` acceptance draws, one-off proposal schedulers, or generic chain counter logic in `src/cdt/` when
+`markov-chain-monte-carlo` can own that behavior. If CDT needs temporary local sampler logic because the upstream API lacks a hook, document the gap in the
+code or nearby docs and open or link an upstream issue before extending the local implementation. The current production migration is tracked by
+[`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155), with upstream delayed-step telemetry tracked by
+[`markov-chain-monte-carlo#61`](https://github.com/acgetchell/markov-chain-monte-carlo/issues/61).
+
+Once the production runner delegates fully to upstream sampler mechanics, add a static check so future CDT changes cannot reintroduce local generic
+Metropolis-Hastings implementations by accident.
 
 ---
 
