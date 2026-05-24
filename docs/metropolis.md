@@ -5,8 +5,8 @@
 For each step:
 
 1. Select a move type with `ErgodicsSystem::select_random_move()`.
-2. Read the cached sampleable local sites for that move type, rebuilding the cache first if the triangulation modification counter changed, and select one site
-   uniformly from that same site universe. If no site exists, record the step as a self-loop proposal and continue without changing the live triangulation.
+2. Read the cached sampleable local sites for that move type, rebuilding the cache first if the triangulation cache key changed, and select one site uniformly
+   from that same site universe. If no site exists, record the step as a self-loop proposal and continue without changing the live triangulation.
 3. Compute the proposed action change from the concrete proposal's simplex-count delta:
    - `(2,2)` / edge flip: `ΔN0 = 0`, `ΔN1 = 0`, `ΔN2 = 0`
    - `(1,3)`: `ΔN0 = +1`, `ΔN1 = +3`, `ΔN2 = +2`
@@ -59,10 +59,11 @@ after the move. This corrects proposal asymmetry for detailed balance without ad
 The proposal-site universe must be the same for sampling and counting. If the sampler can choose a site, that site belongs in the denominator used for the
 proposal probability, even if applying it later returns an ordinary geometric, causal, or backend rejection.
 
-`ErgodicsSystem` owns this proposal-site universe as a per-move-family cache keyed by the CDT triangulation modification counter. Forward counts are therefore
-the cached set length, and forward sampling is uniform over the same cached vector. Ordinary self-loop outcomes leave the live triangulation and cache current;
-accepted mutations replace or mutate the triangulation, causing the next proposal to rebuild before sampling stale handles. Proposed-state reverse counts are
-computed from a fresh cache for the cloned proposed state.
+`ErgodicsSystem` owns this proposal-site universe as a per-move-family cache keyed by `(instance_id, modification_count)`. The instance identity prevents
+cross-instance reuse when distinct triangulations have colliding modification counts, while the modification count keeps ordinary self-loop outcomes cheap.
+Forward counts are therefore the cached set length, and forward sampling is uniform over the same cached vector. Accepted mutations replace or mutate the
+triangulation, causing the next proposal to rebuild before sampling stale handles. Proposed-state reverse counts are computed from a fresh cache for the cloned
+proposed state using that same `(instance_id, modification_count)` validity check.
 
 This is the ordinary Metropolis-Hastings proposal-ratio correction: it uses the actual proposal kernel, not empirical acceptance counts from the run. Hastings'
 original Markov-chain sampling paper gives the general acceptance rule, and Brunekreef, Görlich, and Loll describe CDT Monte Carlo moves together with their

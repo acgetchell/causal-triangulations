@@ -301,6 +301,12 @@ pub struct CdtProposalPlan {
     action_after: Option<f64>,
     delta_action: Option<f64>,
     forward_site_count: usize,
+    /// Reverse proposal-site denominator for the realized proposed state.
+    ///
+    /// This is the number of valid inverse-move local sites used to normalize
+    /// the reverse proposal probability in the Metropolis-Hastings site-count
+    /// ratio. It is a count of sites and must be greater than zero for a
+    /// realized proposal to have finite reverse weight.
     reverse_site_count: usize,
     proposed_state: CdtTriangulation2D,
 }
