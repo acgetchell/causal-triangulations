@@ -1,5 +1,11 @@
 # Metropolis Move Ordering And Detailed Balance
 
+> **MCMC backend boundary:** this page describes the current CDT production Metropolis runner. Its proposal-before-mutation contract should be preserved, but
+> generic Metropolis-Hastings mechanics should migrate behind `markov-chain-monte-carlo` adapters rather than remain as CDT-local sampler logic. The boundary
+> refactor is tracked by [`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155); upstream delayed-step hooks and
+> telemetry needs are tracked by
+> [`markov-chain-monte-carlo#61`](https://github.com/acgetchell/markov-chain-monte-carlo/issues/61).
+
 `MetropolisAlgorithm::run()` uses a proposal-before-mutation ordering for CDT Monte Carlo steps.
 
 For each step:
@@ -27,6 +33,25 @@ acceptance draw. Rollback remains inside the move kernels while planning on the 
 after partial invariant refresh work. The recorded `SimulationResultsBackend::move_stats` counts Metropolis-level attempted and applied moves, while
 `SimulationResultsBackend::proposal_stats` records proposal-kernel telemetry such as no-site outcomes, sampled-site failures, Metropolis rejections, and
 accepted transitions.
+
+## Chunked Sweeps
+
+`MetropolisAlgorithm::resume_to_checkpoint()` continues a stored `CdtMcmcCheckpoint` for the configured additional step count and returns another resumable
+checkpoint. This keeps the checkpointed triangulation, Metropolis acceptance RNG, ergodic proposal RNG, counters, measurements, and elapsed-time telemetry
+together between chunks.
+
+The large-scale 1+1 debug harness uses this CDT-local chunking path to run one Metropolis sweep at a time. This behavior should eventually align with the
+upstream resumable sampler pattern tracked by
+[`markov-chain-monte-carlo#60`](https://github.com/acgetchell/markov-chain-monte-carlo/issues/60) and
+[`causal-triangulations#153`](https://github.com/acgetchell/causal-triangulations/issues/153):
+
+1. Read the current number of top-dimensional simplices at the start of the sweep.
+2. Run exactly that many Metropolis proposal steps.
+3. Inspect and log the checkpointed state.
+4. Enforce wall-clock caps between sweeps.
+
+Those debug runs are unfixed-volume Metropolis sweeps. The cosmological constant in the action controls volume growth or shrinkage; the harness does not impose
+a fixed-volume constraint or reuse the initial simplex count as a fixed step budget for later sweeps.
 
 ## Proposal-Ratio Correction
 

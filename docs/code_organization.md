@@ -168,10 +168,15 @@ The crate is split into two intentionally different layers:
 - `src/geometry/` is the backend interface layer. It is the only layer that talks directly to the `delaunay` crate, wrapping upstream types behind crate-owned
   traits, opaque handles, generators, and backend adapters.
 - `src/cdt/` is the CDT domain layer. It owns causal triangulation semantics: foliation, topology and causality checks, ergodic moves, Regge action, Metropolis
-  sampling, measurements, and observables.
+  sampling adapters, measurements, and observables.
 
 Code outside `src/geometry/` must not import `delaunay::` directly. CDT modules should depend on `TriangulationQuery` / `TriangulationMut`, crate-owned Delaunay
 handle wrappers, `DelaunayBackend2D`, and generator functions from `crate::geometry`.
+
+Generic MCMC mechanics should be delegated to `markov-chain-monte-carlo` through thin CDT adapters. CDT owns domain state, proposal-site enumeration,
+foliation/topology validation, measurements, and result translation; the upstream MCMC crate should own Metropolis-Hastings acceptance, proposal-ratio
+application, chain counters, delayed-proposal commit ordering, and reusable sampler continuation behavior. The current boundary refactor is tracked by
+[`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155).
 
 ## Key Modules
 
@@ -224,11 +229,16 @@ The implementation is split into child modules under `src/cdt/triangulation/`:
 
 ### `cdt/metropolis.rs` — Metropolis move ordering
 
-`MetropolisAlgorithm::run()` proposes a move type, samples an explicit local proposal site from the same universe used for proposal counts, plans that site on a
-cloned triangulation, computes `ΔS` and the forward/reverse Metropolis-Hastings site-count ratio, accepts or rejects the concrete proposal, and only replaces
-the live triangulation after acceptance. Ordinary causal, geometric, and backend edit failures are self-loop proposal outcomes recorded in
-`ProposalStatistics`; hard backend failures remain structured errors. Toroidal move finalization rejects and rolls back candidate sites that would violate χ =
-0 or the closed-S¹ per-slice foliation invariant. See `docs/metropolis.md` for the detailed ordering and detailed-balance contract.
+`MetropolisAlgorithm::run()` is the current CDT production runner for proposal-before-mutation sampling. It proposes a move type, samples an explicit local
+proposal site from the same universe used for proposal counts, plans that site on a cloned triangulation, computes `ΔS` and the forward/reverse
+Metropolis-Hastings site-count ratio, accepts or rejects the concrete proposal, and only replaces the live triangulation after acceptance. Ordinary causal,
+geometric, and backend edit failures are self-loop proposal outcomes recorded in `ProposalStatistics`; hard backend failures remain structured errors.
+Toroidal move finalization rejects and rolls back candidate sites that would violate χ = 0 or the closed-S¹ per-slice foliation invariant.
+
+This direct M-H loop is transitional. The module also contains CDT adapters for `markov-chain-monte-carlo`, and the production runner should migrate toward
+delegating generic acceptance, proposal-ratio application, chain counters, and delayed-proposal commit ordering to that upstream crate while retaining
+CDT-specific telemetry and result conversion. See `docs/metropolis.md` for the detailed ordering and
+[`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155) for the boundary refactor.
 
 ### `cdt/results.rs` — Simulation outputs
 

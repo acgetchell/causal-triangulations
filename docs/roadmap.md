@@ -24,9 +24,18 @@ The v0.1.0 foundation work focuses on making the crate a usable, validated 1+1 C
   ([#140](https://github.com/acgetchell/causal-triangulations/issues/140))
 - [ ] Audit public doctests for fallible error handling
   ([#151](https://github.com/acgetchell/causal-triangulations/issues/151))
-- [ ] Use chunked Metropolis sweeps in large-scale 1+1 CDT debug runs
+- [x] Use chunked Metropolis sweeps in large-scale 1+1 CDT debug runs
   ([#152](https://github.com/acgetchell/causal-triangulations/issues/152)). The v0.1.0 scientific-utility bar requires the large-scale debug path to exercise
   Metropolis CDT behavior with literature-style sweeps sized from the current simplex count, not only the raw move kernel.
+- [ ] Align chunked Metropolis continuation with the upstream resumable sampler pattern
+  ([#153](https://github.com/acgetchell/causal-triangulations/issues/153)). Since #155 already requires a new `markov-chain-monte-carlo` release, chunked CDT
+  continuation should also move onto the upstream continuation/checkpoint API before the DOI-backed `v0.1.0` release.
+- [ ] Enforce the MCMC backend boundary
+  ([#155](https://github.com/acgetchell/causal-triangulations/issues/155)). Because GitHub releases are archived by Zenodo, the DOI-backed `v0.1.0` release
+  should not ship with generic Metropolis-Hastings mechanics duplicated in CDT-local code. Complete this after an updated `markov-chain-monte-carlo` release
+  provides the needed upstream resumable-sampler and delayed-step telemetry APIs
+  ([markov-chain-monte-carlo#60](https://github.com/acgetchell/markov-chain-monte-carlo/issues/60),
+  [markov-chain-monte-carlo#61](https://github.com/acgetchell/markov-chain-monte-carlo/issues/61)).
 
 ## 1+1 Maturity
 
@@ -38,9 +47,10 @@ Likely follow-up work before broadening the dimensional surface:
 - Add manual foliation assignment APIs with the same validation and synchronization guarantees as constructor-assigned labels
 - Add tutorial-style examples for open-boundary strips, toroidal runs, observables, and interpreting Metropolis acceptance behavior
 
-## v0.1.1 Ensemble Controls
+## v0.1.1 Maturity And Ensemble Controls
 
-The post-v0.1.0 1+1 track should keep the default ensemble scientifically explicit while adding opt-in controls for finite-volume numerical workflows:
+The post-v0.1.0 1+1 track should keep the default ensemble scientifically explicit while adding opt-in controls, dependency-gated cleanup, and public API
+polish that are useful but not required for the first DOI-backed foundation release:
 
 - Add optional CDT volume fixing for bounded large-scale simulations
   ([#142](https://github.com/acgetchell/causal-triangulations/issues/142)). Volume fixing should be opt-in and documented as a modified action, not the default
@@ -54,9 +64,9 @@ The post-v0.1.0 1+1 track should keep the default ensemble scientifically explic
 - Redesign public error shapes for ergonomic typed diagnostics
   ([#149](https://github.com/acgetchell/causal-triangulations/issues/149)). This should build on the current typed category enums by evaluating richer observed
   values, constraints, and matching patterns without blocking the v0.1.0 correctness work.
-- Align the local chunked Metropolis API with the upstream resumable sampler pattern
-  ([#153](https://github.com/acgetchell/causal-triangulations/issues/153)). This is 1+1 stabilization after the v0.1.0 scientific workflow is functional:
-  `markov-chain-monte-carlo#60` should guide API convergence, but it should not block the local CDT behavior needed for v0.1.0.
+- Use exact Delaunay flip-feasibility validators for proposal-site accounting once `delaunay#419` ships
+  ([#146](https://github.com/acgetchell/causal-triangulations/issues/146)). v0.1.0 should prove CDT's counted proposal sites match the sites sampled by the
+  proposal kernel; backend-provided immutable feasibility checks are post-release dependency-gated tightening that avoids duplicating Delaunay dry-run policy.
 
 ## Higher-Dimensional CDT Tracks
 
