@@ -64,6 +64,11 @@ The useful updates ported from MCMC are:
   unit and integration tests.
 - public-surface Rust Semgrep rules that reject `unwrap()` and `expect()` in public doctests, Cargo examples, and benchmark harnesses, with benchmarks using
   explicit fixture helpers so failed setup still reports the operation that failed.
+- The `causal-triangulations.rust.no-unwrap-expect-in-doctests` rule now distinguishes code-like `.unwrap()` and `.expect(...)` calls from prose mentions, and
+  `causal-triangulations.rust.no-unwrap-expect-in-benches-examples` keeps Semgrep fixture cross-matches scoped to the
+  `tests/semgrep/src/project_rules/rust_style.rs` fixture shape. Before this refinement, prose such as "do not use `.unwrap()`" could be reported and Semgrep
+  test mode needed broader name-based exclusions; after it, public-surface checks still reject panic-style calls while fixture-only exceptions are explicitly
+  anchored.
 - an `examples-validate` recipe that runs Cargo examples and verifies stable output markers for the user-facing example contracts.
 
 The useful Semgrep updates ported from the sibling `delaunay` repository are:
