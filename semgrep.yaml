@@ -370,17 +370,20 @@ rules:
           - pattern: $VALUE.unwrap()
           - pattern: $VALUE.expect(...)
       - pattern-not-inside: |
-          fn production_unwrap_and_panic_fixture(...) {
+          fn production_unwrap_and_panic_fixture(result: Result<u32, &'static str>, value: Option<u32>) {
               ...
           }
       - pattern-not-inside: |
-          fn test_only_unwrap_and_panic_fixture(...) {
+          #[cfg(test)]
+          fn test_only_unwrap_and_panic_fixture(result: Result<u32, &'static str>) {
               ...
           }
       - pattern-not-inside: |
           #[cfg(test)]
           mod prop_tests {
-              ...
+              fn helper(result: Result<u32, &'static str>) {
+                  ...
+              }
           }
 
   - id: causal-triangulations.rust.no-panic-in-src
