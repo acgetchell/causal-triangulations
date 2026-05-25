@@ -263,17 +263,16 @@ impl Target<CdtTriangulation2D> for CdtTarget {
 ///
 /// ```
 /// use causal_triangulations::prelude::action::ActionConfig;
+/// use causal_triangulations::prelude::errors::CdtResult;
 /// use causal_triangulations::prelude::moves::MoveType;
 /// use causal_triangulations::prelude::simulation::{
-///     CdtProposal, CdtProposalError, CdtTriangulation,
+///     CdtProposal, CdtTriangulation, DelayedProposal,
 /// };
-/// use markov_chain_monte_carlo::DelayedProposal;
 /// use rand::{SeedableRng, rngs::StdRng};
 ///
-/// # fn main() -> Result<(), CdtProposalError> {
-/// let tri = CdtTriangulation::from_cdt_strip(4, 3).expect("valid CDT strip");
-/// let mut proposal =
-///     CdtProposal::with_seed(ActionConfig::default(), 7).expect("valid action config");
+/// # fn main() -> CdtResult<()> {
+/// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+/// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7)?;
 /// let mut rng = StdRng::seed_from_u64(11);
 ///
 /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
@@ -351,16 +350,15 @@ impl CdtProposalPlan {
 ///
 /// ```
 /// use causal_triangulations::prelude::action::ActionConfig;
+/// use causal_triangulations::prelude::errors::CdtResult;
 /// use causal_triangulations::prelude::simulation::{
-///     CdtProposal, CdtProposalError, CdtTriangulation,
+///     CdtProposal, CdtTriangulation, DelayedProposal,
 /// };
-/// use markov_chain_monte_carlo::DelayedProposal;
 /// use rand::{SeedableRng, rngs::StdRng};
 ///
-/// # fn main() -> Result<(), CdtProposalError> {
-/// let tri = CdtTriangulation::from_cdt_strip(4, 3).expect("valid CDT strip");
-/// let mut proposal =
-///     CdtProposal::with_seed(ActionConfig::default(), 7).expect("valid action config");
+/// # fn main() -> CdtResult<()> {
+/// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+/// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7)?;
 /// let mut rng = StdRng::seed_from_u64(11);
 /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
 ///     return Ok(());
@@ -611,6 +609,22 @@ impl Error for CdtProposalError {
     }
 }
 
+impl From<CdtProposalError> for CdtError {
+    fn from(error: CdtProposalError) -> Self {
+        match error {
+            CdtProposalError::ApplicationFailed {
+                move_type,
+                attempt,
+                source,
+            } => Self::ProposalApplicationFailed {
+                move_type,
+                attempt,
+                source: MetropolisMoveApplicationFailure::from(source),
+            },
+        }
+    }
+}
+
 /// Delayed-commit CDT proposal distribution.
 ///
 /// This adapter exposes CDT's clone-plan-commit move ordering through the
@@ -624,15 +638,15 @@ impl Error for CdtProposalError {
 ///
 /// ```
 /// use causal_triangulations::prelude::action::ActionConfig;
+/// use causal_triangulations::prelude::errors::CdtResult;
 /// use causal_triangulations::prelude::simulation::{
-///     CdtProposal, CdtProposalError, CdtTriangulation,
+///     CdtProposal, CdtTriangulation, DelayedProposal,
 /// };
-/// use markov_chain_monte_carlo::DelayedProposal;
 /// use rand::{SeedableRng, rngs::StdRng};
 ///
-/// # fn main() -> Result<(), CdtProposalError> {
-/// let tri = CdtTriangulation::from_cdt_strip(4, 3).expect("valid CDT strip");
-/// let mut proposal = CdtProposal::new(ActionConfig::default()).expect("valid action config");
+/// # fn main() -> CdtResult<()> {
+/// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+/// let mut proposal = CdtProposal::new(ActionConfig::default())?;
 /// let mut rng = StdRng::seed_from_u64(7);
 ///
 /// let plan = proposal.propose_plan(&tri, &mut rng)?;
@@ -3552,6 +3566,19 @@ mod tests {
         );
         assert!(err.to_string().contains("Move13Add"));
         assert!(err.to_string().contains("attempt 2"));
+
+        let cdt_error = CdtError::from(err);
+        assert!(matches!(
+            cdt_error,
+            CdtError::ProposalApplicationFailed {
+                move_type: MoveType::Move13Add,
+                attempt: 2,
+                source: MetropolisMoveApplicationFailure::BackendMutation {
+                    operation: BackendMutationOperation::SetVertexDataByKey,
+                    ..
+                },
+            }
+        ));
 
         let site_rejection = CdtProposalSiteRejection::Kernel(source.clone());
         assert_eq!(

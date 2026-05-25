@@ -614,11 +614,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::backends::delaunay::{
-    ///     DelaunayBackend, DelaunayError,
-    /// };
+    /// use causal_triangulations::geometry::backends::delaunay::{DelaunayBackend, DelaunayError};
     /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
     /// use causal_triangulations::geometry::traits::TriangulationQuery;
+    /// use causal_triangulations::DelaunayValidationLevel;
     ///
     /// fn main() -> Result<(), DelaunayError> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -626,7 +625,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///         ([1.0, 0.0], 0),
     ///         ([0.5, 1.0], 1),
     ///     ])
-    ///     .expect("finite non-collinear triangle should build");
+    ///     .map_err(|err| DelaunayError::ValidationFailed {
+    ///         level: DelaunayValidationLevel::Four,
+    ///         detail: err.to_string(),
+    ///     })?;
     ///
     ///     let backend = DelaunayBackend::<u32, i32, 2>::from_triangulation(dt)?;
     ///     assert_eq!(backend.vertex_count(), 3);
@@ -650,9 +652,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::backends::delaunay::DelaunayError;
     /// use causal_triangulations::geometry::DelaunayBackend2D;
+    /// use causal_triangulations::geometry::backends::delaunay::DelaunayError;
     /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::DelaunayValidationLevel;
     ///
     /// fn main() -> Result<(), DelaunayError> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -660,7 +663,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///         ([1.0, 0.0], 0),
     ///         ([0.5, 1.0], 1),
     ///     ])
-    ///     .expect("finite non-collinear triangle should build");
+    ///     .map_err(|err| DelaunayError::ValidationFailed {
+    ///         level: DelaunayValidationLevel::Four,
+    ///         detail: err.to_string(),
+    ///     })?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt)?;
     ///     assert_eq!(backend.triangulation().number_of_vertices(), 3);
     ///     Ok(())
@@ -682,9 +688,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::backends::delaunay::DelaunayError;
     /// use causal_triangulations::geometry::DelaunayBackend2D;
+    /// use causal_triangulations::geometry::backends::delaunay::DelaunayError;
     /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::DelaunayValidationLevel;
     ///
     /// fn main() -> Result<(), DelaunayError> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -692,7 +699,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///         ([1.0, 0.0], 0),
     ///         ([0.5, 1.0], 1),
     ///     ])
-    ///     .expect("finite non-collinear triangle should build");
+    ///     .map_err(|err| DelaunayError::ValidationFailed {
+    ///         level: DelaunayValidationLevel::Four,
+    ///         detail: err.to_string(),
+    ///     })?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt)?;
     ///     assert!(backend.is_delaunay());
     ///     Ok(())
@@ -718,9 +728,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::backends::delaunay::DelaunayError;
     /// use causal_triangulations::geometry::DelaunayBackend2D;
+    /// use causal_triangulations::geometry::backends::delaunay::DelaunayError;
     /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::DelaunayValidationLevel;
     ///
     /// fn main() -> Result<(), DelaunayError> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -728,7 +739,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///         ([1.0, 0.0], 0),
     ///         ([0.5, 1.0], 1),
     ///     ])
-    ///     .expect("finite non-collinear triangle should build");
+    ///     .map_err(|err| DelaunayError::ValidationFailed {
+    ///         level: DelaunayValidationLevel::Four,
+    ///         detail: err.to_string(),
+    ///     })?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt)?;
     ///     backend.validate_delaunay()?;
     ///     Ok(())
@@ -803,7 +817,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::CdtResult;
+    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::geometry::DelaunayBackend2D;
     /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
     /// use std::num::NonZeroUsize;
@@ -814,8 +828,12 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///         ([1.0, 0.0], 0),
     ///         ([0.5, 1.0], 1),
     ///     ])?;
-    ///     let mut backend = DelaunayBackend2D::from_triangulation(dt)
-    ///         .expect("Delaunay input should validate");
+    ///     let mut backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+    ///         CdtError::DelaunayValidationFailed {
+    ///             level: DelaunayValidationLevel::Four,
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
     ///
     ///     backend.set_delaunay_check_interval(NonZeroUsize::new(16));
     ///     backend.set_delaunay_check_interval(None);
@@ -847,17 +865,25 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::geometry::DelaunayBackend2D;
     /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
     ///
-    /// let dt = build_delaunay2_with_data(&[
-    ///     ([0.0, 0.0], 0_u32),
-    ///     ([1.0, 0.0], 0),
-    ///     ([0.5, 1.0], 1),
-    /// ]).unwrap();
-    /// let backend = DelaunayBackend2D::from_triangulation(dt)
-    ///     .expect("Delaunay input should validate");
-    /// let _kind = backend.topology_kind();
+    /// fn main() -> CdtResult<()> {
+    ///     let dt = build_delaunay2_with_data(&[
+    ///         ([0.0, 0.0], 0_u32),
+    ///         ([1.0, 0.0], 0),
+    ///         ([0.5, 1.0], 1),
+    ///     ])?;
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+    ///         CdtError::DelaunayValidationFailed {
+    ///             level: DelaunayValidationLevel::Four,
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
+    ///     let _kind = backend.topology_kind();
+    ///     Ok(())
+    /// }
     /// ```
     #[must_use]
     pub const fn topology_kind(&self) -> TopologyKind {
@@ -869,10 +895,14 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::CdtResult;
     /// use causal_triangulations::prelude::triangulation::*;
     ///
-    /// let tri = CdtTriangulation::from_toroidal_cdt(3, 3).unwrap();
-    /// assert_eq!(tri.geometry().periodic_domain(), Some([3.0, 3.0]));
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_toroidal_cdt(3, 3)?;
+    ///     assert_eq!(tri.geometry().periodic_domain(), Some([3.0, 3.0]));
+    ///     Ok(())
+    /// }
     /// ```
     #[must_use]
     pub const fn periodic_domain(&self) -> Option<[f64; D]> {
@@ -889,18 +919,38 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::{
+    ///     CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, DelaunayValidationLevel,
+    /// };
     /// use causal_triangulations::geometry::DelaunayBackend2D;
     /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
     ///
-    /// let dt = build_delaunay2_with_data(&[
-    ///     ([0.0, 0.0], 0_u32),
-    ///     ([1.0, 0.0], 0),
-    ///     ([0.5, 1.0], 1),
-    /// ]).unwrap();
-    /// let backend = DelaunayBackend2D::from_triangulation(dt)
-    ///     .expect("Delaunay input should validate");
-    /// let (key, _) = backend.triangulation().vertices().next().unwrap();
-    /// assert!(backend.vertex_data_by_key(key).is_some());
+    /// fn main() -> CdtResult<()> {
+    ///     let dt = build_delaunay2_with_data(&[
+    ///         ([0.0, 0.0], 0_u32),
+    ///         ([1.0, 0.0], 0),
+    ///         ([0.5, 1.0], 1),
+    ///     ])?;
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+    ///         CdtError::DelaunayValidationFailed {
+    ///             level: DelaunayValidationLevel::Four,
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
+    ///     let key = backend
+    ///         .triangulation()
+    ///         .vertices()
+    ///         .next()
+    ///         .map(|(key, _)| key)
+    ///         .ok_or_else(|| CdtError::ValidationFailed {
+    ///             check: CdtValidationCheck::Geometry,
+    ///             failure: CdtValidationFailure::BackendGeometry {
+    ///                 detail: "validated triangle should contain a vertex".to_string(),
+    ///             },
+    ///         })?;
+    ///     assert!(backend.vertex_data_by_key(key).is_some());
+    ///     Ok(())
+    /// }
     /// ```
     #[must_use]
     pub fn vertex_data_by_key(&self, key: VertexKey) -> Option<VertexData> {
@@ -912,18 +962,38 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::{
+    ///     CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, DelaunayValidationLevel,
+    /// };
     /// use causal_triangulations::geometry::DelaunayBackend2D;
     /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
     ///
-    /// let dt = build_delaunay2_with_data(&[
-    ///     ([0.0, 0.0], 0_u32),
-    ///     ([1.0, 0.0], 0),
-    ///     ([0.5, 1.0], 1),
-    /// ]).unwrap();
-    /// let backend = DelaunayBackend2D::from_triangulation(dt)
-    ///     .expect("Delaunay input should validate");
-    /// let (key, _) = backend.triangulation().simplices().next().unwrap();
-    /// assert_eq!(backend.simplex_data_by_key(key), None);
+    /// fn main() -> CdtResult<()> {
+    ///     let dt = build_delaunay2_with_data(&[
+    ///         ([0.0, 0.0], 0_u32),
+    ///         ([1.0, 0.0], 0),
+    ///         ([0.5, 1.0], 1),
+    ///     ])?;
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+    ///         CdtError::DelaunayValidationFailed {
+    ///             level: DelaunayValidationLevel::Four,
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
+    ///     let key = backend
+    ///         .triangulation()
+    ///         .simplices()
+    ///         .next()
+    ///         .map(|(key, _)| key)
+    ///         .ok_or_else(|| CdtError::ValidationFailed {
+    ///             check: CdtValidationCheck::Geometry,
+    ///             failure: CdtValidationFailure::BackendGeometry {
+    ///                 detail: "validated triangle should contain a simplex".to_string(),
+    ///             },
+    ///         })?;
+    ///     assert_eq!(backend.simplex_data_by_key(key), None);
+    ///     Ok(())
+    /// }
     /// ```
     #[must_use]
     pub fn simplex_data_by_key(&self, key: SimplexKey) -> Option<SimplexData> {
@@ -941,20 +1011,47 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::{
+    ///     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck,
+    ///     CdtValidationFailure, DelaunayValidationLevel,
+    /// };
     /// use causal_triangulations::geometry::DelaunayBackend2D;
     /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
     ///
-    /// let dt = build_delaunay2_with_data(&[
-    ///     ([0.0, 0.0], 0_u32),
-    ///     ([1.0, 0.0], 0),
-    ///     ([0.5, 1.0], 1),
-    /// ]).unwrap();
-    /// let mut backend = DelaunayBackend2D::from_triangulation(dt)
-    ///     .expect("Delaunay input should validate");
-    /// let (key, _) = backend.triangulation().vertices().next().unwrap();
-    /// let previous = backend.set_vertex_data_by_key(key, Some(3)).unwrap();
-    /// assert!(previous.is_some());
-    /// assert_eq!(backend.vertex_data_by_key(key), Some(3));
+    /// fn main() -> CdtResult<()> {
+    ///     let dt = build_delaunay2_with_data(&[
+    ///         ([0.0, 0.0], 0_u32),
+    ///         ([1.0, 0.0], 0),
+    ///         ([0.5, 1.0], 1),
+    ///     ])?;
+    ///     let mut backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+    ///         CdtError::DelaunayValidationFailed {
+    ///             level: DelaunayValidationLevel::Four,
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
+    ///     let key = backend
+    ///         .triangulation()
+    ///         .vertices()
+    ///         .next()
+    ///         .map(|(key, _)| key)
+    ///         .ok_or_else(|| CdtError::ValidationFailed {
+    ///             check: CdtValidationCheck::Geometry,
+    ///             failure: CdtValidationFailure::BackendGeometry {
+    ///                 detail: "validated triangle should contain a vertex".to_string(),
+    ///             },
+    ///         })?;
+    ///     let previous = backend.set_vertex_data_by_key(key, Some(3)).map_err(|err| {
+    ///         CdtError::BackendMutationFailed {
+    ///             operation: BackendMutationOperation::SetVertexDataByKey,
+    ///             target: format!("vertex {key:?}"),
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
+    ///     assert!(previous.is_some());
+    ///     assert_eq!(backend.vertex_data_by_key(key), Some(3));
+    ///     Ok(())
+    /// }
     /// ```
     pub fn set_vertex_data_by_key(
         &mut self,
@@ -977,20 +1074,47 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::{
+    ///     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck,
+    ///     CdtValidationFailure, DelaunayValidationLevel,
+    /// };
     /// use causal_triangulations::geometry::DelaunayBackend2D;
     /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
     ///
-    /// let dt = build_delaunay2_with_data(&[
-    ///     ([0.0, 0.0], 0_u32),
-    ///     ([1.0, 0.0], 0),
-    ///     ([0.5, 1.0], 1),
-    /// ]).unwrap();
-    /// let mut backend = DelaunayBackend2D::from_triangulation(dt)
-    ///     .expect("Delaunay input should validate");
-    /// let (key, _) = backend.triangulation().simplices().next().unwrap();
-    /// let previous = backend.set_simplex_data_by_key(key, Some(1)).unwrap();
-    /// assert_eq!(previous, None);
-    /// assert_eq!(backend.simplex_data_by_key(key), Some(1));
+    /// fn main() -> CdtResult<()> {
+    ///     let dt = build_delaunay2_with_data(&[
+    ///         ([0.0, 0.0], 0_u32),
+    ///         ([1.0, 0.0], 0),
+    ///         ([0.5, 1.0], 1),
+    ///     ])?;
+    ///     let mut backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+    ///         CdtError::DelaunayValidationFailed {
+    ///             level: DelaunayValidationLevel::Four,
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
+    ///     let key = backend
+    ///         .triangulation()
+    ///         .simplices()
+    ///         .next()
+    ///         .map(|(key, _)| key)
+    ///         .ok_or_else(|| CdtError::ValidationFailed {
+    ///             check: CdtValidationCheck::Geometry,
+    ///             failure: CdtValidationFailure::BackendGeometry {
+    ///                 detail: "validated triangle should contain a simplex".to_string(),
+    ///             },
+    ///         })?;
+    ///     let previous = backend.set_simplex_data_by_key(key, Some(1)).map_err(|err| {
+    ///         CdtError::BackendMutationFailed {
+    ///             operation: BackendMutationOperation::SetSimplexDataByKey,
+    ///             target: format!("simplex {key:?}"),
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
+    ///     assert_eq!(previous, None);
+    ///     assert_eq!(backend.simplex_data_by_key(key), Some(1));
+    ///     Ok(())
+    /// }
     /// ```
     pub fn set_simplex_data_by_key(
         &mut self,

@@ -82,9 +82,11 @@ Public APIs must **not panic**.
 
 Use explicit error propagation.
 
-Production `src/` code must not use bare `unwrap()` or explicit `panic!`. Use `?`, typed errors, `Option`, or an intentional fallback instead. Tests, doctests,
-examples, and benchmark setup may fail fast when a broken fixture should stop execution immediately; prefer `expect("reason")` over bare `unwrap()` in
-user-facing examples so failures remain diagnosable.
+Production `src/` code must not use bare `unwrap()` or explicit `panic!`. Use `?`, typed errors, `Option`, or an intentional fallback instead.
+
+Public doctests, Cargo examples, and benchmarks must not use `unwrap()` or `expect()`. Doctests and examples should normally return `CdtResult<()>` and use
+`?`; benchmarks should use small local fixture helpers that preserve the failed operation in their panic message. Unit and integration tests may still fail
+fast with `expect("reason")` when a broken fixture should stop execution immediately.
 
 ### Fallible public functions
 

@@ -708,7 +708,8 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
                 time_1,
                 step_distance,
             },
-            CdtError::MetropolisMoveApplicationFailed { source, .. } => source,
+            CdtError::MetropolisMoveApplicationFailed { source, .. }
+            | CdtError::ProposalApplicationFailed { source, .. } => source,
             error => Self::Unexpected {
                 detail: error.to_string(),
             },
@@ -797,6 +798,16 @@ pub enum CdtError {
         move_type: MoveType,
         /// Number of application attempts made before failing.
         attempts: usize,
+        /// Most specific lower-level rejection or failure observed.
+        source: MetropolisMoveApplicationFailure,
+    },
+    /// Planning or committing a standalone delayed CDT proposal hit a hard failure.
+    #[error("CDT proposal failed while applying {move_type:?} on attempt {attempt}: {source}")]
+    ProposalApplicationFailed {
+        /// Move type whose concrete proposal application failed.
+        move_type: MoveType,
+        /// Local-site attempt that hit the hard failure.
+        attempt: usize,
         /// Most specific lower-level rejection or failure observed.
         source: MetropolisMoveApplicationFailure,
     },
@@ -1504,6 +1515,29 @@ mod tests {
         assert_eq!(
             display,
             "Metropolis accepted Move31Remove at step 17, but applying it failed after 8 attempts; source: backend mutation failed [set_vertex_data] on vertex VertexKey(123v1): backend reported invalid vertex key"
+        );
+        assert_eq!(
+            Error::source(&error).map(ToString::to_string),
+            Some(source.to_string())
+        );
+    }
+
+    #[test]
+    fn test_proposal_application_failed_error() {
+        let source = MetropolisMoveApplicationFailure::BackendMutation {
+            operation: BackendMutationOperation::SetVertexDataByKey,
+            target: "vertex VertexKey(123v1)".to_string(),
+            detail: "backend reported invalid vertex key".to_string(),
+        };
+        let error = CdtError::ProposalApplicationFailed {
+            move_type: MoveType::Move13Add,
+            attempt: 2,
+            source: source.clone(),
+        };
+        let display = format!("{error}");
+        assert_eq!(
+            display,
+            "CDT proposal failed while applying Move13Add on attempt 2: backend mutation failed [set_vertex_data_by_key] on vertex VertexKey(123v1): backend reported invalid vertex key"
         );
         assert_eq!(
             Error::source(&error).map(ToString::to_string),

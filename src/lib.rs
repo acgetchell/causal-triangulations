@@ -33,13 +33,23 @@
 //! transient caches and timestamps on load.
 //!
 //! ```
+//! use causal_triangulations::{CheckpointOperation, CdtError};
 //! use causal_triangulations::prelude::triangulation::*;
 //! use serde_json::{from_str, to_string};
 //!
 //! fn main() -> CdtResult<()> {
 //!     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-//!     let json = to_string(&tri).expect("serialize checkpoint");
-//!     let restored: CdtTriangulation2D = from_str(&json).expect("deserialize checkpoint");
+//!     let json = to_string(&tri).map_err(|err| CdtError::CheckpointSerializationFailed {
+//!         operation: CheckpointOperation::Serialize,
+//!         target: "triangulation".to_string(),
+//!         detail: err.to_string(),
+//!     })?;
+//!     let restored: CdtTriangulation2D =
+//!         from_str(&json).map_err(|err| CdtError::CheckpointSerializationFailed {
+//!             operation: CheckpointOperation::Deserialize,
+//!             target: "triangulation".to_string(),
+//!             detail: err.to_string(),
+//!         })?;
 //!     restored.validate_topology()?;
 //!     restored.validate_foliation()?;
 //!     restored.validate_causality()?;
@@ -285,7 +295,10 @@ pub mod prelude {
     /// proposal adapter, telemetry structs, result containers, and typed
     /// proposal errors needed by MCMC workflows. It also includes the
     /// triangulation query trait so callers can inspect final or checkpointed
-    /// states returned by simulation APIs.
+    /// states returned by simulation APIs. The upstream MCMC traits are
+    /// re-exported here because [`CdtProposal`](crate::cdt::metropolis::CdtProposal)
+    /// and [`CdtTarget`](crate::cdt::metropolis::CdtTarget) expose their primary
+    /// behavior through those trait implementations.
     /// Observable estimators live in [`crate::prelude::observables`].
     pub mod simulation {
         pub use crate::cdt::action::{ActionConfig, compute_regge_action};
@@ -301,6 +314,7 @@ pub mod prelude {
         pub use crate::geometry::CdtTriangulation2D;
         pub use crate::geometry::traits::TriangulationQuery;
         pub use crate::{CdtTriangulation, run_simulation};
+        pub use markov_chain_monte_carlo::{ChainCheckpoint, DelayedProposal, Target};
     }
 
     /// Focused exports for CDT observables and post-simulation analysis.
@@ -341,7 +355,7 @@ pub mod prelude {
     /// queries), without pulling in simulation-specific symbols.
     ///
     /// ```
-    /// use causal_triangulations::CdtResult;
+    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::geometry::*;
     ///
     /// fn main() -> CdtResult<()> {
@@ -351,8 +365,12 @@ pub mod prelude {
     ///         ([0.5, 1.0], 1),
     ///     ])?;
     ///
-    ///     let mut backend = DelaunayBackend2D::from_triangulation(dt)
-    ///         .expect("Delaunay input should validate");
+    ///     let mut backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+    ///         CdtError::DelaunayValidationFailed {
+    ///             level: DelaunayValidationLevel::Four,
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
     ///     assert!(backend.is_valid());
     ///
     ///     let topology: GlobalTopology<2> = GlobalTopology::Toroidal {

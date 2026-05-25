@@ -61,7 +61,9 @@ The useful updates ported from MCMC are:
   release tags;
 - a Semgrep rule that rejects `NaN` and infinity defaults after failed floating-point conversions, with a regression fixture under `tests/semgrep/`.
 - production-only Rust Semgrep rules that reject bare `unwrap()` and explicit `panic!` in non-test `src/` code while preserving idiomatic fail-fast usage in
-  tests, doctests, examples, and benchmark setup.
+  unit and integration tests.
+- public-surface Rust Semgrep rules that reject `unwrap()` and `expect()` in public doctests, Cargo examples, and benchmark harnesses, with benchmarks using
+  explicit fixture helpers so failed setup still reports the operation that failed.
 - an `examples-validate` recipe that runs Cargo examples and verifies stable output markers for the user-facing example contracts.
 
 The useful Semgrep updates ported from the sibling `delaunay` repository are:

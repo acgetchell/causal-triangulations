@@ -1,0 +1,8 @@
+// ruleid: causal-triangulations.rust.no-unwrap-expect-in-doctests
+/// let value = Some(1_u32).unwrap();
+
+// ruleid: causal-triangulations.rust.no-unwrap-expect-in-doctests
+//! let value = Ok::<u32, &'static str>(1).expect("doctest should not panic");
+
+// ok: causal-triangulations.rust.no-unwrap-expect-in-doctests
+/// # fn main() -> causal_triangulations::CdtResult<()> { Ok(()) }

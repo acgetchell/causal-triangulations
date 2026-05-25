@@ -823,17 +823,19 @@ impl CdtConfig {
     /// ```
     /// use causal_triangulations::CdtConfig;
     ///
-    /// let config = CdtConfig::try_from_args([
-    ///     "cdt",
-    ///     "--vertices-per-slice",
-    ///     "4",
-    ///     "--timeslices",
-    ///     "4",
-    /// ])
-    /// .expect("valid CLI arguments");
+    /// fn main() -> Result<(), clap::Error> {
+    ///     let config = CdtConfig::try_from_args([
+    ///         "cdt",
+    ///         "--vertices-per-slice",
+    ///         "4",
+    ///         "--timeslices",
+    ///         "4",
+    ///     ])?;
     ///
-    /// assert_eq!(config.vertices, 16);
-    /// assert_eq!(config.timeslices, 4);
+    ///     assert_eq!(config.vertices, 16);
+    ///     assert_eq!(config.timeslices, 4);
+    ///     Ok(())
+    /// }
     /// ```
     pub fn try_from_args<I, T>(args: I) -> Result<Self, ClapError>
     where
