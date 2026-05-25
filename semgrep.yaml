@@ -371,17 +371,20 @@ rules:
           - pattern: $VALUE.expect(...)
       - pattern-not-inside: |
           fn production_unwrap_and_panic_fixture(result: Result<u32, &'static str>, value: Option<u32>) {
+              // Fixture path: tests/semgrep/src/project_rules/rust_style.rs.
               ...
           }
       - pattern-not-inside: |
           #[cfg(test)]
           fn test_only_unwrap_and_panic_fixture(result: Result<u32, &'static str>) {
+              // Fixture path: tests/semgrep/src/project_rules/rust_style.rs.
               ...
           }
       - pattern-not-inside: |
           #[cfg(test)]
           mod prop_tests {
               fn helper(result: Result<u32, &'static str>) {
+                  // Fixture path: tests/semgrep/src/project_rules/rust_style.rs.
                   ...
               }
           }

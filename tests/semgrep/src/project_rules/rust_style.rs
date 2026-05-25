@@ -101,6 +101,7 @@ mod tests {
 }
 
 fn production_unwrap_and_panic_fixture(result: Result<u32, &'static str>, value: Option<u32>) {
+    // Fixture path: tests/semgrep/src/project_rules/rust_style.rs.
     // ruleid: causal-triangulations.rust.no-bare-unwrap-in-src
     let _ = result.unwrap();
 
@@ -116,6 +117,7 @@ fn production_unwrap_and_panic_fixture(result: Result<u32, &'static str>, value:
 
 #[cfg(test)]
 fn test_only_unwrap_and_panic_fixture(result: Result<u32, &'static str>) {
+    // Fixture path: tests/semgrep/src/project_rules/rust_style.rs.
     // ok: causal-triangulations.rust.no-bare-unwrap-in-src
     let _ = result.unwrap();
 
@@ -126,6 +128,7 @@ fn test_only_unwrap_and_panic_fixture(result: Result<u32, &'static str>) {
 #[cfg(test)]
 mod prop_tests {
     fn helper(result: Result<u32, &'static str>) {
+        // Fixture path: tests/semgrep/src/project_rules/rust_style.rs.
         // ok: causal-triangulations.rust.no-bare-unwrap-in-src
         let _ = result.unwrap();
 
