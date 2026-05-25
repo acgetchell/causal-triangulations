@@ -101,10 +101,10 @@ mod tests {
 }
 
 fn production_unwrap_and_panic_fixture(result: Result<u32, &'static str>, value: Option<u32>) {
-    // ruleid: causal-triangulations.rust.no-bare-unwrap-in-src, causal-triangulations.rust.no-unwrap-expect-in-benches-examples
+    // ruleid: causal-triangulations.rust.no-bare-unwrap-in-src
     let _ = result.unwrap();
 
-    // ruleid: causal-triangulations.rust.no-bare-unwrap-in-src, causal-triangulations.rust.no-unwrap-expect-in-benches-examples
+    // ruleid: causal-triangulations.rust.no-bare-unwrap-in-src
     let _ = value.unwrap();
 
     // ok: causal-triangulations.rust.no-bare-unwrap-in-src
@@ -117,7 +117,6 @@ fn production_unwrap_and_panic_fixture(result: Result<u32, &'static str>, value:
 #[cfg(test)]
 fn test_only_unwrap_and_panic_fixture(result: Result<u32, &'static str>) {
     // ok: causal-triangulations.rust.no-bare-unwrap-in-src
-    // ruleid: causal-triangulations.rust.no-unwrap-expect-in-benches-examples
     let _ = result.unwrap();
 
     // ok: causal-triangulations.rust.no-panic-in-src
@@ -128,7 +127,6 @@ fn test_only_unwrap_and_panic_fixture(result: Result<u32, &'static str>) {
 mod prop_tests {
     fn helper(result: Result<u32, &'static str>) {
         // ok: causal-triangulations.rust.no-bare-unwrap-in-src
-        // ruleid: causal-triangulations.rust.no-unwrap-expect-in-benches-examples
         let _ = result.unwrap();
 
         // ok: causal-triangulations.rust.no-panic-in-src

@@ -347,7 +347,7 @@ rules:
       include:
         - "/src/**/*.rs"
         - "/tests/semgrep/doctests/**/*.txt"
-    pattern-regex: '^\s*//[!/].*\.(unwrap|expect)\s*\('
+    pattern-regex: '^\s*//[!/]\s*(?:#\s*)?.*(?:\b[\w:]+|[\]\)])\.(unwrap|expect)\s*\('
 
   - id: causal-triangulations.rust.no-unwrap-expect-in-benches-examples
     languages:
@@ -365,9 +365,23 @@ rules:
         - "/benches/**/*.rs"
         - "/examples/**/*.rs"
         - "/tests/semgrep/src/project_rules/bench_example_usage.rs"
-    pattern-either:
-      - pattern: $VALUE.unwrap()
-      - pattern: $VALUE.expect(...)
+    patterns:
+      - pattern-either:
+          - pattern: $VALUE.unwrap()
+          - pattern: $VALUE.expect(...)
+      - pattern-not-inside: |
+          fn production_unwrap_and_panic_fixture(...) {
+              ...
+          }
+      - pattern-not-inside: |
+          fn test_only_unwrap_and_panic_fixture(...) {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod prop_tests {
+              ...
+          }
 
   - id: causal-triangulations.rust.no-panic-in-src
     languages:
