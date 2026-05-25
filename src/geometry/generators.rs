@@ -108,11 +108,14 @@ fn validate_toroidal_domain(domain: [f64; 2]) -> CdtResult<()> {
 /// # Examples
 ///
 /// ```
+/// use causal_triangulations::CdtResult;
 /// use causal_triangulations::prelude::geometry::*;
 ///
-/// let dt = generate_delaunay2(5, (0.0, 1.0), Some(7))
-///     .expect("seeded generation succeeds");
-/// assert_eq!(dt.number_of_vertices(), 5);
+/// fn main() -> CdtResult<()> {
+///     let dt = generate_delaunay2(5, (0.0, 1.0), Some(7))?;
+///     assert_eq!(dt.number_of_vertices(), 5);
+///     Ok(())
+/// }
 /// ```
 pub fn generate_delaunay2(
     number_of_vertices: u32,
@@ -180,15 +183,18 @@ pub fn generate_delaunay2(
 /// # Examples
 ///
 /// ```
+/// use causal_triangulations::CdtResult;
 /// use causal_triangulations::prelude::geometry::*;
 ///
-/// let dt = build_delaunay2_with_data(&[
-///     ([0.0, 0.0], 0),
-///     ([1.0, 0.0], 0),
-///     ([0.5, 1.0], 1),
-/// ])
-/// .expect("build labeled triangle");
-/// assert_eq!(dt.number_of_vertices(), 3);
+/// fn main() -> CdtResult<()> {
+///     let dt = build_delaunay2_with_data(&[
+///         ([0.0, 0.0], 0),
+///         ([1.0, 0.0], 0),
+///         ([0.5, 1.0], 1),
+///     ])?;
+///     assert_eq!(dt.number_of_vertices(), 3);
+///     Ok(())
+/// }
 /// ```
 pub fn build_delaunay2_with_data(
     coords_with_data: &[([f64; 2], u32)],
@@ -257,16 +263,19 @@ pub fn build_delaunay2_with_data(
 /// # Examples
 ///
 /// ```
+/// use causal_triangulations::CdtResult;
 /// use causal_triangulations::prelude::geometry::*;
 ///
-/// // Single labeled triangle (PL-manifold-with-boundary, Euclidean):
-/// let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
-/// let simplices = vec![vec![0, 1, 2]];
+/// fn main() -> CdtResult<()> {
+///     // Single labeled triangle (PL-manifold-with-boundary, Euclidean):
+///     let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
+///     let simplices = vec![vec![0, 1, 2]];
 ///
-/// let dt = build_delaunay2_from_simplices(&vertices, &simplices)
-///     .expect("explicit single-triangle mesh");
-/// assert_eq!(dt.number_of_vertices(), 3);
-/// assert_eq!(dt.number_of_simplices(), 1);
+///     let dt = build_delaunay2_from_simplices(&vertices, &simplices)?;
+///     assert_eq!(dt.number_of_vertices(), 3);
+///     assert_eq!(dt.number_of_simplices(), 1);
+///     Ok(())
+/// }
 /// ```
 pub fn build_delaunay2_from_simplices(
     coords_with_data: &[([f64; 2], u32)],
@@ -302,21 +311,24 @@ pub fn build_delaunay2_from_simplices(
 /// Import topology metadata from this crate's geometry prelude:
 ///
 /// ```
+/// use causal_triangulations::CdtResult;
 /// use causal_triangulations::prelude::geometry::*;
 ///
-/// // Single labeled triangle, default PL-manifold guarantee, Euclidean global topology.
-/// let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
-/// let simplices = vec![vec![0, 1, 2]];
+/// fn main() -> CdtResult<()> {
+///     // Single labeled triangle, default PL-manifold guarantee, Euclidean global topology.
+///     let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
+///     let simplices = vec![vec![0, 1, 2]];
 ///
-/// let dt = build_delaunay2_with_topology(
-///     &vertices,
-///     &simplices,
-///     TopologyGuarantee::DEFAULT,
-///     GlobalTopology::Euclidean,
-/// )
-/// .expect("explicit single-triangle mesh");
-/// assert_eq!(dt.number_of_vertices(), 3);
-/// assert_eq!(dt.number_of_simplices(), 1);
+///     let dt = build_delaunay2_with_topology(
+///         &vertices,
+///         &simplices,
+///         TopologyGuarantee::DEFAULT,
+///         GlobalTopology::Euclidean,
+///     )?;
+///     assert_eq!(dt.number_of_vertices(), 3);
+///     assert_eq!(dt.number_of_simplices(), 1);
+///     Ok(())
+/// }
 /// ```
 pub fn build_delaunay2_with_topology(
     coords_with_data: &[([f64; 2], u32)],
@@ -389,40 +401,43 @@ pub fn build_delaunay2_with_topology(
 /// connectivity to `delaunay`:
 ///
 /// ```
+/// use causal_triangulations::{CdtError, CdtResult};
 /// use causal_triangulations::prelude::geometry::*;
-/// use causal_triangulations::CdtError;
 ///
-/// const N: usize = 3;
-/// const T: usize = 3;
+/// fn main() -> CdtResult<()> {
+///     const N: usize = 3;
+///     const LABELS: [u32; 3] = [0, 1, 2];
+///     const T: usize = LABELS.len();
 ///
-/// // Vertex (i, t) lives at index i + t*N, with x = i/N, y = t/T, label = t.
-/// let mut vertices: Vec<([f64; 2], u32)> = Vec::with_capacity(N * T);
-/// for t in 0..T {
-///     for i in 0..N {
-///         #[allow(clippy::cast_precision_loss)]
-///         let coord = [i as f64 / N as f64, t as f64 / T as f64];
-///         let label = u32::try_from(t).expect("slice index fits in u32");
-///         vertices.push((coord, label));
+///     // Vertex (i, t) lives at index i + t*N, with x = i/N, y = t/T, label = t.
+///     let mut vertices: Vec<([f64; 2], u32)> = Vec::with_capacity(N * T);
+///     for (t, label) in LABELS.into_iter().enumerate() {
+///         for i in 0..N {
+///             #[allow(clippy::cast_precision_loss)]
+///             let coord = [i as f64 / N as f64, t as f64 / T as f64];
+///             vertices.push((coord, label));
+///         }
 ///     }
-/// }
 ///
-/// // Each (i, t) quad contributes one Up and one Down triangle.
-/// let mut simplices: Vec<Vec<usize>> = Vec::with_capacity(2 * N * T);
-/// for t in 0..T {
-///     let t_next = (t + 1) % T;
-///     for i in 0..N {
-///         let i_next = (i + 1) % N;
-///         simplices.push(vec![i + t * N, i_next + t * N, i + t_next * N]);
-///         simplices.push(vec![i_next + t * N, i_next + t_next * N, i + t_next * N]);
+///     // Each (i, t) quad contributes one Up and one Down triangle.
+///     let mut simplices: Vec<Vec<usize>> = Vec::with_capacity(2 * N * T);
+///     for t in 0..T {
+///         let t_next = (t + 1) % T;
+///         for i in 0..N {
+///             let i_next = (i + 1) % N;
+///             simplices.push(vec![i + t * N, i_next + t * N, i + t_next * N]);
+///             simplices.push(vec![i_next + t * N, i_next + t_next * N, i + t_next * N]);
+///         }
 ///     }
-/// }
 ///
-/// let result = build_toroidal_delaunay2(&vertices, &simplices, [1.0, 1.0]);
-/// assert!(matches!(
-///     result,
-///     Err(CdtError::DelaunayGenerationFailed { ref underlying_error, .. })
-///         if underlying_error.contains("Explicit non-Euclidean connectivity")
-/// ));
+///     let result = build_toroidal_delaunay2(&vertices, &simplices, [1.0, 1.0]);
+///     assert!(matches!(
+///         result,
+///         Err(CdtError::DelaunayGenerationFailed { ref underlying_error, .. })
+///             if underlying_error.contains("Explicit non-Euclidean connectivity")
+///     ));
+///     Ok(())
+/// }
 /// ```
 pub fn build_toroidal_delaunay2(
     coords_with_data: &[([f64; 2], u32)],
@@ -465,19 +480,19 @@ pub fn build_toroidal_delaunay2(
 /// and validate it with the upstream Level 1-4 checks:
 ///
 /// ```
-/// use causal_triangulations::CdtResult;
+/// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
 /// use causal_triangulations::prelude::geometry::*;
 ///
 /// fn main() -> CdtResult<()> {
 ///     const N: usize = 3;
-///     const T: usize = 3;
+///     const LABELS: [u32; 3] = [0, 1, 2];
+///     const T: usize = LABELS.len();
 ///     let mut vertices: Vec<([f64; 2], u32)> = Vec::with_capacity(N * T);
 ///
-///     for t in 0..T {
+///     for (t, label) in LABELS.into_iter().enumerate() {
 ///         for i in 0..N {
 ///             #[allow(clippy::cast_precision_loss)]
 ///             let coord = [i as f64, t as f64];
-///             let label = u32::try_from(t).expect("slice index fits in u32");
 ///             vertices.push((coord, label));
 ///         }
 ///     }
@@ -486,11 +501,16 @@ pub fn build_toroidal_delaunay2(
 ///     assert_eq!(dt.number_of_vertices(), N * T);
 ///     assert_eq!(dt.number_of_simplices(), 2 * N * T);
 ///
-///     let backend = DelaunayBackend2D::from_triangulation(dt)
-///         .expect("Delaunay input should validate");
-///     backend
-///         .validate_delaunay()
-///         .expect("periodic toroidal mesh passes Level 1-4 validation");
+///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+///         CdtError::DelaunayValidationFailed {
+///             level: DelaunayValidationLevel::Four,
+///             detail: err.to_string(),
+///         }
+///     })?;
+///     backend.validate_delaunay().map_err(|err| CdtError::DelaunayValidationFailed {
+///         level: DelaunayValidationLevel::Four,
+///         detail: err.to_string(),
+///     })?;
 ///     Ok(())
 /// }
 /// ```

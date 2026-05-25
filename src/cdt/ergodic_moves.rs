@@ -656,26 +656,32 @@ impl ErgodicsSystem {
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
     ///
-    /// let dt = build_delaunay2_from_simplices(
-    ///     &[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 1), ([1.0, 1.0], 1)],
-    ///     &[vec![0, 1, 2], vec![1, 3, 2]],
-    /// )
-    /// .expect("build square CDT");
-    /// let backend = DelaunayBackend2D::from_triangulation(dt)
-    ///     .expect("Delaunay input should validate");
-    /// let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
-    ///     .expect("wrap labeled square");
-    /// let mut system = ErgodicsSystem::new();
-    /// let result = system.attempt_22_move(&mut triangulation);
-    /// assert!(matches!(
-    ///     result,
-    ///     MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
-    /// ));
-    /// assert_eq!(system.stats.moves_22_attempted, 1);
+    /// fn main() -> CdtResult<()> {
+    ///     let dt = build_delaunay2_from_simplices(
+    ///         &[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 1), ([1.0, 1.0], 1)],
+    ///         &[vec![0, 1, 2], vec![1, 3, 2]],
+    ///     )?;
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+    ///         CdtError::DelaunayValidationFailed {
+    ///             level: DelaunayValidationLevel::Four,
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
+    ///     let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
+    ///     let mut system = ErgodicsSystem::new();
+    ///     let result = system.attempt_22_move(&mut triangulation);
+    ///     assert!(matches!(
+    ///         result,
+    ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
+    ///     ));
+    ///     assert_eq!(system.stats.moves_22_attempted, 1);
+    ///     Ok(())
+    /// }
     /// ```
     pub fn attempt_22_move(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         self.stats.record_attempt(MoveType::Move22);
@@ -699,24 +705,30 @@ impl ErgodicsSystem {
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
     ///
-    /// let dt = build_delaunay2_with_data(&[
-    ///     ([0.0, 0.0], 0),
-    ///     ([1.0, 0.0], 0),
-    ///     ([0.5, 1.0], 1),
-    /// ])
-    /// .expect("build labeled triangle");
-    /// let backend = DelaunayBackend2D::from_triangulation(dt)
-    ///     .expect("Delaunay input should validate");
-    /// let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
-    ///     .expect("wrap labeled triangle");
-    /// let mut system = ErgodicsSystem::new();
-    /// let result = system.attempt_13_move(&mut triangulation);
-    /// assert!(matches!(result, MoveResult::Success | MoveResult::GeometricViolation));
-    /// assert_eq!(system.stats.moves_13_attempted, 1);
+    /// fn main() -> CdtResult<()> {
+    ///     let dt = build_delaunay2_with_data(&[
+    ///         ([0.0, 0.0], 0),
+    ///         ([1.0, 0.0], 0),
+    ///         ([0.5, 1.0], 1),
+    ///     ])?;
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+    ///         CdtError::DelaunayValidationFailed {
+    ///             level: DelaunayValidationLevel::Four,
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
+    ///     let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
+    ///     let mut system = ErgodicsSystem::new();
+    ///     let result = system.attempt_13_move(&mut triangulation);
+    ///     assert!(matches!(result, MoveResult::Success | MoveResult::GeometricViolation));
+    ///     assert_eq!(system.stats.moves_13_attempted, 1);
+    ///     Ok(())
+    /// }
     /// ```
     pub fn attempt_13_move(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         self.stats.record_attempt(MoveType::Move13Add);
@@ -754,28 +766,34 @@ impl ErgodicsSystem {
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
     ///
-    /// let dt = build_delaunay2_with_data(&[
-    ///     ([0.0, 0.0], 0),
-    ///     ([1.0, 0.0], 0),
-    ///     ([0.5, 1.0], 1),
-    /// ])
-    /// .expect("build labeled triangle");
-    /// let backend = DelaunayBackend2D::from_triangulation(dt)
-    ///     .expect("Delaunay input should validate");
-    /// let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
-    ///     .expect("wrap labeled triangle");
-    /// let mut system = ErgodicsSystem::new();
-    /// let _ = system.attempt_13_move(&mut triangulation);
-    /// let result = system.attempt_31_move(&mut triangulation);
-    /// assert!(matches!(
-    ///     result,
-    ///     MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
-    /// ));
-    /// assert_eq!(system.stats.moves_31_attempted, 1);
+    /// fn main() -> CdtResult<()> {
+    ///     let dt = build_delaunay2_with_data(&[
+    ///         ([0.0, 0.0], 0),
+    ///         ([1.0, 0.0], 0),
+    ///         ([0.5, 1.0], 1),
+    ///     ])?;
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+    ///         CdtError::DelaunayValidationFailed {
+    ///             level: DelaunayValidationLevel::Four,
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
+    ///     let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
+    ///     let mut system = ErgodicsSystem::new();
+    ///     let _ = system.attempt_13_move(&mut triangulation);
+    ///     let result = system.attempt_31_move(&mut triangulation);
+    ///     assert!(matches!(
+    ///         result,
+    ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
+    ///     ));
+    ///     assert_eq!(system.stats.moves_31_attempted, 1);
+    ///     Ok(())
+    /// }
     /// ```
     pub fn attempt_31_move(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         self.stats.record_attempt(MoveType::Move31Remove);
@@ -806,26 +824,32 @@ impl ErgodicsSystem {
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
     ///
-    /// let dt = build_delaunay2_from_simplices(
-    ///     &[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 1), ([1.0, 1.0], 1)],
-    ///     &[vec![0, 1, 2], vec![1, 3, 2]],
-    /// )
-    /// .expect("build square CDT");
-    /// let backend = DelaunayBackend2D::from_triangulation(dt)
-    ///     .expect("Delaunay input should validate");
-    /// let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
-    ///     .expect("wrap labeled square");
-    /// let mut system = ErgodicsSystem::new();
-    /// let result = system.attempt_edge_flip(&mut triangulation);
-    /// assert!(matches!(
-    ///     result,
-    ///     MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
-    /// ));
-    /// assert_eq!(system.stats.edge_flips_attempted, 1);
+    /// fn main() -> CdtResult<()> {
+    ///     let dt = build_delaunay2_from_simplices(
+    ///         &[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 1), ([1.0, 1.0], 1)],
+    ///         &[vec![0, 1, 2], vec![1, 3, 2]],
+    ///     )?;
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+    ///         CdtError::DelaunayValidationFailed {
+    ///             level: DelaunayValidationLevel::Four,
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
+    ///     let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
+    ///     let mut system = ErgodicsSystem::new();
+    ///     let result = system.attempt_edge_flip(&mut triangulation);
+    ///     assert!(matches!(
+    ///         result,
+    ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
+    ///     ));
+    ///     assert_eq!(system.stats.edge_flips_attempted, 1);
+    ///     Ok(())
+    /// }
     /// ```
     pub fn attempt_edge_flip(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         self.stats.record_attempt(MoveType::EdgeFlip);
@@ -838,26 +862,32 @@ impl ErgodicsSystem {
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
     ///
-    /// let dt = build_delaunay2_with_data(&[
-    ///     ([0.0, 0.0], 0),
-    ///     ([1.0, 0.0], 0),
-    ///     ([0.5, 1.0], 1),
-    /// ])
-    /// .expect("build labeled triangle");
-    /// let backend = DelaunayBackend2D::from_triangulation(dt)
-    ///     .expect("Delaunay input should validate");
-    /// let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
-    ///     .expect("wrap labeled triangle");
-    /// let mut system = ErgodicsSystem::new();
-    /// let result = system.attempt_random_move(&mut triangulation);
-    /// assert!(matches!(
-    ///     result,
-    ///     MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
-    /// ));
+    /// fn main() -> CdtResult<()> {
+    ///     let dt = build_delaunay2_with_data(&[
+    ///         ([0.0, 0.0], 0),
+    ///         ([1.0, 0.0], 0),
+    ///         ([0.5, 1.0], 1),
+    ///     ])?;
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+    ///         CdtError::DelaunayValidationFailed {
+    ///             level: DelaunayValidationLevel::Four,
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
+    ///     let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
+    ///     let mut system = ErgodicsSystem::new();
+    ///     let result = system.attempt_random_move(&mut triangulation);
+    ///     assert!(matches!(
+    ///         result,
+    ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
+    ///     ));
+    ///     Ok(())
+    /// }
     /// ```
     pub fn attempt_random_move(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         let move_type = self.select_random_move();

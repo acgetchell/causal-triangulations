@@ -393,15 +393,17 @@ impl Foliation {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{Foliation, FoliationError};
+    /// use causal_triangulations::{CdtResult, Foliation, FoliationError};
     ///
-    /// let foliation = Foliation::from_slice_sizes(vec![3, 4], 2)
-    ///     .expect("both slices are non-empty");
-    /// assert_eq!(foliation.num_slices(), 2);
-    /// assert_eq!(foliation.labeled_vertex_count(), 7);
+    /// fn main() -> CdtResult<()> {
+    ///     let foliation = Foliation::from_slice_sizes(vec![3, 4], 2)?;
+    ///     assert_eq!(foliation.num_slices(), 2);
+    ///     assert_eq!(foliation.labeled_vertex_count(), 7);
     ///
-    /// let err = Foliation::from_slice_sizes(vec![], 0).expect_err("zero slices are invalid");
-    /// assert_eq!(err, FoliationError::EmptyFoliation);
+    ///     let err = Foliation::from_slice_sizes(vec![], 0).expect_err("zero slices are invalid");
+    ///     assert_eq!(err, FoliationError::EmptyFoliation);
+    ///     Ok(())
+    /// }
     /// ```
     pub fn from_slice_sizes(
         slice_sizes: Vec<usize>,
@@ -430,10 +432,13 @@ impl Foliation {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::Foliation;
+    /// use causal_triangulations::{CdtResult, Foliation};
     ///
-    /// let foliation = Foliation::from_slice_sizes(vec![3, 4], 2).unwrap();
-    /// assert_eq!(foliation.slice_sizes(), &[3, 4]);
+    /// fn main() -> CdtResult<()> {
+    ///     let foliation = Foliation::from_slice_sizes(vec![3, 4], 2)?;
+    ///     assert_eq!(foliation.slice_sizes(), &[3, 4]);
+    ///     Ok(())
+    /// }
     /// ```
     #[must_use]
     pub fn slice_sizes(&self) -> &[usize] {
@@ -445,10 +450,13 @@ impl Foliation {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::Foliation;
+    /// use causal_triangulations::{CdtResult, Foliation};
     ///
-    /// let foliation = Foliation::from_slice_sizes(vec![3, 4], 2).unwrap();
-    /// assert_eq!(foliation.num_slices(), 2);
+    /// fn main() -> CdtResult<()> {
+    ///     let foliation = Foliation::from_slice_sizes(vec![3, 4], 2)?;
+    ///     assert_eq!(foliation.num_slices(), 2);
+    ///     Ok(())
+    /// }
     /// ```
     #[must_use]
     pub const fn num_slices(&self) -> u32 {
@@ -460,10 +468,13 @@ impl Foliation {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::Foliation;
+    /// use causal_triangulations::{CdtResult, Foliation};
     ///
-    /// let foliation = Foliation::from_slice_sizes(vec![3, 4], 2).unwrap();
-    /// assert_eq!(foliation.labeled_vertex_count(), 7);
+    /// fn main() -> CdtResult<()> {
+    ///     let foliation = Foliation::from_slice_sizes(vec![3, 4], 2)?;
+    ///     assert_eq!(foliation.labeled_vertex_count(), 7);
+    ///     Ok(())
+    /// }
     /// ```
     #[must_use]
     pub fn labeled_vertex_count(&self) -> usize {

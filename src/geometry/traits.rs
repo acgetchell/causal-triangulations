@@ -105,9 +105,10 @@ pub trait TriangulationQuery: GeometryBackend {
     /// use causal_triangulations::prelude::testing::*;
     ///
     /// let backend = MockBackend::create_triangle();
-    /// let edge = backend.edges().next().expect("triangle should have an edge");
-    /// let endpoints = backend.edge_endpoints(&edge);
-    /// assert!(endpoints.is_some());
+    /// assert!(backend
+    ///     .edges()
+    ///     .next()
+    ///     .is_some_and(|edge| backend.edge_endpoints(&edge).is_some()));
     /// ```
     fn edge_endpoints(
         &self,

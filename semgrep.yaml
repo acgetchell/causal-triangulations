@@ -286,6 +286,8 @@ rules:
       include:
         - "/src/**/*.rs"
         - "/tests/semgrep/src/**/*.rs"
+      exclude:
+        - "/tests/semgrep/src/project_rules/bench_example_usage.rs"
     patterns:
       - pattern: $VALUE.unwrap()
       - pattern-not-inside: |
@@ -329,6 +331,62 @@ rules:
           #[cfg(any(test, ...))]
           impl $TYPE {
               ...
+          }
+
+  - id: causal-triangulations.rust.no-unwrap-expect-in-doctests
+    languages:
+      - generic
+    severity: WARNING
+    message: "Use fallible doctest flow instead of unwrap() or expect() in public documentation examples."
+    metadata:
+      category: correctness
+      rationale: >-
+        Public Rust documentation examples should model typed error handling
+        with CdtResult and ? rather than teaching panic-based control flow.
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/semgrep/doctests/**/*.txt"
+    pattern-regex: '^\s*//[!/]\s*(?:#\s*)?.*(?:\b[\w:]+|[\]\)])\.(unwrap|expect)\s*\('
+
+  - id: causal-triangulations.rust.no-unwrap-expect-in-benches-examples
+    languages:
+      - rust
+    severity: WARNING
+    message: "Use explicit fixture error handling instead of unwrap() or expect() in benchmarks and examples."
+    metadata:
+      category: correctness
+      rationale: >-
+        Benchmarks and public examples should keep failure modes explicit so
+        users and CI see the operation that failed instead of a panic-only
+        unwrap/expect path.
+    paths:
+      include:
+        - "/benches/**/*.rs"
+        - "/examples/**/*.rs"
+        - "/tests/semgrep/src/project_rules/bench_example_usage.rs"
+    patterns:
+      - pattern-either:
+          - pattern: $VALUE.unwrap()
+          - pattern: $VALUE.expect(...)
+      - pattern-not-inside: |
+          fn production_unwrap_and_panic_fixture(result: Result<u32, &'static str>, value: Option<u32>) {
+              // Fixture path: tests/semgrep/src/project_rules/rust_style.rs.
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          fn test_only_unwrap_and_panic_fixture(result: Result<u32, &'static str>) {
+              // Fixture path: tests/semgrep/src/project_rules/rust_style.rs.
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod prop_tests {
+              fn helper(result: Result<u32, &'static str>) {
+                  // Fixture path: tests/semgrep/src/project_rules/rust_style.rs.
+                  ...
+              }
           }
 
   - id: causal-triangulations.rust.no-panic-in-src

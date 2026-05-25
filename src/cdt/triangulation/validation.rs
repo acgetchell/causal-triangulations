@@ -124,6 +124,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::{CdtError, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::triangulation::*;
     ///
@@ -133,8 +134,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///         ([1.0, 0.0], 0),
     ///         ([0.5, 1.0], 1),
     ///     ])?;
-    ///     let backend = DelaunayBackend2D::from_triangulation(dt)
-    ///         .expect("three non-collinear labeled points should validate");
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+    ///         CdtError::DelaunayValidationFailed {
+    ///             level: DelaunayValidationLevel::Four,
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
     ///     let tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
     ///     tri.validate_causality()?;
     ///     Ok(())
@@ -166,6 +171,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::{CdtError, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::triangulation::*;
     ///
@@ -175,8 +181,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///         ([1.0, 0.0], 0),
     ///         ([0.5, 1.0], 1),
     ///     ])?;
-    ///     let backend = DelaunayBackend2D::from_triangulation(dt)
-    ///         .expect("three non-collinear labeled points should validate");
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
+    ///         CdtError::DelaunayValidationFailed {
+    ///             level: DelaunayValidationLevel::Four,
+    ///             detail: err.to_string(),
+    ///         }
+    ///     })?;
     ///     let tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
     ///     tri.validate_causality_delaunay()?;
     ///     Ok(())

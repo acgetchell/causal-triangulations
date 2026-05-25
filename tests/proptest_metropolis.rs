@@ -3,9 +3,8 @@
 
 use approx::relative_eq;
 use causal_triangulations::prelude::action::ActionConfig;
-use causal_triangulations::prelude::simulation::CdtTarget;
+use causal_triangulations::prelude::simulation::{CdtTarget, Target};
 use causal_triangulations::prelude::triangulation::{CdtTriangulation, CdtTriangulation2D};
-use markov_chain_monte_carlo::Target;
 use proptest::prelude::*;
 
 /// Shared triangulation created once (fixed seed, cheap).
