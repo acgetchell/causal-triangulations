@@ -75,9 +75,9 @@ This section contains the seminal papers and foundational work that established 
 - Ambjørn, J., Budd, T., and Watabiki, Y. "Scale-dependent Hausdorff dimensions in 2d gravity." _Physics Letters B_ 736 (2014): 339-343. DOI:
   [10.1016/j.physletb.2014.07.047](https://doi.org/10.1016/j.physletb.2014.07.047). arXiv: [1406.6251](https://arxiv.org/abs/1406.6251)
 
-- Ambjørn, J., Gizbert-Studnicki, J., Görlich, A., Jurkiewicz, J., and Németh, D. "The phase structure of causal dynamical triangulations with toroidal spatial
-  topology." _Journal of High Energy Physics_ 2018, no. 6 (2018): 111. DOI: [10.1007/JHEP06(2018)111](https://doi.org/10.1007/JHEP06(2018)111). arXiv:
-  [1802.10434](https://arxiv.org/abs/1802.10434)
+- Ambjørn, J., Gizbert-Studnicki, J., Görlich, A., Jurkiewicz, J., and Németh, D. "The phase structure of causal dynamical triangulations with toroidal
+  spatial topology." _Journal of High Energy Physics_ 2018, no. 6 (2018): 111. DOI:
+  [10.1007/JHEP06(2018)111](https://doi.org/10.1007/JHEP06(2018)111). arXiv: [1802.10434](https://arxiv.org/abs/1802.10434)
 
 - Ambjørn, J., Görlich, A. T., Jurkiewicz, J., Loll, R., Gizbert-Studnicki, J., and Trześniewski, T. "The semiclassical limit of causal dynamical
   triangulations." _Nuclear Physics B_ 849, no. 1 (2011): 144-165. DOI:
@@ -130,6 +130,13 @@ improvements to the `markov-chain-monte-carlo` crate. Refer to that crate and it
 
 - Hastings, W. K. "Monte Carlo sampling methods using Markov chains and their applications." _Biometrika_ 57, no. 1 (1970): 97-109. DOI:
   [10.1093/biomet/57.1.97](https://doi.org/10.1093/biomet/57.1.97)
+
+### 1+1 CDT Coupling Calibration
+
+- The default non-volume-fixed 1+1 CDT action constants use the critical 2D CDT cosmological coupling `lambda_c = ln 2` from the exactly solved model described
+  by Ambjørn and Loll (1998) and reviewed by Ambjørn, Görlich, Jurkiewicz, and Loll (2012). Because this crate's action writes the cosmological term as
+  `lambda_edge N1` while the standard 2D CDT convention weights triangle volume `N2`, the default toroidal edge-count value is
+  `lambda_edge = (2 / 3) ln 2`, using the closed 1+1 relation `N1 = 3 N2 / 2`.
 
 ### Regge Calculus and Discrete Action
 

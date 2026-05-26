@@ -44,9 +44,6 @@ fn main() -> CdtResult<()> {
     config.steps = 100;
     config.thermalization_steps = 20;
     config.measurement_frequency = 5;
-    config.coupling_0 = 1.0;
-    config.coupling_2 = 1.0;
-    config.cosmological_constant = 0.1;
 
     // Extract individual configs
     let metropolis_config = config.to_metropolis_config();

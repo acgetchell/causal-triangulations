@@ -88,11 +88,11 @@ cargo build --release
   --output-json toroidal-summary.json
 ```
 
-Prefer `--vertices-per-slice` for regular equal-slice initial data; the binary computes the total initial vertex count as `vertices_per_slice × timeslices`. Use
-`--volume-profile N0,N1,...` for explicit nonuniform spatial slice volumes; when supplied without `--timeslices`, the number of profile entries defines the
-time-slice count. `--vertices` is still accepted when you already know the total for regular data, but it must divide evenly by `--timeslices`. Open-boundary
-runs require at least 4 vertices per slice and toroidal runs require at least 3 vertices per slice. Without `--simulate`, the binary only builds the initial
-triangulation and writes the step-0 measurement.
+Prefer `--vertices-per-slice` for regular equal-slice initial data; the binary computes the total initial vertex count as
+`vertices_per_slice × timeslices`. Use `--volume-profile N0,N1,...` for explicit nonuniform spatial slice volumes; when supplied without `--timeslices`, the
+number of profile entries defines the time-slice count. `--vertices` is still accepted when you already know the total for regular data, but it must divide
+evenly by `--timeslices`. Open-boundary runs require at least 4 vertices per slice and toroidal runs require at least 3 vertices per slice. Without
+`--simulate`, the binary only builds the initial triangulation and writes the step-0 measurement.
 
 ### Ensemble And Volume Behavior
 
@@ -106,6 +106,11 @@ volume term in the action. Use `--cosmological-constant` to tune that behavior. 
 minimum-volume configurations or toward rapid growth; this is expected physics for the unfixed ensemble, not volume fixing.
 Automated λ-scan utilities for finding practical finite-volume windows are planned as [#143](https://github.com/acgetchell/causal-triangulations/issues/143);
 for v0.1.0, tune `--cosmological-constant` manually and inspect the reported volume and acceptance diagnostics.
+
+The default 1+1 action constants use `κ0 = 0`, `κ2 = 0`, and an edge-count cosmological constant `(2 / 3) ln 2`, mapping the crate's `λ N1` convention to the
+standard 2D CDT critical triangle-volume coupling `λc = ln 2` for closed toroidal triangulations. The Delaunay backend supplies construction and validation
+infrastructure for a well-formed initial PL triangulation; the simulation ensemble is defined by CDT moves, constraints, action, and Metropolis-Hastings
+acceptance, not by maintaining Delaunayhood after every move.
 
 Higher-dimensional CDT studies often use explicit approximate volume fixing for finite-size numerical work. For example, Ambjørn et al. discuss quadratic
 volume fixing in [The Semiclassical Limit of Causal Dynamical Triangulations](https://arxiv.org/abs/1102.3929), and the toroidal phase-structure study uses

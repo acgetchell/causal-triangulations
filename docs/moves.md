@@ -12,8 +12,8 @@ with `prelude::triangulation::*` for CDT wrappers and `prelude::geometry::*` whe
 
 Enumerates the available move types:
 
-- `Move22` — (2,2) move: flip the shared edge between two triangles, preserving vertex count; causality-aware — the CDT layer validates and rejects moves that
-  break causal layering
+- `Move22` — (2,2) move: flip the shared edge between two triangles, preserving vertex count; causality-aware — the CDT layer validates and rejects moves
+  that break causal layering
 - `Move13Add` — (1,3) move: insert a new vertex by adding local CDT volume; open-boundary and unfoliated runs subdivide one triangle into three, while
   toroidal foliated runs split a spacelike link by subdividing an adjacent face and flipping the original spacelike link away. Inserted vertices receive the
   time label needed to keep the replacement simplices causal.
@@ -85,7 +85,8 @@ non-success `MoveResult`. Toroidal post-move topology or closed-ring foliation f
 site was geometrically editable but would break the periodic CDT contract.
 
 The Metropolis loop first selects an explicit local proposal site, clones the current triangulation, and applies that exact site on the cloned proposed state;
-see `src/cdt/metropolis.rs`. It then performs the accept/reject decision from the proposed move metadata; see `docs/metropolis.md`. Only accepted proposals
+see `src/cdt/metropolis/runner.rs` and `src/cdt/metropolis/adapter.rs`. It then performs the accept/reject decision from the proposed move metadata; see
+`docs/metropolis.md`. Only accepted proposals
 swap the cloned, mutated state into the live simulation. Ordinary causal, geometric, or backend edit failures on the cloned state are self-loop proposal
 outcomes recorded in `ProposalStatistics`; hard backend mutation or invariant-refresh failures still return `CdtError::MetropolisMoveApplicationFailed`.
 
@@ -102,6 +103,9 @@ detailed balance and the cosmological constant controls whether the universe siz
 For unfixed-volume runs, tune the cosmological constant rather than expecting the move kernels to preserve volume. The cosmological constant is conjugate to
 the lattice volume term, so changing it changes the relative acceptance of volume-increasing and volume-decreasing trajectories through the ordinary action
 difference. The current binary exposes this as `--cosmological-constant`, and programmatic callers set it through `ActionConfig`.
+
+The default 1+1 action constants are calibrated to the standard 2D CDT critical cosmological coupling. They use zero curvature couplings and set the edge-count
+cosmological constant to `(2 / 3) ln 2`, mapping this crate's `λ N1` action convention to `λc N2` with `λc = ln 2` on closed toroidal triangulations.
 
 Approximate volume fixing is also standard in higher-dimensional CDT when the scientific goal is a finite-size ensemble at a chosen lattice volume. In that
 case the fixing term is part of the sampled action, for example a quadratic penalty around a target volume, and detailed balance is with respect to the
