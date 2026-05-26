@@ -9,7 +9,7 @@
 //! - Triangulation generation parameters
 //! - Runtime behavior options
 
-use crate::cdt::action::ActionConfig;
+use crate::cdt::action::{ActionConfig, DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT};
 use crate::cdt::metropolis::MetropolisConfig;
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
 use clap::error::ErrorKind;
@@ -215,21 +215,21 @@ struct CdtCliArgs {
 
     #[arg(
         long,
-        default_value = "1.0",
+        default_value = "0.0",
         help = "Regge action vertex coupling kappa_0"
     )]
     coupling_0: f64,
 
     #[arg(
         long,
-        default_value = "1.0",
+        default_value = "0.0",
         help = "Regge action triangle coupling kappa_2"
     )]
     coupling_2: f64,
 
     #[arg(
         long,
-        default_value = "0.1",
+        default_value_t = DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
         help = "Regge action cosmological constant lambda"
     )]
     cosmological_constant: f64,
@@ -872,9 +872,9 @@ impl CdtConfig {
             steps: 1000,
             thermalization_steps: 100,
             measurement_frequency: 10,
-            coupling_0: 1.0,
-            coupling_2: 1.0,
-            cosmological_constant: 0.1,
+            coupling_0: 0.0,
+            coupling_2: 0.0,
+            cosmological_constant: DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
             simulate: false,
             seed: None,
             topology: CdtTopology::OpenBoundary,
@@ -921,7 +921,7 @@ impl CdtConfig {
     /// use causal_triangulations::CdtConfig;
     ///
     /// let action = CdtConfig::new(16, 4).to_action_config();
-    /// assert_relative_eq!(action.coupling_0, 1.0);
+    /// assert_relative_eq!(action.coupling_0, 0.0);
     /// ```
     #[must_use]
     pub const fn to_action_config(&self) -> ActionConfig {
@@ -1156,9 +1156,9 @@ impl TestConfig {
             steps: 10,
             thermalization_steps: 2,
             measurement_frequency: 2,
-            coupling_0: 1.0,
-            coupling_2: 1.0,
-            cosmological_constant: 0.1,
+            coupling_0: 0.0,
+            coupling_2: 0.0,
+            cosmological_constant: DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
             simulate: false,
             seed: None,
             topology: CdtTopology::OpenBoundary,
@@ -1188,9 +1188,9 @@ impl TestConfig {
             steps: 100,
             thermalization_steps: 20,
             measurement_frequency: 5,
-            coupling_0: 1.0,
-            coupling_2: 1.0,
-            cosmological_constant: 0.1,
+            coupling_0: 0.0,
+            coupling_2: 0.0,
+            cosmological_constant: DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
             simulate: false,
             seed: None,
             topology: CdtTopology::OpenBoundary,
@@ -1220,9 +1220,9 @@ impl TestConfig {
             steps: 1000,
             thermalization_steps: 100,
             measurement_frequency: 10,
-            coupling_0: 1.0,
-            coupling_2: 1.0,
-            cosmological_constant: 0.1,
+            coupling_0: 0.0,
+            coupling_2: 0.0,
+            cosmological_constant: DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
             simulate: false,
             seed: None,
             topology: CdtTopology::OpenBoundary,
@@ -1348,9 +1348,12 @@ mod tests {
         assert_eq!(metropolis_config.steps, 1000);
 
         let action_config = config.to_action_config();
-        assert_relative_eq!(action_config.coupling_0, 1.0);
-        assert_relative_eq!(action_config.coupling_2, 1.0);
-        assert_relative_eq!(action_config.cosmological_constant, 0.1);
+        assert_relative_eq!(action_config.coupling_0, 0.0);
+        assert_relative_eq!(action_config.coupling_2, 0.0);
+        assert_relative_eq!(
+            action_config.cosmological_constant,
+            DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT
+        );
     }
 
     #[test]

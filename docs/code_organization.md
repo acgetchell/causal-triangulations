@@ -89,7 +89,12 @@ causal-triangulations/
 │   │   ├── action.rs
 │   │   ├── ergodic_moves.rs
 │   │   ├── foliation.rs
-│   │   ├── metropolis.rs
+│   │   ├── metropolis/
+│   │   │   ├── adapter.rs
+│   │   │   ├── checkpoint.rs
+│   │   │   ├── helpers.rs
+│   │   │   ├── runner.rs
+│   │   │   └── telemetry.rs
 │   │   ├── observables.rs
 │   │   ├── results.rs
 │   │   ├── triangulation.rs
@@ -227,10 +232,10 @@ The implementation is split into child modules under `src/cdt/triangulation/`:
 - `OpenBoundary` (default) — finite strip with boundary, χ ∈ {1, 2}
 - `Toroidal` — periodic in space and time, S¹×S¹, χ = 0
 - Wired through `CdtConfig.topology`, `CdtConfigOverrides.topology`, the CLI `--topology` flag, and `CdtMetadata.topology`
-- `run_simulation()` dispatches on topology and profile mode: regular `Toroidal` → `from_toroidal_cdt`, regular `OpenBoundary` → `from_cdt_strip`, and explicit
-  `CdtConfig.volume_profile` → the matching profile constructor; `vertices` is always the total vertex count
+- `run_simulation()` dispatches on topology and profile mode: regular `Toroidal` → `from_toroidal_cdt`, regular `OpenBoundary` → `from_cdt_strip`, and
+  explicit `CdtConfig.volume_profile` → the matching profile constructor; `vertices` is always the total vertex count
 
-### `cdt/metropolis.rs` — Metropolis move ordering
+### `cdt/metropolis/` — Metropolis move ordering
 
 `MetropolisAlgorithm::run()` is the current CDT production runner for proposal-before-mutation sampling. It proposes a move type, samples an explicit local
 proposal site from the same universe used for proposal counts, plans that site on a cloned triangulation, computes `ΔS` and the forward/reverse
@@ -238,9 +243,13 @@ Metropolis-Hastings site-count ratio, accepts or rejects the concrete proposal, 
 geometric, and backend edit failures are self-loop proposal outcomes recorded in `ProposalStatistics`; hard backend failures remain structured errors.
 Toroidal move finalization rejects and rolls back candidate sites that would violate χ = 0 or the closed-S¹ per-slice foliation invariant.
 
-This direct M-H loop is transitional. The module also contains CDT adapters for `markov-chain-monte-carlo`, and the production runner should migrate toward
-delegating generic acceptance, proposal-ratio application, chain counters, and delayed-proposal commit ordering to that upstream crate while retaining
-CDT-specific telemetry and result conversion. See `docs/metropolis.md` for the detailed ordering and
+The module tree is declared from `src/lib.rs` to avoid the `metropolis.rs` plus `metropolis/` layout pattern. `adapter.rs` is the single CDT adapter boundary
+for `markov-chain-monte-carlo` proposal and target traits. `runner.rs` keeps the transitional production step loop, `checkpoint.rs` owns resumable checkpoint
+state and resume validation, `telemetry.rs` owns public step/proposal telemetry, and `helpers.rs` holds shared CDT-domain calculations.
+
+This direct M-H loop is transitional. The production runner should migrate toward delegating generic acceptance, proposal-ratio application, chain counters, and
+delayed-proposal commit ordering to the upstream MCMC crate while retaining CDT-specific telemetry and result conversion. See `docs/metropolis.md` for the
+detailed ordering and
 [`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155) for the boundary refactor.
 
 ### `cdt/results.rs` — Simulation outputs
@@ -252,8 +261,8 @@ CDT-specific telemetry and result conversion. See `docs/metropolis.md` for the d
 
 ### `cdt/observables.rs` — User-facing estimators
 
-- `estimate_hausdorff_dimension` — estimates Hausdorff dimension from combinatorial dual-graph geodesic ball growth, returning `None` when the triangulation is
-  too small or live face adjacency cannot be resolved
+- `estimate_hausdorff_dimension` — estimates Hausdorff dimension from combinatorial dual-graph geodesic ball growth, returning `None` when the triangulation
+  is too small or live face adjacency cannot be resolved
 - `estimate_spectral_dimension` — estimates spectral dimension from dual-graph diffusion return probability, returning `None` when the graph is too small or
   lacks enough positive return-probability samples for a fit
 - `CdtTriangulation::volume_profile` measures per-slice triangle counts on a triangulation; `SimulationResultsBackend` provides aggregate volume-profile
@@ -280,8 +289,8 @@ CDT-specific telemetry and result conversion. See `docs/metropolis.md` for the d
 
 - `generate_delaunay2` — builds a 2D Delaunay triangulation with optional seed
 - `build_delaunay2_with_data` — builds from coordinate + vertex-data pairs
-- `build_delaunay2_from_simplices` / `build_delaunay2_with_topology` — builds from explicit simplex connectivity (no Delaunay point insertion); the latter also
-  accepts `TopologyGuarantee` and `GlobalTopology` metadata for supported explicit topologies
+- `build_delaunay2_from_simplices` / `build_delaunay2_with_topology` — builds from explicit simplex connectivity (no Delaunay point insertion); the latter
+  also accepts `TopologyGuarantee` and `GlobalTopology` metadata for supported explicit topologies
 - `build_toroidal_delaunay2` — API-compatibility wrapper for explicit toroidal meshes; with `delaunay` v0.7.8 it validates the domain and reports the upstream
   explicit-toroidal topology limitation
 - `build_periodic_toroidal_delaunay2` — builds true periodic toroidal Delaunay meshes through the upstream image-point constructor

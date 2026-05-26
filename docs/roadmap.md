@@ -54,7 +54,7 @@ polish that are useful but not required for the first DOI-backed foundation rele
 
 - Add optional CDT volume fixing for bounded large-scale simulations
   ([#142](https://github.com/acgetchell/causal-triangulations/issues/142)). Volume fixing should be opt-in and documented as a modified action, not the default
-  unfixed-volume ensemble.
+  unfixed-volume ensemble calibrated to the 1+1 CDT `lambda_c = ln 2` critical coupling.
 - Add λ scan utilities for unfixed-volume 1+1 CDT runs
   ([#143](https://github.com/acgetchell/causal-triangulations/issues/143)). These should help users tune the cosmological constant, which is conjugate to the
   lattice volume term and controls volume growth or shrinkage in unfixed-volume runs.
@@ -78,8 +78,8 @@ The next CDT dimensions should advance as explicit topology tracks rather than a
   support.
 - v0.3.0 should add 2+1 CDT with spherical spatial slices (S²) after spherical topology lands in the `delaunay` crate. Treat this as a separate topology track
   rather than as a prerequisite for the first usable 2+1 toroidal release.
-- 3+1 CDT with spherical spatial slices (S³) and toroidal spatial slices (T³), following the same staged path after the required geometry-backend operations and
-  invariants are available
+- 3+1 CDT with spherical spatial slices (S³) and toroidal spatial slices (T³), following the same staged path after the required geometry-backend operations
+  and invariants are available
 - Periodic-time variants where the topology contract is well defined and the backend can validate the corresponding Euler/Poincaré-style invariants cleanly
 - Dimension-specific action terms, simplex-count bookkeeping, volume profiles, and acceptance diagnostics
 

@@ -4,8 +4,8 @@ Per-vertex time labels, edge classification, and causal validation for 1+1 CDT.
 
 ## Background
 
-In Causal Dynamical Triangulations (Ambjørn, Jurkiewicz, Loll 2001), spacetime is built from simplices arranged in a **foliation** — a layered structure where
-each time slice is a spatial manifold and adjacent slices are connected by timelike edges.
+In Causal Dynamical Triangulations (Ambjørn, Jurkiewicz, Loll 2001), spacetime is built from simplices arranged in a **foliation** — a layered structure
+where each time slice is a spatial manifold and adjacent slices are connected by timelike edges.
 
 For the periodic 1+1 CDT cases:
 
@@ -14,10 +14,10 @@ For the periodic 1+1 CDT cases:
 - **Edge classification**: spacelike (both endpoints at same t) or timelike (endpoints at t and t±1)
 - **Causality constraint**: no edge may span more than one time slice (|Δt| ≤ 1)
 
-This implementation also supports open-boundary strip variants. `from_toroidal_cdt()` builds the periodic S¹ × S¹ toroidal case, while `from_cdt_strip()` builds
-regular open spatial-interval strip geometries over discrete time. Profile constructors, `from_cdt_strip_profile()` and `from_toroidal_cdt_profile()`, accept
-explicit per-slice spatial volumes `N(t)` for nonuniform initial data. All constructor families use the same edge classification and causality constraint, but
-their topology metadata and boundary expectations differ.
+This implementation also supports open-boundary strip variants. `from_toroidal_cdt()` builds the periodic S¹ × S¹ toroidal case, while `from_cdt_strip()`
+builds regular open spatial-interval strip geometries over discrete time. Profile constructors, `from_cdt_strip_profile()` and `from_toroidal_cdt_profile()`,
+accept explicit per-slice spatial volumes `N(t)` for nonuniform initial data. All constructor families use the same edge classification and causality
+constraint, but their topology metadata and boundary expectations differ.
 
 ## Architecture
 
@@ -38,8 +38,8 @@ CdtTriangulation<B>
 ```
 
 Vertex data is set at construction time via `VertexBuilder::data(t)`. For post-construction labeling (e.g., `assign_foliation_by_y`), labels are written
-in-place through CDT-owned helper paths — an O(1) operation per vertex that does not affect geometry or topology. Public callers do not receive mutable backend
-access; CDT mutation paths are narrow so cache and foliation synchronization state are invalidated consistently.
+in-place through CDT-owned helper paths — an O(1) operation per vertex that does not affect geometry or topology. Public callers do not receive mutable
+backend access; CDT mutation paths are narrow so cache and foliation synchronization state are invalidated consistently.
 
 ## Time Label Assignment
 
@@ -98,8 +98,8 @@ Classification is done by `classify_edge(t0, t1)`, which reads time labels from 
 - `Up` (2,1) — two vertices at time _t_, one at _t + 1_. The spacelike base is in the lower slice.
 - `Down` (1,2) — one vertex at time _t_, two at _t + 1_. The spacelike base is in the upper slice.
 
-Classification is done by `classify_simplex(t0, t1, t2)`. Triangles that don’t span exactly one time slice (e.g., all vertices at the same time, or spanning >1
-slice) return `None`.
+Classification is done by `classify_simplex(t0, t1, t2)`. Triangles that don’t span exactly one time slice (e.g., all vertices at the same time, or spanning
+>1 slice) return `None`.
 
 Simplex types are encoded as `i32` simplex data (`Up = 1`, `Down = -1`) and can be bulk-written via `classify_all_simplices()` using `set_simplex_data`. For
 foliated triangulations this bulk path is strict: every face must classify as `Up` or `Down`, otherwise `classify_all_simplices()` and
@@ -143,7 +143,8 @@ Strict simplex-classification check:
 
 - `CdtError::CausalityViolation { time_0, time_1 }` — structured error for time labels spanning more than one slice step
 - `CdtError::DelaunayGenerationFailed` — from explicit CDT constructors when builder output is inconsistent, with detailed construction context
-- `CdtError::ValidationFailed { check, detail }` — for structural foliation issues and foliation-assignment failures (for example unreadable vertex coordinates)
+- `CdtError::ValidationFailed { check, detail }` — for structural foliation issues and foliation-assignment failures, for example unreadable vertex
+  coordinates
 - `CdtError::InvalidGenerationParameters` — for invalid constructor parameters
 
 ## Regression Coverage

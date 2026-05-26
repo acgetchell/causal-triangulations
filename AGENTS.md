@@ -139,13 +139,14 @@ Commit bodies appear **verbatim** in `CHANGELOG.md` (indented by git‑cliff's t
 - The **type** determines the changelog section (`feat` → Added, `fix` → Fixed, `refactor`/`test`/`style` → Changed, `perf` → Performance, `docs` →
   Documentation, `build`/`chore`/`ci` → Maintenance).
 - Include **PR references** as `(#N)` in the subject — cliff auto‑links them (e.g. `feat: add foo (#42)`).
-- **Avoid headings** `#`–`###` in the body — they conflict with changelog structure (`##` = release, `###` = section). Use `####` if a heading is truly needed.
+- **Avoid headings** `#`–`###` in the body — they conflict with changelog structure (`##` = release, `###` = section). Use `####` if a heading is truly
+  needed.
 - Body text should be **plain prose or simple lists**. Numbered lists and sub‑items are fine but avoid deep nesting.
 
 #### Breaking Changes
 
-Breaking changes **must** use one of these conventional commit markers so that `git‑cliff` can detect them and generate the `### ⚠️ Breaking Changes` section in
-`CHANGELOG.md`:
+Breaking changes **must** use one of these conventional commit markers so that `git‑cliff` can detect them and generate the `### ⚠️ Breaking Changes`
+section in `CHANGELOG.md`:
 
 - **Bang notation**: `feat!: remove deprecated API` (append `!` after the type/scope)
 - **Footer trailer**: add `BREAKING CHANGE: <description>` as a [git trailer](https://git-scm.com/docs/git-interpret-trailers) at the end of the commit body

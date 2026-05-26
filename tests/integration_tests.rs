@@ -6,6 +6,7 @@
 //! workflows, topology preservation, error handling, and consistency between components.
 
 use approx::{abs_diff_eq, assert_relative_eq};
+use causal_triangulations::cdt::action::DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT;
 use causal_triangulations::prelude::action::ActionConfig;
 use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveResult};
 use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
@@ -260,8 +261,8 @@ mod integration_tests {
             "Action calculation must produce finite results"
         );
 
-        // For default config (κ₀=1.0, κ₂=1.0, λ=0.1): S = -V - F + 0.1*E
-        let expected = 0.1f64.mul_add(f64::from(edges), -f64::from(vertices) - f64::from(faces));
+        // Defaults map the edge-count lambda convention to the critical 1+1 CDT triangle coupling.
+        let expected = DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT * f64::from(edges);
         assert_relative_eq!(action, expected, epsilon = f64::EPSILON);
     }
 

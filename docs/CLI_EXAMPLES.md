@@ -42,7 +42,7 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 - `--coupling-0 <κ₀>`: Coupling constant for vertices (default: 1.0)
 - `--coupling-2 <κ₂>`: Coupling constant for triangles (default: 1.0)
-- `--cosmological-constant <λ>`: Cosmological constant (default: 0.1)
+- `--cosmological-constant <λ>`: Edge-count cosmological constant (default: `(2 / 3) ln 2`)
 
 ### Additional Options
 

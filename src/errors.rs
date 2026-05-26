@@ -5,6 +5,7 @@
 use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::FoliationError;
 use crate::config::CdtTopology;
+use markov_chain_monte_carlo::McmcError;
 use std::fmt;
 
 /// Highest cumulative upstream Delaunay validation level being enforced.
@@ -467,88 +468,240 @@ impl fmt::Display for CdtValidationFailure {
     }
 }
 
-/// Category explaining why a checkpoint could not be resumed.
+/// Move-statistics counter category used in checkpoint resume diagnostics.
+///
+/// Use this with [`CheckpointResumeFailure::MoveCounterOverflow`] and
+/// [`CheckpointResumeFailure::CounterConversionOverflow`] to distinguish which
+/// aggregated counter could not be represented without parsing display text.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::errors::CheckpointMoveCounter;
+///
+/// assert_eq!(CheckpointMoveCounter::Attempted.to_string(), "attempted");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
-pub enum CheckpointResumeReason {
-    /// Resumed step count would overflow.
-    StepCountOverflow,
-    /// Checkpoint target reconstruction failed.
-    CheckpointTargetConfiguration,
-    /// Generic MCMC chain restoration failed.
-    McmcChainRestore,
-    /// Restored triangulation failed invariant validation.
-    TriangulationInvariants,
-    /// Stored action disagrees with recomputed action.
-    ActionMismatch,
-    /// Action configuration differs from the checkpoint.
-    IncompatibleActionConfiguration,
-    /// Temperature differs from the checkpoint.
-    IncompatibleTemperature,
-    /// Thermalization schedule differs from the checkpoint.
-    IncompatibleThermalizationSchedule,
-    /// Measurement frequency differs from the checkpoint.
-    IncompatibleMeasurementFrequency,
-    /// Checkpoint simulation configuration failed validation.
-    CheckpointConfiguration,
-    /// Checkpoint action configuration failed validation.
-    CheckpointActionConfiguration,
-    /// Generic MCMC chain counters disagree with CDT move statistics.
-    ChainCounterMismatch,
-    /// Generic MCMC chain step count disagrees with checkpoint step.
-    ChainStepMismatch,
-    /// Step telemetry is internally inconsistent.
-    StepTelemetryMismatch,
-    /// Step telemetry index conversion overflowed.
-    StepTelemetryOverflow,
-    /// Measurement telemetry count or step conversion overflowed.
-    MeasurementTelemetryOverflow,
-    /// Measurement telemetry is internally inconsistent.
-    MeasurementTelemetryMismatch,
-    /// Move statistics violate internal accounting invariants.
-    MoveStatisticsInvariant,
-    /// Accepted or rejected counter conversion overflowed.
-    CounterConversionOverflow,
+pub enum CheckpointMoveCounter {
+    /// Attempted move counter.
+    Attempted,
+    /// Accepted move counter.
+    Accepted,
+    /// Rejected move counter.
+    Rejected,
 }
 
-impl fmt::Display for CheckpointResumeReason {
+impl fmt::Display for CheckpointMoveCounter {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::StepCountOverflow => formatter.write_str("step count overflow"),
-            Self::CheckpointTargetConfiguration => {
-                formatter.write_str("checkpoint target configuration")
-            }
-            Self::McmcChainRestore => formatter.write_str("mcmc chain restore"),
-            Self::TriangulationInvariants => formatter.write_str("triangulation invariants"),
-            Self::ActionMismatch => formatter.write_str("action mismatch"),
-            Self::IncompatibleActionConfiguration => {
-                formatter.write_str("incompatible action configuration")
-            }
-            Self::IncompatibleTemperature => formatter.write_str("incompatible temperature"),
-            Self::IncompatibleThermalizationSchedule => {
-                formatter.write_str("incompatible thermalization schedule")
-            }
-            Self::IncompatibleMeasurementFrequency => {
-                formatter.write_str("incompatible measurement frequency")
-            }
-            Self::CheckpointConfiguration => formatter.write_str("checkpoint configuration"),
-            Self::CheckpointActionConfiguration => {
-                formatter.write_str("checkpoint action configuration")
-            }
-            Self::ChainCounterMismatch => formatter.write_str("chain counter mismatch"),
-            Self::ChainStepMismatch => formatter.write_str("chain step mismatch"),
-            Self::StepTelemetryMismatch => formatter.write_str("step telemetry mismatch"),
-            Self::StepTelemetryOverflow => formatter.write_str("step telemetry overflow"),
-            Self::MeasurementTelemetryOverflow => {
-                formatter.write_str("measurement telemetry overflow")
-            }
-            Self::MeasurementTelemetryMismatch => {
-                formatter.write_str("measurement telemetry mismatch")
-            }
-            Self::MoveStatisticsInvariant => formatter.write_str("move statistics invariant"),
-            Self::CounterConversionOverflow => formatter.write_str("counter conversion overflow"),
+            Self::Attempted => formatter.write_str("attempted"),
+            Self::Accepted => formatter.write_str("accepted"),
+            Self::Rejected => formatter.write_str("rejected"),
         }
     }
+}
+
+/// Structured reason a CDT checkpoint could not be resumed.
+///
+/// [`CdtError::CheckpointResumeFailed`] wraps this enum for CDT-owned resume
+/// invariants such as incompatible schedules, inconsistent telemetry, and
+/// overflow while rebuilding upstream MCMC counters. Upstream framework,
+/// configuration, and triangulation validation failures remain separate
+/// [`CdtError`] variants so callers can keep matching the original typed error.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::errors::{
+///     CdtError, CheckpointResumeFailure,
+/// };
+///
+/// let err = CdtError::CheckpointResumeFailed {
+///     failure: CheckpointResumeFailure::IncompatibleTemperature,
+/// };
+///
+/// assert!(matches!(
+///     err,
+///     CdtError::CheckpointResumeFailed {
+///         failure: CheckpointResumeFailure::IncompatibleTemperature,
+///     }
+/// ));
+/// ```
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+#[non_exhaustive]
+pub enum CheckpointResumeFailure {
+    /// Resumed step count would overflow.
+    #[error("resumed step count exceeds u32::MAX")]
+    StepCountOverflow,
+    /// Stored action disagrees with recomputed action.
+    #[error("checkpoint action mismatch: stored {stored}, recomputed {recomputed}")]
+    ActionMismatch {
+        /// Serialized action stored in the checkpoint.
+        stored: f64,
+        /// Action recomputed from the restored triangulation.
+        recomputed: f64,
+    },
+    /// Action configuration differs from the checkpoint.
+    #[error("action configuration differs from checkpoint")]
+    IncompatibleActionConfiguration,
+    /// Temperature differs from the checkpoint.
+    #[error("temperature differs from checkpoint")]
+    IncompatibleTemperature,
+    /// Thermalization schedule differs from the checkpoint.
+    #[error("thermalization schedule differs from checkpoint")]
+    IncompatibleThermalizationSchedule,
+    /// Measurement frequency differs from the checkpoint.
+    #[error("measurement frequency differs from checkpoint")]
+    IncompatibleMeasurementFrequency,
+    /// Generic MCMC chain counters disagree with CDT move statistics.
+    #[error(
+        "chain counters do not match move statistics: chain accepted={chain_accepted}, rejected={chain_rejected}; move accepted={move_accepted}, rejected={move_rejected}"
+    )]
+    ChainCounterMismatch {
+        /// Accepted proposals recorded by the upstream MCMC chain.
+        chain_accepted: usize,
+        /// Rejected proposals recorded by the upstream MCMC chain.
+        chain_rejected: usize,
+        /// Accepted proposals reconstructed from CDT move statistics.
+        move_accepted: usize,
+        /// Rejected proposals reconstructed from CDT move statistics.
+        move_rejected: usize,
+    },
+    /// Generic MCMC chain step count disagrees with checkpoint step.
+    #[error(
+        "chain step count does not match checkpoint step: chain steps={chain_steps}, checkpoint step={checkpoint_step}"
+    )]
+    ChainStepMismatch {
+        /// Total steps recorded by the upstream MCMC chain.
+        chain_steps: usize,
+        /// Current CDT step stored in the checkpoint.
+        checkpoint_step: u32,
+    },
+    /// Step telemetry length disagrees with the chain step count.
+    #[error("step telemetry length mismatch: got {actual}, expected {expected}")]
+    StepTelemetryLengthMismatch {
+        /// Number of serialized step records.
+        actual: usize,
+        /// Expected number of step records from the chain counters.
+        expected: usize,
+    },
+    /// Accepted-step telemetry count disagrees with the chain accepted count.
+    #[error("accepted step count mismatch: got {actual}, expected {expected}")]
+    StepTelemetryAcceptedCountMismatch {
+        /// Accepted steps recorded in CDT telemetry.
+        actual: usize,
+        /// Accepted proposals recorded by the upstream MCMC chain.
+        expected: usize,
+    },
+    /// Step telemetry index conversion overflowed.
+    #[error("step telemetry index exceeds u32::MAX")]
+    StepTelemetryIndexOverflow,
+    /// Step telemetry records are not sequential.
+    #[error("step telemetry must be sequential: got step {actual}, expected {expected}")]
+    StepTelemetrySequenceMismatch {
+        /// Serialized step value.
+        actual: u32,
+        /// Expected sequential step value.
+        expected: u32,
+    },
+    /// Step telemetry contains a non-finite pre-move action.
+    #[error("step {step} has non-finite action_before")]
+    NonFiniteStepActionBefore {
+        /// Step with invalid telemetry.
+        step: u32,
+    },
+    /// Step telemetry contains a non-finite action delta.
+    #[error("step {step} has non-finite delta_action")]
+    NonFiniteStepDeltaAction {
+        /// Step with invalid telemetry.
+        step: u32,
+    },
+    /// Accepted step telemetry is missing the action delta.
+    #[error("accepted step {step} is missing delta_action")]
+    AcceptedStepMissingDeltaAction {
+        /// Step with invalid telemetry.
+        step: u32,
+    },
+    /// Accepted step telemetry has an action-after value inconsistent with the delta.
+    #[error("step {step} action_after does not match delta_action")]
+    StepActionAfterDeltaMismatch {
+        /// Step with invalid telemetry.
+        step: u32,
+    },
+    /// Accepted step telemetry contains a non-finite post-move action.
+    #[error("step {step} has non-finite action_after")]
+    NonFiniteStepActionAfter {
+        /// Step with invalid telemetry.
+        step: u32,
+    },
+    /// Accepted step telemetry is missing the post-move action.
+    #[error("accepted step {step} is missing action_after")]
+    AcceptedStepMissingActionAfter {
+        /// Step with invalid telemetry.
+        step: u32,
+    },
+    /// Rejected step telemetry unexpectedly contains a post-move action.
+    #[error("rejected step {step} unexpectedly has action_after")]
+    RejectedStepHasActionAfter {
+        /// Step with invalid telemetry.
+        step: u32,
+    },
+    /// Measurement count calculation overflowed.
+    #[error("scheduled measurement count exceeds usize::MAX")]
+    MeasurementCountOverflow,
+    /// Measurement telemetry length disagrees with the configured schedule.
+    #[error("scheduled measurement count mismatch: got {actual}, expected {expected}")]
+    MeasurementCountMismatch {
+        /// Number of serialized measurements.
+        actual: usize,
+        /// Expected measurement count from the sampling schedule.
+        expected: usize,
+    },
+    /// Measurement step calculation overflowed.
+    #[error("scheduled measurement step exceeds u32::MAX")]
+    MeasurementStepOverflow,
+    /// Measurement telemetry step disagrees with the configured schedule.
+    #[error("measurement telemetry step mismatch: got {actual}, expected {expected}")]
+    MeasurementStepMismatch {
+        /// Serialized measurement step.
+        actual: u32,
+        /// Expected measurement step from the sampling schedule.
+        expected: u32,
+    },
+    /// Measurement telemetry contains a non-finite action.
+    #[error("measurement at step {step} has non-finite action")]
+    NonFiniteMeasurementAction {
+        /// Measurement step with invalid telemetry.
+        step: u32,
+    },
+    /// A per-move counter sum overflowed.
+    #[error("{counter} move count exceeds u64::MAX")]
+    MoveCounterOverflow {
+        /// Counter category that overflowed.
+        counter: CheckpointMoveCounter,
+    },
+    /// Resumable checkpoints cannot contain hard-failure move counters.
+    #[error("{move_type:?} hard-failure move count must be zero in resumable checkpoints")]
+    MoveHardFailures {
+        /// Move type with invalid hard-failure telemetry.
+        move_type: MoveType,
+    },
+    /// Accepted move counter exceeds attempted move counter.
+    #[error("{move_type:?} accepted move count exceeds attempted move count")]
+    MoveAcceptedExceedsAttempted {
+        /// Move type with impossible move telemetry.
+        move_type: MoveType,
+    },
+    /// Total accepted move count exceeds total attempted move count.
+    #[error("accepted move count exceeds attempted move count")]
+    TotalAcceptedExceedsAttempted,
+    /// Accepted or rejected counter conversion overflowed.
+    #[error("{counter} move count exceeds usize::MAX")]
+    CounterConversionOverflow {
+        /// Counter category that could not fit in upstream chain counters.
+        counter: CheckpointMoveCounter,
+    },
 }
 
 /// Lower-level source for a Metropolis-accepted move that could not be applied.
@@ -710,8 +863,21 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             },
             CdtError::MetropolisMoveApplicationFailed { source, .. }
             | CdtError::ProposalApplicationFailed { source, .. } => source,
-            error => Self::Unexpected {
-                detail: error.to_string(),
+            unexpected @ (CdtError::UnsupportedDimension(_)
+            | CdtError::DelaunayGenerationFailed { .. }
+            | CdtError::InvalidGenerationParameters { .. }
+            | CdtError::InvalidConfiguration { .. }
+            | CdtError::InvalidSimulationConfiguration { .. }
+            | CdtError::InvalidTriangulationMetadata { .. }
+            | CdtError::VertexBuildFailed { .. }
+            | CdtError::Mcmc(_)
+            | CdtError::OutputWriteFailed { .. }
+            | CdtError::OutputPathResolutionFailed { .. }
+            | CdtError::OutputPathConflict { .. }
+            | CdtError::OutputReadFailed { .. }
+            | CdtError::CheckpointSerializationFailed { .. }
+            | CdtError::CheckpointResumeFailed { .. }) => Self::Unexpected {
+                detail: unexpected.to_string(),
             },
         }
     }
@@ -907,9 +1073,9 @@ pub enum CdtError {
         /// quantity that triggers the violation (`step_distance > 1`).
         step_distance: u32,
     },
-    /// MCMC framework error (e.g. NaN in log-probability)
+    /// Upstream MCMC framework error, such as a non-finite log-probability.
     #[error("MCMC error: {0}")]
-    Mcmc(String),
+    Mcmc(#[from] McmcError),
     /// Writing CSV/JSON simulation output failed.
     #[error("Failed to write {format} output to {path}: {detail}")]
     OutputWriteFailed {
@@ -957,12 +1123,15 @@ pub enum CdtError {
         detail: String,
     },
     /// Restoring or continuing an MCMC checkpoint failed before sampling resumed.
-    #[error("Failed to resume MCMC checkpoint [{reason}]: {detail}")]
+    ///
+    /// The [`CheckpointResumeFailure`] source is reserved for CDT-owned
+    /// resume invariants. Upstream MCMC, configuration, and triangulation
+    /// validation errors are reported through their more specific variants.
+    #[error("Failed to resume MCMC checkpoint: {failure}")]
     CheckpointResumeFailed {
-        /// Structured reason category for the resume failure.
-        reason: CheckpointResumeReason,
-        /// Human-readable reason resume could not proceed.
-        detail: String,
+        /// Structured resume failure with typed context.
+        #[source]
+        failure: CheckpointResumeFailure,
     },
 }
 
@@ -982,12 +1151,6 @@ fn format_causality_violation(time_0: u32, time_1: u32, step_distance: u32) -> S
              (t={time_0} to t={time_1}, |Δt|={raw} on the time circle), \
              maximum allowed is 1"
         )
-    }
-}
-
-impl From<markov_chain_monte_carlo::McmcError> for CdtError {
-    fn from(err: markov_chain_monte_carlo::McmcError) -> Self {
-        Self::Mcmc(err.to_string())
     }
 }
 
@@ -1235,86 +1398,31 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_resume_reason_display_covers_all_categories() {
+    fn checkpoint_move_counter_display_covers_all_categories() {
         let cases = [
-            (
-                CheckpointResumeReason::StepCountOverflow,
-                "step count overflow",
-            ),
-            (
-                CheckpointResumeReason::CheckpointTargetConfiguration,
-                "checkpoint target configuration",
-            ),
-            (
-                CheckpointResumeReason::McmcChainRestore,
-                "mcmc chain restore",
-            ),
-            (
-                CheckpointResumeReason::TriangulationInvariants,
-                "triangulation invariants",
-            ),
-            (CheckpointResumeReason::ActionMismatch, "action mismatch"),
-            (
-                CheckpointResumeReason::IncompatibleActionConfiguration,
-                "incompatible action configuration",
-            ),
-            (
-                CheckpointResumeReason::IncompatibleTemperature,
-                "incompatible temperature",
-            ),
-            (
-                CheckpointResumeReason::IncompatibleThermalizationSchedule,
-                "incompatible thermalization schedule",
-            ),
-            (
-                CheckpointResumeReason::IncompatibleMeasurementFrequency,
-                "incompatible measurement frequency",
-            ),
-            (
-                CheckpointResumeReason::CheckpointConfiguration,
-                "checkpoint configuration",
-            ),
-            (
-                CheckpointResumeReason::CheckpointActionConfiguration,
-                "checkpoint action configuration",
-            ),
-            (
-                CheckpointResumeReason::ChainCounterMismatch,
-                "chain counter mismatch",
-            ),
-            (
-                CheckpointResumeReason::ChainStepMismatch,
-                "chain step mismatch",
-            ),
-            (
-                CheckpointResumeReason::StepTelemetryMismatch,
-                "step telemetry mismatch",
-            ),
-            (
-                CheckpointResumeReason::StepTelemetryOverflow,
-                "step telemetry overflow",
-            ),
-            (
-                CheckpointResumeReason::MeasurementTelemetryOverflow,
-                "measurement telemetry overflow",
-            ),
-            (
-                CheckpointResumeReason::MeasurementTelemetryMismatch,
-                "measurement telemetry mismatch",
-            ),
-            (
-                CheckpointResumeReason::MoveStatisticsInvariant,
-                "move statistics invariant",
-            ),
-            (
-                CheckpointResumeReason::CounterConversionOverflow,
-                "counter conversion overflow",
-            ),
+            (CheckpointMoveCounter::Attempted, "attempted"),
+            (CheckpointMoveCounter::Accepted, "accepted"),
+            (CheckpointMoveCounter::Rejected, "rejected"),
         ];
 
-        for (reason, expected) in cases {
-            assert_eq!(reason.to_string(), expected);
+        for (counter, expected) in cases {
+            assert_eq!(counter.to_string(), expected);
         }
+    }
+
+    #[test]
+    fn checkpoint_resume_failure_display_includes_structured_context() {
+        let failure = CheckpointResumeFailure::ChainCounterMismatch {
+            chain_accepted: 1,
+            chain_rejected: 2,
+            move_accepted: 3,
+            move_rejected: 4,
+        };
+
+        assert_eq!(
+            failure.to_string(),
+            "chain counters do not match move statistics: chain accepted=1, rejected=2; move accepted=3, rejected=4"
+        );
     }
 
     #[test]
@@ -1722,15 +1830,22 @@ mod tests {
 
     #[test]
     fn test_mcmc_error() {
-        let error = CdtError::Mcmc("NaN log-probability".to_string());
+        let error = CdtError::Mcmc(McmcError::NanProposedLogProb);
         let display = format!("{error}");
-        assert_eq!(display, "MCMC error: NaN log-probability");
+        assert_eq!(
+            display,
+            "MCMC error: target returned NaN log-probability for a proposed state"
+        );
     }
 
     #[test]
     fn test_mcmc_error_from_conversion() {
-        let mcmc_err = markov_chain_monte_carlo::McmcError::NanProposedLogProb;
+        let mcmc_err = McmcError::NanProposedLogProb;
         let cdt_err: CdtError = mcmc_err.into();
+        assert!(matches!(
+            cdt_err,
+            CdtError::Mcmc(McmcError::NanProposedLogProb)
+        ));
         let display = format!("{cdt_err}");
         assert!(
             display.contains("MCMC error"),
@@ -1859,17 +1974,19 @@ mod tests {
     #[test]
     fn test_checkpoint_resume_failed_error() {
         let error = CdtError::CheckpointResumeFailed {
-            reason: CheckpointResumeReason::IncompatibleTemperature,
-            detail: "temperature differs from checkpoint".to_string(),
+            failure: CheckpointResumeFailure::IncompatibleTemperature,
         };
-        let CdtError::CheckpointResumeFailed { reason, detail } = &error else {
+        let CdtError::CheckpointResumeFailed { failure } = &error else {
             panic!("expected CheckpointResumeFailed variant");
         };
-        assert_eq!(*reason, CheckpointResumeReason::IncompatibleTemperature);
-        assert_eq!(detail, "temperature differs from checkpoint");
+        assert_eq!(*failure, CheckpointResumeFailure::IncompatibleTemperature);
         assert_eq!(
             format!("{error}"),
-            "Failed to resume MCMC checkpoint [incompatible temperature]: temperature differs from checkpoint"
+            "Failed to resume MCMC checkpoint: temperature differs from checkpoint"
+        );
+        assert_eq!(
+            Error::source(&error).map(ToString::to_string),
+            Some("temperature differs from checkpoint".to_string())
         );
     }
 

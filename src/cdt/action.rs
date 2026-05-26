@@ -8,6 +8,22 @@
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
 use serde::{Deserialize, Serialize};
 
+/// Critical cosmological coupling for pure 1+1 CDT in the triangle-volume convention.
+///
+/// The exactly solved 2D CDT transfer matrix has critical point `λ_c = ln 2`
+/// when triangulations are weighted by `exp(-λ N2)`, where `N2` is the number
+/// of triangles.
+pub const CDT_1P1_CRITICAL_TRIANGLE_COSMOLOGICAL_CONSTANT: f64 = std::f64::consts::LN_2;
+
+/// Default edge-count cosmological coupling for toroidal 1+1 CDT runs.
+///
+/// This crate's historical action writes the cosmological term as `λ N1`.
+/// For closed toroidal 1+1 CDT triangulations, `N1 = 3 N2 / 2`, so this value
+/// maps the edge-count convention to the standard 2D CDT critical triangle
+/// coupling `λ_c = ln 2`.
+pub const DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT: f64 =
+    2.0 * CDT_1P1_CRITICAL_TRIANGLE_COSMOLOGICAL_CONSTANT / 3.0;
+
 /// Calculates the 2D Regge Action for a given triangulation.
 ///
 /// The 2D Regge Action in CDT is given by:
@@ -69,12 +85,17 @@ pub struct ActionConfig {
 }
 
 impl Default for ActionConfig {
-    /// Default CDT action parameters for 2D simulations.
+    /// Default CDT action parameters for 1+1 CDT simulations.
+    ///
+    /// In pure 1+1 gravity the curvature/Newton term is topological at fixed
+    /// topology. The defaults therefore leave the vertex and triangle couplings
+    /// at zero and use the edge-count cosmological coupling that maps to the
+    /// standard 2D CDT critical value `λ_c = ln 2` for toroidal triangulations.
     fn default() -> Self {
         Self {
-            coupling_0: 1.0,
-            coupling_2: 1.0,
-            cosmological_constant: 0.1,
+            coupling_0: 0.0,
+            coupling_2: 0.0,
+            cosmological_constant: DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
         }
     }
 }
@@ -193,9 +214,12 @@ mod tests {
     #[test]
     fn test_action_config_default() {
         let config = ActionConfig::default();
-        assert_relative_eq!(config.coupling_0, 1.0);
-        assert_relative_eq!(config.coupling_2, 1.0);
-        assert_relative_eq!(config.cosmological_constant, 0.1);
+        assert_relative_eq!(config.coupling_0, 0.0);
+        assert_relative_eq!(config.coupling_2, 0.0);
+        assert_relative_eq!(
+            config.cosmological_constant,
+            DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT
+        );
     }
 
     #[test]

@@ -34,6 +34,38 @@ after partial invariant refresh work. The recorded `SimulationResultsBackend::mo
 `SimulationResultsBackend::proposal_stats` records proposal-kernel telemetry such as no-site outcomes, sampled-site failures, Metropolis rejections, and
 accepted transitions.
 
+## Scientific Calibration And Geometry Backend Role
+
+The Delaunay backend is an implementation substrate, not the sampled physics ensemble. It gives the crate a robust way to construct an initial piecewise-linear
+manifold, validate topology and adjacency, and perform checked local edit primitives. After initialization, the simulation does not enforce the Delaunay
+condition as part of the Markov-chain state. The sampled ensemble is defined by the CDT move set, foliation/topology/causality validation, the configured
+action, and the Metropolis-Hastings acceptance rule.
+
+The default action constants are calibrated for the non-volume-fixed 1+1 CDT baseline. In pure 1+1 gravity the curvature/Newton term is topological at fixed
+topology, so the default vertex and triangle couplings are zero:
+
+```text
+kappa_0 = 0
+kappa_2 = 0
+```
+
+The exactly solved 2D CDT model has critical cosmological coupling `lambda_c = ln 2` in the triangle-volume convention where configurations are weighted by
+`exp(-lambda N2)`. This crate's historical action writes the cosmological term as `lambda_edge N1`. For closed toroidal 1+1 triangulations,
+`N1 = 3 N2 / 2`, so the default edge-count coupling is
+
+```text
+lambda_edge = (2 / 3) ln 2 ~= 0.46209812037329684
+```
+
+With these defaults, toroidal 1+1 runs map the edge-count action convention to the standard critical triangle-volume coupling. Non-volume-fixed finite runs may
+still drift because the critical point is a continuum-limit statement and there is no volume-fixing penalty. The follow-up volume-fixing work in
+[`causal-triangulations#142`](https://github.com/acgetchell/causal-triangulations/issues/142) should add an explicit modified-action ensemble for production
+fixed-volume studies.
+
+The calibration is based on Ambjørn and Loll's original 2D CDT construction and the Ambjørn, Görlich, Jurkiewicz, and Loll review. The volume-fixing follow-up
+should cite the higher-dimensional CDT simulation literature where quadratic fixing terms are added deliberately. See [REFERENCES.md](../REFERENCES.md) for the
+full citations.
+
 ## Chunked Sweeps
 
 `MetropolisAlgorithm::resume_to_checkpoint()` continues a stored `CdtMcmcCheckpoint` for the configured additional step count and returns another resumable

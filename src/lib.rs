@@ -129,8 +129,37 @@ pub mod cdt {
     pub mod ergodic_moves;
     /// Foliation data structures (time labels, edge classification).
     pub mod foliation;
-    /// Metropolis-Hastings algorithm implementation.
-    pub mod metropolis;
+    /// Metropolis-Hastings sampling for CDT triangulations.
+    ///
+    /// The module is split by API boundary:
+    /// [`adapter`](crate::cdt::metropolis::adapter) exposes the CDT target and
+    /// delayed proposal types used by `markov-chain-monte-carlo`,
+    /// [`runner`](crate::cdt::metropolis::runner) provides the transitional
+    /// [`MetropolisAlgorithm`](crate::cdt::metropolis::MetropolisAlgorithm)
+    /// facade, [`checkpoint`](crate::cdt::metropolis::checkpoint) owns
+    /// resumable CDT/MCMC checkpoints, and
+    /// [`telemetry`](crate::cdt::metropolis::telemetry) contains step and
+    /// proposal counters. Most callers should import these through
+    /// [`crate::prelude::simulation`] or the re-exports on this module.
+    pub mod metropolis {
+        /// Adapter boundary to the upstream MCMC crate.
+        pub mod adapter;
+        /// Checkpoint and resume validation.
+        pub mod checkpoint;
+        /// Shared CDT-domain helper functions for Metropolis modules.
+        pub(crate) mod helpers;
+        /// Transitional Metropolis runner implementation.
+        pub mod runner;
+        /// Step and proposal telemetry types.
+        pub mod telemetry;
+
+        pub use adapter::{
+            CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget,
+        };
+        pub use checkpoint::CdtMcmcCheckpoint;
+        pub use runner::{MetropolisAlgorithm, MetropolisConfig};
+        pub use telemetry::{MonteCarloStep, ProposalStatistics};
+    }
     /// User-facing CDT observable estimators.
     pub mod observables;
     /// Simulation result containers and measurement summaries.
@@ -152,9 +181,9 @@ pub use cdt::results::{Measurement, SimulationResultsBackend};
 pub use config::{CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, TestConfig};
 pub use errors::{
     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
-    CheckpointOperation, CheckpointResumeReason, ConfigurationSetting, DelaunayValidationLevel,
-    GenerationParameterIssue, MetropolisMoveApplicationFailure, OutputFormat,
-    TriangulationMetadataField,
+    CheckpointMoveCounter, CheckpointOperation, CheckpointResumeFailure, ConfigurationSetting,
+    DelaunayValidationLevel, GenerationParameterIssue, MetropolisMoveApplicationFailure,
+    OutputFormat, TriangulationMetadataField,
 };
 
 use crate::cdt::results::SimulationResultsParts;
@@ -229,9 +258,10 @@ pub mod prelude {
     pub mod errors {
         pub use crate::errors::{
             BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck,
-            CdtValidationFailure, CheckpointOperation, CheckpointResumeReason,
-            ConfigurationSetting, DelaunayValidationLevel, GenerationParameterIssue,
-            MetropolisMoveApplicationFailure, OutputFormat, TriangulationMetadataField,
+            CdtValidationFailure, CheckpointMoveCounter, CheckpointOperation,
+            CheckpointResumeFailure, ConfigurationSetting, DelaunayValidationLevel,
+            GenerationParameterIssue, MetropolisMoveApplicationFailure, OutputFormat,
+            TriangulationMetadataField,
         };
     }
 
@@ -647,9 +677,9 @@ mod tests {
             steps: 10,
             thermalization_steps: 5,
             measurement_frequency: 2,
-            coupling_0: 1.0,
-            coupling_2: 1.0,
-            cosmological_constant: 0.1,
+            coupling_0: 0.0,
+            coupling_2: 0.0,
+            cosmological_constant: crate::cdt::action::DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
             simulate: false,
             seed: Some(42),
             topology: CdtTopology::OpenBoundary,
@@ -886,9 +916,12 @@ mod tests {
         assert_eq!(metropolis_config.steps, 10);
 
         let action_config = config.to_action_config();
-        assert_relative_eq!(action_config.coupling_0, 1.0);
-        assert_relative_eq!(action_config.coupling_2, 1.0);
-        assert_relative_eq!(action_config.cosmological_constant, 0.1);
+        assert_relative_eq!(action_config.coupling_0, 0.0);
+        assert_relative_eq!(action_config.coupling_2, 0.0);
+        assert_relative_eq!(
+            action_config.cosmological_constant,
+            crate::cdt::action::DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT
+        );
     }
 
     #[test]
@@ -906,9 +939,9 @@ mod tests {
             steps: 10,
             thermalization_steps: 5,
             measurement_frequency: 2,
-            coupling_0: 1.0,
-            coupling_2: 1.0,
-            cosmological_constant: 0.1,
+            coupling_0: 0.0,
+            coupling_2: 0.0,
+            cosmological_constant: crate::cdt::action::DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
             simulate: false,
             seed: None,
             topology: CdtTopology::Toroidal,

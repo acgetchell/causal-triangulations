@@ -377,16 +377,16 @@ just perf-check 5.0   # Strict threshold before completion
 ### Data Flow
 
 ```text
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│ Criterion       │───▶│ Performance      │───▶│ Reports &       │
-│ Benchmarks      │    │ Analysis Script  │    │ Comparisons     │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-         │                       │                        │
-         ▼                       ▼                        ▼
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│ JSON Results    │    │ Baseline         │    │ CI Comments &   │
-│ (target/criterion)│    │ Storage          │    │ Artifacts       │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
+┌───────────┐     ┌──────────┐     ┌─────────────┐
+│ Criterion │───▶│ Analysis │───▶│ Reports     │
+│ benches   │     │ script   │     │ comparisons │
+└───────────┘     └──────────┘     └─────────────┘
+      │                │                 │
+      ▼                ▼                 ▼
+┌───────────┐     ┌──────────┐     ┌─────────────┐
+│ JSON      │     │ Baseline │     │ CI comments │
+│ results   │     │ storage  │     │ artifacts   │
+└───────────┘     └──────────┘     └─────────────┘
 ```
 
 This system provides comprehensive performance monitoring while remaining easy to use for both contributors and maintainers.
