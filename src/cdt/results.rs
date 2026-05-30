@@ -1099,6 +1099,7 @@ mod tests {
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
     use serde_json::{Value, from_str, to_value};
+    use std::assert_matches;
     use std::env;
     use std::fs;
     use std::path::PathBuf;
@@ -1239,7 +1240,7 @@ mod tests {
         )
         .expect_err("zero temperature should be rejected");
 
-        assert!(matches!(
+        assert_matches!(
             error,
             CdtError::InvalidSimulationConfiguration {
                 ref setting,
@@ -1248,7 +1249,7 @@ mod tests {
             } if *setting == ConfigurationSetting::Temperature
                 && provided_value == "0"
                 && expected == "finite and positive"
-        ));
+        );
     }
 
     #[test]
@@ -1268,14 +1269,14 @@ mod tests {
         )
         .expect_err("non-finite action coupling should be rejected");
 
-        assert!(matches!(
+        assert_matches!(
             error,
             CdtError::InvalidConfiguration {
                 ref setting,
                 ref provided_value,
                 ref expected,
             } if *setting == ConfigurationSetting::Coupling0 && provided_value == "NaN" && expected == "finite"
-        ));
+        );
     }
 
     #[test]
@@ -1307,10 +1308,10 @@ mod tests {
         )
         .expect_err("stale foliation should be rejected");
 
-        assert!(matches!(
+        assert_matches!(
             error,
             CdtError::Foliation(FoliationError::StaleBookkeeping { .. })
-        ));
+        );
     }
 
     #[test]
@@ -1392,14 +1393,14 @@ mod tests {
         })
         .expect_err("invalid wire Metropolis config should be rejected");
 
-        assert!(matches!(
+        assert_matches!(
             error,
             CdtError::InvalidSimulationConfiguration {
                 ref setting,
                 ref provided_value,
                 ref expected,
             } if *setting == ConfigurationSetting::Temperature && provided_value == "0" && expected == "finite and positive"
-        ));
+        );
     }
 
     #[test]
@@ -1418,14 +1419,14 @@ mod tests {
         })
         .expect_err("invalid wire action config should be rejected");
 
-        assert!(matches!(
+        assert_matches!(
             error,
             CdtError::InvalidConfiguration {
                 ref setting,
                 ref provided_value,
                 ref expected,
             } if *setting == ConfigurationSetting::Coupling0 && provided_value == "NaN" && expected == "finite"
-        ));
+        );
     }
 
     #[test]

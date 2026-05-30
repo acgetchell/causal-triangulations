@@ -56,6 +56,7 @@ The useful updates ported from MCMC are:
 
 - explicit `rustfmt.toml` formatting configuration;
 - explicit uv package mode and pytest 9 minimum in `pyproject.toml`;
+- docs.rs package metadata with `all-features = true`, matching MCMC so rendered API documentation includes every public feature-gated surface;
 - CodeQL analysis for GitHub Actions and Rust, using `build-mode: none` for Rust;
 - the MCMC-style `cliff.toml` template and `just changelog-unreleased <version>` flow, adapted to keep CDT's changelog archive step and avoid temporary local
   release tags;

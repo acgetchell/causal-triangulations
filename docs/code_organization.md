@@ -313,5 +313,5 @@ Delaunay triangulation before CDT foliation, causality, topology, and simplex-cl
 
 - `delaunay` (v0.7.8) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
   `set_vertex_data_by_key` for O(1) label mutation)
-- `markov-chain-monte-carlo` (v0.3) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, `Target`)
+- `markov-chain-monte-carlo` (v0.4) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, `Target`)
 - `num-traits` — `ToPrimitive` and `NumCast` for checked or saturating numeric conversions

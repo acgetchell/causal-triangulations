@@ -848,6 +848,7 @@ mod tests {
     use crate::geometry::generators::build_delaunay2_with_data;
     use serde_json::error::Category;
     use serde_json::{from_str, from_value, json, to_string, to_value};
+    use std::assert_matches;
     use std::num::NonZeroUsize;
     use std::thread;
     use std::time::{Duration, Instant};
@@ -896,7 +897,7 @@ mod tests {
         let backend = labeled_triangle_backend([0, 0, 1]);
         let result = CdtTriangulation::try_new(backend, 0, 2);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
                 ref field,
@@ -907,7 +908,7 @@ mod tests {
                 && topology == CdtTopology::OpenBoundary
                 && provided_value == "0"
                 && expected == "≥ 1"
-        ));
+        );
     }
 
     #[test]
@@ -915,7 +916,7 @@ mod tests {
         let backend = labeled_triangle_backend([0, 0, 1]);
         let result = CdtTriangulation::try_new(backend, 2, 3);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
                 ref field,
@@ -926,7 +927,7 @@ mod tests {
                 && topology == CdtTopology::OpenBoundary
                 && provided_value == "3"
                 && expected == "backend dimension (2)"
-        ));
+        );
     }
 
     #[test]
@@ -935,7 +936,7 @@ mod tests {
         let tri = unchecked_open_boundary(backend, 2, 3);
         let result = tri.validate_topology();
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
                 ref field,
@@ -945,7 +946,7 @@ mod tests {
             }) if *field == TriangulationMetadataField::Dimension
                 && provided_value == "3"
                 && expected == "backend dimension (2)"
-        ));
+        );
     }
 
     #[test]
@@ -1281,7 +1282,7 @@ mod tests {
     #[test]
     fn test_zero_time_slices_rejected() {
         let result = CdtTriangulation::from_random_points(5, 0, 2);
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
                 ref field,
@@ -1289,7 +1290,7 @@ mod tests {
                 ref expected,
                 ..
             }) if *field == TriangulationMetadataField::Timeslices && provided_value == "0" && expected == "≥ 1"
-        ));
+        );
     }
 
     #[test]
@@ -1513,7 +1514,7 @@ mod tests {
 
         let result = tri.validate_topology();
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::TopologyMismatch {
                 topology,
@@ -1521,7 +1522,7 @@ mod tests {
                 ref expected_euler_characteristics,
                 ..
             }) if topology == CdtTopology::OpenBoundary && expected_euler_characteristics == &[1, 2]
-        ));
+        );
     }
 
     #[test]
@@ -1534,7 +1535,7 @@ mod tests {
             .expect("test Delaunay triangle should validate");
 
         let result = CdtTriangulation::with_topology(backend, 3, 2, CdtTopology::Toroidal);
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::TopologyMismatch {
                 topology,
@@ -1542,7 +1543,7 @@ mod tests {
                 ref expected_euler_characteristics,
                 ..
             }) if topology == CdtTopology::Toroidal && expected_euler_characteristics == &[0]
-        ));
+        );
     }
 
     #[test]
@@ -1550,7 +1551,7 @@ mod tests {
         let mut tri = CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
 
         let result = tri.set_time_slices(2);
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
                 ref field,
@@ -1561,7 +1562,7 @@ mod tests {
                 && topology == CdtTopology::Toroidal
                 && provided_value == "2"
                 && expected == "≥ 3"
-        ));
+        );
         assert_eq!(tri.time_slices(), 3);
         assert!(tri.validate_topology().is_ok());
     }
@@ -1574,7 +1575,7 @@ mod tests {
             .expect("test Delaunay triangle should validate");
 
         let result = CdtTriangulation::with_topology(backend, 2, 3, CdtTopology::Toroidal);
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
                 ref field,
@@ -1585,7 +1586,7 @@ mod tests {
                 && topology == CdtTopology::Toroidal
                 && provided_value == "2"
                 && expected == "≥ 3"
-        ));
+        );
     }
 
     #[test]

@@ -725,6 +725,7 @@ mod tests {
     use markov_chain_monte_carlo::{Chain, DelayedProposal, Target};
     use rand::rngs::StdRng;
     use serde_json::{from_str, to_string, to_value};
+    use std::assert_matches;
     use std::error::Error;
     use std::num::NonZeroUsize;
 
@@ -1756,12 +1757,12 @@ mod tests {
             panic!("expected impossible move statistics to fail");
         };
 
-        assert!(matches!(
+        assert_matches!(
             failure,
             CheckpointResumeFailure::MoveAcceptedExceedsAttempted {
                 move_type: MoveType::Move22
             }
-        ));
+        );
         let detail = failure.to_string();
         assert!(detail.contains("accepted move count exceeds attempted move count"));
     }
@@ -1777,12 +1778,12 @@ mod tests {
             panic!("expected overflowing move statistics to fail");
         };
 
-        assert!(matches!(
+        assert_matches!(
             failure,
             CheckpointResumeFailure::MoveCounterOverflow {
                 counter: CheckpointMoveCounter::Attempted
             }
-        ));
+        );
         let detail = failure.to_string();
         assert!(detail.contains("attempted move count exceeds u64::MAX"));
     }
@@ -1799,12 +1800,12 @@ mod tests {
             panic!("expected impossible hard-failure statistics to fail");
         };
 
-        assert!(matches!(
+        assert_matches!(
             failure,
             CheckpointResumeFailure::MoveHardFailures {
                 move_type: MoveType::Move22
             }
-        ));
+        );
         let detail = failure.to_string();
         assert!(detail.contains("Move22"));
         assert!(detail.contains("hard-failure move count must be zero"));
@@ -2377,8 +2378,8 @@ mod tests {
             .step_delayed(&target, &mut proposal, &mut rng)
             .expect("ordinary no-site outcomes must be delayed-step rejections, not errors");
 
-        assert_eq!(step.proposed, step.info.is_some());
-        assert!(!step.accepted || step.log_prob_after.is_some());
+        assert_eq!(step.outcome.has_proposal(), step.info.is_some());
+        assert!(!step.outcome.is_accepted() || step.log_prob_after.is_some());
     }
 
     #[test]
@@ -2433,7 +2434,7 @@ mod tests {
         assert!(err.to_string().contains("attempt 2"));
 
         let cdt_error = CdtError::from(err);
-        assert!(matches!(
+        assert_matches!(
             cdt_error,
             CdtError::ProposalApplicationFailed {
                 move_type: MoveType::Move13Add,
@@ -2443,7 +2444,7 @@ mod tests {
                     ..
                 },
             }
-        ));
+        );
 
         let site_rejection = CdtProposalSiteRejection::Kernel(source.clone());
         assert_eq!(

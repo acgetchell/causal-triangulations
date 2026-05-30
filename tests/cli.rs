@@ -170,7 +170,7 @@ fn cdt_cli_invalid_measurement_frequency_too_large() {
     cmd.arg("--simulate");
 
     cmd.assert().failure().stderr(predicate::str::contains(
-        "Invalid configuration: measurement_frequency (got: 200, expected: ≤ steps (100))",
+        "Invalid simulation configuration: measurement_frequency (got: 200, expected: ≤ steps (100))",
     ));
 }
 
@@ -316,7 +316,7 @@ fn cdt_cli_rejects_missing_post_thermalization_measurement() {
     cmd.arg("--simulate");
 
     cmd.assert().failure().stderr(predicate::str::contains(
-        "Invalid configuration: measurement schedule",
+        "Invalid simulation configuration: measurement schedule",
     ));
 }
 

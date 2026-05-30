@@ -16,7 +16,7 @@ keywords = [
 license = "BSD-3-Clause"
 readme = "README.md"
 repository = "https://github.com/acgetchell/causal-triangulations"
-rust-version = "1.95.0"
+rust-version = "1.96.0"
 description = "Causal Dynamical Triangulations in d-dimensions"
 
 # Features removed - backend system is now internal implementation detail
@@ -37,6 +37,9 @@ harness = false
 [features]
 slow-tests = [  ]
 
+[package.metadata.docs.rs]
+all-features = true
+
 [profile.perf]
 inherits = "release"
 lto = "thin"
@@ -48,7 +51,7 @@ debug = "line-tables-only"
 [dependencies]
 clap = { version = "4.6.1", features = [ "derive" ] }
 delaunay = "0.7.8"
-markov-chain-monte-carlo = { version = "0.3.0", features = [ "serde" ] }
+markov-chain-monte-carlo = { version = "0.4.0", features = [ "serde" ] }
 dirs = "6.0.0"
 env_logger = "0.11.10"
 log = "0.4.30"

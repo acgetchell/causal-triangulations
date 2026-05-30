@@ -597,6 +597,7 @@ mod tests {
     use super::*;
     use crate::errors::CdtError;
     use crate::geometry::DelaunayBackend2D;
+    use std::assert_matches;
     use std::collections::HashMap;
 
     /// Produces an order-independent snapshot of vertices and simplex connectivity for seeded tests.
@@ -638,14 +639,14 @@ mod tests {
     fn test_generate_delaunay2_vertex_build_error_context() {
         let error = generate_delaunay2_vertex_build_error(5, "missing point".to_string());
 
-        assert!(matches!(
+        assert_matches!(
             error,
             CdtError::VertexBuildFailed {
                 ref context,
                 ref underlying_error,
             } if context == "generate_delaunay2(5 vertices)"
                 && underlying_error == "missing point"
-        ));
+        );
     }
 
     #[test]
@@ -668,9 +669,10 @@ mod tests {
         let simplices = vec![vec![0, 1, 3]];
 
         let result = build_delaunay2_from_simplices(&vertices, &simplices);
-        assert!(
-            matches!(result, Err(CdtError::DelaunayGenerationFailed { .. })),
-            "explicit builder must reject out-of-bounds vertex indices, got {result:?}"
+        assert_matches!(
+            result,
+            Err(CdtError::DelaunayGenerationFailed { .. }),
+            "explicit builder must reject out-of-bounds vertex indices"
         );
     }
 
@@ -720,18 +722,16 @@ mod tests {
 
         let error = build_toroidal_delaunay2(&vertices, &simplices, [1.0, 1.0])
             .expect_err("explicit toroidal topology should report upstream limitation");
-        assert!(
-            matches!(
-                error,
-                CdtError::DelaunayGenerationFailed {
-                    vertex_count: 9,
-                    ref underlying_error,
-                    ..
-                } if underlying_error.contains(
-                    "Explicit non-Euclidean connectivity is not supported for Toroidal"
-                )
+        assert_matches!(
+            error,
+            CdtError::DelaunayGenerationFailed {
+                vertex_count: 9,
+                ref underlying_error,
+                ..
+            } if underlying_error.contains(
+                "Explicit non-Euclidean connectivity is not supported for Toroidal"
             ),
-            "explicit toroidal mesh should fail with the upstream topology limitation, got {error:?}"
+            "explicit toroidal mesh should fail with the upstream topology limitation"
         );
     }
 
@@ -776,18 +776,16 @@ mod tests {
             ([f64::INFINITY, 3.0], "axis 0 period inf"),
         ] {
             let result = build_periodic_toroidal_delaunay2(&vertices, domain);
-            assert!(
-                matches!(
-                    result,
-                    Err(CdtError::InvalidGenerationParameters {
-                        ref issue,
-                        ref provided_value,
-                        ref expected_range,
-                    }) if *issue == GenerationParameterIssue::InvalidToroidalDomain
-                        && provided_value == expected_value
-                        && expected_range == "finite and positive periods"
-                ),
-                "invalid periodic toroidal domain {domain:?} should be rejected, got {result:?}"
+            assert_matches!(
+                result,
+                Err(CdtError::InvalidGenerationParameters {
+                    ref issue,
+                    ref provided_value,
+                    ref expected_range,
+                }) if *issue == GenerationParameterIssue::InvalidToroidalDomain
+                    && provided_value == expected_value
+                    && expected_range == "finite and positive periods",
+                "invalid periodic toroidal domain {domain:?} should be rejected"
             );
         }
     }
@@ -801,18 +799,16 @@ mod tests {
         ];
 
         let result = build_periodic_toroidal_delaunay2(&vertices, [3.0, 3.0]);
-        assert!(
-            matches!(
-                result,
-                Err(CdtError::InvalidGenerationParameters {
-                    ref issue,
-                    ref provided_value,
-                    ref expected_range,
-                }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
-                    && provided_value == "vertex 1 axis 1 = -inf"
-                    && expected_range == "finite coordinate values"
-            ),
-            "periodic toroidal non-finite coordinate should be rejected, got {result:?}"
+        assert_matches!(
+            result,
+            Err(CdtError::InvalidGenerationParameters {
+                ref issue,
+                ref provided_value,
+                ref expected_range,
+            }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
+                && provided_value == "vertex 1 axis 1 = -inf"
+                && expected_range == "finite coordinate values",
+            "periodic toroidal non-finite coordinate should be rejected"
         );
     }
 
@@ -917,17 +913,15 @@ mod tests {
     fn test_generate_delaunay2_rejects_non_finite_range() {
         for range in [(f64::NAN, 1.0), (0.0, f64::INFINITY)] {
             let result = generate_delaunay2(4, range, None);
-            assert!(
-                matches!(
-                    result,
-                    Err(CdtError::InvalidGenerationParameters {
-                        ref issue,
-                        ref expected_range,
-                        ..
-                    }) if *issue == GenerationParameterIssue::InvalidCoordinateRange
-                        && expected_range == "finite min < max"
-                ),
-                "non-finite range {range:?} should be rejected, got {result:?}"
+            assert_matches!(
+                result,
+                Err(CdtError::InvalidGenerationParameters {
+                    ref issue,
+                    ref expected_range,
+                    ..
+                }) if *issue == GenerationParameterIssue::InvalidCoordinateRange
+                    && expected_range == "finite min < max",
+                "non-finite range {range:?} should be rejected"
             );
         }
     }
@@ -937,18 +931,16 @@ mod tests {
         let vertices = [([0.0, 0.0], 0u32), ([1.0, f64::NAN], 0), ([0.5, 1.0], 1)];
 
         let result = build_delaunay2_with_data(&vertices);
-        assert!(
-            matches!(
-                result,
-                Err(CdtError::InvalidGenerationParameters {
-                    ref issue,
-                    ref provided_value,
-                    ref expected_range,
-                }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
-                    && provided_value == "vertex 1 axis 1 = NaN"
-                    && expected_range == "finite coordinate values"
-            ),
-            "explicit non-finite coordinate should be rejected, got {result:?}"
+        assert_matches!(
+            result,
+            Err(CdtError::InvalidGenerationParameters {
+                ref issue,
+                ref provided_value,
+                ref expected_range,
+            }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
+                && provided_value == "vertex 1 axis 1 = NaN"
+                && expected_range == "finite coordinate values",
+            "explicit non-finite coordinate should be rejected"
         );
     }
 
@@ -962,18 +954,16 @@ mod tests {
         let simplices = vec![vec![0, 1, 2]];
 
         let result = build_delaunay2_from_simplices(&vertices, &simplices);
-        assert!(
-            matches!(
-                result,
-                Err(CdtError::InvalidGenerationParameters {
-                    ref issue,
-                    ref provided_value,
-                    ref expected_range,
-                }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
-                    && provided_value == "vertex 2 axis 1 = -inf"
-                    && expected_range == "finite coordinate values"
-            ),
-            "delegating explicit-simplex builder should reject non-finite coordinates, got {result:?}"
+        assert_matches!(
+            result,
+            Err(CdtError::InvalidGenerationParameters {
+                ref issue,
+                ref provided_value,
+                ref expected_range,
+            }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
+                && provided_value == "vertex 2 axis 1 = -inf"
+                && expected_range == "finite coordinate values",
+            "delegating explicit-simplex builder should reject non-finite coordinates"
         );
     }
 
@@ -992,18 +982,16 @@ mod tests {
             TopologyGuarantee::DEFAULT,
             GlobalTopology::Euclidean,
         );
-        assert!(
-            matches!(
-                result,
-                Err(CdtError::InvalidGenerationParameters {
-                    ref issue,
-                    ref provided_value,
-                    ref expected_range,
-                }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
-                    && provided_value == "vertex 1 axis 0 = inf"
-                    && expected_range == "finite coordinate values"
-            ),
-            "explicit non-finite topology coordinate should be rejected, got {result:?}"
+        assert_matches!(
+            result,
+            Err(CdtError::InvalidGenerationParameters {
+                ref issue,
+                ref provided_value,
+                ref expected_range,
+            }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
+                && provided_value == "vertex 1 axis 0 = inf"
+                && expected_range == "finite coordinate values",
+            "explicit non-finite topology coordinate should be rejected"
         );
     }
 
@@ -1019,18 +1007,16 @@ mod tests {
             ([f64::INFINITY, 1.0], "axis 0 period inf"),
         ] {
             let result = build_toroidal_delaunay2(&vertices, &simplices, domain);
-            assert!(
-                matches!(
-                    result,
-                    Err(CdtError::InvalidGenerationParameters {
-                        ref issue,
-                        ref provided_value,
-                        ref expected_range,
-                    }) if *issue == GenerationParameterIssue::InvalidToroidalDomain
-                        && provided_value == expected_value
-                        && expected_range == "finite and positive periods"
-                ),
-                "invalid domain {domain:?} should be rejected, got {result:?}"
+            assert_matches!(
+                result,
+                Err(CdtError::InvalidGenerationParameters {
+                    ref issue,
+                    ref provided_value,
+                    ref expected_range,
+                }) if *issue == GenerationParameterIssue::InvalidToroidalDomain
+                    && provided_value == expected_value
+                    && expected_range == "finite and positive periods",
+                "invalid domain {domain:?} should be rejected"
             );
         }
     }

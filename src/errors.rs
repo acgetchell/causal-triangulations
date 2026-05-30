@@ -49,14 +49,12 @@ impl fmt::Display for DelaunayValidationLevel {
 ///     vertices: 2,
 ///     ..CdtConfig::new(36, 3)
 /// };
-/// let err = config.validate().expect_err("vertices below the minimum are invalid");
-///
 /// assert!(matches!(
-///     err,
-///     CdtError::InvalidConfiguration {
+///     config.into_validated(),
+///     Err(CdtError::InvalidConfiguration {
 ///         setting: ConfigurationSetting::Vertices,
 ///         ..
-///     }
+///     })
 /// ));
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1160,6 +1158,7 @@ pub type CdtResult<T> = Result<T, CdtError>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
     use std::error::Error;
 
     #[test]
@@ -1842,10 +1841,7 @@ mod tests {
     fn test_mcmc_error_from_conversion() {
         let mcmc_err = McmcError::NanProposedLogProb;
         let cdt_err: CdtError = mcmc_err.into();
-        assert!(matches!(
-            cdt_err,
-            CdtError::Mcmc(McmcError::NanProposedLogProb)
-        ));
+        assert_matches!(cdt_err, CdtError::Mcmc(McmcError::NanProposedLogProb));
         let display = format!("{cdt_err}");
         assert!(
             display.contains("MCMC error"),
