@@ -38,6 +38,23 @@ def raises_specific_exception() -> None:
     raise RuntimeError("specific failure")
 
 
+def implicit_path_read_text_encoding(path) -> None:
+    # ruleid: causal-triangulations.python.explicit-path-text-encoding-in-tests
+    path.read_text()
+
+
+def implicit_path_write_text_encoding(path) -> None:
+    # ruleid: causal-triangulations.python.explicit-path-text-encoding-in-tests
+    path.write_text("Time: [1.0, 1.0, 1.0] µs\n")
+
+
+def explicit_path_text_encoding(path) -> None:
+    # ok: causal-triangulations.python.explicit-path-text-encoding-in-tests
+    path.read_text(encoding="utf-8")
+    # ok: causal-triangulations.python.explicit-path-text-encoding-in-tests
+    path.write_text("Time: [1.0, 1.0, 1.0] µs\n", encoding="utf-8")
+
+
 def adhoc_mock_stdout() -> None:
     # ruleid: causal-triangulations.python.no-adhoc-completedprocess-mock
     result = Mock()

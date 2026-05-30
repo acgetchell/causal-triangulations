@@ -74,6 +74,9 @@ The useful updates ported from MCMC are:
   `tests/semgrep/src/project_rules/rust_style.rs` fixture shape. Before this refinement, prose such as "do not use `.unwrap()`" could be reported and Semgrep
   test mode needed broader name-based exclusions; after it, public-surface checks still reject panic-style calls while fixture-only exceptions are explicitly
   anchored.
+- low-risk MCMC Semgrep rules for public `*_unchecked` Rust APIs, dynamic error erasure in examples/benchmarks, and dynamic error erasure in doctests. The CDT
+  versions keep repository-owned rule IDs, explicit fixture paths, and typed-error guidance so user-facing examples continue to model `CdtResult` or concrete
+  errors.
 - an `examples-validate` recipe that runs Cargo examples and verifies stable output markers for the user-facing example contracts.
 
 The useful Semgrep updates ported from the sibling `delaunay` repository are:

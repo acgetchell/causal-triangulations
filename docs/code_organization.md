@@ -78,6 +78,7 @@ causal-triangulations/
 │   ├── archive_changelog.py
 │   ├── benchmark_models.py
 │   ├── benchmark_utils.py
+│   ├── check_semgrep_fixtures.py
 │   ├── coverage_report.py
 │   ├── hardware_utils.py
 │   ├── performance_analysis.py

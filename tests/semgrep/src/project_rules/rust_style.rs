@@ -140,6 +140,16 @@ mod prop_tests {
     }
 }
 
+// ruleid: causal-triangulations.rust.no-public-unchecked-apis
+pub fn from_raw_unchecked() {}
+
+// ok: causal-triangulations.rust.no-public-unchecked-apis
+fn private_unchecked() {}
+
+#[cfg(test)]
+// ok: causal-triangulations.rust.no-public-unchecked-apis
+pub fn test_only_unchecked() {}
+
 // ruleid: causal-triangulations.rust.no-clippy-allow-lints
 #[allow(clippy::too_many_lines)]
 fn clippy_allow_fixture() {}

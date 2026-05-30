@@ -618,29 +618,30 @@ run-simulation:
 
 # Repository-owned Semgrep rules for project-specific diagnostics.
 semgrep: _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
     uv run semgrep --metrics off --error --strict --timeout 30 --config semgrep.yaml .
+    python_test_files=()
+    while IFS= read -r file; do
+        python_test_files+=("$file")
+    done < <(git ls-files 'scripts/tests/*.py')
+    if [[ "${#python_test_files[@]}" -gt 0 ]]; then
+        uv run semgrep --metrics off --error --strict --timeout 30 --config semgrep.yaml "${python_test_files[@]}"
+    fi
 
 semgrep-test: _ensure-uv
     #!/usr/bin/env bash
     set -euo pipefail
-    config_dir="$(mktemp -d "${TMPDIR:-/tmp}/ct-semgrep-config.XXXXXX")"
-    cleanup() {
-        if [[ -n "${config_dir:-}" && "$config_dir" == "${TMPDIR:-/tmp}"/ct-semgrep-config.* ]]; then
-            rm -rf "$config_dir"
-        fi
+
+    check_semgrep_fixture() {
+        target="$1"
+        json="$(uv run semgrep scan --metrics off --json --quiet --strict --config semgrep.yaml "$target")"
+        SEMGREP_JSON="$json" uv run scripts/check_semgrep_fixtures.py "$target"
     }
-    trap cleanup EXIT
 
-    # Semgrep directory test mode maps fixture paths to config paths, so mirror
-    # each fixture to the shared config while keeping semgrep.yaml authoritative.
     while IFS= read -r -d '' fixture; do
-        rel="${fixture#tests/semgrep/}"
-        config_path="$config_dir/${rel%.*}.yaml"
-        mkdir -p "$(dirname "$config_path")"
-        ln -s "$PWD/semgrep.yaml" "$config_path"
+        check_semgrep_fixture "$fixture"
     done < <(find tests/semgrep -type f ! -name '*.fixed' -print0)
-
-    uv run semgrep scan --metrics off --test --strict --config "$config_dir" tests/semgrep
 
 # cspell:ignore oldname newname
 
