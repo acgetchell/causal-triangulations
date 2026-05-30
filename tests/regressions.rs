@@ -6,6 +6,7 @@ use causal_triangulations::{
     ActionConfig, CdtTriangulation, ErgodicsSystem, MetropolisAlgorithm, MetropolisConfig,
     MoveResult,
 };
+use std::assert_matches;
 
 #[test]
 fn toroidal_observables_run_accepts_periodic_moves_after_offset_support() {
@@ -60,12 +61,10 @@ fn proposal_site_cache_does_not_reuse_sites_for_replaced_triangulation_instances
     assert_eq!(triangulation.metadata().modification_count, 0);
 
     let first_result = system.attempt_13_move(&mut triangulation);
-    assert!(
-        !matches!(
-            first_result,
-            MoveResult::Rejected(_) | MoveResult::HardFailure(_)
-        ),
-        "initial toroidal move should not hit a hard proposal failure: {first_result:?}"
+    assert_matches!(
+        first_result,
+        MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation,
+        "initial toroidal move should not hit a hard proposal failure"
     );
     triangulation
         .validate()

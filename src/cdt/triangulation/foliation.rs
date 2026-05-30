@@ -1027,6 +1027,7 @@ mod tests {
     use super::*;
     use crate::errors::TriangulationMetadataField;
     use crate::geometry::generators::build_delaunay2_with_data;
+    use std::assert_matches;
     use std::thread;
     use std::time::Duration;
 
@@ -1092,10 +1093,10 @@ mod tests {
 
         tri.set_vertex_data(&first_vertex, None)
             .expect("Expected valid vertex handle while clearing label");
-        assert!(matches!(
+        assert_matches!(
             tri.validate_foliation(),
             Err(CdtError::Foliation(FoliationError::StaleBookkeeping { .. }))
-        ));
+        );
     }
 
     #[test]
@@ -1111,12 +1112,12 @@ mod tests {
 
         tri.set_vertex_data(&first_vertex, None)
             .expect("Expected valid vertex handle while clearing label");
-        assert!(matches!(
+        assert_matches!(
             tri.synchronize_foliation_from_live_labels(),
             Err(CdtError::Foliation(FoliationError::MissingVertexLabel {
                 vertex: 0
             }))
-        ));
+        );
 
         let backend = labeled_triangle_backend([0, 0, 1]);
         let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
@@ -1129,14 +1130,14 @@ mod tests {
 
         tri.set_vertex_data(&first_vertex, Some(7))
             .expect("Expected valid vertex handle while mutating label");
-        assert!(matches!(
+        assert_matches!(
             tri.synchronize_foliation_from_live_labels(),
             Err(CdtError::Foliation(FoliationError::OutOfRangeVertexLabel {
                 vertex: 0,
                 label: 7,
                 expected_range_end: 2,
             }))
-        ));
+        );
     }
 
     #[test]
@@ -1149,13 +1150,13 @@ mod tests {
                 .expect("non-empty mismatched bookkeeping is constructible"),
         );
 
-        assert!(matches!(
+        assert_matches!(
             tri.validate_foliation(),
             Err(CdtError::Foliation(FoliationError::LabelCountMismatch {
                 labeled: 2,
                 expected: 3,
             }))
-        ));
+        );
     }
 
     #[test]
@@ -1211,10 +1212,10 @@ mod tests {
             .saturating_add(1);
         let result = tri.assign_foliation_by_y(requested_slices);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::Foliation(FoliationError::EmptySlice { .. }))
-        ));
+        );
         assert_eq!(tri.time_slices(), initial_time_slices);
         assert_eq!(
             tri.metadata().modification_count,
@@ -1233,7 +1234,7 @@ mod tests {
 
         let result = tri.assign_foliation_by_y(2);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
                 ref field,
@@ -1244,7 +1245,7 @@ mod tests {
                 && topology == CdtTopology::Toroidal
                 && provided_value == "2"
                 && expected == "≥ 3"
-        ));
+        );
         assert_eq!(tri.time_slices(), 3);
         assert_eq!(tri.slice_sizes(), initial_slice_sizes.as_slice());
         assert!(tri.has_foliation());
@@ -1311,10 +1312,10 @@ mod tests {
             tri.validate_causality(),
             tri.validate_simplex_classification(),
         ] {
-            assert!(matches!(
+            assert_matches!(
                 result,
                 Err(CdtError::Foliation(FoliationError::StaleBookkeeping { .. }))
-            ));
+            );
         }
     }
 
@@ -1371,7 +1372,7 @@ mod tests {
         let live_ct = tri
             .simplex_type(&face)
             .expect("Single face should be classifiable");
-        assert!(matches!(live_ct, SimplexType::Up | SimplexType::Down));
+        assert_matches!(live_ct, SimplexType::Up | SimplexType::Down);
 
         tri.classify_all_simplices()
             .expect("Should classify simplices with foliation")
@@ -1393,7 +1394,7 @@ mod tests {
     fn classification_rejects_same_slice_triangle() {
         let backend = labeled_triangle_backend([0, 0, 0]);
 
-        assert!(matches!(
+        assert_matches!(
             CdtTriangulation::from_labeled_delaunay(backend, 1, 2),
             Err(CdtError::ValidationFailed {
                 ref check,
@@ -1404,7 +1405,7 @@ mod tests {
                 },
             })
                 if *check == CdtValidationCheck::Causality
-        ));
+        );
     }
 
     #[test]

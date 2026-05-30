@@ -1647,6 +1647,7 @@ mod tests {
     };
     use serde_json::{Value, error::Category};
     use slotmap::KeyData;
+    use std::assert_matches;
     use std::collections::HashSet;
 
     /// Wraps generated test fixtures through the public checked constructor.
@@ -2025,10 +2026,7 @@ mod tests {
         let bogus_key = VertexKey::from(KeyData::from_ffi(u64::MAX));
         let invalid_handle = DelaunayVertexHandle { key: bogus_key };
         let err = backend.vertex_coordinates(&invalid_handle).unwrap_err();
-        assert!(
-            matches!(err, DelaunayError::InvalidVertex { key } if key == bogus_key),
-            "Expected InvalidVertex with matching key, got: {err}"
-        );
+        assert_matches!(err, DelaunayError::InvalidVertex { key } if key == bogus_key);
     }
 
     #[test]
@@ -2063,10 +2061,7 @@ mod tests {
         let bogus_key = SimplexKey::from(KeyData::from_ffi(u64::MAX));
         let invalid_handle = DelaunayFaceHandle { key: bogus_key };
         let err = backend.face_vertices(&invalid_handle).unwrap_err();
-        assert!(
-            matches!(err, DelaunayError::InvalidFace { key } if key == bogus_key),
-            "Expected InvalidFace with matching key, got: {err}"
-        );
+        assert_matches!(err, DelaunayError::InvalidFace { key } if key == bogus_key);
     }
 
     #[test]
@@ -2282,10 +2277,7 @@ mod tests {
         let bogus_key = SimplexKey::from(KeyData::from_ffi(u64::MAX));
         let invalid_handle = DelaunayFaceHandle { key: bogus_key };
         let err = backend.face_neighbors(&invalid_handle).unwrap_err();
-        assert!(
-            matches!(err, DelaunayError::InvalidFace { key } if key == bogus_key),
-            "Expected InvalidFace with matching key, got: {err}"
-        );
+        assert_matches!(err, DelaunayError::InvalidFace { key } if key == bogus_key);
     }
 
     #[test]
@@ -2296,10 +2288,7 @@ mod tests {
         let bogus_key = VertexKey::from(KeyData::from_ffi(u64::MAX));
         let invalid_handle = DelaunayVertexHandle { key: bogus_key };
         let err = backend.adjacent_faces(&invalid_handle).unwrap_err();
-        assert!(
-            matches!(err, DelaunayError::InvalidVertex { key } if key == bogus_key),
-            "Expected InvalidVertex with matching key, got: {err}"
-        );
+        assert_matches!(err, DelaunayError::InvalidVertex { key } if key == bogus_key);
     }
 
     #[test]
@@ -2310,10 +2299,7 @@ mod tests {
         let bogus_key = VertexKey::from(KeyData::from_ffi(u64::MAX));
         let invalid_handle = DelaunayVertexHandle { key: bogus_key };
         let err = backend.incident_edges(&invalid_handle).unwrap_err();
-        assert!(
-            matches!(err, DelaunayError::InvalidVertex { key } if key == bogus_key),
-            "Expected InvalidVertex with matching key, got: {err}"
-        );
+        assert_matches!(err, DelaunayError::InvalidVertex { key } if key == bogus_key);
     }
 
     #[test]
@@ -2505,39 +2491,39 @@ mod tests {
 
         let vertex = backend.vertices().next().expect("valid vertex handle");
 
-        assert!(matches!(
+        assert_matches!(
             backend.move_vertex(vertex, &[1.0, 1.0]),
             Err(DelaunayError::NotImplemented {
                 operation: DelaunayOperation::MoveVertex,
             })
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             backend.insert_vertex(&[0.0]),
             Err(DelaunayError::CoordinateDimensionMismatch {
                 actual: 1,
                 expected: 2,
             })
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             backend.insert_vertex(&[f64::NAN, 0.0]),
             Err(DelaunayError::NonFiniteCoordinate {
                 operation: DelaunayOperation::InsertVertex,
                 axis: 0,
                 value,
             }) if value.is_nan()
-        ));
+        );
 
         let bogus_vertex = VertexKey::from(KeyData::from_ffi(u64::MAX));
-        assert!(matches!(
+        assert_matches!(
             backend.remove_vertex(DelaunayVertexHandle { key: bogus_vertex }),
             Err(DelaunayError::InvalidVertex { key }) if key == bogus_vertex,
-        ));
+        );
 
         let bogus_face = SimplexKey::from(KeyData::from_ffi(u64::MAX));
-        assert!(matches!(
+        assert_matches!(
             backend.subdivide_face(DelaunayFaceHandle { key: bogus_face }, &[0.25, 0.25]),
             Err(DelaunayError::InvalidFace { key }) if key == bogus_face,
-        ));
+        );
 
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
             .expect("labeled triangle should build");
@@ -2546,11 +2532,11 @@ mod tests {
             .edges()
             .next()
             .expect("single triangle has boundary edges");
-        assert!(matches!(
+        assert_matches!(
             boundary_backend.flip_edge(boundary_edge),
             Err(DelaunayError::NonFlippableEdge { reason, .. })
                 if reason == NonFlippableEdgeReason::NotInteriorFacet,
-        ));
+        );
     }
 
     #[test]
@@ -2587,18 +2573,18 @@ mod tests {
             backend.face_count(),
         );
 
-        assert!(matches!(
+        assert_matches!(
             backend.clear(),
             Err(DelaunayError::NotImplemented {
                 operation: DelaunayOperation::Clear,
             })
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             backend.reserve_capacity(32, 64),
             Err(DelaunayError::NotImplemented {
                 operation: DelaunayOperation::ReserveCapacity,
             })
-        ));
+        );
         assert_eq!(
             (
                 backend.vertex_count(),

@@ -8,9 +8,8 @@
 //! - Attempt a basic CDT simulation
 //! - Run the Metropolis loop over real 2D CDT move kernels
 
-use causal_triangulations::prelude::config::CdtConfig;
 use causal_triangulations::prelude::errors::CdtResult;
-use causal_triangulations::prelude::simulation::MetropolisAlgorithm;
+use causal_triangulations::prelude::simulation::{CdtConfig, MetropolisAlgorithm};
 use causal_triangulations::prelude::triangulation::CdtTriangulation;
 use log::{LevelFilter, info};
 
@@ -44,6 +43,7 @@ fn main() -> CdtResult<()> {
     config.steps = 100;
     config.thermalization_steps = 20;
     config.measurement_frequency = 5;
+    let config = config.into_validated()?;
 
     // Extract individual configs
     let metropolis_config = config.to_metropolis_config();

@@ -46,8 +46,10 @@ Some differences remain because CDT has different workflows and project invarian
   stabilization work a named path for heavier integration coverage.
 - CDT has a repository rule SARIF workflow for the local Semgrep rules. A Codacy workflow was not ported because it depends on project-specific
   `CODACY_PROJECT_TOKEN` setup and would duplicate the existing repository-rule SARIF signal until Codacy is configured for this repository.
-- CDT Semgrep rules include geometry-backend isolation, foliation/topology validation, focused prelude imports, Python support-script discipline, and typed
-  error policies. These are repository-specific and should not be weakened while porting generic rules.
+- CDT Semgrep rules include geometry-backend isolation, foliation/topology validation, focused prelude imports, doctest assertion-idiom enforcement,
+  Python support-script discipline, and typed error policies. These are repository-specific and should not be weakened while porting generic rules. The
+  `prefer-assert-matches-in-doctests` rule keeps public `///` examples on `std::assert_matches` (Rust 1.96.0) so documentation teaches the diagnostic-friendly
+  idiom rather than `assert!(matches!(...))`.
 - CDT and MCMC both require Python `>=3.12` for repository-managed support tooling.
 
 ## Ported Updates
@@ -56,6 +58,7 @@ The useful updates ported from MCMC are:
 
 - explicit `rustfmt.toml` formatting configuration;
 - explicit uv package mode and pytest 9 minimum in `pyproject.toml`;
+- docs.rs package metadata with `all-features = true`, matching MCMC so rendered API documentation includes every public feature-gated surface;
 - CodeQL analysis for GitHub Actions and Rust, using `build-mode: none` for Rust;
 - the MCMC-style `cliff.toml` template and `just changelog-unreleased <version>` flow, adapted to keep CDT's changelog archive step and avoid temporary local
   release tags;

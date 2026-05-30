@@ -239,6 +239,7 @@ mod tests {
     use super::*;
     use crate::geometry::backends::mock::MockBackend;
     use crate::geometry::traits::{EdgeAdjacentFacesResult, GeometryBackend, TriangulationQuery};
+    use std::assert_matches;
     use std::collections::HashSet;
 
     #[derive(Debug, Clone)]
@@ -412,25 +413,13 @@ mod tests {
         assert_eq!(backend.dimension(), 1);
         assert_eq!(backend.vertices().collect::<Vec<_>>(), vec![0, 1, 2]);
         assert_eq!(backend.vertex_coordinates(&0), Ok(vec![0.0]));
-        assert!(matches!(
-            backend.vertex_coordinates(&99),
-            Err(FixtureError::Vertex)
-        ));
+        assert_matches!(backend.vertex_coordinates(&99), Err(FixtureError::Vertex));
         assert_eq!(backend.adjacent_faces(&0), Ok(Vec::new()));
-        assert!(matches!(
-            backend.adjacent_faces(&99),
-            Err(FixtureError::Vertex)
-        ));
+        assert_matches!(backend.adjacent_faces(&99), Err(FixtureError::Vertex));
         assert_eq!(backend.incident_edges(&0), Ok(Vec::new()));
-        assert!(matches!(
-            backend.incident_edges(&99),
-            Err(FixtureError::Vertex)
-        ));
+        assert_matches!(backend.incident_edges(&99), Err(FixtureError::Vertex));
         assert_eq!(backend.face_neighbors(&0), Ok(Vec::new()));
-        assert!(matches!(
-            backend.face_neighbors(&99),
-            Err(FixtureError::Face)
-        ));
+        assert_matches!(backend.face_neighbors(&99), Err(FixtureError::Face));
 
         let hull: HashSet<_> = backend.convex_hull().into_iter().collect();
         assert_eq!(hull, HashSet::from([0, 1]));

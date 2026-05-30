@@ -19,6 +19,12 @@ Key goals:
 
 All design decisions should prioritize these goals.
 
+## Rust Baseline
+
+The repository MSRV is Rust 1.96.0. `Cargo.toml` and `rust-toolchain.toml` must stay in sync so local `rustup` usage and CI install the same baseline.
+Tests and public doctests use `std::assert_matches` instead of `assert!(matches!(...))` when checking enum or result shapes so failures show the unexpected
+value directly. The `causal-triangulations.rust.prefer-assert-matches-in-doctests` Semgrep rule enforces this idiom in `src/` documentation examples.
+
 ---
 
 ## Safety
@@ -228,6 +234,7 @@ instead of deep module paths when demonstrating public workflows. Avoid duplicat
 documented:
 
 - `prelude::geometry` for backend construction, geometry generators, and geometry traits
+- `prelude::config` for raw and validated CDT configuration types, topology selection, overrides, and presets
 - `prelude::triangulation` for CDT wrappers, foliation classification, topology metadata, and triangulation queries
 - `prelude::moves` for local ergodic move kernels, move results, move types, and move statistics
 - `prelude::action` for standalone action configuration and Regge action calculations

@@ -330,6 +330,7 @@ mod tests {
     use crate::cdt::foliation::{EdgeType, FoliationError};
     use crate::config::CdtTopology;
     use crate::geometry::generators::build_delaunay2_with_data;
+    use std::assert_matches;
 
     /// Builds a minimal labeled Delaunay backend for validation tests.
     fn labeled_triangle_backend(labels: [u32; 3]) -> DelaunayBackend2D {
@@ -460,10 +461,10 @@ mod tests {
         tri.set_vertex_data(&vertex_to_mutate, Some(3))
             .expect("Expected valid vertex handle while mutating deterministic triangle");
 
-        assert!(matches!(
+        assert_matches!(
             tri.validate_causality_delaunay(),
             Err(CdtError::Foliation(FoliationError::StaleBookkeeping { .. }))
-        ));
+        );
     }
 
     #[test]
@@ -480,10 +481,10 @@ mod tests {
         tri.set_vertex_data(&vertex_to_clear, None)
             .expect("Expected valid vertex handle while clearing label");
 
-        assert!(matches!(
+        assert_matches!(
             tri.validate_causality_delaunay(),
             Err(CdtError::Foliation(FoliationError::StaleBookkeeping { .. }))
-        ));
+        );
     }
 
     #[test]
@@ -491,7 +492,7 @@ mod tests {
         let backend = labeled_triangle_backend([0, 0, 0]);
         let result = CdtTriangulation::from_labeled_delaunay(backend, 1, 2);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::ValidationFailed {
                 ref check,
@@ -502,7 +503,7 @@ mod tests {
                 },
             })
                 if *check == CdtValidationCheck::Causality
-        ));
+        );
     }
 
     #[test]
@@ -518,9 +519,9 @@ mod tests {
         tri.set_vertex_data(&slice0_vertex, Some(8))
             .expect("Expected valid vertex handle while mutating label");
 
-        assert!(matches!(
+        assert_matches!(
             tri.validate_causality_delaunay(),
             Err(CdtError::Foliation(FoliationError::StaleBookkeeping { .. }))
-        ));
+        );
     }
 }

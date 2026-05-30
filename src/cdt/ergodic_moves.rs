@@ -553,13 +553,14 @@ impl ErgodicsSystem {
     ///
     /// ```
     /// use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveType};
+    /// use std::assert_matches;
     ///
     /// let mut system = ErgodicsSystem::new();
     /// let move_type = system.select_random_move();
-    /// assert!(matches!(
+    /// assert_matches!(
     ///     move_type,
     ///     MoveType::Move22 | MoveType::Move13Add | MoveType::Move31Remove | MoveType::EdgeFlip
-    /// ));
+    /// );
     /// ```
     #[must_use]
     pub fn select_random_move(&mut self) -> MoveType {
@@ -660,6 +661,7 @@ impl ErgodicsSystem {
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_from_simplices(
@@ -675,10 +677,10 @@ impl ErgodicsSystem {
     ///     let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
     ///     let mut system = ErgodicsSystem::new();
     ///     let result = system.attempt_22_move(&mut triangulation);
-    ///     assert!(matches!(
+    ///     assert_matches!(
     ///         result,
     ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
-    ///     ));
+    ///     );
     ///     assert_eq!(system.stats.moves_22_attempted, 1);
     ///     Ok(())
     /// }
@@ -709,6 +711,7 @@ impl ErgodicsSystem {
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -725,7 +728,7 @@ impl ErgodicsSystem {
     ///     let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
     ///     let mut system = ErgodicsSystem::new();
     ///     let result = system.attempt_13_move(&mut triangulation);
-    ///     assert!(matches!(result, MoveResult::Success | MoveResult::GeometricViolation));
+    ///     assert_matches!(result, MoveResult::Success | MoveResult::GeometricViolation);
     ///     assert_eq!(system.stats.moves_13_attempted, 1);
     ///     Ok(())
     /// }
@@ -770,6 +773,7 @@ impl ErgodicsSystem {
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -787,10 +791,10 @@ impl ErgodicsSystem {
     ///     let mut system = ErgodicsSystem::new();
     ///     let _ = system.attempt_13_move(&mut triangulation);
     ///     let result = system.attempt_31_move(&mut triangulation);
-    ///     assert!(matches!(
+    ///     assert_matches!(
     ///         result,
     ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
-    ///     ));
+    ///     );
     ///     assert_eq!(system.stats.moves_31_attempted, 1);
     ///     Ok(())
     /// }
@@ -828,6 +832,7 @@ impl ErgodicsSystem {
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_from_simplices(
@@ -843,10 +848,10 @@ impl ErgodicsSystem {
     ///     let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
     ///     let mut system = ErgodicsSystem::new();
     ///     let result = system.attempt_edge_flip(&mut triangulation);
-    ///     assert!(matches!(
+    ///     assert_matches!(
     ///         result,
     ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
-    ///     ));
+    ///     );
     ///     assert_eq!(system.stats.edge_flips_attempted, 1);
     ///     Ok(())
     /// }
@@ -866,6 +871,7 @@ impl ErgodicsSystem {
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -882,10 +888,10 @@ impl ErgodicsSystem {
     ///     let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
     ///     let mut system = ErgodicsSystem::new();
     ///     let result = system.attempt_random_move(&mut triangulation);
-    ///     assert!(matches!(
+    ///     assert_matches!(
     ///         result,
     ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
-    ///     ));
+    ///     );
     ///     Ok(())
     /// }
     /// ```
@@ -1849,6 +1855,7 @@ mod tests {
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
     use approx::assert_relative_eq;
+    use std::assert_matches;
     use std::collections::HashSet;
 
     /// Builds the minimal foliated triangle fixture used by `(1,3)` tests.
@@ -2034,7 +2041,7 @@ mod tests {
             }),
         );
 
-        assert!(matches!(result, MoveResult::HardFailure(_)));
+        assert_matches!(result, MoveResult::HardFailure(_));
         assert_eq!(system.stats.moves_13_attempted, 1);
         assert_eq!(system.stats.moves_13_accepted, 0);
         assert_eq!(system.stats.moves_13_hard_failed, 1);
@@ -2164,7 +2171,7 @@ mod tests {
             }),
         );
 
-        assert!(matches!(result, MoveResult::HardFailure(_)));
+        assert_matches!(result, MoveResult::HardFailure(_));
         assert_eq!(
             (
                 triangulation.vertex_count(),
@@ -2212,7 +2219,7 @@ mod tests {
             .expect("test Delaunay triangle should validate");
         let result = CdtTriangulation2D::with_topology(backend, 3, 2, CdtTopology::Toroidal);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::TopologyMismatch {
                 topology,
@@ -2220,7 +2227,7 @@ mod tests {
                 expected_euler_characteristics,
                 ..
             }) if topology == CdtTopology::Toroidal && expected_euler_characteristics == [0]
-        ));
+        );
     }
 
     #[test]
@@ -2620,7 +2627,7 @@ mod tests {
         let mut system = ErgodicsSystem::new();
         let mut triangulation = single_triangle();
         let result = system.attempt_13_move(&mut triangulation);
-        assert!(matches!(result, MoveResult::Success));
+        assert_matches!(result, MoveResult::Success);
         let before_vertices = triangulation.vertex_count();
 
         let result = system.attempt_31_move(&mut triangulation);
@@ -2823,9 +2830,10 @@ mod tests {
 
         let result = system.attempt_31_move(&mut triangulation);
 
-        assert!(
-            matches!(result, MoveResult::CausalityViolation),
-            "minimal periodic toroidal slices should reject volume removal causally, got {result:?}"
+        assert_matches!(
+            result,
+            MoveResult::CausalityViolation,
+            "minimal periodic toroidal slices should reject volume removal causally"
         );
         assert_eq!(system.stats.moves_31_attempted, 1);
         assert_eq!(system.stats.moves_31_accepted, 0);
@@ -2865,14 +2873,12 @@ mod tests {
 
             let result = attempt_move(&mut system, &mut triangulation);
 
-            assert!(
-                matches!(
-                    result,
-                    MoveResult::Success
-                        | MoveResult::CausalityViolation
-                        | MoveResult::GeometricViolation
-                ),
-                "periodic toroidal {move_type:?} should not fail through backend offset handling, got {result:?}"
+            assert_matches!(
+                result,
+                MoveResult::Success
+                    | MoveResult::CausalityViolation
+                    | MoveResult::GeometricViolation,
+                "periodic toroidal {move_type:?} should not fail through backend offset handling"
             );
             triangulation.validate().expect(
                 "periodic toroidal k=2 move attempt should preserve evolved CDT invariants",

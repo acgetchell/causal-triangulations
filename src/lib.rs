@@ -178,7 +178,10 @@ pub use cdt::metropolis::{
 };
 pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
 pub use cdt::results::{Measurement, SimulationResultsBackend};
-pub use config::{CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, TestConfig};
+pub use config::{
+    CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, TestConfig, ValidatedCdtConfig,
+    ValidatedInitialVolume,
+};
 pub use errors::{
     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
     CheckpointMoveCounter, CheckpointOperation, CheckpointResumeFailure, ConfigurationSetting,
@@ -225,13 +228,14 @@ pub mod prelude {
     pub use crate::run_simulation;
 
     // Configuration and errors
-    pub use crate::config::{CdtConfig, CdtTopology};
+    pub use crate::config::{CdtConfig, CdtTopology, ValidatedCdtConfig};
     pub use crate::errors::{CdtError, CdtResult};
 
     /// Focused exports for configuration parsing and presets.
     pub mod config {
         pub use crate::config::{
             CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, TestConfig,
+            ValidatedCdtConfig, ValidatedInitialVolume,
         };
     }
 
@@ -321,15 +325,39 @@ pub mod prelude {
 
     /// Focused exports for running CDT simulations.
     ///
-    /// This prelude includes [`run_simulation`], the Metropolis runner, delayed
-    /// proposal adapter, telemetry structs, result containers, and typed
-    /// proposal errors needed by MCMC workflows. It also includes the
-    /// triangulation query trait so callers can inspect final or checkpointed
-    /// states returned by simulation APIs. The upstream MCMC traits are
-    /// re-exported here because [`CdtProposal`](crate::cdt::metropolis::CdtProposal)
-    /// and [`CdtTarget`](crate::cdt::metropolis::CdtTarget) expose their primary
+    /// This prelude includes [`run_simulation`], validated simulation
+    /// configuration, the Metropolis runner, delayed proposal adapter, telemetry
+    /// structs, result containers, and typed proposal errors needed by MCMC
+    /// workflows. It also includes the triangulation query trait so callers can
+    /// inspect final or checkpointed states returned by simulation APIs. The
+    /// upstream MCMC traits are re-exported here because
+    /// [`CdtProposal`](crate::cdt::metropolis::CdtProposal) and
+    /// [`CdtTarget`](crate::cdt::metropolis::CdtTarget) expose their primary
     /// behavior through those trait implementations.
     /// Observable estimators live in [`crate::prelude::observables`].
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtConfig, CdtResult, ValidatedCdtConfig,
+    /// };
+    ///
+    /// fn configured_steps(config: ValidatedCdtConfig) -> u32 {
+    ///     config.to_metropolis_config().steps
+    /// }
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = CdtConfig {
+    ///         steps: 5,
+    ///         thermalization_steps: 0,
+    ///         measurement_frequency: 1,
+    ///         ..CdtConfig::new(16, 4)
+    ///     }
+    ///     .into_validated()?;
+    ///
+    ///     assert_eq!(configured_steps(config), 5);
+    ///     Ok(())
+    /// }
+    /// ```
     pub mod simulation {
         pub use crate::cdt::action::{ActionConfig, compute_regge_action};
         pub use crate::cdt::ergodic_moves::MoveType;
@@ -339,7 +367,7 @@ pub mod prelude {
         };
         pub use crate::cdt::results::{Measurement, SimulationResultsBackend};
         pub use crate::cdt::triangulation::SimulationEvent;
-        pub use crate::config::{CdtConfig, CdtTopology};
+        pub use crate::config::{CdtConfig, CdtTopology, ValidatedCdtConfig};
         pub use crate::errors::{CdtError, CdtResult};
         pub use crate::geometry::CdtTriangulation2D;
         pub use crate::geometry::traits::TriangulationQuery;
@@ -387,6 +415,7 @@ pub mod prelude {
     /// ```
     /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::geometry::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -407,10 +436,10 @@ pub mod prelude {
     ///         domain: [1.0, 1.0],
     ///         mode: ToroidalConstructionMode::Explicit,
     ///     };
-    ///     assert!(matches!(topology, GlobalTopology::Toroidal { .. }));
+    ///     assert_matches!(topology, GlobalTopology::Toroidal { .. });
     ///
     ///     let error = backend.insert_vertex(&[0.0]).expect_err("coordinate dimension is invalid");
-    ///     assert!(matches!(error, DelaunayError::CoordinateDimensionMismatch { .. }));
+    ///     assert_matches!(error, DelaunayError::CoordinateDimensionMismatch { .. });
     ///     Ok(())
     /// }
     /// ```
@@ -474,12 +503,12 @@ pub mod prelude {
 ///
 /// # Errors
 ///
-/// Returns [`CdtError::InvalidConfiguration`] if the configuration fails validation,
-/// including invalid measurement schedules, unsupported open-boundary or
-/// toroidal slice counts, invalid regular slice counts, or inconsistent
-/// explicit spatial volume profiles.
-/// Returns [`CdtError::UnsupportedDimension`] if a validated configuration requests
-/// a simulation dimension other than 2.
+/// Returns [`CdtError::InvalidConfiguration`] if geometry, topology, action, or
+/// initial-volume configuration fails validation, including unsupported
+/// dimensions, unsupported open-boundary or toroidal slice counts, invalid
+/// regular slice counts, or inconsistent explicit spatial volume profiles.
+/// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
+/// temperature or measurement schedule is invalid.
 /// Returns triangulation generation, topology, foliation, or Metropolis errors
 /// from the selected construction and simulation path.
 /// If [`CdtConfig::output_csv`] or [`CdtConfig::output_json`] is set, returns
@@ -509,50 +538,37 @@ pub mod prelude {
 /// }
 /// ```
 pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend> {
-    // Validate configuration early to fail fast with clear error messages
-    config.validate()?;
+    let config = config.clone().into_validated()?;
 
-    let vertices = config.vertices;
-    let timeslices = config.timeslices;
+    let vertices = config.vertices();
+    let timeslices = config.timeslices();
 
-    if let Some(dim) = config.dimension
-        && dim != 2
-    {
-        return Err(CdtError::UnsupportedDimension(dim.into()));
-    }
-
-    log::info!("Dimensionality: {}", config.dimension.unwrap_or(2));
+    log::info!("Dimensionality: {}", config.dimension());
     log::info!("Number of vertices: {vertices}");
     log::info!("Number of timeslices: {timeslices}");
-    if let Some(profile) = &config.volume_profile {
+    if let Some(profile) = config.volume_profile() {
         log::info!("Initial spatial volume profile: {profile:?}");
     }
-    log::info!("Topology: {:?}", config.topology);
+    log::info!("Topology: {:?}", config.topology());
     log::info!("Using trait-based backend system");
 
-    // Create initial triangulation based on topology.
-    //
-    // `config.vertices` is always the *total* vertex count. With no explicit
-    // profile, `validate()` has checked topology-specific divisibility so we can
-    // divide to recover N = vertices/T per slice.
-    let triangulation = match config.topology {
-        CdtTopology::Toroidal => {
+    // Create initial triangulation from the validated topology/profile matrix.
+    let triangulation = match (config.topology(), config.initial_volume()) {
+        (CdtTopology::Toroidal, ValidatedInitialVolume::ExplicitProfile(profile)) => {
             log::info!("Constructing toroidal CDT (S¹×S¹)");
-            if let Some(profile) = &config.volume_profile {
-                CdtTriangulation::from_toroidal_cdt_profile(profile)?
-            } else {
-                let vertices_per_slice = vertices / timeslices;
-                CdtTriangulation::from_toroidal_cdt(vertices_per_slice, timeslices)?
-            }
+            CdtTriangulation::from_toroidal_cdt_profile(profile)?
         }
-        CdtTopology::OpenBoundary => {
+        (CdtTopology::Toroidal, ValidatedInitialVolume::Regular { vertices_per_slice }) => {
+            log::info!("Constructing toroidal CDT (S¹×S¹)");
+            CdtTriangulation::from_toroidal_cdt(vertices_per_slice, timeslices)?
+        }
+        (CdtTopology::OpenBoundary, ValidatedInitialVolume::ExplicitProfile(profile)) => {
             log::info!("Constructing open-boundary CDT strip");
-            if let Some(profile) = &config.volume_profile {
-                CdtTriangulation::from_cdt_strip_profile(profile)?
-            } else {
-                let vertices_per_slice = vertices / timeslices;
-                CdtTriangulation::from_cdt_strip(vertices_per_slice, timeslices)?
-            }
+            CdtTriangulation::from_cdt_strip_profile(profile)?
+        }
+        (CdtTopology::OpenBoundary, ValidatedInitialVolume::Regular { vertices_per_slice }) => {
+            log::info!("Constructing open-boundary CDT strip");
+            CdtTriangulation::from_cdt_strip(vertices_per_slice, timeslices)?
         }
     };
 
@@ -563,7 +579,7 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
         triangulation.face_count()
     );
 
-    let results = if config.simulate {
+    let results = if config.simulate() {
         // Run full CDT simulation with MCMC backend
         let metropolis_config = config.to_metropolis_config();
         let action_config = config.to_action_config();
@@ -584,13 +600,12 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
         let vertices = saturating_usize_to_u32(triangulation.vertex_count());
         let edges = saturating_usize_to_u32(triangulation.edge_count());
         let triangles = saturating_usize_to_u32(triangulation.face_count());
-        let initial_action = config
-            .to_action_config()
-            .calculate_action(vertices, edges, triangles);
+        let action_config = config.to_action_config();
+        let initial_action = action_config.calculate_action(vertices, edges, triangles);
 
         SimulationResultsBackend::from_parts(SimulationResultsParts {
             config: config.to_metropolis_config(),
-            action_config: config.to_action_config(),
+            action_config,
             move_stats: MoveStatistics::new(),
             proposal_stats: ProposalStatistics::new(),
             steps: vec![],
@@ -607,16 +622,16 @@ pub fn run_simulation(config: &CdtConfig) -> CdtResult<SimulationResultsBackend>
         })
     };
 
-    write_configured_outputs(config, &results)?;
+    write_configured_outputs(&config, &results)?;
     Ok(results)
 }
 
 /// Writes configured result outputs after a run completes.
 fn write_configured_outputs(
-    config: &CdtConfig,
+    validated_config: &ValidatedCdtConfig,
     results: &SimulationResultsBackend,
 ) -> CdtResult<()> {
-    if config.output_csv.is_none() && config.output_json.is_none() {
+    if validated_config.output_csv().is_none() && validated_config.output_json().is_none() {
         return Ok(());
     }
 
@@ -625,13 +640,11 @@ fn write_configured_outputs(
         detail: err.to_string(),
     })?;
 
-    let resolved_csv = config
-        .output_csv
-        .as_ref()
+    let resolved_csv = validated_config
+        .output_csv()
         .map(|path| CdtConfig::resolve_path(&base_dir, path));
-    let resolved_json = config
-        .output_json
-        .as_ref()
+    let resolved_json = validated_config
+        .output_json()
         .map(|path| CdtConfig::resolve_path(&base_dir, path));
 
     if let (Some(csv_path), Some(json_path)) = (&resolved_csv, &resolved_json)
@@ -649,7 +662,7 @@ fn write_configured_outputs(
     }
 
     if let Some(resolved) = resolved_json {
-        results.write_summary_json(config, &resolved)?;
+        results.write_summary_json(validated_config.config(), &resolved)?;
         log::info!("Wrote simulation JSON summary to {}", resolved.display());
     }
 
@@ -661,6 +674,7 @@ mod tests {
     use super::*;
     use approx::assert_relative_eq;
     use serde_json::{Value, from_str};
+    use std::assert_matches;
     use std::env;
     use std::fs;
     use std::path::PathBuf;
@@ -797,7 +811,7 @@ mod tests {
         let result = run_simulation(&config);
         assert!(result.is_err(), "Should reject zero measurement frequency");
 
-        if let Err(CdtError::InvalidConfiguration {
+        if let Err(CdtError::InvalidSimulationConfiguration {
             setting,
             provided_value,
             expected,
@@ -807,7 +821,7 @@ mod tests {
             assert_eq!(provided_value, "0");
             assert_eq!(expected, "≥ 1");
         } else {
-            panic!("Expected InvalidConfiguration error");
+            panic!("Expected InvalidSimulationConfiguration error");
         }
     }
 
@@ -823,7 +837,7 @@ mod tests {
             "Should reject measurement frequency greater than steps"
         );
 
-        if let Err(CdtError::InvalidConfiguration {
+        if let Err(CdtError::InvalidSimulationConfiguration {
             setting,
             provided_value,
             expected,
@@ -833,7 +847,7 @@ mod tests {
             assert_eq!(provided_value, "200");
             assert_eq!(expected, "≤ steps (100)");
         } else {
-            panic!("Expected InvalidConfiguration error");
+            panic!("Expected InvalidSimulationConfiguration error");
         }
     }
 
@@ -867,7 +881,7 @@ mod tests {
         let result = run_simulation(&config);
         assert!(result.is_err(), "Should reject negative temperature");
 
-        if let Err(CdtError::InvalidConfiguration {
+        if let Err(CdtError::InvalidSimulationConfiguration {
             setting,
             provided_value,
             expected,
@@ -877,7 +891,7 @@ mod tests {
             assert_eq!(provided_value, "-1");
             assert_eq!(expected, "finite and positive");
         } else {
-            panic!("Expected InvalidConfiguration error");
+            panic!("Expected InvalidSimulationConfiguration error");
         }
     }
 
@@ -909,7 +923,9 @@ mod tests {
 
     #[test]
     fn test_config_conversions() {
-        let config = create_test_config();
+        let config = create_test_config()
+            .into_validated()
+            .expect("test config should validate");
 
         let metropolis_config = config.to_metropolis_config();
         assert_relative_eq!(metropolis_config.temperature, 1.0);
@@ -960,10 +976,10 @@ mod tests {
             3,
             "Toroidal run_simulation must preserve the configured timeslice count"
         );
-        assert!(matches!(
+        assert_matches!(
             results.triangulation().metadata().topology,
             CdtTopology::Toroidal
-        ));
+        );
     }
 
     #[test]
@@ -1007,10 +1023,10 @@ mod tests {
 
         assert_eq!(results.triangulation().vertex_count(), 16);
         assert_eq!(results.triangulation().slice_sizes(), &[3, 4, 5, 4]);
-        assert!(matches!(
+        assert_matches!(
             results.triangulation().metadata().topology,
             CdtTopology::Toroidal
-        ));
+        );
         results
             .triangulation()
             .validate()

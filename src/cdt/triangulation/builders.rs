@@ -1083,6 +1083,7 @@ mod tests {
     use crate::cdt::foliation::{EdgeType, FoliationError, SimplexType};
     use crate::errors::{CdtValidationCheck, CdtValidationFailure, TriangulationMetadataField};
     use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
+    use std::assert_matches;
 
     /// Builds a minimal labeled Delaunay backend for constructor tests.
     fn labeled_triangle_backend(labels: [u32; 3]) -> DelaunayBackend2D {
@@ -1144,7 +1145,7 @@ mod tests {
             12,
         );
 
-        assert!(matches!(
+        assert_matches!(
             remapped,
             CdtError::DelaunayGenerationFailed {
                 vertex_count: 12,
@@ -1152,7 +1153,7 @@ mod tests {
                 attempt: 1,
                 ref underlying_error,
             } if underlying_error == "builder failed"
-        ));
+        );
     }
 
     #[test]
@@ -1283,14 +1284,14 @@ mod tests {
     fn test_from_seeded_points_rejects_invalid_dimension() {
         let result = CdtTriangulation::from_seeded_points(10, 3, 3, 42);
 
-        assert!(matches!(result, Err(CdtError::UnsupportedDimension(3))));
+        assert_matches!(result, Err(CdtError::UnsupportedDimension(3)));
     }
 
     #[test]
     fn test_from_seeded_points_rejects_zero_time_slices() {
         let result = CdtTriangulation::from_seeded_points(5, 0, 2, 53);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
                 ref field,
@@ -1298,7 +1299,7 @@ mod tests {
                 ref expected,
                 ..
             }) if *field == TriangulationMetadataField::Timeslices && provided_value == "0" && expected == "≥ 1"
-        ));
+        );
     }
 
     #[test]
@@ -1365,7 +1366,7 @@ mod tests {
 
         let result = CdtTriangulation::from_labeled_delaunay(backend, 2, 3);
 
-        assert!(matches!(result, Err(CdtError::UnsupportedDimension(3))));
+        assert_matches!(result, Err(CdtError::UnsupportedDimension(3)));
     }
 
     #[test]
@@ -1374,7 +1375,7 @@ mod tests {
 
         let result = CdtTriangulation::from_labeled_delaunay(backend, 0, 2);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
                 ref field,
@@ -1382,7 +1383,7 @@ mod tests {
                 ref expected,
                 ..
             }) if *field == TriangulationMetadataField::Timeslices && provided_value == "0" && expected == "≥ 1"
-        ));
+        );
     }
 
     #[test]
@@ -1393,14 +1394,14 @@ mod tests {
             .expect("test Delaunay triangle should validate");
 
         let result = CdtTriangulation::from_labeled_delaunay(backend, 2, 2);
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::Foliation(FoliationError::OutOfRangeVertexLabel {
                 label: 5,
                 expected_range_end: 2,
                 ..
             }))
-        ));
+        );
     }
 
     #[test]
@@ -1411,10 +1412,10 @@ mod tests {
             .expect("test Delaunay triangle should validate");
 
         let result = CdtTriangulation::from_labeled_delaunay(backend, 3, 2);
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::Foliation(FoliationError::EmptySlice { slice: 1 }))
-        ));
+        );
     }
 
     #[test]
@@ -1434,13 +1435,13 @@ mod tests {
 
         let result = CdtTriangulation::from_labeled_delaunay(backend, 2, 2);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::ValidationFailed {
                 ref check,
                 failure: CdtValidationFailure::InvalidCdtTriangle { .. },
             }) if *check == CdtValidationCheck::Causality
-        ));
+        );
     }
 
     #[test]
@@ -1455,14 +1456,14 @@ mod tests {
             &[vec![0, 1, 2], vec![1, 3, 2]],
         );
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::DelaunayGenerationFailed {
                 vertex_count: 4,
                 attempt: 1,
                 ..
             })
-        ));
+        );
     }
 
     #[test]
@@ -1477,17 +1478,17 @@ mod tests {
     fn test_from_cdt_strip_edge_classification() {
         let tri = strict_strip(5, 3);
         for edge in tri.geometry().edges() {
-            assert!(matches!(
+            assert_matches!(
                 tri.edge_type(&edge),
                 Some(EdgeType::Spacelike | EdgeType::Timelike)
-            ));
+            );
         }
     }
 
     #[test]
     fn test_from_cdt_strip_rejects_invalid_params() {
         let few_vertices = CdtTriangulation::from_cdt_strip(3, 3);
-        assert!(matches!(
+        assert_matches!(
             few_vertices,
             Err(CdtError::InvalidGenerationParameters {
                 ref issue,
@@ -1496,10 +1497,10 @@ mod tests {
             }) if *issue == GenerationParameterIssue::InsufficientVerticesPerSlice
                 && provided_value == "3"
                 && expected_range == "≥ 4"
-        ));
+        );
 
         let few_slices = CdtTriangulation::from_cdt_strip(4, 1);
-        assert!(matches!(
+        assert_matches!(
             few_slices,
             Err(CdtError::InvalidGenerationParameters {
                 ref issue,
@@ -1508,14 +1509,14 @@ mod tests {
             }) if *issue == GenerationParameterIssue::InsufficientNumberOfTimeSlices
                 && provided_value == "1"
                 && expected_range == "≥ 2"
-        ));
+        );
     }
 
     #[test]
     fn test_from_cdt_strip_rejects_simplex_count_overflow() {
         let result = CdtTriangulation::from_cdt_strip(65_535, 65_537);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::InvalidGenerationParameters {
                 ref issue,
@@ -1524,7 +1525,7 @@ mod tests {
             }) if *issue == GenerationParameterIssue::SimplexCountOverflow
                 && provided_value == "2 × 4294836224"
                 && expected_range == "product ≤ u32::MAX"
-        ));
+        );
     }
 
     #[test]
@@ -1573,7 +1574,7 @@ mod tests {
     fn test_open_profile_face_count_rejects_empty_profile() {
         let result = open_profile_face_count(&[]);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::InvalidGenerationParameters {
                 ref issue,
@@ -1582,7 +1583,7 @@ mod tests {
             }) if *issue == GenerationParameterIssue::EmptyVolumeProfile
                 && provided_value == "[]"
                 && expected_range == "at least one time slice"
-        ));
+        );
     }
 
     #[test]
@@ -1591,7 +1592,7 @@ mod tests {
             .expect("nonuniform Delaunay strip should build");
         let result = validate_profile_strip_counts(tri.geometry(), 15, 16, 18, 3.0);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::DelaunayGenerationFailed {
                 vertex_count: 15,
@@ -1602,14 +1603,14 @@ mod tests {
                 .contains("build_delaunay2_with_data()/from_cdt_strip_profile()")
                 && underlying_error.contains("produced 15 vertices and 17 faces")
                 && underlying_error.contains("expected 16 vertices and 18 faces")
-        ));
+        );
     }
 
     #[test]
     fn test_from_cdt_strip_profile_rejects_invalid_profile() {
         let result = CdtTriangulation::from_cdt_strip_profile(&[4, 3, 5]);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::InvalidGenerationParameters {
                 ref issue,
@@ -1618,14 +1619,14 @@ mod tests {
             }) if *issue == GenerationParameterIssue::InsufficientVerticesInVolumeProfileSlice
                 && provided_value == "slice 1 has 3"
                 && expected_range == "each slice ≥ 4 for open-boundary topology"
-        ));
+        );
     }
 
     #[test]
     fn test_from_cdt_strip_profile_rejects_too_few_slices() {
         let result = CdtTriangulation::from_cdt_strip_profile(&[4]);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::InvalidGenerationParameters {
                 ref issue,
@@ -1634,7 +1635,7 @@ mod tests {
             }) if *issue == GenerationParameterIssue::InsufficientNumberOfTimeSlices
                 && provided_value == "1"
                 && expected_range == "≥ 2 for open-boundary topology"
-        ));
+        );
     }
 
     #[test]
@@ -1642,7 +1643,7 @@ mod tests {
         let tri = CdtTriangulation::from_cdt_strip(4, 2).expect("Delaunay strip should build");
         let result = validate_strip_counts(tri.geometry(), 8, 7, 8, 7, 4, 2, 1.0);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::DelaunayGenerationFailed {
                 vertex_count: 8,
@@ -1653,17 +1654,17 @@ mod tests {
                 && underlying_error.contains("produced 6 faces, expected 7")
                 && underlying_error.contains("vertices_per_slice=4")
                 && underlying_error.contains("num_slices=2")
-        ));
+        );
     }
 
     #[test]
     fn test_simplex_type_returns_up_or_down() {
         let tri = strict_strip(5, 3);
         for face in tri.geometry().faces() {
-            assert!(matches!(
+            assert_matches!(
                 tri.simplex_type(&face),
                 Some(SimplexType::Up | SimplexType::Down)
-            ));
+            );
         }
     }
 
@@ -1679,7 +1680,7 @@ mod tests {
         assert_eq!(tri.geometry().euler_characteristic(), 0);
         assert_eq!(tri.dimension(), 2);
         assert_eq!(tri.time_slices(), 3);
-        assert!(matches!(tri.metadata().topology, CdtTopology::Toroidal));
+        assert_matches!(tri.metadata().topology, CdtTopology::Toroidal);
     }
 
     #[test]
@@ -1719,7 +1720,7 @@ mod tests {
         assert_eq!(tri.edge_count(), 48);
         assert_eq!(tri.slice_sizes(), &[3, 4, 5, 4]);
         assert_eq!(tri.geometry().euler_characteristic(), 0);
-        assert!(matches!(tri.metadata().topology, CdtTopology::Toroidal));
+        assert_matches!(tri.metadata().topology, CdtTopology::Toroidal);
         assert!(tri.geometry().validate_delaunay().is_ok());
         assert!(tri.validate_topology().is_ok());
         assert!(tri.validate_foliation().is_ok());
@@ -1730,7 +1731,7 @@ mod tests {
     #[test]
     fn test_from_toroidal_cdt_profile_rejects_invalid_profile() {
         let few_slices = CdtTriangulation::from_toroidal_cdt_profile(&[3, 4]);
-        assert!(matches!(
+        assert_matches!(
             few_slices,
             Err(CdtError::InvalidGenerationParameters {
                 ref issue,
@@ -1739,10 +1740,10 @@ mod tests {
             }) if *issue == GenerationParameterIssue::InsufficientNumberOfTimeSlices
                 && provided_value == "2"
                 && expected_range == "≥ 3 for toroidal topology"
-        ));
+        );
 
         let small_slice = CdtTriangulation::from_toroidal_cdt_profile(&[3, 2, 3]);
-        assert!(matches!(
+        assert_matches!(
             small_slice,
             Err(CdtError::InvalidGenerationParameters {
                 ref issue,
@@ -1751,7 +1752,7 @@ mod tests {
             }) if *issue == GenerationParameterIssue::InsufficientVerticesInVolumeProfileSlice
                 && provided_value == "slice 1 has 2"
                 && expected_range == "each slice ≥ 3 for toroidal topology"
-        ));
+        );
     }
 
     #[test]
@@ -1783,7 +1784,7 @@ mod tests {
     #[test]
     fn test_from_toroidal_cdt_invalid_params() {
         let few_vertices = CdtTriangulation::from_toroidal_cdt(2, 3);
-        assert!(matches!(
+        assert_matches!(
             few_vertices,
             Err(CdtError::InvalidGenerationParameters {
                 ref issue,
@@ -1792,11 +1793,11 @@ mod tests {
             }) if *issue == GenerationParameterIssue::InsufficientVerticesPerSlice
                 && provided_value == "2"
                 && expected_range == "≥ 3"
-        ));
+        );
 
         for slices in [1, 2] {
             let few_slices = CdtTriangulation::from_toroidal_cdt(4, slices);
-            assert!(matches!(
+            assert_matches!(
                 few_slices,
                 Err(CdtError::InvalidGenerationParameters {
                     ref issue,
@@ -1805,7 +1806,7 @@ mod tests {
                 }) if *issue == GenerationParameterIssue::InsufficientNumberOfTimeSlices
                     && provided_value == &slices.to_string()
                     && expected_range == "≥ 3"
-            ));
+            );
         }
     }
 
@@ -1813,7 +1814,7 @@ mod tests {
     fn test_from_toroidal_cdt_rejects_vertex_count_overflow() {
         let result = CdtTriangulation::from_toroidal_cdt(u32::MAX, 3);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::InvalidGenerationParameters {
                 ref issue,
@@ -1822,7 +1823,7 @@ mod tests {
             }) if *issue == GenerationParameterIssue::VertexCountOverflow
                 && provided_value == "4294967295 × 3"
                 && expected_range == "product ≤ u32::MAX"
-        ));
+        );
     }
 
     #[test]
@@ -1830,7 +1831,7 @@ mod tests {
         let tri = CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
         let result = validate_toroidal_counts(tri.geometry(), 12, 12, 23, (0.0, 3.0));
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(CdtError::DelaunayGenerationFailed {
                 vertex_count: 12,
@@ -1840,7 +1841,7 @@ mod tests {
             }) if underlying_error.contains("periodic toroidal builder")
                 && underlying_error.contains("produced 12 vertices and 24 faces")
                 && underlying_error.contains("expected 12 vertices and 23 faces")
-        ));
+        );
     }
 
     #[test]

@@ -670,6 +670,7 @@ impl TriangulationMut for MockBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn mock_operation_display_covers_all_operations() {
@@ -788,73 +789,70 @@ mod tests {
         let missing_edge = MockEdgeHandle(99);
         let missing_face = MockFaceHandle(99);
 
-        assert!(matches!(
+        assert_matches!(
             backend.vertex_coordinates(&missing_vertex),
             Err(MockError::Vertex(99))
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             backend.face_vertices(&missing_face),
             Err(MockError::Face(99))
-        ));
+        );
         assert!(backend.edge_endpoints(&missing_edge).is_none());
-        assert!(matches!(
+        assert_matches!(
             backend.adjacent_faces(&missing_vertex),
             Err(MockError::Vertex(99))
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             backend.incident_edges(&missing_vertex),
             Err(MockError::Vertex(99))
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             backend.face_neighbors(&missing_face),
             Err(MockError::Face(99))
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             backend.remove_vertex(missing_vertex.clone()),
             Err(MockError::Vertex(99))
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             backend.move_vertex(missing_vertex, &[1.0, 2.0]),
             Err(MockError::Vertex(99))
-        ));
-        assert!(matches!(
-            backend.flip_edge(missing_edge),
-            Err(MockError::Edge(99))
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(backend.flip_edge(missing_edge), Err(MockError::Edge(99)));
+        assert_matches!(
             backend.subdivide_face(missing_face, &[0.25, 0.25]),
             Err(MockError::Face(99))
-        ));
+        );
     }
 
     #[test]
     fn test_mock_backend_rejects_invalid_coordinate_dimensions() {
         let mut backend = MockBackend::create_triangle();
 
-        assert!(matches!(
+        assert_matches!(
             backend.insert_vertex(&[1.0]),
             Err(MockError::InvalidCoordinateDimension {
                 operation: MockOperation::InsertVertex,
                 expected: 2,
                 actual: 1,
             })
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             backend.move_vertex(MockVertexHandle(0), &[1.0, 2.0, 3.0]),
             Err(MockError::InvalidCoordinateDimension {
                 operation: MockOperation::MoveVertex,
                 expected: 2,
                 actual: 3,
             })
-        ));
-        assert!(matches!(
+        );
+        assert_matches!(
             backend.subdivide_face(MockFaceHandle(0), &[0.25]),
             Err(MockError::InvalidCoordinateDimension {
                 operation: MockOperation::SubdivideFace,
                 expected: 2,
                 actual: 1,
             })
-        ));
+        );
     }
 
     #[test]
@@ -888,14 +886,14 @@ mod tests {
             .edges()
             .next()
             .expect("triangle should contain edges");
-        assert!(matches!(
+        assert_matches!(
             backend.flip_edge(edge.clone()),
             Err(MockError::NonFlippableEdge {
                 edge: _,
                 adjacent_faces: 1,
                 reason: MockNonFlippableReason::EdgeSharedByTwoFaces,
             })
-        ));
+        );
         assert!(!backend.can_flip_edge(&edge));
         assert!(!backend.can_flip_edge(&MockEdgeHandle(99)));
 
@@ -938,14 +936,14 @@ mod tests {
 
         let result = backend.reserve_capacity(usize::MAX, 0);
 
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(MockError::ReservationFailed {
                 operation: MockStorageTarget::Vertices,
                 requested_capacity: usize::MAX,
                 detail,
             }) if !detail.is_empty()
-        ));
+        );
     }
 
     #[test]
@@ -1039,36 +1037,36 @@ mod tests {
         backend.edges.insert(0, (0, 1));
         backend.faces.insert(0, vec![0, 1, 2, 3]);
         backend.faces.insert(1, vec![0, 1, 2]);
-        assert!(matches!(
+        assert_matches!(
             backend.flip_edge(MockEdgeHandle(0)),
             Err(MockError::NonFlippableEdge {
                 edge: 0,
                 adjacent_faces: 2,
                 reason: MockNonFlippableReason::AdjacentFacesMustBeTriangles,
             })
-        ));
+        );
 
         backend.faces.insert(0, vec![0, 1, 2]);
         backend.faces.insert(1, vec![1, 0, 2]);
-        assert!(matches!(
+        assert_matches!(
             backend.flip_edge(MockEdgeHandle(0)),
             Err(MockError::NonFlippableEdge {
                 edge: 0,
                 adjacent_faces: 2,
                 reason: MockNonFlippableReason::OppositeVerticesMustBeDistinct,
             })
-        ));
+        );
 
         backend.faces.insert(1, vec![1, 0, 3]);
         backend.edges.insert(1, (2, 3));
-        assert!(matches!(
+        assert_matches!(
             backend.flip_edge(MockEdgeHandle(0)),
             Err(MockError::NonFlippableEdge {
                 edge: 0,
                 adjacent_faces: 2,
                 reason: MockNonFlippableReason::ReplacementEdgeAlreadyExists,
             })
-        ));
+        );
     }
 
     #[test]
@@ -1082,14 +1080,14 @@ mod tests {
         backend.faces.insert(0, vec![0, 1, 2, 3]);
         backend.next_face_id = 1;
 
-        assert!(matches!(
+        assert_matches!(
             backend.subdivide_face(MockFaceHandle(0), &[0.5, 0.5]),
             Err(MockError::NonSubdividableFace {
                 face: 0,
                 vertex_count: 4,
                 expected: "3 vertices",
             })
-        ));
+        );
         assert_eq!(backend.vertex_count(), 4);
         assert_eq!(backend.face_count(), 1);
     }

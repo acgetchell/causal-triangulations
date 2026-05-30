@@ -136,6 +136,426 @@ pub struct CdtConfig {
     pub output_json: Option<PathBuf>,
 }
 
+/// Runtime configuration that has passed all CDT validation rules.
+///
+/// [`CdtConfig`] remains the raw DTO for CLI, file, and test construction. Convert it
+/// into [`ValidatedCdtConfig`] before running algorithms that rely on topology,
+/// schedule, dimensionality, and finite-coupling invariants.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::config::{CdtConfig, ValidatedCdtConfig};
+/// use causal_triangulations::prelude::errors::CdtResult;
+///
+/// fn main() -> CdtResult<()> {
+///     let validated = ValidatedCdtConfig::new(CdtConfig::new(16, 4))?;
+///     assert_eq!(validated.regular_vertices_per_slice(), Some(4));
+///     Ok(())
+/// }
+/// ```
+#[derive(Debug, Clone)]
+pub struct ValidatedCdtConfig {
+    config: CdtConfig,
+}
+
+/// Validated initial spatial-volume input for CDT construction.
+///
+/// This lets callers branch on regular equal-slice data versus an explicit
+/// nonuniform profile without rechecking divisibility, slice-count, or per-slice
+/// minimum invariants.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::config::{CdtConfig, ValidatedInitialVolume};
+/// use causal_triangulations::prelude::errors::CdtResult;
+/// use std::assert_matches;
+///
+/// fn main() -> CdtResult<()> {
+///     let config = CdtConfig::new(16, 4).into_validated()?;
+///     assert_matches!(
+///         config.initial_volume(),
+///         ValidatedInitialVolume::Regular {
+///             vertices_per_slice: 4
+///         }
+///     );
+///     Ok(())
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidatedInitialVolume<'a> {
+    /// Regular equal-size spatial slices.
+    Regular {
+        /// Number of vertices in each slice.
+        vertices_per_slice: u32,
+    },
+    /// Explicit nonuniform spatial slice volumes.
+    ExplicitProfile(&'a [u32]),
+}
+
+impl ValidatedCdtConfig {
+    /// Validates a raw configuration and stores only the accepted value.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidConfiguration`] when a geometry, topology, or
+    /// action invariant is violated, or [`CdtError::InvalidSimulationConfiguration`]
+    /// when the Metropolis temperature or schedule is invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::{CdtConfig, ValidatedCdtConfig};
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let validated = ValidatedCdtConfig::new(CdtConfig::new(16, 4))?;
+    ///     assert_eq!(validated.timeslices(), 4);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn new(config: CdtConfig) -> CdtResult<Self> {
+        config.ensure_valid()?;
+        Ok(Self { config })
+    }
+
+    /// Returns the validated configuration for serialization/reporting APIs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::CdtConfig;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let validated = CdtConfig::new(16, 4).into_validated()?;
+    ///     assert_eq!(validated.config().vertices, 16);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn config(&self) -> &CdtConfig {
+        &self.config
+    }
+
+    /// Converts the validated wrapper back into the inner configuration.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::CdtConfig;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = CdtConfig::new(16, 4).into_validated()?.into_config();
+    ///     assert_eq!(config.timeslices, 4);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub fn into_config(self) -> CdtConfig {
+        self.config
+    }
+
+    /// Gets the effective dimension.
+    ///
+    /// This is always `2` for accepted configurations.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::CdtConfig;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = CdtConfig::new(16, 4).into_validated()?;
+    ///     assert_eq!(config.dimension(), 2);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn dimension(&self) -> u8 {
+        match self.config.dimension {
+            Some(dimension) => dimension,
+            None => 2,
+        }
+    }
+
+    /// Total number of vertices in the initial triangulation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::CdtConfig;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = CdtConfig::new(16, 4).into_validated()?;
+    ///     assert_eq!(config.vertices(), 16);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn vertices(&self) -> u32 {
+        self.config.vertices
+    }
+
+    /// Number of initial time slices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::CdtConfig;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = CdtConfig::new(16, 4).into_validated()?;
+    ///     assert_eq!(config.timeslices(), 4);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn timeslices(&self) -> u32 {
+        self.config.timeslices
+    }
+
+    /// Optional explicit initial spatial volume profile.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::CdtConfig;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = CdtConfig {
+    ///         vertices: 15,
+    ///         timeslices: 3,
+    ///         volume_profile: Some(vec![4, 6, 5]),
+    ///         ..CdtConfig::new(15, 3)
+    ///     }
+    ///     .into_validated()?;
+    ///     assert_eq!(config.volume_profile(), Some([4, 6, 5].as_slice()));
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub fn volume_profile(&self) -> Option<&[u32]> {
+        self.config.volume_profile.as_deref()
+    }
+
+    /// Vertices per slice for validated regular equal-slice initial data.
+    ///
+    /// Returns `None` when the configuration uses an explicit volume profile.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::CdtConfig;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let regular = CdtConfig::new(16, 4).into_validated()?;
+    ///     assert_eq!(regular.regular_vertices_per_slice(), Some(4));
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub fn regular_vertices_per_slice(&self) -> Option<u32> {
+        self.config
+            .volume_profile
+            .is_none()
+            .then_some(self.config.vertices / self.config.timeslices)
+    }
+
+    /// Initial spatial-volume input with validation proof attached.
+    ///
+    /// The returned value is safe to feed directly into CDT constructors because
+    /// [`Self::new`] has already checked topology-specific slice constraints.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::{CdtConfig, ValidatedInitialVolume};
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    /// use std::assert_matches;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = CdtConfig {
+    ///         vertices: 15,
+    ///         timeslices: 3,
+    ///         volume_profile: Some(vec![4, 6, 5]),
+    ///         ..CdtConfig::new(15, 3)
+    ///     }
+    ///     .into_validated()?;
+    ///
+    ///     assert_matches!(
+    ///         config.initial_volume(),
+    ///         ValidatedInitialVolume::ExplicitProfile([4, 6, 5])
+    ///     );
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub fn initial_volume(&self) -> ValidatedInitialVolume<'_> {
+        self.config.volume_profile.as_ref().map_or_else(
+            || ValidatedInitialVolume::Regular {
+                vertices_per_slice: self.config.vertices / self.config.timeslices,
+            },
+            |profile| ValidatedInitialVolume::ExplicitProfile(profile),
+        )
+    }
+
+    /// Selected initial topology.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::{CdtConfig, CdtTopology};
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = CdtConfig {
+    ///         topology: CdtTopology::Toroidal,
+    ///         ..CdtConfig::new(12, 3)
+    ///     }
+    ///     .into_validated()?;
+    ///     assert_eq!(config.topology(), CdtTopology::Toroidal);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn topology(&self) -> CdtTopology {
+        self.config.topology
+    }
+
+    /// Whether to run Metropolis simulation after constructing the initial triangulation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::CdtConfig;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = CdtConfig {
+    ///         simulate: false,
+    ///         ..CdtConfig::new(16, 4)
+    ///     }
+    ///     .into_validated()?;
+    ///     assert!(!config.simulate());
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn simulate(&self) -> bool {
+        self.config.simulate
+    }
+
+    /// Configured CSV output path, if any.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::CdtConfig;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    /// use std::path::Path;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = CdtConfig {
+    ///         output_csv: Some("measurements.csv".into()),
+    ///         ..CdtConfig::new(16, 4)
+    ///     }
+    ///     .into_validated()?;
+    ///     assert_eq!(config.output_csv(), Some(Path::new("measurements.csv")));
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub fn output_csv(&self) -> Option<&Path> {
+        self.config.output_csv.as_deref()
+    }
+
+    /// Configured JSON output path, if any.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::CdtConfig;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    /// use std::path::Path;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = CdtConfig {
+    ///         output_json: Some("summary.json".into()),
+    ///         ..CdtConfig::new(16, 4)
+    ///     }
+    ///     .into_validated()?;
+    ///     assert_eq!(config.output_json(), Some(Path::new("summary.json")));
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub fn output_json(&self) -> Option<&Path> {
+        self.config.output_json.as_deref()
+    }
+
+    /// Creates a validated [`MetropolisConfig`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::CdtConfig;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = CdtConfig {
+    ///         seed: Some(42),
+    ///         ..CdtConfig::new(16, 4)
+    ///     }
+    ///     .into_validated()?;
+    ///     let metropolis = config.to_metropolis_config();
+    ///     assert_eq!(metropolis.seed, Some(42));
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn to_metropolis_config(&self) -> MetropolisConfig {
+        to_metropolis_config(&self.config)
+    }
+
+    /// Creates a validated [`ActionConfig`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use approx::assert_relative_eq;
+    /// use causal_triangulations::prelude::config::CdtConfig;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let action = CdtConfig::new(16, 4)
+    ///         .into_validated()?
+    ///         .to_action_config();
+    ///     assert_relative_eq!(action.coupling_0, 0.0);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn to_action_config(&self) -> ActionConfig {
+        to_action_config(&self.config)
+    }
+}
+
+impl TryFrom<CdtConfig> for ValidatedCdtConfig {
+    type Error = CdtError;
+
+    fn try_from(config: CdtConfig) -> Result<Self, Self::Error> {
+        Self::new(config)
+    }
+}
+
 /// Command-line arguments accepted by the `cdt` binary.
 #[derive(Parser)]
 #[command(
@@ -417,6 +837,30 @@ pub struct CdtConfigOverrides {
 }
 
 impl CdtConfig {
+    /// Converts this raw configuration DTO into a validated runtime configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidConfiguration`] when a geometry, topology, or
+    /// action invariant is violated, or [`CdtError::InvalidSimulationConfiguration`]
+    /// when the Metropolis temperature or schedule is invalid.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::config::CdtConfig;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let config = CdtConfig::new(16, 4).into_validated()?;
+    ///     assert_eq!(config.vertices(), 16);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn into_validated(self) -> CdtResult<ValidatedCdtConfig> {
+        ValidatedCdtConfig::new(self)
+    }
+
     /// Merges this configuration with a set of override values, returning a new configuration.
     ///
     /// Override fields that are `None` are ignored, leaving the original configuration values
@@ -674,6 +1118,19 @@ const fn invalid_config_parts(
     }
 }
 
+/// Builds a typed simulation-configuration error for Metropolis schedule settings.
+const fn invalid_sim_config_parts(
+    setting: ConfigurationSetting,
+    provided_value: String,
+    expected: String,
+) -> CdtError {
+    CdtError::InvalidSimulationConfiguration {
+        setting,
+        provided_value,
+        expected,
+    }
+}
+
 /// Rejects non-finite action couplings before they can poison action/log-probability math.
 fn validate_coupling(setting: ConfigurationSetting, value: f64) -> CdtResult<()> {
     if value.is_finite() {
@@ -783,6 +1240,29 @@ pub(crate) fn validate_schedule(
     Ok(())
 }
 
+/// Builds the MCMC runtime configuration from an already validated raw config.
+const fn to_metropolis_config(config: &CdtConfig) -> MetropolisConfig {
+    let metropolis = MetropolisConfig::new(
+        config.temperature,
+        config.steps,
+        config.thermalization_steps,
+        config.measurement_frequency,
+    );
+    MetropolisConfig {
+        seed: config.seed,
+        ..metropolis
+    }
+}
+
+/// Builds the action runtime configuration from an already validated raw config.
+const fn to_action_config(config: &CdtConfig) -> ActionConfig {
+    ActionConfig::new(
+        config.coupling_0,
+        config.coupling_2,
+        config.cosmological_constant,
+    )
+}
+
 impl CdtConfig {
     /// Builds a new instance of `CdtConfig` from command-line arguments.
     ///
@@ -848,8 +1328,8 @@ impl CdtConfig {
     /// Creates a new configuration from total vertices and time slices.
     ///
     /// The `vertices` argument is the total initial vertex count, not a
-    /// per-slice count. Call [`Self::validate`] before running a simulation to
-    /// check topology-specific divisibility and per-slice minimums.
+    /// per-slice count. Call [`Self::into_validated`] before deriving runtime
+    /// action or Metropolis configuration.
     ///
     /// # Examples
     ///
@@ -883,51 +1363,6 @@ impl CdtConfig {
         }
     }
 
-    /// Creates a `MetropolisConfig` from this configuration.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::CdtConfig;
-    ///
-    /// let config = CdtConfig {
-    ///     seed: Some(42),
-    ///     ..CdtConfig::new(16, 4)
-    /// };
-    /// let metropolis = config.to_metropolis_config();
-    /// assert_eq!(metropolis.seed, Some(42));
-    /// ```
-    #[must_use]
-    pub const fn to_metropolis_config(&self) -> MetropolisConfig {
-        let config = MetropolisConfig::new(
-            self.temperature,
-            self.steps,
-            self.thermalization_steps,
-            self.measurement_frequency,
-        );
-        // Wire seed through if present
-        MetropolisConfig {
-            seed: self.seed,
-            ..config
-        }
-    }
-
-    /// Creates an `ActionConfig` from this configuration.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use approx::assert_relative_eq;
-    /// use causal_triangulations::CdtConfig;
-    ///
-    /// let action = CdtConfig::new(16, 4).to_action_config();
-    /// assert_relative_eq!(action.coupling_0, 0.0);
-    /// ```
-    #[must_use]
-    pub const fn to_action_config(&self) -> ActionConfig {
-        ActionConfig::new(self.coupling_0, self.coupling_2, self.cosmological_constant)
-    }
-
     /// Gets the effective dimension (defaults to 2 if not specified).
     ///
     /// # Examples
@@ -949,27 +1384,29 @@ impl CdtConfig {
         }
     }
 
-    /// Validates the configuration parameters.
+    /// Checks the configuration parameters without returning a validated wrapper.
     ///
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidConfiguration`] if the dimension is not 2, if
-    /// action couplings or temperature are non-finite, if the measurement
-    /// schedule cannot produce a post-thermalization measurement, or if topology
-    /// constraints on time slices, total vertices, or per-slice vertices are not
-    /// satisfied. Regular equal-slice initialization requires `vertices` to be
-    /// divisible by `timeslices`; explicit [`Self::volume_profile`] initialization
-    /// instead requires the profile length and sum to match the configured counts.
+    /// action couplings are non-finite, or if topology constraints on time
+    /// slices, total vertices, or per-slice vertices are not satisfied. Regular
+    /// equal-slice initialization requires `vertices` to be divisible by
+    /// `timeslices`; explicit [`Self::volume_profile`] initialization instead
+    /// requires the profile length and sum to match the configured counts.
+    /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
+    /// temperature or measurement schedule is invalid.
     ///
     /// # Examples
     ///
     /// ```
     /// use causal_triangulations::CdtConfig;
     ///
-    /// let config = CdtConfig::new(16, 4);
-    /// assert!(config.validate().is_ok());
+    /// let config = CdtConfig::new(16, 4).into_validated()?;
+    /// assert_eq!(config.timeslices(), 4);
+    /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
-    pub fn validate(&self) -> CdtResult<()> {
+    fn ensure_valid(&self) -> CdtResult<()> {
         if self.vertices < 3 {
             return Err(invalid_config(
                 ConfigurationSetting::Vertices,
@@ -1006,9 +1443,7 @@ impl CdtConfig {
             self.steps,
             self.thermalization_steps,
             self.measurement_frequency,
-            |setting, provided_value, expected| {
-                invalid_config_parts(setting, provided_value, expected)
-            },
+            invalid_sim_config_parts,
         )
     }
 
@@ -1237,6 +1672,7 @@ mod tests {
     use super::*;
     use approx::assert_relative_eq;
     use dirs::home_dir;
+    use std::assert_matches;
     use std::path::PathBuf;
 
     #[test]
@@ -1322,10 +1758,10 @@ mod tests {
         ])
         .expect_err("unsupported dimension should be reported as a parse error");
 
-        assert!(matches!(
+        assert_matches!(
             error.kind(),
             clap::error::ErrorKind::ValueValidation | clap::error::ErrorKind::InvalidValue
-        ));
+        );
     }
 
     #[test]
@@ -1341,7 +1777,9 @@ mod tests {
 
     #[test]
     fn test_config_conversions() {
-        let config = CdtConfig::new(64, 4);
+        let config = CdtConfig::new(64, 4)
+            .into_validated()
+            .expect("test config should validate");
 
         let metropolis_config = config.to_metropolis_config();
         assert_relative_eq!(metropolis_config.temperature, 1.0);
@@ -1357,95 +1795,155 @@ mod tests {
     }
 
     #[test]
+    fn validated_config_carries_initial_volume_proof() {
+        let regular = CdtConfig::new(64, 4)
+            .into_validated()
+            .expect("regular config should validate");
+        assert_eq!(regular.dimension(), 2);
+        assert_eq!(regular.vertices(), 64);
+        assert_eq!(regular.timeslices(), 4);
+        assert_eq!(regular.regular_vertices_per_slice(), Some(16));
+        assert_matches!(
+            regular.initial_volume(),
+            ValidatedInitialVolume::Regular {
+                vertices_per_slice: 16
+            }
+        );
+
+        let profiled = CdtConfig {
+            vertices: 15,
+            timeslices: 3,
+            volume_profile: Some(vec![4, 6, 5]),
+            ..CdtConfig::new(15, 3)
+        }
+        .into_validated()
+        .expect("profile config should validate");
+
+        assert_eq!(profiled.regular_vertices_per_slice(), None);
+        assert_matches!(
+            profiled.initial_volume(),
+            ValidatedInitialVolume::ExplicitProfile([4, 6, 5])
+        );
+    }
+
+    #[test]
+    fn validated_config_exposes_raw_runtime_fields() {
+        let raw = CdtConfig {
+            topology: CdtTopology::Toroidal,
+            simulate: false,
+            output_csv: Some(PathBuf::from("measurements.csv")),
+            output_json: Some(PathBuf::from("summary.json")),
+            ..CdtConfig::new(12, 3)
+        };
+
+        let validated =
+            ValidatedCdtConfig::try_from(raw.clone()).expect("toroidal config should validate");
+
+        assert_eq!(validated.config().vertices, 12);
+        assert_eq!(validated.volume_profile(), None);
+        assert_eq!(validated.topology(), CdtTopology::Toroidal);
+        assert!(!validated.simulate());
+        assert_eq!(
+            validated.output_csv(),
+            Some(PathBuf::from("measurements.csv").as_path())
+        );
+        assert_eq!(
+            validated.output_json(),
+            Some(PathBuf::from("summary.json").as_path())
+        );
+        assert_eq!(validated.into_config().output_json, raw.output_json);
+    }
+
+    #[test]
     #[expect(
         clippy::too_many_lines,
         reason = "validation test exercises the full structured configuration error matrix"
     )]
     fn test_config_validation() {
         let valid_config = CdtConfig::new(36, 3);
-        assert!(valid_config.validate().is_ok());
+        assert!(valid_config.into_validated().is_ok());
 
         let invalid_vertices = CdtConfig {
             vertices: 2,
             ..CdtConfig::new(36, 3)
         };
-        assert!(matches!(
-            invalid_vertices.validate(),
+        assert_matches!(
+            invalid_vertices.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting,
                 provided_value,
                 expected,
             }) if setting == ConfigurationSetting::Vertices && provided_value == "2" && expected == "≥ 3"
-        ));
+        );
 
         let invalid_timeslices = CdtConfig {
             timeslices: 0,
             ..CdtConfig::new(36, 3)
         };
-        assert!(matches!(
-            invalid_timeslices.validate(),
+        assert_matches!(
+            invalid_timeslices.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting,
                 provided_value,
                 expected,
             }) if setting == ConfigurationSetting::Timeslices && provided_value == "0" && expected == "≥ 1"
-        ));
+        );
 
         let invalid_temperature = CdtConfig {
             temperature: -1.0,
             ..CdtConfig::new(36, 3)
         };
-        assert!(matches!(
-            invalid_temperature.validate(),
-            Err(CdtError::InvalidConfiguration {
+        assert_matches!(
+            invalid_temperature.into_validated(),
+            Err(CdtError::InvalidSimulationConfiguration {
                 setting,
                 provided_value,
                 expected,
             }) if setting == ConfigurationSetting::Temperature
                 && provided_value == "-1"
                 && expected == "finite and positive"
-        ));
+        );
 
         let invalid_measurement_frequency = CdtConfig {
             measurement_frequency: 0,
             ..CdtConfig::new(36, 3)
         };
-        assert!(matches!(
-            invalid_measurement_frequency.validate(),
-            Err(CdtError::InvalidConfiguration {
+        assert_matches!(
+            invalid_measurement_frequency.into_validated(),
+            Err(CdtError::InvalidSimulationConfiguration {
                 setting,
                 provided_value,
                 expected,
             }) if setting == ConfigurationSetting::MeasurementFrequency
                 && provided_value == "0"
                 && expected == "≥ 1"
-        ));
+        );
 
         let invalid_steps = CdtConfig {
             steps: 0,
             ..CdtConfig::new(36, 3)
         };
-        assert!(matches!(
-            invalid_steps.validate(),
-            Err(CdtError::InvalidConfiguration {
+        assert_matches!(
+            invalid_steps.into_validated(),
+            Err(CdtError::InvalidSimulationConfiguration {
                 setting,
                 provided_value,
                 expected,
             }) if setting == ConfigurationSetting::Steps && provided_value == "0" && expected == "≥ 1"
-        ));
+        );
 
         let invalid_dimension = CdtConfig {
             dimension: Some(4),
             ..CdtConfig::new(36, 3)
         };
-        assert!(matches!(
-            invalid_dimension.validate(),
+        assert_matches!(
+            invalid_dimension.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting,
                 provided_value,
                 expected,
             }) if setting == ConfigurationSetting::Dimension && provided_value == "4" && expected == "2"
-        ));
+        );
 
         for (setting, value) in [
             (ConfigurationSetting::Coupling0, f64::NAN),
@@ -1464,14 +1962,14 @@ mod tests {
                 }
                 _ => unreachable!("test case should name a known action coupling"),
             }
-            assert!(matches!(
-                invalid_action_coupling.validate(),
+            assert_matches!(
+                invalid_action_coupling.into_validated(),
                 Err(CdtError::InvalidConfiguration {
                     setting: invalid_setting,
                     expected,
                     ..
                 }) if invalid_setting == setting && expected == "finite"
-            ));
+            );
         }
 
         let finite_action_couplings = CdtConfig {
@@ -1481,7 +1979,7 @@ mod tests {
             ..CdtConfig::new(36, 3)
         };
         assert!(
-            finite_action_couplings.validate().is_ok(),
+            finite_action_couplings.into_validated().is_ok(),
             "finite signed action couplings should be accepted"
         );
 
@@ -1489,16 +1987,16 @@ mod tests {
             measurement_frequency: 2_000,
             ..CdtConfig::new(36, 3)
         };
-        assert!(matches!(
-            measurement_frequency_exceeds_steps.validate(),
-            Err(CdtError::InvalidConfiguration {
+        assert_matches!(
+            measurement_frequency_exceeds_steps.into_validated(),
+            Err(CdtError::InvalidSimulationConfiguration {
                 setting,
                 provided_value,
                 expected,
             }) if setting == ConfigurationSetting::MeasurementFrequency
                 && provided_value == "2000"
                 && expected == "≤ steps (1000)"
-        ));
+        );
 
         let boundary_aligned_measurement = CdtConfig {
             steps: 11,
@@ -1507,7 +2005,7 @@ mod tests {
             ..CdtConfig::new(36, 3)
         };
         assert!(
-            boundary_aligned_measurement.validate().is_ok(),
+            boundary_aligned_measurement.into_validated().is_ok(),
             "Configurations where thermalization ends on a measurement boundary should pass validation"
         );
 
@@ -1518,7 +2016,7 @@ mod tests {
             ..CdtConfig::new(36, 3)
         };
         assert!(
-            boundary_aligned_final_measurement.validate().is_ok(),
+            boundary_aligned_final_measurement.into_validated().is_ok(),
             "Configurations with a final-step post-thermalization measurement should pass validation"
         );
 
@@ -1529,7 +2027,7 @@ mod tests {
             ..CdtConfig::new(36, 3)
         };
         assert!(
-            final_step_measurement.validate().is_ok(),
+            final_step_measurement.into_validated().is_ok(),
             "A measurement taken exactly at the final completed step should satisfy the schedule"
         );
 
@@ -1539,8 +2037,8 @@ mod tests {
             measurement_frequency: 10,
             ..CdtConfig::new(36, 3)
         };
-        match insufficient_measurements.validate() {
-            Err(CdtError::InvalidConfiguration {
+        match insufficient_measurements.into_validated() {
+            Err(CdtError::InvalidSimulationConfiguration {
                 setting,
                 provided_value,
                 expected,
@@ -1563,16 +2061,16 @@ mod tests {
             measurement_frequency: 1,
             ..CdtConfig::new(36, 3)
         };
-        assert!(matches!(
-            thermalization_exceeds_steps.validate(),
-            Err(CdtError::InvalidConfiguration {
+        assert_matches!(
+            thermalization_exceeds_steps.into_validated(),
+            Err(CdtError::InvalidSimulationConfiguration {
                 setting,
                 provided_value,
                 expected,
             }) if setting == ConfigurationSetting::ThermalizationSteps
                 && provided_value == "11"
                 && expected == "≤ steps (10)"
-        ));
+        );
 
         let overflowed_post_thermalization_boundary = CdtConfig {
             steps: u32::MAX,
@@ -1580,8 +2078,8 @@ mod tests {
             measurement_frequency: 2,
             ..CdtConfig::new(36, 3)
         };
-        match overflowed_post_thermalization_boundary.validate() {
-            Err(CdtError::InvalidConfiguration {
+        match overflowed_post_thermalization_boundary.into_validated() {
+            Err(CdtError::InvalidSimulationConfiguration {
                 setting,
                 provided_value,
                 expected,
@@ -1609,7 +2107,7 @@ mod tests {
             ..CdtConfig::new(12, 3)
         };
         assert!(
-            valid_toroidal.validate().is_ok(),
+            valid_toroidal.into_validated().is_ok(),
             "Valid toroidal config (T=3, V=12) should validate"
         );
 
@@ -1620,8 +2118,8 @@ mod tests {
             timeslices: 2,
             ..CdtConfig::new(6, 2)
         };
-        assert!(matches!(
-            toroidal_t_too_small.validate(),
+        assert_matches!(
+            toroidal_t_too_small.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting,
                 provided_value,
@@ -1629,7 +2127,7 @@ mod tests {
             }) if setting == ConfigurationSetting::Timeslices
                 && provided_value == "2"
                 && expected == "≥ 3 for toroidal topology"
-        ));
+        );
 
         // Vertices not divisible by timeslices must be rejected.
         let toroidal_indivisible = CdtConfig {
@@ -1638,8 +2136,8 @@ mod tests {
             timeslices: 3,
             ..CdtConfig::new(11, 3)
         };
-        assert!(matches!(
-            toroidal_indivisible.validate(),
+        assert_matches!(
+            toroidal_indivisible.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting,
                 provided_value,
@@ -1647,7 +2145,7 @@ mod tests {
             }) if setting == ConfigurationSetting::Vertices
                 && provided_value == "11"
                 && expected == "divisible by timeslices (3) for toroidal topology"
-        ));
+        );
 
         // Fewer than 3 vertices per slice must be rejected (e.g. T=3, N=2).
         let toroidal_too_few_per_slice = CdtConfig {
@@ -1656,8 +2154,8 @@ mod tests {
             timeslices: 3,
             ..CdtConfig::new(6, 3)
         };
-        assert!(matches!(
-            toroidal_too_few_per_slice.validate(),
+        assert_matches!(
+            toroidal_too_few_per_slice.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting,
                 provided_value,
@@ -1665,7 +2163,7 @@ mod tests {
             }) if setting == ConfigurationSetting::Vertices
                 && provided_value == "6"
                 && expected == "≥ 3 · timeslices (9) for toroidal topology"
-        ));
+        );
 
         let toroidal_min_total_overflow = CdtConfig {
             topology: CdtTopology::Toroidal,
@@ -1673,8 +2171,8 @@ mod tests {
             timeslices: u32::MAX,
             ..CdtConfig::new(u32::MAX, u32::MAX)
         };
-        assert!(matches!(
-            toroidal_min_total_overflow.validate(),
+        assert_matches!(
+            toroidal_min_total_overflow.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting,
                 provided_value,
@@ -1682,7 +2180,7 @@ mod tests {
             }) if setting == ConfigurationSetting::Timeslices
                 && provided_value == u32::MAX.to_string()
                 && expected == "3 · timeslices must fit in u32 for toroidal topology"
-        ));
+        );
     }
 
     #[test]
@@ -1694,7 +2192,7 @@ mod tests {
             ..CdtConfig::new(12, 3)
         };
         assert!(
-            valid_open_boundary.validate().is_ok(),
+            valid_open_boundary.into_validated().is_ok(),
             "valid open-boundary config should validate"
         );
 
@@ -1704,8 +2202,8 @@ mod tests {
             timeslices: 1,
             ..CdtConfig::new(4, 1)
         };
-        assert!(matches!(
-            open_boundary_too_few_slices.validate(),
+        assert_matches!(
+            open_boundary_too_few_slices.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting,
                 provided_value,
@@ -1713,7 +2211,7 @@ mod tests {
             }) if setting == ConfigurationSetting::Timeslices
                 && provided_value == "1"
                 && expected == "≥ 2 for open-boundary topology"
-        ));
+        );
 
         let open_boundary_indivisible = CdtConfig {
             topology: CdtTopology::OpenBoundary,
@@ -1721,8 +2219,8 @@ mod tests {
             timeslices: 3,
             ..CdtConfig::new(11, 3)
         };
-        assert!(matches!(
-            open_boundary_indivisible.validate(),
+        assert_matches!(
+            open_boundary_indivisible.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting,
                 provided_value,
@@ -1730,7 +2228,7 @@ mod tests {
             }) if setting == ConfigurationSetting::Vertices
                 && provided_value == "11"
                 && expected == "divisible by timeslices (3) for open-boundary topology"
-        ));
+        );
 
         let open_boundary_too_few_per_slice = CdtConfig {
             topology: CdtTopology::OpenBoundary,
@@ -1738,8 +2236,8 @@ mod tests {
             timeslices: 3,
             ..CdtConfig::new(9, 3)
         };
-        assert!(matches!(
-            open_boundary_too_few_per_slice.validate(),
+        assert_matches!(
+            open_boundary_too_few_per_slice.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting,
                 provided_value,
@@ -1747,7 +2245,7 @@ mod tests {
             }) if setting == ConfigurationSetting::Vertices
                 && provided_value == "9"
                 && expected == "≥ 4 · timeslices (12) for open-boundary topology"
-        ));
+        );
     }
 
     #[test]
@@ -1759,7 +2257,7 @@ mod tests {
             ..CdtConfig::new(12, 3)
         };
         assert!(
-            valid_profile.validate().is_ok(),
+            valid_profile.into_validated().is_ok(),
             "nonuniform open-boundary profiles should not require divisible vertex counts"
         );
 
@@ -1769,8 +2267,8 @@ mod tests {
             volume_profile: Some(vec![4, 6, 5]),
             ..CdtConfig::new(12, 3)
         };
-        assert!(matches!(
-            mismatched_sum.validate(),
+        assert_matches!(
+            mismatched_sum.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting,
                 provided_value,
@@ -1778,7 +2276,7 @@ mod tests {
             }) if setting == ConfigurationSetting::Vertices
                 && provided_value == "14"
                 && expected == "sum of volume_profile (15)"
-        ));
+        );
 
         let mismatched_len = CdtConfig {
             vertices: 15,
@@ -1786,8 +2284,8 @@ mod tests {
             volume_profile: Some(vec![4, 6, 5]),
             ..CdtConfig::new(16, 4)
         };
-        assert!(matches!(
-            mismatched_len.validate(),
+        assert_matches!(
+            mismatched_len.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting,
                 provided_value,
@@ -1795,7 +2293,7 @@ mod tests {
             }) if setting == ConfigurationSetting::VolumeProfile
                 && provided_value == "3 entries"
                 && expected == "4 entries for configured timeslices"
-        ));
+        );
     }
 
     #[test]
@@ -1807,7 +2305,7 @@ mod tests {
             volume_profile: Some(vec![3, 4, 5, 4]),
             ..CdtConfig::new(16, 4)
         };
-        assert!(valid_profile.validate().is_ok());
+        assert!(valid_profile.into_validated().is_ok());
 
         let too_small = CdtConfig {
             vertices: 11,
@@ -1816,8 +2314,8 @@ mod tests {
             volume_profile: Some(vec![3, 2, 3, 3]),
             ..CdtConfig::new(12, 4)
         };
-        assert!(matches!(
-            too_small.validate(),
+        assert_matches!(
+            too_small.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting,
                 provided_value,
@@ -1825,7 +2323,7 @@ mod tests {
             }) if setting == ConfigurationSetting::VolumeProfile
                 && provided_value == "slice 1 has 2"
                 && expected == "each slice ≥ 3 for toroidal topology"
-        ));
+        );
     }
 
     #[test]
@@ -1863,17 +2361,17 @@ mod tests {
     #[test]
     fn test_preset_configs() {
         let small = TestConfig::small();
-        assert!(small.validate().is_ok());
+        assert!(small.clone().into_validated().is_ok());
         assert_eq!(small.vertices, 16);
         assert_eq!(small.steps, 10);
 
         let medium = TestConfig::medium();
-        assert!(medium.validate().is_ok());
+        assert!(medium.clone().into_validated().is_ok());
         assert_eq!(medium.vertices, 64);
         assert_eq!(medium.steps, 100);
 
         let large = TestConfig::large();
-        assert!(large.validate().is_ok());
+        assert!(large.clone().into_validated().is_ok());
         assert_eq!(large.vertices, 256);
         assert_eq!(large.steps, 1000);
     }
@@ -2007,17 +2505,14 @@ mod tests {
 
         let result = base.merge_with_override(&overrides);
 
-        assert!(
-            matches!(
-                result,
-                Err(CdtError::InvalidConfiguration {
-                    setting: ConfigurationSetting::Vertices,
-                    ref provided_value,
-                    ref expected,
-                }) if provided_value == "[4294967295, 1]"
-                    && expected == "volume profile sum <= u32::MAX"
-            ),
-            "{result:?}"
+        assert_matches!(
+            result,
+            Err(CdtError::InvalidConfiguration {
+                setting: ConfigurationSetting::Vertices,
+                ref provided_value,
+                ref expected,
+            }) if provided_value == "[4294967295, 1]"
+                && expected == "volume profile sum <= u32::MAX"
         );
     }
 
