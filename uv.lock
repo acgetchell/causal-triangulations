@@ -83,12 +83,12 @@ requires-dist = [{ name = "packaging" }]
 [package.metadata.requires-dev]
 dev = [
     { name = "actionlint-py", specifier = "==1.7.12.24" },
-    { name = "pytest", specifier = ">=9.0.3" },
+    { name = "pytest", specifier = "==9.0.3" },
     { name = "ruff", specifier = "==0.15.14" },
     { name = "semgrep", specifier = "==1.164.0" },
     { name = "shellcheck-py", specifier = "==0.11.0.1" },
     { name = "shfmt-py", specifier = "==4.0.0" },
-    { name = "ty", specifier = ">=0.0.40" },
+    { name = "ty", specifier = "==0.0.40" },
     { name = "yamllint", specifier = "==1.38.0" },
 ]
 

@@ -755,7 +755,7 @@ setup-tools:
 
     echo ""
     echo "Ensuring uv-managed Python tools..."
-    uv sync --group dev
+    uv sync --locked --group dev
 
     echo ""
     echo "Verifying required commands are available..."
