@@ -45,7 +45,7 @@ from benchmark_utils import (
 from performance_analysis import PerformanceAnalyzer
 
 THRESHOLD_PERCENT = f"{DEFAULT_REGRESSION_THRESHOLD:.1f}%"
-UTF8 = "utf-8"
+UTF8: str = "utf-8"
 
 
 def compute_average_time_change(current_results, baseline_results):

@@ -54,6 +54,10 @@ def explicit_path_text_encoding(path: Path) -> None:
     path.read_text(encoding="utf-8")
     # ok: causal-triangulations.python.explicit-path-text-encoding-in-tests
     path.write_text("Time: [1.0, 1.0, 1.0] µs\n", encoding="utf-8")
+    # ok: causal-triangulations.python.explicit-path-text-encoding-in-tests
+    path.read_text(encoding='utf-8')
+    # ok: causal-triangulations.python.explicit-path-text-encoding-in-tests
+    path.write_text("Time: [1.0, 1.0, 1.0] µs\n", encoding='utf-8')
 
 
 def adhoc_mock_stdout() -> None:

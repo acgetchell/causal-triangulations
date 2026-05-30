@@ -992,9 +992,13 @@ rules:
           - patterns:
               - pattern: $PATH.read_text(...)
               - pattern-not: $PATH.read_text(..., encoding="utf-8", ...)
+              - pattern-not: $PATH.read_text(..., encoding='utf-8', ...)
+              - pattern-not: $PATH.read_text(..., encoding=UTF8, ...)
           - patterns:
               - pattern: $PATH.write_text(...)
               - pattern-not: $PATH.write_text(..., encoding="utf-8", ...)
+              - pattern-not: $PATH.write_text(..., encoding='utf-8', ...)
+              - pattern-not: $PATH.write_text(..., encoding=UTF8, ...)
 
   - id: causal-triangulations.python.no-broad-exception
     languages:
