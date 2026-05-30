@@ -625,8 +625,9 @@ semgrep-test: _ensure-uv
     set -euo pipefail
     config_dir="$(mktemp -d "${TMPDIR:-/tmp}/ct-semgrep-config.XXXXXX")"
     cleanup() {
-        find "$config_dir" -type l -exec unlink {} \;
-        find "$config_dir" -depth -type d -exec rmdir {} +
+        if [[ -n "${config_dir:-}" && "$config_dir" == "${TMPDIR:-/tmp}"/ct-semgrep-config.* ]]; then
+            rm -rf "$config_dir"
+        fi
     }
     trap cleanup EXIT
 
