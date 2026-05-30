@@ -312,6 +312,12 @@ Run with:
 just action-lint
 ```
 
+GitHub Actions security analysis runs with `zizmor` locally and in `.github/workflows/zizmor.yml`:
+
+```bash
+just zizmor
+```
+
 ---
 
 ## Python Validation

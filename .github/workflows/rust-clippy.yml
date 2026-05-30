@@ -29,6 +29,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
@@ -36,22 +38,15 @@ jobs:
           cache: true
           # toolchain, components, etc. are specified in rust-toolchain.toml
 
-      - name: Cache clippy tools
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+      - name: Install clippy-sarif
+        uses: taiki-e/cache-cargo-install-action@417450f3c33ee20393705369577571770643d4c7 # v3.0.7
         with:
-          path: |
-            ~/.cargo/bin/clippy-sarif
-            ~/.cargo/bin/sarif-fmt
-          key: clippy-sarif-${{ runner.os }}-${{ env.CLIPPY_SARIF_VERSION }}-sarif-fmt-${{ env.SARIF_FMT_VERSION }}
+          tool: clippy-sarif@${{ env.CLIPPY_SARIF_VERSION }}
 
-      - name: Install clippy-sarif tools
-        run: |
-          if ! command -v clippy-sarif &> /dev/null; then
-            cargo install clippy-sarif --locked --version "${CLIPPY_SARIF_VERSION}"
-          fi
-          if ! command -v sarif-fmt &> /dev/null; then
-            cargo install sarif-fmt --locked --version "${SARIF_FMT_VERSION}"
-          fi
+      - name: Install sarif-fmt
+        uses: taiki-e/cache-cargo-install-action@417450f3c33ee20393705369577571770643d4c7 # v3.0.7
+        with:
+          tool: sarif-fmt@${{ env.SARIF_FMT_VERSION }}
 
       - name: Run clippy with SARIF output
         run: |
@@ -75,7 +70,7 @@ jobs:
             github.event_name != 'pull_request'
             || github.event.pull_request.head.repo.full_name == github.repository
           )
-        uses: github/codeql-action/upload-sarif@b25d0ebf40e5b63ee81e1bd6e5d2a12b7c2aeb61 # v4
+        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
         with:
           sarif_file: rust-clippy-results.sarif
           category: "clippy"

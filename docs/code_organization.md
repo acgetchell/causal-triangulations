@@ -25,7 +25,8 @@ causal-triangulations/
 │   │   ├── codeql.yml
 │   │   ├── performance.yml
 │   │   ├── rust-clippy.yml
-│   │   └── semgrep-sarif.yml
+│   │   ├── semgrep-sarif.yml
+│   │   └── zizmor.yml
 │   ├── CODEOWNERS
 │   └── dependabot.yml
 ├── benches/
@@ -155,6 +156,7 @@ causal-triangulations/
 ├── LICENSE
 ├── README.md
 ├── REFERENCES.md
+├── SECURITY.md
 ├── cliff.toml
 ├── clippy.toml
 ├── dprint.json

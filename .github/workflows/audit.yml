@@ -25,8 +25,12 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
+    env:
+      CARGO_AUDIT_VERSION: "0.22.1"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
@@ -46,9 +50,9 @@ jobs:
           restore-keys: advisory-db-${{ runner.os }}-v1-
 
       - name: Install cargo-audit
-        uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2.79.9
+        uses: taiki-e/cache-cargo-install-action@417450f3c33ee20393705369577571770643d4c7 # v3.0.7
         with:
-          tool: cargo-audit@0.22.1
+          tool: cargo-audit@${{ env.CARGO_AUDIT_VERSION }}
 
       - name: Run cargo audit
         run: |

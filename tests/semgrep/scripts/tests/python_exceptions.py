@@ -70,6 +70,11 @@ def typed_completed_process() -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
 
 
+def direct_subprocess_run() -> None:
+    # ruleid: causal-triangulations.python.no-direct-subprocess-run-outside-wrapper
+    subprocess.run(["git", "status"], check=True)
+
+
 # ruleid: causal-triangulations.python.no-untyped-defs-in-scripts
 def missing_return_annotation():
     return None
