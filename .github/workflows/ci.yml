@@ -59,12 +59,12 @@ jobs:
 
       - name: Install just
         if: matrix.os != 'windows-latest'
-        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d # v2.79.2
+        uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2.79.9
         with:
           tool: just
 
       - name: Install cargo-nextest
-        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d # v2.79.2
+        uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2.79.9
         with:
           tool: cargo-nextest@${{ env.NEXTEST_VERSION }}
 
@@ -76,25 +76,25 @@ jobs:
 
       - name: Install typos-cli
         if: matrix.os != 'windows-latest'
-        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d # v2.79.2
+        uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2.79.9
         with:
           tool: typos-cli@${{ env.TYPOS_VERSION }}
 
       - name: Install rumdl (for Markdown linting)
         if: matrix.os != 'windows-latest'
-        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d # v2.79.2
+        uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2.79.9
         with:
           tool: rumdl@${{ env.RUMDL_VERSION }}
 
       - name: Install dprint (for YAML formatting)
         if: matrix.os != 'windows-latest'
-        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d # v2.79.2
+        uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2.79.9
         with:
           tool: dprint@${{ env.DPRINT_VERSION }}
 
       - name: Install taplo (for TOML formatting and linting)
         if: matrix.os != 'windows-latest'
-        uses: taiki-e/install-action@213ccc1a076163c093f914550b94feb90fab916d # v2.79.2
+        uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2.79.9
         with:
           tool: taplo-cli
 
