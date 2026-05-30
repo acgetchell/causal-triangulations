@@ -991,10 +991,10 @@ rules:
       - pattern-either:
           - patterns:
               - pattern: $PATH.read_text(...)
-              - pattern-not: $PATH.read_text(..., encoding=..., ...)
+              - pattern-not: $PATH.read_text(..., encoding="utf-8", ...)
           - patterns:
               - pattern: $PATH.write_text(...)
-              - pattern-not: $PATH.write_text(..., encoding=..., ...)
+              - pattern-not: $PATH.write_text(..., encoding="utf-8", ...)
 
   - id: causal-triangulations.python.no-broad-exception
     languages:
