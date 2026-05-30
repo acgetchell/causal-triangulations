@@ -403,6 +403,7 @@ pub fn build_delaunay2_with_topology(
 /// ```
 /// use causal_triangulations::{CdtError, CdtResult};
 /// use causal_triangulations::prelude::geometry::*;
+/// use std::assert_matches;
 ///
 /// fn main() -> CdtResult<()> {
 ///     const N: usize = 3;
@@ -431,11 +432,11 @@ pub fn build_delaunay2_with_topology(
 ///     }
 ///
 ///     let result = build_toroidal_delaunay2(&vertices, &simplices, [1.0, 1.0]);
-///     assert!(matches!(
+///     assert_matches!(
 ///         result,
 ///         Err(CdtError::DelaunayGenerationFailed { ref underlying_error, .. })
 ///             if underlying_error.contains("Explicit non-Euclidean connectivity")
-///     ));
+///     );
 ///     Ok(())
 /// }
 /// ```

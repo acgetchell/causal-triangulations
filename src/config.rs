@@ -170,15 +170,16 @@ pub struct ValidatedCdtConfig {
 /// ```
 /// use causal_triangulations::prelude::config::{CdtConfig, ValidatedInitialVolume};
 /// use causal_triangulations::prelude::errors::CdtResult;
+/// use std::assert_matches;
 ///
 /// fn main() -> CdtResult<()> {
 ///     let config = CdtConfig::new(16, 4).into_validated()?;
-///     assert!(matches!(
+///     assert_matches!(
 ///         config.initial_volume(),
 ///         ValidatedInitialVolume::Regular {
 ///             vertices_per_slice: 4
 ///         }
-///     ));
+///     );
 ///     Ok(())
 /// }
 /// ```
@@ -378,6 +379,7 @@ impl ValidatedCdtConfig {
     /// ```
     /// use causal_triangulations::prelude::config::{CdtConfig, ValidatedInitialVolume};
     /// use causal_triangulations::prelude::errors::CdtResult;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let config = CdtConfig {
@@ -388,10 +390,10 @@ impl ValidatedCdtConfig {
     ///     }
     ///     .into_validated()?;
     ///
-    ///     assert!(matches!(
+    ///     assert_matches!(
     ///         config.initial_volume(),
     ///         ValidatedInitialVolume::ExplicitProfile([4, 6, 5])
-    ///     ));
+    ///     );
     ///     Ok(())
     /// }
     /// ```

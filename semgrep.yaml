@@ -349,6 +349,23 @@ rules:
         - "/tests/semgrep/doctests/**/*.txt"
     pattern-regex: '^\s*//[!/]\s*(?:#\s*)?.*(?:\b[\w:]+|[\]\)])\.(unwrap|expect)\s*\('
 
+  - id: causal-triangulations.rust.prefer-assert-matches-in-doctests
+    languages:
+      - generic
+    severity: WARNING
+    message: "Use assert_matches! (std::assert_matches) instead of assert!(matches!(...)) in public documentation examples."
+    metadata:
+      category: maintainability
+      rationale: >-
+        Public Rust documentation examples should teach std::assert_matches,
+        which reports the unmatched value on failure instead of the bare
+        boolean that assert!(matches!(...)) produces.
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/semgrep/doctests/**/*.txt"
+    pattern-regex: '^\s*//[!/].*\bassert!\s*\(\s*matches!\s*\('
+
   - id: causal-triangulations.rust.no-unwrap-expect-in-benches-examples
     languages:
       - rust

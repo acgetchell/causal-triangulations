@@ -415,6 +415,7 @@ pub mod prelude {
     /// ```
     /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::geometry::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -435,10 +436,10 @@ pub mod prelude {
     ///         domain: [1.0, 1.0],
     ///         mode: ToroidalConstructionMode::Explicit,
     ///     };
-    ///     assert!(matches!(topology, GlobalTopology::Toroidal { .. }));
+    ///     assert_matches!(topology, GlobalTopology::Toroidal { .. });
     ///
     ///     let error = backend.insert_vertex(&[0.0]).expect_err("coordinate dimension is invalid");
-    ///     assert!(matches!(error, DelaunayError::CoordinateDimensionMismatch { .. }));
+    ///     assert_matches!(error, DelaunayError::CoordinateDimensionMismatch { .. });
     ///     Ok(())
     /// }
     /// ```

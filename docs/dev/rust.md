@@ -22,7 +22,8 @@ All design decisions should prioritize these goals.
 ## Rust Baseline
 
 The repository MSRV is Rust 1.96.0. `Cargo.toml` and `rust-toolchain.toml` must stay in sync so local `rustup` usage and CI install the same baseline.
-Tests may use `std::assert_matches` instead of `assert!(matches!(...))` when checking enum or result shapes so failures show the unexpected value directly.
+Tests and public doctests use `std::assert_matches` instead of `assert!(matches!(...))` when checking enum or result shapes so failures show the unexpected
+value directly. The `causal-triangulations.rust.prefer-assert-matches-in-doctests` Semgrep rule enforces this idiom in `src/` documentation examples.
 
 ---
 

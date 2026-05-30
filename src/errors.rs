@@ -44,18 +44,19 @@ impl fmt::Display for DelaunayValidationLevel {
 /// ```
 /// use causal_triangulations::prelude::errors::{CdtError, ConfigurationSetting};
 /// use causal_triangulations::prelude::CdtConfig;
+/// use std::assert_matches;
 ///
 /// let config = CdtConfig {
 ///     vertices: 2,
 ///     ..CdtConfig::new(36, 3)
 /// };
-/// assert!(matches!(
+/// assert_matches!(
 ///     config.into_validated(),
 ///     Err(CdtError::InvalidConfiguration {
 ///         setting: ConfigurationSetting::Vertices,
 ///         ..
 ///     })
-/// ));
+/// );
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -115,17 +116,18 @@ impl fmt::Display for ConfigurationSetting {
 /// ```
 /// use causal_triangulations::prelude::errors::{CdtError, GenerationParameterIssue};
 /// use causal_triangulations::prelude::triangulation::CdtTriangulation;
+/// use std::assert_matches;
 ///
 /// let err = CdtTriangulation::from_random_points(2, 2, 2)
 ///     .expect_err("fewer than three vertices cannot form a triangulation");
 ///
-/// assert!(matches!(
+/// assert_matches!(
 ///     err,
 ///     CdtError::InvalidGenerationParameters {
 ///         issue: GenerationParameterIssue::InsufficientVertexCount,
 ///         ..
 ///     }
-/// ));
+/// );
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -193,6 +195,7 @@ impl fmt::Display for GenerationParameterIssue {
 /// ```
 /// use causal_triangulations::prelude::errors::{CdtError, TriangulationMetadataField};
 /// use causal_triangulations::prelude::triangulation::CdtTopology;
+/// use std::assert_matches;
 ///
 /// let metadata_error = CdtError::InvalidTriangulationMetadata {
 ///     field: TriangulationMetadataField::Timeslices,
@@ -201,13 +204,13 @@ impl fmt::Display for GenerationParameterIssue {
 ///     expected: "at least three time slices".to_string(),
 /// };
 ///
-/// assert!(matches!(
+/// assert_matches!(
 ///     metadata_error,
 ///     CdtError::InvalidTriangulationMetadata {
 ///         field: TriangulationMetadataField::Timeslices,
 ///         ..
 ///     }
-/// ));
+/// );
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -514,17 +517,18 @@ impl fmt::Display for CheckpointMoveCounter {
 /// use causal_triangulations::prelude::errors::{
 ///     CdtError, CheckpointResumeFailure,
 /// };
+/// use std::assert_matches;
 ///
 /// let err = CdtError::CheckpointResumeFailed {
 ///     failure: CheckpointResumeFailure::IncompatibleTemperature,
 /// };
 ///
-/// assert!(matches!(
+/// assert_matches!(
 ///     err,
 ///     CdtError::CheckpointResumeFailed {
 ///         failure: CheckpointResumeFailure::IncompatibleTemperature,
 ///     }
-/// ));
+/// );
 /// ```
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]

@@ -75,6 +75,7 @@ impl Target<CdtTriangulation2D> for CdtTarget {
 ///     ActionConfig, CdtProposal, CdtResult, CdtTriangulation, DelayedProposal, MoveType,
 /// };
 /// use rand::{SeedableRng, rngs::StdRng};
+/// use std::assert_matches;
 ///
 /// # fn main() -> CdtResult<()> {
 /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
@@ -84,10 +85,10 @@ impl Target<CdtTriangulation2D> for CdtTarget {
 /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
 ///     return Ok(());
 /// };
-/// assert!(matches!(
+/// assert_matches!(
 ///     plan.move_type(),
 ///     MoveType::Move22 | MoveType::Move13Add | MoveType::Move31Remove | MoveType::EdgeFlip
-/// ));
+/// );
 /// assert!(plan.action_before().is_finite());
 /// if let (Some(delta), Some(action_after)) = (plan.delta_action(), plan.action_after()) {
 ///     approx::assert_relative_eq!(
@@ -126,6 +127,7 @@ impl CdtProposalPlan {
     ///     ActionConfig, CdtProposal, CdtResult, CdtTriangulation, DelayedProposal, MoveType,
     /// };
     /// use rand::{SeedableRng, rngs::StdRng};
+    /// use std::assert_matches;
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
@@ -134,10 +136,10 @@ impl CdtProposalPlan {
     /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
     ///     return Ok(());
     /// };
-    /// assert!(matches!(
+    /// assert_matches!(
     ///     plan.move_type(),
     ///     MoveType::Move22 | MoveType::Move13Add | MoveType::Move31Remove | MoveType::EdgeFlip
-    /// ));
+    /// );
     /// # Ok(())
     /// # }
     /// ```

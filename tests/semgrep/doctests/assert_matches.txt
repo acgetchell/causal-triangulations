@@ -1,0 +1,14 @@
+// ruleid: causal-triangulations.rust.prefer-assert-matches-in-doctests
+/// assert!(matches!(value, Some(_)));
+
+// ruleid: causal-triangulations.rust.prefer-assert-matches-in-doctests
+//! assert!(matches!(plan.move_type(), MoveType::Move22 | MoveType::EdgeFlip));
+
+// ok: causal-triangulations.rust.prefer-assert-matches-in-doctests
+/// assert_matches!(value, Some(_));
+
+// ok: causal-triangulations.rust.prefer-assert-matches-in-doctests
+/// assert!(value.is_some());
+
+// ok: causal-triangulations.rust.prefer-assert-matches-in-doctests
+/// Prefer assert_matches! to nested matches! checks in public examples.

@@ -122,19 +122,20 @@ struct CachedValue<T> {
 /// ```
 /// use causal_triangulations::prelude::moves::MoveType;
 /// use causal_triangulations::prelude::triangulation::SimulationEvent;
+/// use std::assert_matches;
 ///
 /// let event = SimulationEvent::MoveAttempted {
 ///     move_type: MoveType::Move13Add,
 ///     step: 7,
 /// };
 ///
-/// assert!(matches!(
+/// assert_matches!(
 ///     event,
 ///     SimulationEvent::MoveAttempted {
 ///         move_type: MoveType::Move13Add,
 ///         step: 7,
 ///     }
-/// ));
+/// );
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SimulationEvent {
@@ -320,6 +321,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -335,7 +337,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///     })?;
     ///
     ///     let tri = CdtTriangulation::with_topology(backend, 2, 2, CdtTopology::OpenBoundary)?;
-    ///     assert!(matches!(tri.metadata().topology, CdtTopology::OpenBoundary));
+    ///     assert_matches!(tri.metadata().topology, CdtTopology::OpenBoundary);
     ///     assert_eq!(tri.time_slices(), 2);
     ///     assert_eq!(tri.dimension(), 2);
     ///     Ok(())
@@ -347,6 +349,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// use causal_triangulations::prelude::errors::TriangulationMetadataField;
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -363,7 +366,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///
     ///     let err = CdtTriangulation::with_topology(backend, 2, 3, CdtTopology::Toroidal)
     ///         .expect_err("toroidal metadata requires at least three time slices");
-    ///     assert!(matches!(
+    ///     assert_matches!(
     ///         err,
     ///         CdtError::InvalidTriangulationMetadata {
     ///             field,
@@ -374,7 +377,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///             && topology == CdtTopology::Toroidal
     ///             && provided_value == "2"
     ///             && expected == "≥ 3"
-    ///     ));
+    ///     );
     ///     Ok(())
     /// }
     /// ```
@@ -384,6 +387,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// use causal_triangulations::prelude::errors::TriangulationMetadataField;
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -400,7 +404,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///
     ///     let err = CdtTriangulation::with_topology(backend, 3, 2, CdtTopology::Toroidal)
     ///         .expect_err("a planar triangle cannot be published as toroidal");
-    ///     assert!(matches!(
+    ///     assert_matches!(
     ///         err,
     ///         CdtError::TopologyMismatch {
     ///             topology,
@@ -408,7 +412,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///             expected_euler_characteristics,
     ///             ..
     ///         } if topology == CdtTopology::Toroidal && expected_euler_characteristics.as_slice() == [0]
-    ///     ));
+    ///     );
     ///     Ok(())
     /// }
     /// ```
@@ -790,12 +794,13 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// ```
     /// use causal_triangulations::prelude::errors::{CdtError, TriangulationMetadataField};
     /// use causal_triangulations::prelude::triangulation::{CdtTopology, CdtTriangulation};
+    /// use std::assert_matches;
     ///
     /// fn main() -> causal_triangulations::CdtResult<()> {
     /// let mut tri = CdtTriangulation::from_toroidal_cdt(4, 3)?;
     ///
     /// let err = tri.set_time_slices(2).expect_err("T < 3 is invalid");
-    /// assert!(matches!(
+    /// assert_matches!(
     ///     err,
     ///     CdtError::InvalidTriangulationMetadata {
     ///         field,
@@ -806,7 +811,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///         && topology == CdtTopology::Toroidal
     ///         && provided_value == "2"
     ///         && expected == "≥ 3"
-    /// ));
+    /// );
     /// # Ok(())
     /// # }
     /// ```

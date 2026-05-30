@@ -553,13 +553,14 @@ impl ErgodicsSystem {
     ///
     /// ```
     /// use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveType};
+    /// use std::assert_matches;
     ///
     /// let mut system = ErgodicsSystem::new();
     /// let move_type = system.select_random_move();
-    /// assert!(matches!(
+    /// assert_matches!(
     ///     move_type,
     ///     MoveType::Move22 | MoveType::Move13Add | MoveType::Move31Remove | MoveType::EdgeFlip
-    /// ));
+    /// );
     /// ```
     #[must_use]
     pub fn select_random_move(&mut self) -> MoveType {
@@ -660,6 +661,7 @@ impl ErgodicsSystem {
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_from_simplices(
@@ -675,10 +677,10 @@ impl ErgodicsSystem {
     ///     let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
     ///     let mut system = ErgodicsSystem::new();
     ///     let result = system.attempt_22_move(&mut triangulation);
-    ///     assert!(matches!(
+    ///     assert_matches!(
     ///         result,
     ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
-    ///     ));
+    ///     );
     ///     assert_eq!(system.stats.moves_22_attempted, 1);
     ///     Ok(())
     /// }
@@ -709,6 +711,7 @@ impl ErgodicsSystem {
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -725,7 +728,7 @@ impl ErgodicsSystem {
     ///     let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
     ///     let mut system = ErgodicsSystem::new();
     ///     let result = system.attempt_13_move(&mut triangulation);
-    ///     assert!(matches!(result, MoveResult::Success | MoveResult::GeometricViolation));
+    ///     assert_matches!(result, MoveResult::Success | MoveResult::GeometricViolation);
     ///     assert_eq!(system.stats.moves_13_attempted, 1);
     ///     Ok(())
     /// }
@@ -770,6 +773,7 @@ impl ErgodicsSystem {
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -787,10 +791,10 @@ impl ErgodicsSystem {
     ///     let mut system = ErgodicsSystem::new();
     ///     let _ = system.attempt_13_move(&mut triangulation);
     ///     let result = system.attempt_31_move(&mut triangulation);
-    ///     assert!(matches!(
+    ///     assert_matches!(
     ///         result,
     ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
-    ///     ));
+    ///     );
     ///     assert_eq!(system.stats.moves_31_attempted, 1);
     ///     Ok(())
     /// }
@@ -828,6 +832,7 @@ impl ErgodicsSystem {
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_from_simplices(
@@ -843,10 +848,10 @@ impl ErgodicsSystem {
     ///     let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
     ///     let mut system = ErgodicsSystem::new();
     ///     let result = system.attempt_edge_flip(&mut triangulation);
-    ///     assert!(matches!(
+    ///     assert_matches!(
     ///         result,
     ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
-    ///     ));
+    ///     );
     ///     assert_eq!(system.stats.edge_flips_attempted, 1);
     ///     Ok(())
     /// }
@@ -866,6 +871,7 @@ impl ErgodicsSystem {
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::moves::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -882,10 +888,10 @@ impl ErgodicsSystem {
     ///     let mut triangulation = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)?;
     ///     let mut system = ErgodicsSystem::new();
     ///     let result = system.attempt_random_move(&mut triangulation);
-    ///     assert!(matches!(
+    ///     assert_matches!(
     ///         result,
     ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
-    ///     ));
+    ///     );
     ///     Ok(())
     /// }
     /// ```
