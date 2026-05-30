@@ -11,7 +11,7 @@ Both repositories now have explicit local configuration for the core Rust and Py
 - `rustfmt.toml` records stable Rust formatting settings used by `cargo fmt`.
 - `.taplo.toml` keeps TOML formatting conservative and Cargo-like.
 - `ty.toml` scopes Ty to `scripts/` and pins the supported Python version.
-- `pyproject.toml` owns Ruff, Ty, pytest, uv packaging, and uv-managed development dependencies.
+- `pyproject.toml` owns Ruff, Ty, pytest, Semgrep, actionlint, yamllint, shellcheck, shfmt, uv packaging, and uv-managed development dependencies.
 - `rumdl.toml`, `dprint.json`, `.yamllint`, `typos.toml`, and `clippy.toml` define documentation and configuration checks.
 - `justfile` is the single local entry point for formatting, linting, tests, coverage, Semgrep, changelog, and setup commands.
 
@@ -27,6 +27,8 @@ performance-analysis scripts. The shared script patterns have already been porte
 - secure subprocess wrappers in `scripts/subprocess_utils.py`;
 - typed `subprocess.CompletedProcess[str]` helpers in tests;
 - Ruff, Ty, pytest, and uv-managed development dependencies in `pyproject.toml`;
+- actionlint, yamllint, shellcheck, and shfmt are installed through the uv development environment so the same `just ci` path can run on Linux, macOS, and
+  Windows without Homebrew or runner-global tool assumptions;
 - Python Semgrep rules and fixtures for broad exception catches across all `scripts/**/*.py`, raw `Exception` in tests, ad hoc subprocess mocks, and missing
   return annotations.
 
@@ -72,6 +74,9 @@ The useful updates ported from MCMC are:
   `tests/semgrep/src/project_rules/rust_style.rs` fixture shape. Before this refinement, prose such as "do not use `.unwrap()`" could be reported and Semgrep
   test mode needed broader name-based exclusions; after it, public-surface checks still reject panic-style calls while fixture-only exceptions are explicitly
   anchored.
+- low-risk MCMC Semgrep rules for public `*_unchecked` Rust APIs, dynamic error erasure in examples/benchmarks, and dynamic error erasure in doctests. The CDT
+  versions keep repository-owned rule IDs, explicit fixture paths, and typed-error guidance so user-facing examples continue to model `CdtResult` or concrete
+  errors.
 - an `examples-validate` recipe that runs Cargo examples and verifies stable output markers for the user-facing example contracts.
 
 The useful Semgrep updates ported from the sibling `delaunay` repository are:
@@ -100,6 +105,25 @@ The useful `justfile` updates ported from `delaunay` are:
   readable version comments. Dependabot remains the update path for pinned external actions, with review focused on preserving both the SHA and readable version
   comment.
 - Delaunay's non-Rust 160-column tooling policy, adapted for CDT while intentionally leaving Rust formatting at `rustfmt`'s 100-column width.
+
+## Issue #162 CI And Security Alignment
+
+Issue #162 refreshed the CI and security baseline against `markov-chain-monte-carlo` after acgetchell/markov-chain-monte-carlo#68 and #57:
+
+- The main CI matrix now installs Python tooling with `uv sync --locked --group dev` and runs `just ci` on Ubuntu, macOS, and Windows.
+- Rust CLI tools used in PR-running workflows are installed through `taiki-e/cache-cargo-install-action@417450f3c33ee20393705369577571770643d4c7`
+  (`v3.0.7`) instead of `taiki-e/install-action` or ad hoc `cargo install` cache scripts.
+- The GitHub Actions Semgrep allowlist now permits `taiki-e/cache-cargo-install-action` and `zizmorcore/zizmor-action`, and no longer permits
+  `taiki-e/install-action`.
+- Repository-owned Semgrep rules now also guard checkout credential persistence, `pull_request_target`, direct `github-script` expression interpolation,
+  unlocked workflow `uv sync`, direct Python `subprocess.run` bypasses, and direct MCMC imports outside the CDT Metropolis adapter boundary.
+- Tool versions are pinned in workflow `env` blocks and mirrored in `justfile` constants for `cargo-nextest`, `dprint`, `rumdl`, `taplo`, `typos`, `zizmor`,
+  `cargo-llvm-cov`, and `git-cliff`.
+- Local validation includes `just zizmor` through `lint-config`, while `.github/workflows/zizmor.yml` uploads the GitHub Actions security signal in CI.
+- `SECURITY.md` documents private vulnerability reporting and the repository security check set.
+
+Cold-cache PR runs after tool-version changes are expected to be slower while `taiki-e/cache-cargo-install-action` seeds tool caches. Warm-cache timing should
+be measured after the first cache-warming run before making additional CI-shape changes.
 
 ## CI Shape Evaluation
 

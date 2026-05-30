@@ -62,9 +62,9 @@ still drift because the critical point is a continuum-limit statement and there 
 [`causal-triangulations#142`](https://github.com/acgetchell/causal-triangulations/issues/142) should add an explicit modified-action ensemble for production
 fixed-volume studies.
 
-The calibration is based on Ambjørn and Loll's original 2D CDT construction and the Ambjørn, Görlich, Jurkiewicz, and Loll review. The volume-fixing follow-up
-should cite the higher-dimensional CDT simulation literature where quadratic fixing terms are added deliberately. See [REFERENCES.md](../REFERENCES.md) for the
-full citations.
+The calibration is based on Ambjørn and Loll's original 2D CDT construction and the Ambjørn, Görlich, Jurkiewicz, and Loll review. The
+volume-fixing follow-up should cite the higher-dimensional CDT simulation literature where quadratic fixing terms are added deliberately. See
+[REFERENCES.md](../REFERENCES.md) for the full citations.
 
 ## Chunked Sweeps
 

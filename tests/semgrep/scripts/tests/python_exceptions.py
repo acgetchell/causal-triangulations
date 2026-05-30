@@ -1,5 +1,6 @@
 import subprocess
 import unittest.mock
+from pathlib import Path
 from unittest import mock
 from unittest.mock import MagicMock, Mock
 
@@ -38,6 +39,27 @@ def raises_specific_exception() -> None:
     raise RuntimeError("specific failure")
 
 
+def implicit_path_read_text_encoding(path: Path) -> None:
+    # ruleid: causal-triangulations.python.explicit-path-text-encoding-in-tests
+    path.read_text()
+
+
+def implicit_path_write_text_encoding(path: Path) -> None:
+    # ruleid: causal-triangulations.python.explicit-path-text-encoding-in-tests
+    path.write_text("Time: [1.0, 1.0, 1.0] µs\n")
+
+
+def explicit_path_text_encoding(path: Path) -> None:
+    # ok: causal-triangulations.python.explicit-path-text-encoding-in-tests
+    path.read_text(encoding="utf-8")
+    # ok: causal-triangulations.python.explicit-path-text-encoding-in-tests
+    path.write_text("Time: [1.0, 1.0, 1.0] µs\n", encoding="utf-8")
+    # ok: causal-triangulations.python.explicit-path-text-encoding-in-tests
+    path.read_text(encoding='utf-8')
+    # ok: causal-triangulations.python.explicit-path-text-encoding-in-tests
+    path.write_text("Time: [1.0, 1.0, 1.0] µs\n", encoding='utf-8')
+
+
 def adhoc_mock_stdout() -> None:
     # ruleid: causal-triangulations.python.no-adhoc-completedprocess-mock
     result = Mock()
@@ -68,6 +90,11 @@ def adhoc_mock_magic_stdout_constructor() -> None:
 def typed_completed_process() -> subprocess.CompletedProcess[str]:
     # ok: causal-triangulations.python.no-adhoc-completedprocess-mock
     return subprocess.CompletedProcess(args=[], returncode=0, stdout="ok", stderr="")
+
+
+def direct_subprocess_run() -> None:
+    # ruleid: causal-triangulations.python.no-direct-subprocess-run-outside-wrapper
+    subprocess.run(["git", "status"], check=True)
 
 
 # ruleid: causal-triangulations.python.no-untyped-defs-in-scripts

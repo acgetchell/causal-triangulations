@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from shutil import copy2 as copyfile  # NOTE: Use copy2 (metadata-preserving) under the 'copyfile' alias for tests/patching convenience.
-from typing import TYPE_CHECKING, TextIO
+from typing import TYPE_CHECKING, TextIO, cast
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -1116,7 +1116,7 @@ class PerformanceSummaryGenerator:
                     # the caller's f-string wraps the result in (...) already.
                     # Use removeprefix/removesuffix (not strip) to avoid
                     # accidentally removing internal parentheses.
-                    return desc.split(" - ")[0].removeprefix("(").removesuffix(")")
+                    return desc.split(" - ", maxsplit=1)[0].removeprefix("(").removesuffix(")")
                 defaults = ["fastest average", "second fastest", "third fastest"]
                 return defaults[position] if position < len(defaults) else "slower"
 
@@ -2271,10 +2271,11 @@ class BenchmarkRegressionHelper:
             with metadata_file.open("r", encoding="utf-8") as f:
                 data: object = json.load(f)
 
-            if not isinstance(data, dict):
+            if not isinstance(data, Mapping):
                 return None
 
-            potential_sha = data.get("commit")
+            metadata = cast("Mapping[str, object]", data)
+            potential_sha = metadata.get("commit")
             if isinstance(potential_sha, str) and re.match(r"^[0-9A-Fa-f]{7,40}$", potential_sha):
                 return potential_sha
         except (OSError, json.JSONDecodeError, KeyError) as e:

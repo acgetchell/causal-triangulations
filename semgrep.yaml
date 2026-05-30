@@ -17,6 +17,7 @@ rules:
     paths:
       include:
         - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
       exclude:
         - "/examples/**"
         - "/benches/**"
@@ -70,6 +71,7 @@ rules:
     paths:
       include:
         - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
     pattern-either:
       - pattern: |
           if std::env::var_os($NAME).is_some() {
@@ -347,6 +349,8 @@ rules:
       include:
         - "/src/**/*.rs"
         - "/tests/semgrep/doctests/**/*.txt"
+      exclude:
+        - "/tests/semgrep/src/**"
     pattern-regex: '^\s*//[!/]\s*(?:#\s*)?.*(?:\b[\w:]+|[\]\)])\.(unwrap|expect)\s*\('
 
   - id: causal-triangulations.rust.prefer-assert-matches-in-doctests
@@ -468,6 +472,48 @@ rules:
               ...
           }
 
+  - id: causal-triangulations.rust.no-public-unchecked-apis
+    languages:
+      - rust
+    severity: WARNING
+    message: "Keep *_unchecked APIs private so invalid-state escape hatches do not become public contracts."
+    metadata:
+      category: correctness
+      rationale: >-
+        Unchecked helpers should stay behind validated CDT constructors,
+        parsers, or setters rather than becoming public API contracts.
+      ported_from: "mcmc.rust.no-public-unchecked-apis"
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+    patterns:
+      - pattern-regex: '^\s*pub(?:\([^)]*\))?\s+(?:const\s+|async\s+|unsafe\s+)?fn\s+[A-Za-z_][A-Za-z0-9_]*_unchecked\s*\('
+      - pattern-not-inside: |
+          mod tests {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          fn $FUNC(...) {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(any(test, ...))]
+          fn $FUNC(...) {
+              ...
+          }
+
   - id: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
     languages:
       - rust
@@ -481,12 +527,43 @@ rules:
     paths:
       include:
         - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
       exclude:
         - "/src/geometry/**/*.rs"
     pattern-regex: >-
       (?mx)^\s*
       (?:pub(?:\([^)]*\))?\s+)?
       use\s+delaunay
+      (?:
+        \s+as\s+[A-Za-z_][A-Za-z0-9_]*
+        |::(?:[^;\n]*\{[\s\S]*?\}|[^;\n]+)
+        |\s*
+      )
+      \s*;
+
+  - id: causal-triangulations.rust.no-direct-mcmc-imports-outside-metropolis
+    languages:
+      - rust
+    severity: WARNING
+    message: "Keep direct markov-chain-monte-carlo imports at the CDT Metropolis adapter boundary."
+    metadata:
+      category: architecture
+      rationale: >-
+        Generic MCMC mechanics should remain delegated through the CDT
+        Metropolis adapter and public re-export surfaces instead of leaking
+        across unrelated CDT modules.
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+      exclude:
+        - "/src/cdt/metropolis/**/*.rs"
+        - "/src/errors.rs"
+        - "/src/lib.rs"
+    pattern-regex: >-
+      (?mx)^\s*
+      (?:pub(?:\([^)]*\))?\s+)?
+      use\s+markov_chain_monte_carlo
       (?:
         \s+as\s+[A-Za-z_][A-Za-z0-9_]*
         |::(?:[^;\n]*\{[\s\S]*?\}|[^;\n]+)
@@ -532,7 +609,10 @@ rules:
         - "/tests/**/*.rs"
         - "/benches/**/*.rs"
       exclude:
-        - "/tests/semgrep/**"
+        - "/tests/semgrep/.github/**"
+        - "/tests/semgrep/doctests/**"
+        - "/tests/semgrep/docs/**"
+        - "/tests/semgrep/scripts/**"
     pattern-regex: '^\s*#\s*\[\s*allow\s*\(\s*clippy::'
 
   - id: causal-triangulations.rust.no-box-dyn-error-in-src
@@ -548,9 +628,11 @@ rules:
     paths:
       include:
         - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
       exclude:
         - "/examples/**"
         - "/benches/**"
+        - "/tests/semgrep/src/project_rules/bench_example_usage.rs"
     patterns:
       # Regex is deliberate here: Rust AST patterns over-match associated
       # error types such as serde's `S::Error`; this rule is about exact
@@ -593,6 +675,54 @@ rules:
               ...
           }
 
+  - id: causal-triangulations.rust.no-box-dyn-error-in-examples-benches
+    languages:
+      - rust
+    severity: WARNING
+    message: "Use CdtResult or a concrete crate error in examples and benchmarks instead of dynamic error erasure."
+    metadata:
+      category: maintainability
+      rationale: >-
+        Examples and benchmarks should model typed error handling that users
+        can copy into their own code.
+      ported_from: "mcmc.rust.no-box-dyn-error-in-examples-benches"
+    paths:
+      include:
+        - "/examples/**/*.rs"
+        - "/benches/**/*.rs"
+        - "/tests/semgrep/src/project_rules/bench_example_usage.rs"
+    patterns:
+      - pattern-regex: >-
+          ^[ \t]*[^\n]*(\bBox\s*<\s*dyn\s+(std::error::)?Error\b|&\s*dyn\s+(std::error::)?Error\b|\banyhow::Error\b)
+      - pattern-not-regex: '^[ \t]*(//|///|/\*|\*)'
+
+  - id: causal-triangulations.rust.no-box-dyn-error-in-doctests
+    languages:
+      - generic
+    severity: WARNING
+    message: "Use concrete error types in doctests instead of Box<dyn Error> or other dynamic error erasure."
+    metadata:
+      category: maintainability
+      rationale: >-
+        Doctests are public examples and should model typed, copyable error
+        handling with CdtResult or concrete errors.
+      ported_from: "mcmc.rust.no-box-dyn-error-in-doctests"
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/semgrep/doctests/**/*.txt"
+      exclude:
+        - "/tests/semgrep/src/**"
+    pattern-either:
+      - pattern-regex: >-
+          ^\s*(//!|///)[^\n]*dyn\s+(std::error::)?Error
+      - pattern-regex: >-
+          ^\s*(//!|///)[^\n]*anyhow::Error
+      - pattern-regex: >-
+          (?s)/\*\*.*?(Box\s*<\s*dyn\s+(std::error::)?Error|&\s*dyn\s+(std::error::)?Error|anyhow::Error).*?\*/
+      - pattern-regex: >-
+          (?s)/\*!.*?(Box\s*<\s*dyn\s+(std::error::)?Error|&\s*dyn\s+(std::error::)?Error|anyhow::Error).*?\*/
+
   - id: causal-triangulations.rust.public-error-enums-non-exhaustive
     languages:
       - rust
@@ -606,6 +736,7 @@ rules:
     paths:
       include:
         - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
         - "/tests/semgrep/src/**/*.rs"
     patterns:
       - pattern: |
@@ -655,6 +786,7 @@ rules:
     paths:
       include:
         - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
     pattern-regex: >-
       (?s)CdtError::ValidationFailed\s*\{(?=[^}]*\bcheck\s*:\s*(?:"(?:foliation|topology|cdt_construction)"(?:\s*\.\s*(?:to_string|into)\s*\(\s*\))?|String\s*::\s*from\s*\(\s*"(?:foliation|topology|cdt_construction)"\s*\)))[^}]*\}
 
@@ -674,6 +806,7 @@ rules:
       include:
         - "/**/*.md"
         - "/justfile"
+        - "/tests/semgrep/docs/**/*.sh"
     pattern-either:
       - pattern-regex: '(?ms)^\s*(?:@echo\s+"?\s*)?just\s+fix\b[^\n]*(?:\n\s*(?:#[^\n]*)?)*?\n\s*(?:@echo\s+"?\s*)?just\s+check(?:\s|$|")' # yamllint disable-line rule:line-length
       - pattern-regex: '(?ms)^\s*(?:@echo\s+"?\s*)?just\s+python-fix\b[^\n]*(?:\n\s*(?:#[^\n]*)?)*?\n\s*(?:@echo\s+"?\s*)?just\s+python-check\b' # yamllint disable-line rule:line-length
@@ -717,8 +850,8 @@ rules:
       include:
         - "/.github/workflows/**/*.yml"
         - "/.github/workflows/**/*.yaml"
-      exclude:
-        - "/tests/semgrep/**"
+        - "/tests/semgrep/.github/workflows/**/*.yml"
+        - "/tests/semgrep/.github/workflows/**/*.yaml"
     patterns:
       - pattern-regex: '(?m)^\s*uses:\s*(?!\./)(?!docker://)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?@(?![a-fA-F0-9]{40}(?:\s+#|$))[^\s#]+' # yamllint disable-line rule:line-length
 
@@ -735,10 +868,10 @@ rules:
       include:
         - "/.github/workflows/**/*.yml"
         - "/.github/workflows/**/*.yaml"
-      exclude:
-        - "/tests/semgrep/**"
+        - "/tests/semgrep/.github/workflows/**/*.yml"
+        - "/tests/semgrep/.github/workflows/**/*.yaml"
     patterns:
-      - pattern-regex: '(?m)^\s*uses:\s*(?!\./)(?!docker://)(?!(?:actions/checkout|actions/cache|actions/upload-artifact|actions/github-script|actions/setup-python|actions-rust-lang/setup-rust-toolchain|astral-sh/setup-uv|taiki-e/install-action|github/codeql-action/(?:upload-sarif|init|analyze)|codecov/codecov-action)@)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?@' # yamllint disable-line rule:line-length
+      - pattern-regex: '(?m)^\s*uses:\s*(?!\./)(?!docker://)(?!(?:actions/checkout|actions/cache|actions/upload-artifact|actions/github-script|actions/setup-python|actions-rust-lang/setup-rust-toolchain|astral-sh/setup-uv|taiki-e/cache-cargo-install-action|github/codeql-action/(?:upload-sarif|init|analyze)|codecov/codecov-action|zizmorcore/zizmor-action)@)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?@' # yamllint disable-line rule:line-length
 
   - id: causal-triangulations.github-actions.external-action-version-comment
     languages:
@@ -753,10 +886,77 @@ rules:
       include:
         - "/.github/workflows/**/*.yml"
         - "/.github/workflows/**/*.yaml"
-      exclude:
-        - "/tests/semgrep/**"
+        - "/tests/semgrep/.github/workflows/**/*.yml"
+        - "/tests/semgrep/.github/workflows/**/*.yaml"
     patterns:
       - pattern-regex: '(?m)^\s*uses:\s*(?!\./)(?!docker://)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?@[a-fA-F0-9]{40}\s*$' # yamllint disable-line rule:line-length
+
+  - id: causal-triangulations.github-actions.checkout-persist-credentials-false
+    languages:
+      - regex
+    severity: WARNING
+    message: "Set persist-credentials: false on actions/checkout steps."
+    metadata:
+      category: security
+      rationale: "Checkout credentials should not remain available to later workflow steps unless a job explicitly needs them."
+    paths:
+      include:
+        - "/.github/workflows/**/*.yml"
+        - "/.github/workflows/**/*.yaml"
+        - "/tests/semgrep/.github/workflows/**/*.yml"
+        - "/tests/semgrep/.github/workflows/**/*.yaml"
+    patterns:
+      - pattern-regex: '(?m)^[ \t]*(?:-[ \t]*)?uses:[ \t]*actions/checkout@[a-fA-F0-9]{40}[^\n]*\n(?!(?:[ \t]*with:\n)?(?:[ \t]{10,}\S[^\n]*\n){0,8}[ \t]{10,}persist-credentials:[ \t]*false\b)' # yamllint disable-line rule:line-length
+
+  - id: causal-triangulations.github-actions.no-pull-request-target
+    languages:
+      - regex
+    severity: WARNING
+    message: "Avoid pull_request_target; use pull_request unless a workflow has a documented security review."
+    metadata:
+      category: security
+      rationale: "pull_request_target runs with base-repository privileges and is risky for workflows that touch untrusted PR content."
+    paths:
+      include:
+        - "/.github/workflows/**/*.yml"
+        - "/.github/workflows/**/*.yaml"
+        - "/tests/semgrep/.github/workflows/**/*.yml"
+        - "/tests/semgrep/.github/workflows/**/*.yaml"
+    pattern-regex: '(?m)^\s*pull_request_target\s*:'
+
+  - id: causal-triangulations.github-actions.github-script-no-expression-interpolation
+    languages:
+      - regex
+    severity: WARNING
+    message: "Pass GitHub expression values to actions/github-script through env instead of interpolating inside script blocks."
+    metadata:
+      category: security
+      rationale: "Interpolating ${{ ... }} directly into JavaScript can turn workflow context strings into executable code."
+    paths:
+      include:
+        - "/.github/workflows/**/*.yml"
+        - "/.github/workflows/**/*.yaml"
+        - "/tests/semgrep/.github/workflows/**/*.yml"
+        - "/tests/semgrep/.github/workflows/**/*.yaml"
+    patterns:
+      - pattern-regex: '(?ms)^\s*script:\s*\|\n(?:(?!^\s*-\s+(?:name|uses):).)*\$\{\{' # yamllint disable-line rule:line-length
+
+  - id: causal-triangulations.github-actions.uv-sync-locked-in-workflows
+    languages:
+      - regex
+    severity: WARNING
+    message: "Use uv sync --locked in GitHub Actions workflows."
+    metadata:
+      category: reproducibility
+      rationale: "Workflow dependency installs should fail on lockfile drift instead of silently resolving new versions."
+    paths:
+      include:
+        - "/.github/workflows/**/*.yml"
+        - "/.github/workflows/**/*.yaml"
+        - "/tests/semgrep/.github/workflows/**/*.yml"
+        - "/tests/semgrep/.github/workflows/**/*.yaml"
+    patterns:
+      - pattern-regex: '(?m)^\s*(?:run:\s*)?uv\s+sync\b(?![^\n]*\s--locked\b)[^\n]*$' # yamllint disable-line rule:line-length
 
   - id: causal-triangulations.python.no-raw-exception-in-tests
     languages:
@@ -770,7 +970,35 @@ rules:
       include:
         - "/scripts/tests/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
+        - "/tests/semgrep/scripts/tests/**/*.py"
     pattern: raise Exception(...)
+
+  - id: causal-triangulations.python.explicit-path-text-encoding-in-tests
+    languages:
+      - python
+    severity: WARNING
+    message: "Pass encoding=\"utf-8\" to Path.read_text/write_text in Python tests."
+    metadata:
+      category: portability
+      rationale: >-
+        Test fixtures that omit an explicit encoding can pass on UTF-8 platforms
+        while failing on Windows when benchmark output contains Unicode symbols.
+    paths:
+      include:
+        - "/scripts/tests/**/*.py"
+        - "/tests/semgrep/scripts/tests/**/*.py"
+    patterns:
+      - pattern-either:
+          - patterns:
+              - pattern: $PATH.read_text(...)
+              - pattern-not: $PATH.read_text(..., encoding="utf-8", ...)
+              - pattern-not: $PATH.read_text(..., encoding='utf-8', ...)
+              - pattern-not: $PATH.read_text(..., encoding=UTF8, ...)
+          - patterns:
+              - pattern: $PATH.write_text(...)
+              - pattern-not: $PATH.write_text(..., encoding="utf-8", ...)
+              - pattern-not: $PATH.write_text(..., encoding='utf-8', ...)
+              - pattern-not: $PATH.write_text(..., encoding=UTF8, ...)
 
   - id: causal-triangulations.python.no-broad-exception
     languages:
@@ -801,6 +1029,7 @@ rules:
     paths:
       include:
         - "/scripts/tests/**/*.py"
+        - "/tests/semgrep/scripts/tests/**/*.py"
     pattern-either:
       - patterns:
           - pattern-either:
@@ -867,6 +1096,25 @@ rules:
       - pattern: unittest.mock.MagicMock(..., returncode=..., ...)
       - pattern: mock.MagicMock(..., returncode=..., ...)
 
+  - id: causal-triangulations.python.no-direct-subprocess-run-outside-wrapper
+    languages:
+      - python
+    severity: WARNING
+    message: "Use subprocess_utils command wrappers instead of calling subprocess.run directly."
+    metadata:
+      category: security
+      rationale: >-
+        Support scripts should inherit the repository's subprocess hardening
+        for executable resolution, shell rejection, text output, and timeouts.
+    paths:
+      include:
+        - "/scripts/**/*.py"
+        - "/tests/semgrep/scripts/tests/**/*.py"
+      exclude:
+        - "/scripts/subprocess_utils.py"
+        - "/scripts/tests/**/*.py"
+    pattern: subprocess.run(...)
+
   - id: causal-triangulations.python.no-untyped-defs-in-scripts
     languages:
       - python
@@ -883,7 +1131,6 @@ rules:
         - "/scripts/postprocess_changelog.py"
         - "/scripts/subprocess_utils.py"
         - "/scripts/tag_release.py"
-        - "/scripts/tests/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
     # Regex catches obvious unannotated definitions while avoiding a custom
     # Python parser rule that would duplicate ty.

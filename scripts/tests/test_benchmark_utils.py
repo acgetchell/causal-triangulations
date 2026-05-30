@@ -45,6 +45,7 @@ from benchmark_utils import (
 from performance_analysis import PerformanceAnalyzer
 
 THRESHOLD_PERCENT = f"{DEFAULT_REGRESSION_THRESHOLD:.1f}%"
+UTF8: str = "utf-8"
 
 
 def compute_average_time_change(current_results, baseline_results):
@@ -502,7 +503,7 @@ Git commit: abc123
 === 10 Points (2D) ===
 Time: [1.0, 1.0, 1.0] µs
 """
-            baseline_file.write_text(baseline_content)
+            baseline_file.write_text(baseline_content, encoding=UTF8)
 
             # Mock successful cargo command
             mock_cargo.return_value = subprocess.CompletedProcess(args=["cargo"], returncode=0, stdout="", stderr="")
@@ -706,7 +707,7 @@ Time: [1.0, 1.0, 1.0] µs
             comparator._write_error_file(output_file, "Baseline file not found", baseline_file)
 
             assert output_file.exists()
-            content = output_file.read_text()
+            content = output_file.read_text(encoding=UTF8)
             assert "Comparison Results" in content
             assert "❌ Error: Baseline file not found" in content
             assert str(baseline_file) in content
@@ -721,7 +722,7 @@ Time: [1.0, 1.0, 1.0] µs
             comparator._write_error_file(output_file, "Benchmark execution error", error_message)
 
             assert output_file.exists()
-            content = output_file.read_text()
+            content = output_file.read_text(encoding=UTF8)
             assert "❌ Error: Benchmark execution error" in content
             assert error_message in content
             assert "Please check the CI logs for more information" in content
@@ -735,7 +736,7 @@ Time: [1.0, 1.0, 1.0] µs
 
             assert output_file.exists()
             assert output_file.parent.exists()
-            content = output_file.read_text()
+            content = output_file.read_text(encoding=UTF8)
             assert "❌ Error: Test error" in content
 
     def test_write_error_file_handles_write_failure(self, comparator):
@@ -1217,7 +1218,7 @@ Hardware Information:
 === 1000 Points (2D) ===
 Time: [95.0, 100.0, 105.0] µs
 """
-            baseline_file.write_text(baseline_content)
+            baseline_file.write_text(baseline_content, encoding=UTF8)
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
                 env_path = env_file.name
@@ -1253,7 +1254,7 @@ Time: [95.0, 100.0, 105.0] µs
 Git commit: abc123def456
 Tag: v1.0.0
 """
-            baseline_file.write_text(baseline_content)
+            baseline_file.write_text(baseline_content, encoding=UTF8)
             # Do NOT create baseline_results.txt - this ensures the copy path is taken
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
@@ -1300,7 +1301,7 @@ Hardware Information:
 === 1000 Points (2D) ===
 Time: [95.0, 100.0, 105.0] µs
 """
-            baseline_file.write_text(baseline_content)
+            baseline_file.write_text(baseline_content, encoding=UTF8)
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
                 env_path = env_file.name
@@ -1399,7 +1400,7 @@ Git commit: abc123def456
 Hardware Information:
   OS: macOS
 """
-            baseline_file.write_text(baseline_content)
+            baseline_file.write_text(baseline_content, encoding=UTF8)
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
                 env_path = env_file.name
@@ -1546,7 +1547,7 @@ Hardware Information:
         """Test successful regression test run."""
         with tempfile.TemporaryDirectory() as temp_dir:
             baseline_file = Path(temp_dir) / "baseline.txt"
-            baseline_file.write_text("mock baseline content")
+            baseline_file.write_text("mock baseline content", encoding=UTF8)
 
             with patch("benchmark_utils.PerformanceComparator") as mock_comparator_class:
                 mock_comparator = Mock()
@@ -1565,7 +1566,7 @@ Hardware Information:
         """Test regression test run with dev mode enabled."""
         with tempfile.TemporaryDirectory() as temp_dir:
             baseline_file = Path(temp_dir) / "baseline.txt"
-            baseline_file.write_text("mock baseline content")
+            baseline_file.write_text("mock baseline content", encoding=UTF8)
 
             with patch("benchmark_utils.PerformanceComparator") as mock_comparator_class:
                 mock_comparator = Mock()
@@ -1584,7 +1585,7 @@ Hardware Information:
         """Test regression test run failure."""
         with tempfile.TemporaryDirectory() as temp_dir:
             baseline_file = Path(temp_dir) / "baseline.txt"
-            baseline_file.write_text("mock baseline content")
+            baseline_file.write_text("mock baseline content", encoding=UTF8)
 
             with patch("benchmark_utils.PerformanceComparator") as mock_comparator_class:
                 mock_comparator = Mock()
@@ -1599,7 +1600,7 @@ Hardware Information:
         """Test regression test run with custom bench_timeout parameter."""
         with tempfile.TemporaryDirectory() as temp_dir:
             baseline_file = Path(temp_dir) / "baseline.txt"
-            baseline_file.write_text("mock baseline content")
+            baseline_file.write_text("mock baseline content", encoding=UTF8)
 
             with patch("benchmark_utils.PerformanceComparator") as mock_comparator_class:
                 mock_comparator = Mock()
@@ -1619,7 +1620,7 @@ Hardware Information:
         with tempfile.TemporaryDirectory() as temp_dir:
             results_file = Path(temp_dir) / "results.txt"
             results_content = "=== Performance Test Results ===\nAll tests passed\n"
-            results_file.write_text(results_content)
+            results_file.write_text(results_content, encoding=UTF8)
 
             BenchmarkRegressionHelper.display_results(results_file)
 
@@ -1641,7 +1642,7 @@ Hardware Information:
         with tempfile.TemporaryDirectory() as temp_dir:
             results_file = Path(temp_dir) / "benches" / "compare_results.txt"
             results_file.parent.mkdir(parents=True)
-            results_file.write_text("REGRESSION detected in benchmark xyz")
+            results_file.write_text("REGRESSION detected in benchmark xyz", encoding=UTF8)
 
             env_vars = {
                 "BASELINE_SOURCE": "artifact",
@@ -1695,7 +1696,7 @@ Hardware Information:
         with tempfile.TemporaryDirectory() as temp_dir:
             results_file = Path(temp_dir) / "benches" / "compare_results.txt"
             results_file.parent.mkdir(parents=True)
-            results_file.write_text("REGRESSION detected in benchmark xyz")
+            results_file.write_text("REGRESSION detected in benchmark xyz", encoding=UTF8)
 
             env_vars = {
                 "BASELINE_EXISTS": "true",
@@ -1721,7 +1722,7 @@ Hardware Information:
         with tempfile.TemporaryDirectory() as temp_dir:
             results_file = Path(temp_dir) / "benches" / "compare_results.txt"
             results_file.parent.mkdir(parents=True)
-            results_file.write_text("REGRESSION detected in benchmark xyz")
+            results_file.write_text("REGRESSION detected in benchmark xyz", encoding=UTF8)
 
             github_env_file = Path(temp_dir) / "github_env"
             env_vars = {
@@ -1735,7 +1736,7 @@ Hardware Information:
 
                 # Check that GITHUB_ENV file was written to
                 assert github_env_file.exists()
-                github_env_content = github_env_file.read_text()
+                github_env_content = github_env_file.read_text(encoding=UTF8)
                 assert "BENCHMARK_REGRESSION_DETECTED=true" in github_env_content
 
     def test_generate_summary_with_error_file(self, temp_chdir, capsys):
@@ -1750,7 +1751,8 @@ Hardware Information:
                 "❌ Error: Benchmark execution timeout\n\n"
                 "Details: Command timed out after 1800 seconds\n\n"
                 "This error prevented the benchmark comparison from completing successfully.\n"
-                "Please check the CI logs for more information.\n"
+                "Please check the CI logs for more information.\n",
+                encoding=UTF8,
             )
 
             env_vars = {
@@ -1785,7 +1787,7 @@ class TestProjectRootHandling:
 
             # Create Cargo.toml in temp directory
             cargo_toml = temp_path / "Cargo.toml"
-            cargo_toml.write_text('[package]\nname = "test"\n')
+            cargo_toml.write_text('[package]\nname = "test"\n', encoding=UTF8)
 
             # Create subdirectory and change to it
             sub_dir = temp_path / "subdir"
@@ -1819,7 +1821,7 @@ class TestTimeoutHandling:
             (
                 "PerformanceComparator",
                 "compare_with_baseline",
-                lambda temp_dir: (Path(temp_dir) / "baseline.txt").write_text("mock baseline"),
+                lambda temp_dir: (Path(temp_dir) / "baseline.txt").write_text("mock baseline", encoding=UTF8),
             ),
         ],
     )
@@ -1879,7 +1881,7 @@ class TestTimeoutHandling:
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
             baseline_file = Path(temp_dir) / "baseline.txt"
-            baseline_file.write_text("mock baseline")
+            baseline_file.write_text("mock baseline", encoding=UTF8)
 
             comparator = PerformanceComparator(project_root)
 
@@ -1899,7 +1901,7 @@ class TestTimeoutHandling:
                 # Verify error file contains full exception message with command context
                 error_file = project_root / "benches" / "compare_results.txt"
                 assert error_file.exists()
-                error_content = error_file.read_text()
+                error_content = error_file.read_text(encoding=UTF8)
                 assert "❌ Error: Benchmark execution timeout" in error_content
                 assert "cargo bench" in error_content  # Command from exception
                 assert "timeout after 1800 seconds" in error_content  # Explicit timeout value
@@ -1909,7 +1911,7 @@ class TestTimeoutHandling:
         # Create a temporary project with Cargo.toml to satisfy find_project_root
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            (temp_path / "Cargo.toml").write_text('[package]\nname = "test"\n')
+            (temp_path / "Cargo.toml").write_text('[package]\nname = "test"\n', encoding=UTF8)
 
             with temp_chdir(temp_path):
                 # Test with zero timeout
@@ -1920,7 +1922,7 @@ class TestTimeoutHandling:
 
                 # Test with negative timeout
                 baseline_file = temp_path / "baseline.txt"
-                baseline_file.write_text("mock baseline")
+                baseline_file.write_text("mock baseline", encoding=UTF8)
                 monkeypatch.setattr(sys, "argv", ["benchmark_utils.py", "compare", "--baseline", str(baseline_file), "--bench-timeout", "-100"])
                 with pytest.raises(SystemExit) as exc_info:
                     main()
@@ -2063,7 +2065,7 @@ Throughput: [8333.3, 9090.9, 10000.0] Kelem/s
             baseline_dir = project_root / "baseline-artifact"
             baseline_dir.mkdir(parents=True)
             baseline_file = baseline_dir / "baseline_results.txt"
-            baseline_file.write_text(baseline_content)
+            baseline_file.write_text(baseline_content, encoding=UTF8)
 
             generator = PerformanceSummaryGenerator(project_root)
             lines = generator._parse_baseline_results()
@@ -2092,7 +2094,7 @@ Throughput: [8333.3, 9090.9, 10000.0] Kelem/s
             benches_dir = project_root / "benches"
             benches_dir.mkdir(parents=True)
             comparison_file = benches_dir / "compare_results.txt"
-            comparison_file.write_text(comparison_content)
+            comparison_file.write_text(comparison_content, encoding=UTF8)
 
             generator = PerformanceSummaryGenerator(project_root)
             lines = generator._parse_comparison_results()
@@ -2115,7 +2117,7 @@ Throughput: [8333.3, 9090.9, 10000.0] Kelem/s
             benches_dir = project_root / "benches"
             benches_dir.mkdir(parents=True)
             comparison_file = benches_dir / "compare_results.txt"
-            comparison_file.write_text(comparison_content)
+            comparison_file.write_text(comparison_content, encoding=UTF8)
 
             generator = PerformanceSummaryGenerator(project_root)
             lines = generator._parse_comparison_results()
@@ -2318,7 +2320,7 @@ Benchmark completed.""",
             assert output_file.exists()
 
             # Check file contains expected content
-            content = output_file.read_text()
+            content = output_file.read_text(encoding=UTF8)
             assert "# Delaunay Library Performance Results" in content
             assert "## Performance Results Summary" in content
 
@@ -2412,7 +2414,7 @@ Benchmark completed.""",
             criterion_dir.mkdir(parents=True)
 
             estimates_file = criterion_dir / "estimates.json"
-            estimates_file.write_text("{ invalid json")
+            estimates_file.write_text("{ invalid json", encoding=UTF8)
 
             generator = PerformanceSummaryGenerator(project_root)
 
@@ -2439,7 +2441,7 @@ Benchmark completed.""",
                 # Should still succeed
                 assert success
 
-                content = output_file.read_text()
+                content = output_file.read_text(encoding=UTF8)
                 assert "Version unknown" in content
 
     def test_baseline_fallback_behavior_edge_case(self):
@@ -2458,6 +2460,7 @@ Benchmark completed.""",
                 "=== 1000 Points (3D) ===\n"
                 "Time: [805.0, 810.0, 815.0] µs\n"
                 "Throughput: [1200.0, 1235.0, 1245.0] Kelem/s\n",
+                encoding=UTF8,
             )
 
             # Do NOT create primary baseline file (baseline-artifact/baseline_results.txt)
@@ -2477,7 +2480,7 @@ Benchmark completed.""",
                 success = generator.generate_summary(output_file)
                 assert success
 
-                content = output_file.read_text()
+                content = output_file.read_text(encoding=UTF8)
 
                 # Verify that baseline data was included (meaning fallback worked)
                 assert "Triangulation Data Structure Performance" in content
@@ -2506,11 +2509,12 @@ Benchmark completed.""",
                 "=== 10 Points (2D) ===\n"
                 "Time: [100.0, 110.0, 120.0] µs\n"
                 "Throughput: [8000.0, 9000.0, 10000.0] Kelem/s\n",
+                encoding=UTF8,
             )
 
             # Mock comparison file
             comparison_file = baseline_dir / "compare_results.txt"
-            comparison_file.write_text("✅ OK: All benchmarks within acceptable range\n")
+            comparison_file.write_text("✅ OK: All benchmarks within acceptable range\n", encoding=UTF8)
 
             with (
                 patch("benchmark_utils.get_git_commit_hash") as mock_commit,
@@ -2522,7 +2526,7 @@ Benchmark completed.""",
 
                 assert success
 
-                content = output_file.read_text()
+                content = output_file.read_text(encoding=UTF8)
 
                 # Verify all major sections are present
                 assert "# Delaunay Library Performance Results" in content
@@ -2592,7 +2596,7 @@ Hardware Information:
 === 1000 Points (2D) ===
 Time: [95.0, 100.0, 105.0] µs
 """
-            baseline_file.write_text(baseline_content)
+            baseline_file.write_text(baseline_content, encoding=UTF8)
 
             generator = PerformanceSummaryGenerator(project_root)
             lines = generator._parse_baseline_results()
@@ -2608,7 +2612,7 @@ Hardware Information:
   OS: macOS
   CPU: Apple M4 Max
 """
-            baseline_file.write_text(baseline_content_short)
+            baseline_file.write_text(baseline_content_short, encoding=UTF8)
 
             lines = generator._parse_baseline_results()
             content = "\n".join(lines)
@@ -2664,7 +2668,7 @@ Hardware Information:
 === 10 Points (2D) ===
 Time: [160.1, 168.18, 177.67] µs
 """
-            tag_baseline_file.write_text(baseline_content)
+            tag_baseline_file.write_text(baseline_content, encoding=UTF8)
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
                 env_path = env_file.name
@@ -2715,7 +2719,7 @@ Hardware Information:
 === 100 Points (2D) ===
 Time: [95.0, 100.0, 105.0] µs
 """
-            generic_baseline_file.write_text(baseline_content)
+            generic_baseline_file.write_text(baseline_content, encoding=UTF8)
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
                 env_path = env_file.name
@@ -2758,8 +2762,8 @@ Time: [95.0, 100.0, 105.0] µs
             standard_content = "Standard file content"
             tag_content = "Tag-specific file content"
 
-            standard_file.write_text(standard_content)
-            tag_file.write_text(tag_content)
+            standard_file.write_text(standard_content, encoding=UTF8)
+            tag_file.write_text(tag_content, encoding=UTF8)
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
                 env_path = env_file.name
@@ -2794,9 +2798,9 @@ Time: [95.0, 100.0, 105.0] µs
             baseline_dir = Path(temp_dir)
 
             # Create some non-matching files
-            (baseline_dir / "metadata.json").write_text("{}")
-            (baseline_dir / "random.txt").write_text("Not a baseline")
-            (baseline_dir / "results.log").write_text("Log data")
+            (baseline_dir / "metadata.json").write_text("{}", encoding=UTF8)
+            (baseline_dir / "random.txt").write_text("Not a baseline", encoding=UTF8)
+            (baseline_dir / "results.log").write_text("Log data", encoding=UTF8)
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
                 env_path = env_file.name
@@ -2833,7 +2837,7 @@ Tag: v0.4.3
 Hardware Information:
   OS: macOS
 """
-            tag_baseline_file.write_text(baseline_content)
+            tag_baseline_file.write_text(baseline_content, encoding=UTF8)
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
                 env_path = env_file.name
@@ -2866,7 +2870,7 @@ Tag: v0.4.3
 Hardware Information:
   OS: macOS
 """
-            tag_baseline_file.write_text(baseline_content)
+            tag_baseline_file.write_text(baseline_content, encoding=UTF8)
 
             # Metadata with commit info
             metadata = {"tag": "v0.4.3", "commit": "fedcba987654321", "generated_at": "2025-09-13T00:00:36Z"}
@@ -2909,8 +2913,8 @@ Git commit: def456abc789
 Tag: v0.4.3
 """
 
-            tag_file_1.write_text(tag_content_1)
-            tag_file_2.write_text(tag_content_2)
+            tag_file_1.write_text(tag_content_1, encoding=UTF8)
+            tag_file_2.write_text(tag_content_2, encoding=UTF8)
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
                 env_path = env_file.name
@@ -2935,9 +2939,9 @@ Tag: v0.4.3
             prerelease_file = baseline_dir / "baseline-v1.2.3-beta.1.txt"
             older_stable = baseline_dir / "baseline-v1.2.2.txt"
 
-            stable_file.write_text("Stable v1.2.3")
-            prerelease_file.write_text("Pre-release v1.2.3-beta.1")
-            older_stable.write_text("Older stable v1.2.2")
+            stable_file.write_text("Stable v1.2.3", encoding=UTF8)
+            prerelease_file.write_text("Pre-release v1.2.3-beta.1", encoding=UTF8)
+            older_stable.write_text("Older stable v1.2.2", encoding=UTF8)
 
             # Should select the stable v1.2.3 over both the pre-release and older stable
             selected = BenchmarkRegressionHelper._find_baseline_file(baseline_dir)
@@ -2953,8 +2957,8 @@ Tag: v0.4.3
             stable_file = baseline_dir / "baseline-v0.4.3.txt"
             prerelease_file = baseline_dir / "baseline-v0.4.3-beta.1.txt"
 
-            stable_file.write_text("Date: 2023-12-15\nGit commit: stable043\nTag: v0.4.3\n")
-            prerelease_file.write_text("Date: 2023-12-15\nGit commit: beta043\nTag: v0.4.3-beta.1\n")
+            stable_file.write_text("Date: 2023-12-15\nGit commit: stable043\nTag: v0.4.3\n", encoding=UTF8)
+            prerelease_file.write_text("Date: 2023-12-15\nGit commit: beta043\nTag: v0.4.3-beta.1\n", encoding=UTF8)
 
             # The stable version should be selected
             selected = BenchmarkRegressionHelper._find_baseline_file(baseline_dir)
@@ -2962,7 +2966,7 @@ Tag: v0.4.3
             assert selected.name == "baseline-v0.4.3.txt"
 
             # Verify the content to ensure we got the right file
-            content = selected.read_text()
+            content = selected.read_text(encoding=UTF8)
             assert "stable043" in content
             assert "Tag: v0.4.3" in content
 
@@ -2976,9 +2980,9 @@ Tag: v0.4.3
             beta2_file = baseline_dir / "baseline-v1.2.3-beta.2.txt"
             alpha_file = baseline_dir / "baseline-v1.2.3-alpha.1.txt"
 
-            beta1_file.write_text("Beta 1")
-            beta2_file.write_text("Beta 2")
-            alpha_file.write_text("Alpha 1")
+            beta1_file.write_text("Beta 1", encoding=UTF8)
+            beta2_file.write_text("Beta 2", encoding=UTF8)
+            alpha_file.write_text("Alpha 1", encoding=UTF8)
 
             # Should select the highest version (beta.2 > beta.1 > alpha.1 lexicographically)
             selected = BenchmarkRegressionHelper._find_baseline_file(baseline_dir)
@@ -2996,7 +3000,7 @@ Git commit: abc123def456
 Hardware Information:
   OS: macOS
 """
-            baseline_file.write_text(baseline_content)
+            baseline_file.write_text(baseline_content, encoding=UTF8)
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
                 env_path = env_file.name
@@ -3022,7 +3026,7 @@ Hardware Information:
 
             # Create baseline file without commit info
             baseline_file = baseline_dir / "baseline_results.txt"
-            baseline_file.write_text("Date: 2023-12-15\nHardware: Test\n")
+            baseline_file.write_text("Date: 2023-12-15\nHardware: Test\n", encoding=UTF8)
 
             # Create metadata file with commit info
             metadata_file = baseline_dir / "metadata.json"
@@ -3051,7 +3055,7 @@ Hardware Information:
         with tempfile.TemporaryDirectory() as temp_dir:
             baseline_dir = Path(temp_dir)
             baseline_file = baseline_dir / "baseline_results.txt"
-            baseline_file.write_text("Date: 2023-12-15\n")
+            baseline_file.write_text("Date: 2023-12-15\n", encoding=UTF8)
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
                 env_path = env_file.name
@@ -3200,7 +3204,7 @@ Tag: v1.0.0; echo "injected"; rm -rf /tmp/test
 Hardware Information:
   OS: macOS
 """
-            baseline_file.write_text(baseline_content)
+            baseline_file.write_text(baseline_content, encoding=UTF8)
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
                 env_path = env_file.name
@@ -3242,7 +3246,7 @@ Tag: {long_tag}
 Hardware Information:
   OS: macOS
 """
-            baseline_file.write_text(baseline_content)
+            baseline_file.write_text(baseline_content, encoding=UTF8)
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
                 env_path = env_file.name
@@ -3290,7 +3294,7 @@ Hardware Information:
             # Create files in reverse order to test sorting
             for filename in reversed(files_and_expected_order):
                 file = baseline_dir / filename
-                file.write_text(f"Content of {filename}")
+                file.write_text(f"Content of {filename}", encoding=UTF8)
 
             # Should select the highest version (v2.0.0 stable)
             selected = BenchmarkRegressionHelper._find_baseline_file(baseline_dir)
@@ -3308,16 +3312,16 @@ Hardware Information:
             invalid_file1 = baseline_dir / "baseline-vInvalid.txt"
             generic_file = baseline_dir / "baseline-generic.txt"
 
-            valid_file1.write_text("Valid 1.0.0 content")
-            valid_file2.write_text("Valid 1.2.0 content")
-            invalid_file1.write_text("Invalid version content")
-            generic_file.write_text("Generic content")
+            valid_file1.write_text("Valid 1.0.0 content", encoding=UTF8)
+            valid_file2.write_text("Valid 1.2.0 content", encoding=UTF8)
+            invalid_file1.write_text("Invalid version content", encoding=UTF8)
+            generic_file.write_text("Generic content", encoding=UTF8)
 
             # Should select the highest valid version (1.2.0 > 1.0.0)
             selected = BenchmarkRegressionHelper._find_baseline_file(baseline_dir)
             assert selected is not None
             assert selected.name == "baseline-v1.2.txt"
-            assert "Valid 1.2.0 content" in selected.read_text()
+            assert "Valid 1.2.0 content" in selected.read_text(encoding=UTF8)
 
     def test_packaging_version_truly_invalid_versions(self):
         """Test that truly invalid version formats fall back to generic baseline selection."""
@@ -3330,16 +3334,16 @@ Hardware Information:
             invalid_file3 = baseline_dir / "baseline-vNot-A-Version.txt"
             generic_file = baseline_dir / "baseline_results.txt"  # Standard fallback
 
-            invalid_file1.write_text("Invalid content 1")
-            invalid_file2.write_text("Invalid content 2")
-            invalid_file3.write_text("Invalid content 3")
-            generic_file.write_text("Generic baseline content")
+            invalid_file1.write_text("Invalid content 1", encoding=UTF8)
+            invalid_file2.write_text("Invalid content 2", encoding=UTF8)
+            invalid_file3.write_text("Invalid content 3", encoding=UTF8)
+            generic_file.write_text("Generic baseline content", encoding=UTF8)
 
             # Should fall back to standard baseline file
             selected = BenchmarkRegressionHelper._find_baseline_file(baseline_dir)
             assert selected is not None
             assert selected.name == "baseline_results.txt"
-            assert "Generic baseline content" in selected.read_text()
+            assert "Generic baseline content" in selected.read_text(encoding=UTF8)
 
     def test_generic_baseline_prefers_newest_mtime(self):
         """Test that generic baseline files are selected by most recent mtime."""
@@ -3351,12 +3355,12 @@ Hardware Information:
             newer_file = baseline_dir / "baseline-newer.txt"
 
             # Create older file first
-            older_file.write_text("Older baseline content")
+            older_file.write_text("Older baseline content", encoding=UTF8)
             older_mtime = time.time() - 100  # 100 seconds ago
             os.utime(older_file, (older_mtime, older_mtime))
 
             # Create newer file
-            newer_file.write_text("Newer baseline content")
+            newer_file.write_text("Newer baseline content", encoding=UTF8)
             newer_mtime = time.time() - 50  # 50 seconds ago
             os.utime(newer_file, (newer_mtime, newer_mtime))
 
@@ -3364,7 +3368,7 @@ Hardware Information:
             selected = BenchmarkRegressionHelper._find_baseline_file(baseline_dir)
             assert selected is not None
             assert selected.name == "baseline-newer.txt"
-            assert "Newer baseline content" in selected.read_text()
+            assert "Newer baseline content" in selected.read_text(encoding=UTF8)
 
     def test_prerelease_detection_fix_validation(self):
         """Test that prerelease detection correctly identifies stable vs prerelease versions."""
@@ -3375,14 +3379,14 @@ Hardware Information:
             stable_file = baseline_dir / "baseline-v1.0.0.txt"
             prerelease_file = baseline_dir / "baseline-v1.0.0-rc.1.txt"
 
-            stable_file.write_text("Stable content")
-            prerelease_file.write_text("Prerelease content")
+            stable_file.write_text("Stable content", encoding=UTF8)
+            prerelease_file.write_text("Prerelease content", encoding=UTF8)
 
             # The stable version should be selected over the prerelease
             selected = BenchmarkRegressionHelper._find_baseline_file(baseline_dir)
             assert selected is not None
             assert selected.name == "baseline-v1.0.0.txt"
-            assert "Stable content" in selected.read_text()
+            assert "Stable content" in selected.read_text(encoding=UTF8)
 
     def test_prepare_baseline_and_extract_commit_integration(self):
         """Test the integration between prepare_baseline and extract_baseline_commit."""
@@ -3400,7 +3404,7 @@ Hardware Information:
 === 10 Points (2D) ===
 Time: [160.1, 168.18, 177.67] µs
 """
-            tag_baseline_file.write_text(baseline_content)
+            tag_baseline_file.write_text(baseline_content, encoding=UTF8)
 
             with tempfile.NamedTemporaryFile(mode="w", delete=False) as env_file:
                 env_path = env_file.name

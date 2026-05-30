@@ -41,6 +41,9 @@ permissions:
   contents: read
   pull-requests: write # For posting performance comments
 
+env:
+  UV_VERSION: "0.11.17"
+
 jobs:
   performance:
     name: Performance Analysis
@@ -51,6 +54,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 2 # Need base commit for comparison
+          persist-credentials: false
 
       - name: Detect benchmarks
         id: detect_bench
@@ -77,7 +81,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
-          version: "latest"
+          version: ${{ env.UV_VERSION }}
 
       - name: Validate required tools and configuration
         run: |
@@ -205,12 +209,15 @@ jobs:
       - name: Post performance results to PR
         if: github.event_name == 'pull_request'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PERF_CHECK_RESULT: ${{ steps.perf_check.outputs.result }}
+          PERF_HAS_REGRESSION: ${{ steps.perf_check.outputs.regression }}
         with:
           script: |
             const fs = require('fs');
             const path = 'performance_report.md';
-            const checkResult = '${{ steps.perf_check.outputs.result }}';
-            const hasRegression = '${{ steps.perf_check.outputs.regression }}' === 'true';
+            const checkResult = process.env.PERF_CHECK_RESULT;
+            const hasRegression = process.env.PERF_HAS_REGRESSION === 'true';
 
             let body = '';
 

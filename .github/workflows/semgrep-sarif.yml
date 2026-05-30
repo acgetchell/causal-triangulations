@@ -24,7 +24,7 @@ permissions:
   actions: read
 
 env:
-  UV_VERSION: "0.9.21"
+  UV_VERSION: "0.11.17"
 
 jobs:
   semgrep-sarif:
@@ -34,6 +34,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -45,6 +47,7 @@ jobs:
         run: |
           set +e
           uv run semgrep \
+            --metrics off \
             --error \
             --strict \
             --timeout 30 \
@@ -64,7 +67,7 @@ jobs:
             github.event_name != 'pull_request' ||
             github.event.pull_request.head.repo.full_name == github.repository
           )
-        uses: github/codeql-action/upload-sarif@b25d0ebf40e5b63ee81e1bd6e5d2a12b7c2aeb61 # v4
+        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4.36.0
         with:
           sarif_file: semgrep-results.sarif
           category: semgrep-repository-rules

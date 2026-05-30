@@ -1,6 +1,8 @@
 name: Action policy fixtures
 on:
   workflow_dispatch:
+  # ruleid: causal-triangulations.github-actions.no-pull-request-target
+  pull_request_target:
 
 jobs:
   fixtures:
@@ -10,7 +12,65 @@ jobs:
         # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
+        # ok: causal-triangulations.github-actions.checkout-persist-credentials-false
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Checkout missing credential persistence hardening
+        # ok: causal-triangulations.github-actions.external-action-sha-pinned
+        # ok: causal-triangulations.github-actions.external-action-approved-allowlist
+        # ok: causal-triangulations.github-actions.external-action-version-comment
+        # ruleid: causal-triangulations.github-actions.checkout-persist-credentials-false
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Allowed cached Cargo installer
+        # ok: causal-triangulations.github-actions.external-action-sha-pinned
+        # ok: causal-triangulations.github-actions.external-action-approved-allowlist
+        # ok: causal-triangulations.github-actions.external-action-version-comment
+        uses: taiki-e/cache-cargo-install-action@417450f3c33ee20393705369577571770643d4c7 # v3.0.7
+
+      - name: Allowed zizmor action
+        # ok: causal-triangulations.github-actions.external-action-sha-pinned
+        # ok: causal-triangulations.github-actions.external-action-approved-allowlist
+        # ok: causal-triangulations.github-actions.external-action-version-comment
+        uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d # v0.5.6
+
+      - name: Unsafe github-script interpolation
+        # ok: causal-triangulations.github-actions.external-action-sha-pinned
+        # ok: causal-triangulations.github-actions.external-action-approved-allowlist
+        # ok: causal-triangulations.github-actions.external-action-version-comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          # ruleid: causal-triangulations.github-actions.github-script-no-expression-interpolation
+          script: |
+            const title = "${{ github.event.pull_request.title }}";
+            console.log(title);
+
+      - name: Safe github-script env handoff
+        # ok: causal-triangulations.github-actions.external-action-sha-pinned
+        # ok: causal-triangulations.github-actions.external-action-approved-allowlist
+        # ok: causal-triangulations.github-actions.external-action-version-comment
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        with:
+          # ok: causal-triangulations.github-actions.github-script-no-expression-interpolation
+          script: |
+            const title = process.env.TITLE;
+            console.log(title);
+
+      - name: Unlocked uv sync
+        # ruleid: causal-triangulations.github-actions.uv-sync-locked-in-workflows
+        run: uv sync --group dev
+
+      - name: Locked uv sync
+        # ok: causal-triangulations.github-actions.uv-sync-locked-in-workflows
+        run: uv sync --locked --group dev
+
+      - name: Removed install-action baseline
+        # ruleid: causal-triangulations.github-actions.external-action-approved-allowlist
+        uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2.79.9
 
       - name: Moving tag action
         # ruleid: causal-triangulations.github-actions.external-action-sha-pinned

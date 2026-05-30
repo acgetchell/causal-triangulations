@@ -6,6 +6,9 @@ use num_traits::cast::NumCast;
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 use delaunay::prelude::DelaunayTriangulation;
 
+// ruleid: causal-triangulations.rust.no-direct-mcmc-imports-outside-metropolis
+use markov_chain_monte_carlo::Target;
+
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 pub use delaunay::prelude::VertexBuilder;
 
@@ -136,6 +139,16 @@ mod prop_tests {
         panic!("tests may fail fast");
     }
 }
+
+// ruleid: causal-triangulations.rust.no-public-unchecked-apis
+pub fn from_raw_unchecked() {}
+
+// ok: causal-triangulations.rust.no-public-unchecked-apis
+fn private_unchecked() {}
+
+#[cfg(test)]
+// ok: causal-triangulations.rust.no-public-unchecked-apis
+pub fn test_only_unchecked() {}
 
 // ruleid: causal-triangulations.rust.no-clippy-allow-lints
 #[allow(clippy::too_many_lines)]
