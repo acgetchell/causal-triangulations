@@ -201,7 +201,7 @@ design details.
 - `SimplexType` — `Up` (2,1) or `Down` (1,2) triangle classification, encoded as `i32` simplex data
 - Time labels are stored directly as vertex data (`Vertex.data: Option<u32>`), mirroring CDT-plusplus’s `vertex->info()`
 
-### `cdt/triangulation/` — Foliation integration
+### `cdt/triangulation/` — CDT Triangulation State and Builders
 
 This is CDT domain logic layered over the geometry backend interface. It may use `DelaunayBackend2D` and crate-owned Delaunay handles, but it does not reach
 through to upstream `delaunay::` APIs directly.

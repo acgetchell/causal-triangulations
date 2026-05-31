@@ -192,7 +192,8 @@ impl MockBackend {
     /// use causal_triangulations::geometry::traits::TriangulationQuery;
     /// use std::num::NonZeroUsize;
     ///
-    /// let Some(dimension) = NonZeroUsize::new(2) else {
+    /// let n = 2;
+    /// let Some(dimension) = NonZeroUsize::new(n) else {
     ///     return;
     /// };
     /// let backend = MockBackend::new(dimension);

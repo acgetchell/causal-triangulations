@@ -75,7 +75,9 @@ impl Error for CdtProposalSiteRejection {
 /// references returned by
 /// [`checkpoint proposal stats`][super::CdtMcmcCheckpoint::proposal_stats] or
 /// [`result proposal stats`][crate::cdt::results::SimulationResultsBackend::proposal_stats].
-/// Counters saturate at `u64::MAX` instead of wrapping.
+/// Deserialization requires exactly one terminal outcome for every selected
+/// move-family proposal, and counters saturate at `u64::MAX` instead of
+/// wrapping.
 ///
 /// # Examples
 ///
@@ -191,10 +193,10 @@ impl ProposalStatistics {
 
     /// Rebuilds proposal telemetry from the serialized wire shape.
     ///
-    /// The wire form is rejected when terminal outcomes exceed selected move
-    /// families, or when forward-site observations exist without any selected
-    /// move family. That keeps deserialized result and checkpoint telemetry
-    /// coherent before public accessors expose the counters.
+    /// The wire form is rejected when terminal outcomes do not exactly account
+    /// for selected move families, or when forward-site observations exist
+    /// without any selected move family. That keeps deserialized result and
+    /// checkpoint telemetry coherent before public accessors expose the counters.
     fn from_wire(wire: &ProposalStatisticsWire) -> Result<Self, String> {
         let terminal_outcomes = [
             wire.no_site_proposals,
@@ -208,9 +210,9 @@ impl ProposalStatistics {
         .into_iter()
         .try_fold(0_u64, u64::checked_add)
         .ok_or_else(|| "proposal terminal-outcome counters exceed u64::MAX".to_string())?;
-        if terminal_outcomes > wire.move_family_proposals {
+        if terminal_outcomes != wire.move_family_proposals {
             return Err(format!(
-                "proposal terminal outcomes ({terminal_outcomes}) exceed move-family proposals ({})",
+                "proposal terminal outcomes ({terminal_outcomes}) do not match move-family proposals ({})",
                 wire.move_family_proposals
             ));
         }
@@ -464,6 +466,29 @@ mod tests {
         assert!(
             error.to_string().contains("terminal outcomes"),
             "serde error should explain proposal telemetry invariant, got {error}"
+        );
+    }
+
+    #[test]
+    fn proposal_statistics_deserialization_rejects_under_classified_proposals() {
+        let payload = r#"{
+            "move_family_proposals": 2,
+            "observed_forward_sites": 1,
+            "no_site_proposals": 1,
+            "site_causality_rejections": 0,
+            "site_geometric_rejections": 0,
+            "site_backend_rejections": 0,
+            "metropolis_rejections": 0,
+            "accepted_transitions": 0,
+            "hard_failures": 0
+        }"#;
+
+        let error = serde_json::from_str::<ProposalStatistics>(payload)
+            .expect_err("under-classified move-family proposals should be rejected");
+
+        assert!(
+            error.to_string().contains("do not match"),
+            "serde error should explain exact proposal telemetry invariant, got {error}"
         );
     }
 

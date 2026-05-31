@@ -736,10 +736,10 @@ pub enum CheckpointResumeFailure {
         /// Proposal telemetry counter that could not fit in the target type.
         counter: ProposalTelemetryCounter,
     },
-    /// Completed results cannot contain hard proposal failures.
-    #[error("completed result proposal telemetry has {actual} hard failures; expected 0")]
+    /// Resume-validated proposal telemetry cannot contain hard failures.
+    #[error("proposal telemetry has {actual} hard failures; expected 0")]
     ProposalHardFailures {
-        /// Number of hard proposal failures recorded in result telemetry.
+        /// Number of hard proposal failures recorded in proposal telemetry.
         actual: u64,
     },
     /// Proposal move-family count disagrees with the number of sampler steps.
@@ -1525,7 +1525,7 @@ mod tests {
         let hard_failures = CheckpointResumeFailure::ProposalHardFailures { actual: 3 };
         assert_eq!(
             hard_failures.to_string(),
-            "completed result proposal telemetry has 3 hard failures; expected 0"
+            "proposal telemetry has 3 hard failures; expected 0"
         );
     }
 

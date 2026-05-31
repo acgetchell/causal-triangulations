@@ -120,6 +120,65 @@ pub fn measurement_for(step: u32, action: f64, triangulation: &CdtTriangulation2
     }
 }
 
+/// Returns true when a completed step is on the post-thermalization measurement cadence.
+///
+/// Measurements are emitted only at steps greater than or equal to
+/// `thermalization_steps`. Step `0` is therefore recorded only for schedules with
+/// zero thermalization.
+pub const fn measurement_is_due(
+    step: u32,
+    thermalization_steps: u32,
+    measurement_frequency: u32,
+) -> bool {
+    step >= thermalization_steps && step.is_multiple_of(measurement_frequency)
+}
+
+/// Counts scheduled post-thermalization measurements through `current_step`.
+///
+/// This is the shared cadence calculation used by checkpoint and result
+/// validation, keeping deserialized telemetry aligned with the runner's public
+/// measurement schedule. Returns `None` if the schedule cannot be represented in
+/// `usize`.
+pub fn expected_measurement_count(
+    current_step: u32,
+    thermalization_steps: u32,
+    measurement_frequency: u32,
+) -> Option<usize> {
+    let first = first_measurement_step(thermalization_steps, measurement_frequency)?;
+    if first > current_step {
+        return Some(0);
+    }
+    usize::try_from((current_step - first) / measurement_frequency + 1).ok()
+}
+
+/// Returns the scheduled post-thermalization step at a zero-based measurement index.
+///
+/// This mirrors [`expected_measurement_count`] so checkpoint and result
+/// validation reject pre-thermalization samples instead of accepting a shifted
+/// measurement stream. Returns `None` if the requested index cannot be expressed
+/// as a `u32` step.
+pub fn expected_measurement_step(
+    index: usize,
+    thermalization_steps: u32,
+    measurement_frequency: u32,
+) -> Option<u32> {
+    let first = first_measurement_step(thermalization_steps, measurement_frequency)?;
+    let offset = u32::try_from(index)
+        .ok()?
+        .checked_mul(measurement_frequency)?;
+    first.checked_add(offset)
+}
+
+/// Finds the first measurement cadence at or after thermalization.
+fn first_measurement_step(thermalization_steps: u32, measurement_frequency: u32) -> Option<u32> {
+    if measurement_frequency == 0 {
+        return None;
+    }
+    let first = u64::from(thermalization_steps).div_ceil(u64::from(measurement_frequency))
+        * u64::from(measurement_frequency);
+    u32::try_from(first).ok()
+}
+
 /// Computes the count-level action change before mutating the triangulation.
 ///
 /// This is the core proposal-before-mutation calculation: Metropolis acceptance
@@ -157,4 +216,34 @@ pub fn actions_match(left: f64, right: f64) -> bool {
     }
     let scale = left.abs().max(right.abs()).max(1.0);
     (left - right).abs() <= f64::EPSILON * scale * 8.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn measurement_count_ignores_steps_before_first_post_thermalization_cadence() {
+        assert_eq!(expected_measurement_count(1, 2, 2), Some(0));
+        assert_eq!(expected_measurement_count(2, 2, 2), Some(1));
+        assert_eq!(expected_measurement_count(4, 2, 2), Some(2));
+    }
+
+    #[test]
+    fn measurement_step_rounds_thermalization_up_to_cadence() {
+        assert_eq!(expected_measurement_step(0, 3, 2), Some(4));
+        assert_eq!(expected_measurement_step(1, 3, 2), Some(6));
+    }
+
+    #[test]
+    fn measurement_helpers_reject_zero_frequency() {
+        assert_eq!(expected_measurement_count(4, 0, 0), None);
+        assert_eq!(expected_measurement_step(0, 0, 0), None);
+    }
+
+    #[test]
+    fn actions_match_rejects_nonfinite_values() {
+        assert!(!actions_match(f64::NAN, 1.0));
+        assert!(!actions_match(1.0, f64::INFINITY));
+    }
 }

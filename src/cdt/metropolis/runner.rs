@@ -29,7 +29,9 @@ use super::checkpoint::{
     CdtMcmcCheckpoint, CdtMcmcCheckpointParts, chain_counters, checkpoint_resume_failed,
     validate_checkpoint_counters, validate_resume_compatible,
 };
-use super::helpers::{action_for, actions_match, measurement_for, validate_metropolis_schedule};
+use super::helpers::{
+    action_for, actions_match, measurement_for, measurement_is_due, validate_metropolis_schedule,
+};
 use super::telemetry::{MonteCarloStep, ProposalStatistics};
 
 /// Validated configuration for the Metropolis-Hastings algorithm.
@@ -622,11 +624,18 @@ impl MetropolisAlgorithm {
 
     fn initial_state(&self, mut triangulation: CdtTriangulation2D) -> MetropolisRunState {
         let current_action = action_for(&self.action_config, &triangulation);
-        let measurements = vec![measurement_for(0, current_action, &triangulation)];
-        triangulation.record_event(SimulationEvent::MeasurementTaken {
-            step: 0,
-            action: current_action,
-        });
+        let mut measurements = Vec::new();
+        if measurement_is_due(
+            0,
+            self.config.thermalization_steps(),
+            self.config.measurement_frequency(),
+        ) {
+            measurements.push(measurement_for(0, current_action, &triangulation));
+            triangulation.record_event(SimulationEvent::MeasurementTaken {
+                step: 0,
+                action: current_action,
+            });
+        }
 
         MetropolisRunState {
             triangulation,
@@ -810,7 +819,11 @@ fn run_one_step(
         delta_action,
     });
 
-    if step.is_multiple_of(algorithm.config.measurement_frequency()) {
+    if measurement_is_due(
+        step,
+        algorithm.config.thermalization_steps(),
+        algorithm.config.measurement_frequency(),
+    ) {
         state.measurements.push(measurement_for(
             step,
             state.current_action,
@@ -1075,6 +1088,8 @@ mod tests {
             ),
         });
         state.current_step = 1;
+        state.proposal_stats.record_move_family(1);
+        state.proposal_stats.record_metropolis_rejection();
         state.measurements.push(measurement_for(
             1,
             state.current_action,
@@ -1114,7 +1129,11 @@ mod tests {
             current_step: 1,
             current_action,
             move_stats,
-            proposal_stats: ProposalStatistics::new(),
+            proposal_stats: if accepted {
+                ProposalStatistics::from_validated_parts(1, 1, 0, 0, 0, 0, 0, 1, 0)
+            } else {
+                ProposalStatistics::from_validated_parts(1, 1, 0, 0, 0, 0, 1, 0, 0)
+            },
             steps: vec![MonteCarloStep {
                 step: 1,
                 move_type,
@@ -1324,6 +1343,31 @@ mod tests {
     }
 
     #[test]
+    fn run_skips_pre_thermalization_measurements() {
+        let config = seeded_metropolis_config(1.0, 4, 2, 2, 42);
+        let algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+
+        let results = algorithm
+            .run(triangulation)
+            .expect("simulation should run with post-thermalization measurements");
+        let measurement_steps = results
+            .measurements()
+            .iter()
+            .map(|measurement| measurement.step)
+            .collect::<Vec<_>>();
+
+        assert_eq!(measurement_steps, vec![2, 4]);
+        assert!(
+            results
+                .measurements()
+                .iter()
+                .all(|measurement| measurement.step >= results.config().thermalization_steps())
+        );
+    }
+
+    #[test]
     fn run_with_checkpoint_returns_matching_results_and_checkpoint() {
         let triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
@@ -1513,7 +1557,7 @@ mod tests {
     }
 
     #[test]
-    fn serialized_checkpoint_missing_proposal_stats_defaults_on_restore() {
+    fn serialized_checkpoint_missing_proposal_stats_rejects_nonempty_checkpoint() {
         let checkpoint = serializable_rejected_checkpoint(ActionConfig::default());
         let mut payload = to_value(&checkpoint).expect("checkpoint should serialize");
         payload
@@ -1521,13 +1565,16 @@ mod tests {
             .expect("checkpoint payload should be an object")
             .remove("proposal_stats");
 
-        let restored: CdtMcmcCheckpoint =
-            from_str(&payload.to_string()).expect("legacy checkpoint should deserialize");
+        let Err(error) = from_str::<CdtMcmcCheckpoint>(&payload.to_string()) else {
+            panic!("nonempty checkpoint missing proposal stats should be rejected");
+        };
 
-        assert_eq!(restored.proposal_stats(), &ProposalStatistics::new());
-        MetropolisAlgorithm::new(metropolis_config(1.0, 2, 0, 1), ActionConfig::default())
-            .resume_from_checkpoint(restored)
-            .expect("legacy checkpoint with default proposal stats should resume");
+        assert!(
+            error
+                .to_string()
+                .contains("proposal move-family count mismatch"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
@@ -1764,6 +1811,66 @@ mod tests {
                 )
             },
             "accepted step count mismatch",
+        );
+    }
+
+    #[test]
+    fn resume_rejects_checkpoint_proposal_hard_failures() {
+        let mut checkpoint = synthetic_one_step_checkpoint(false);
+        checkpoint.proposal_stats =
+            ProposalStatistics::from_validated_parts(1, 1, 0, 0, 0, 0, 0, 0, 1);
+
+        assert_checkpoint_resume_failed(
+            validate_checkpoint_counters(&checkpoint),
+            |failure| {
+                matches!(
+                    failure,
+                    CheckpointResumeFailure::ProposalHardFailures { actual: 1 }
+                )
+            },
+            "hard failures",
+        );
+    }
+
+    #[test]
+    fn resume_rejects_checkpoint_proposal_accepted_count_mismatch() {
+        let mut checkpoint = synthetic_one_step_checkpoint(true);
+        checkpoint.proposal_stats =
+            ProposalStatistics::from_validated_parts(1, 1, 1, 0, 0, 0, 0, 0, 0);
+
+        assert_checkpoint_resume_failed(
+            validate_checkpoint_counters(&checkpoint),
+            |failure| {
+                matches!(
+                    failure,
+                    CheckpointResumeFailure::ProposalAcceptedCountMismatch {
+                        actual: 0,
+                        expected: 1
+                    }
+                )
+            },
+            "accepted-transition count mismatch",
+        );
+    }
+
+    #[test]
+    fn resume_rejects_checkpoint_proposal_rejected_count_mismatch() {
+        let mut checkpoint = synthetic_one_step_checkpoint(false);
+        checkpoint.proposal_stats =
+            ProposalStatistics::from_validated_parts(1, 0, 0, 0, 0, 0, 0, 0, 0);
+
+        assert_checkpoint_resume_failed(
+            validate_checkpoint_counters(&checkpoint),
+            |failure| {
+                matches!(
+                    failure,
+                    CheckpointResumeFailure::ProposalRejectedCountMismatch {
+                        actual: 0,
+                        expected: 1
+                    }
+                )
+            },
+            "rejected-transition count mismatch",
         );
     }
 

@@ -11,7 +11,7 @@ use crate::cdt::ergodic_moves::MoveStatistics;
 use crate::cdt::metropolis::{
     MetropolisConfig, MonteCarloStep, ProposalStatistics,
     checkpoint::{chain_counters, checkpoint_resume_failed},
-    helpers::actions_match,
+    helpers::{actions_match, expected_measurement_count, expected_measurement_step},
 };
 use crate::cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
 use crate::config::{CdtConfig, CdtTopology, ValidatedCdtConfig};
@@ -335,7 +335,11 @@ fn validate_result_steps(steps: &[MonteCarloStep], accepted: usize) -> CdtResult
     Ok(())
 }
 
-/// Checks measurement cadence and finite measured actions.
+/// Checks post-thermalization measurement cadence and finite measured actions.
+///
+/// This mirrors the runner's measurement schedule so result deserialization
+/// rejects samples from the thermalization window instead of treating them as
+/// equilibrium data.
 fn validate_result_measurements(
     config: &MetropolisConfig,
     steps: &[MonteCarloStep],
@@ -344,11 +348,12 @@ fn validate_result_measurements(
     let current_step = u32::try_from(steps.len()).map_err(|_| {
         checkpoint_resume_failed(CheckpointResumeFailure::StepTelemetryIndexOverflow)
     })?;
-    let expected_measurements =
-        usize::try_from(u64::from(current_step) / u64::from(config.measurement_frequency()) + 1)
-            .map_err(|_| {
-                checkpoint_resume_failed(CheckpointResumeFailure::MeasurementCountOverflow)
-            })?;
+    let expected_measurements = expected_measurement_count(
+        current_step,
+        config.thermalization_steps(),
+        config.measurement_frequency(),
+    )
+    .ok_or_else(|| checkpoint_resume_failed(CheckpointResumeFailure::MeasurementCountOverflow))?;
     if measurements.len() != expected_measurements {
         return Err(checkpoint_resume_failed(
             CheckpointResumeFailure::MeasurementCountMismatch {
@@ -359,13 +364,14 @@ fn validate_result_measurements(
     }
 
     for (index, measurement) in measurements.iter().enumerate() {
-        let expected_step = u64::try_from(index)
-            .ok()
-            .and_then(|index| index.checked_mul(u64::from(config.measurement_frequency())))
-            .and_then(|step| u32::try_from(step).ok())
-            .ok_or_else(|| {
-                checkpoint_resume_failed(CheckpointResumeFailure::MeasurementStepOverflow)
-            })?;
+        let expected_step = expected_measurement_step(
+            index,
+            config.thermalization_steps(),
+            config.measurement_frequency(),
+        )
+        .ok_or_else(|| {
+            checkpoint_resume_failed(CheckpointResumeFailure::MeasurementStepOverflow)
+        })?;
         if measurement.step != expected_step {
             return Err(checkpoint_resume_failed(
                 CheckpointResumeFailure::MeasurementStepMismatch {
@@ -386,6 +392,11 @@ fn validate_result_measurements(
 }
 
 /// Checks proposal counters against step and move-counter outcomes.
+///
+/// Completed result snapshots must have one terminal proposal outcome per
+/// recorded step and no hard failures. This keeps public
+/// [`Self::proposal_stats`](SimulationResultsBackend::proposal_stats) accessors
+/// from exposing counters that cannot describe the recorded chain.
 fn validate_result_proposal_stats(
     proposal_stats: &ProposalStatistics,
     steps: usize,
@@ -672,6 +683,11 @@ impl SimulationResultsBackend {
     }
 
     /// Returns recorded measurements.
+    ///
+    /// For Metropolis runs, measurements are recorded on the configured cadence
+    /// at or after [`MetropolisConfig::thermalization_steps`]. Construction-only
+    /// results produced by [`run_simulation`](crate::run_simulation) with
+    /// simulation disabled contain a single step-0 construction snapshot.
     ///
     /// # Examples
     ///
@@ -992,8 +1008,8 @@ impl SimulationResultsBackend {
 
     /// Returns measurements after thermalization.
     ///
-    /// Measurements are recorded for the initial state at step 0, then after
-    /// completed-move counts divisible by
+    /// Metropolis runs record measurements only after the configured
+    /// thermalization boundary, at completed-move counts divisible by
     /// [`MetropolisConfig::measurement_frequency`]. This accessor defines
     /// equilibrium as `measurement.step >= thermalization_steps`, so a
     /// measurement taken exactly on the thermalization boundary is included.
@@ -1404,6 +1420,96 @@ mod tests {
     }
 
     #[test]
+    fn public_constructor_rejects_pre_thermalization_measurement_stream() {
+        let config = metropolis_config(1.0, 4, 2, 2);
+        let mut move_stats = MoveStatistics::new();
+        for _ in 0..4 {
+            move_stats.record_attempt(MoveType::Move22);
+        }
+        let steps = (1..=4)
+            .map(|step| MonteCarloStep {
+                step,
+                move_type: MoveType::Move22,
+                accepted: false,
+                action_before: f64::from(step),
+                action_after: None,
+                delta_action: None,
+            })
+            .collect::<Vec<_>>();
+        let measurements = vec![
+            Measurement::new(0, 0.0, 12, 26, 12),
+            Measurement::new(4, 4.0, 12, 26, 12),
+        ];
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+
+        let error = SimulationResultsBackend::new(
+            config,
+            ActionConfig::default(),
+            move_stats,
+            ProposalStatistics::from_validated_parts(4, 0, 4, 0, 0, 0, 0, 0, 0),
+            steps,
+            measurements,
+            Duration::ZERO,
+            triangulation,
+        )
+        .expect_err("pre-thermalization measurements should be rejected");
+
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::MeasurementStepMismatch {
+                    actual: 0,
+                    expected: 2
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn public_constructor_rejects_missing_scheduled_measurement() {
+        let config = metropolis_config(1.0, 4, 2, 2);
+        let mut move_stats = MoveStatistics::new();
+        for _ in 0..4 {
+            move_stats.record_attempt(MoveType::Move22);
+        }
+        let steps = (1..=4)
+            .map(|step| MonteCarloStep {
+                step,
+                move_type: MoveType::Move22,
+                accepted: false,
+                action_before: f64::from(step),
+                action_after: None,
+                delta_action: None,
+            })
+            .collect::<Vec<_>>();
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+
+        let error = SimulationResultsBackend::new(
+            config,
+            ActionConfig::default(),
+            move_stats,
+            ProposalStatistics::from_validated_parts(4, 0, 4, 0, 0, 0, 0, 0, 0),
+            steps,
+            vec![Measurement::new(2, 2.0, 12, 26, 12)],
+            Duration::ZERO,
+            triangulation,
+        )
+        .expect_err("missing scheduled measurement should be rejected");
+
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::MeasurementCountMismatch {
+                    actual: 1,
+                    expected: 2
+                }
+            }
+        );
+    }
+
+    #[test]
     fn public_constructor_rejects_hard_proposal_failures_with_count() {
         let mut move_stats = MoveStatistics::new();
         move_stats.record_attempt(MoveType::Move22);
@@ -1436,6 +1542,87 @@ mod tests {
             error,
             CdtError::CheckpointResumeFailed {
                 failure: CheckpointResumeFailure::ProposalHardFailures { actual: 1 }
+            }
+        );
+    }
+
+    #[test]
+    fn public_constructor_rejects_proposal_accepted_count_mismatch() {
+        let mut move_stats = MoveStatistics::new();
+        move_stats.record_attempt(MoveType::Move22);
+        move_stats.record_success(MoveType::Move22);
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+
+        let error = SimulationResultsBackend::new(
+            metropolis_config(1.0, 1, 0, 1),
+            ActionConfig::default(),
+            move_stats,
+            ProposalStatistics::from_validated_parts(1, 1, 1, 0, 0, 0, 0, 0, 0),
+            vec![MonteCarloStep {
+                step: 1,
+                move_type: MoveType::Move22,
+                accepted: true,
+                action_before: 0.0,
+                action_after: Some(0.0),
+                delta_action: Some(0.0),
+            }],
+            vec![
+                Measurement::new(0, 0.0, 12, 26, 12),
+                Measurement::new(1, 0.0, 12, 26, 12),
+            ],
+            Duration::ZERO,
+            triangulation,
+        )
+        .expect_err("accepted proposal totals must match accepted steps");
+
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::ProposalAcceptedCountMismatch {
+                    actual: 0,
+                    expected: 1
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn public_constructor_rejects_proposal_rejected_count_mismatch() {
+        let mut move_stats = MoveStatistics::new();
+        move_stats.record_attempt(MoveType::Move22);
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+
+        let error = SimulationResultsBackend::new(
+            metropolis_config(1.0, 1, 0, 1),
+            ActionConfig::default(),
+            move_stats,
+            ProposalStatistics::from_validated_parts(1, 0, 0, 0, 0, 0, 0, 0, 0),
+            vec![MonteCarloStep {
+                step: 1,
+                move_type: MoveType::Move22,
+                accepted: false,
+                action_before: 0.0,
+                action_after: None,
+                delta_action: None,
+            }],
+            vec![
+                Measurement::new(0, 0.0, 12, 26, 12),
+                Measurement::new(1, 0.0, 12, 26, 12),
+            ],
+            Duration::ZERO,
+            triangulation,
+        )
+        .expect_err("rejected proposal totals must match rejected steps");
+
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::ProposalRejectedCountMismatch {
+                    actual: 0,
+                    expected: 1
+                }
             }
         );
     }

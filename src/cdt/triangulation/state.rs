@@ -620,7 +620,13 @@ impl<B> CdtTriangulation<B> {
         self.invalidate_cache();
         self.invalidate_foliation_bookkeeping();
         self.metadata.last_modified = Instant::now();
-        self.metadata.modification_count += 1;
+        // Deserialized checkpoints can carry arbitrary counters; avoid wraparound
+        // so cache keys such as MoveSiteCache never see a stale version as fresh.
+        if self.metadata.modification_count == u64::MAX {
+            self.metadata.modification_count = 1;
+        } else {
+            self.metadata.modification_count += 1;
+        }
     }
 
     /// Records a simulation event without marking the geometry as mutated.
@@ -1494,6 +1500,10 @@ mod tests {
         let _geometry = triangulation.geometry();
         let _edge_count = triangulation.edge_count();
         assert_eq!(triangulation.metadata().modification_count, 2);
+
+        triangulation.metadata.modification_count = u64::MAX;
+        triangulation.bump_modification_count();
+        assert_eq!(triangulation.metadata().modification_count, 1);
     }
 
     #[test]

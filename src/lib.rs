@@ -196,6 +196,7 @@ pub use errors::{
 use crate::cdt::results::SimulationResultsParts;
 use crate::util::saturating_usize_to_u32;
 use std::env;
+use std::path::PathBuf;
 use std::time::Duration;
 
 // Trait-based triangulation (recommended)
@@ -518,9 +519,10 @@ pub mod prelude {
 /// If [`ValidatedCdtConfig::output_csv`] or [`ValidatedCdtConfig::output_json`] is set, returns
 /// [`CdtError::OutputPathResolutionFailed`] if the current working directory
 /// cannot be resolved. Returns [`CdtError::OutputPathConflict`] if CSV and JSON
-/// outputs resolve to the same file. Returns [`CdtError::OutputWriteFailed`] if
-/// the configured output file, parent directory creation, or JSON serialization
-/// fails.
+/// outputs resolve to the same file. Output path resolution and conflict checks
+/// happen before triangulation construction or sampling begins. Returns
+/// [`CdtError::OutputWriteFailed`] if the configured output file, parent
+/// directory creation, or JSON serialization fails after the run completes.
 ///
 /// # Examples
 ///
@@ -543,6 +545,7 @@ pub mod prelude {
 /// }
 /// ```
 pub fn run_simulation(config: &ValidatedCdtConfig) -> CdtResult<SimulationResultsBackend> {
+    let output_paths = resolve_configured_output_paths(config)?;
     let vertices = config.vertices();
     let timeslices = config.timeslices();
 
@@ -625,17 +628,24 @@ pub fn run_simulation(config: &ValidatedCdtConfig) -> CdtResult<SimulationResult
         })
     };
 
-    write_configured_outputs(config, &results)?;
+    write_configured_outputs(config, &results, &output_paths)?;
     Ok(results)
 }
 
-/// Writes configured result outputs after a run completes.
-fn write_configured_outputs(
+struct ResolvedOutputPaths {
+    csv: Option<PathBuf>,
+    json: Option<PathBuf>,
+}
+
+/// Resolves configured output paths before expensive triangulation or sampling work begins.
+fn resolve_configured_output_paths(
     validated_config: &ValidatedCdtConfig,
-    results: &SimulationResultsBackend,
-) -> CdtResult<()> {
+) -> CdtResult<ResolvedOutputPaths> {
     if validated_config.output_csv().is_none() && validated_config.output_json().is_none() {
-        return Ok(());
+        return Ok(ResolvedOutputPaths {
+            csv: None,
+            json: None,
+        });
     }
 
     let base_dir = env::current_dir().map_err(|err| CdtError::OutputPathResolutionFailed {
@@ -659,13 +669,25 @@ fn write_configured_outputs(
         });
     }
 
-    if let Some(resolved) = resolved_csv {
-        results.write_measurements_csv(&resolved)?;
+    Ok(ResolvedOutputPaths {
+        csv: resolved_csv,
+        json: resolved_json,
+    })
+}
+
+/// Writes configured result outputs after a run completes.
+fn write_configured_outputs(
+    validated_config: &ValidatedCdtConfig,
+    results: &SimulationResultsBackend,
+    output_paths: &ResolvedOutputPaths,
+) -> CdtResult<()> {
+    if let Some(resolved) = &output_paths.csv {
+        results.write_measurements_csv(resolved)?;
         log::info!("Wrote measurement CSV to {}", resolved.display());
     }
 
-    if let Some(resolved) = resolved_json {
-        results.write_summary_json(validated_config, &resolved)?;
+    if let Some(resolved) = &output_paths.json {
+        results.write_summary_json(validated_config, resolved)?;
         log::info!("Wrote simulation JSON summary to {}", resolved.display());
     }
 
