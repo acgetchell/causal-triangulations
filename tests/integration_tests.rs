@@ -6,9 +6,10 @@
 //! workflows, topology preservation, error handling, and consistency between components.
 
 use approx::{abs_diff_eq, assert_relative_eq};
-use causal_triangulations::cdt::action::DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT;
-use causal_triangulations::prelude::action::ActionConfig;
-use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveResult};
+use causal_triangulations::prelude::action::{
+    ActionConfig, DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
+};
+use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveResult, MoveType};
 use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
 use causal_triangulations::prelude::triangulation::{
     CdtTopology, CdtTriangulation, TriangulationQuery,
@@ -31,7 +32,9 @@ mod integration_tests {
             .validate_causality()
             .expect("initial strip causality is valid");
 
-        let config = MetropolisConfig::new(1.0, 10, 5, 2).with_seed(42);
+        let config = MetropolisConfig::new(1.0, 10, 5, 2)
+            .expect("integration Metropolis config should be valid")
+            .with_seed(42);
         let action_config = ActionConfig::default();
         let algorithm = MetropolisAlgorithm::new(config, action_config);
 
@@ -70,7 +73,7 @@ mod integration_tests {
         const STEPS: u32 = 80;
 
         let triangulation = CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
-        assert_eq!(triangulation.metadata().topology, CdtTopology::Toroidal);
+        assert_eq!(triangulation.metadata().topology(), CdtTopology::Toroidal);
         assert_eq!(triangulation.geometry().euler_characteristic(), 0);
         let initial_profile = triangulation.volume_profile();
         triangulation
@@ -80,7 +83,9 @@ mod integration_tests {
             .validate_foliation()
             .expect("initial toroidal foliation is valid");
 
-        let config = MetropolisConfig::new(1.0, STEPS, 0, 10).with_seed(105);
+        let config = MetropolisConfig::new(1.0, STEPS, 0, 10)
+            .expect("integration Metropolis config should be valid")
+            .with_seed(105);
         let algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
         let results = algorithm
             .run(triangulation)
@@ -93,7 +98,7 @@ mod integration_tests {
             "periodic toroidal simulation should accept at least one move"
         );
         assert!(
-            results.move_stats().moves_13_accepted > 0,
+            results.move_stats().accepted(MoveType::Move13Add) > 0,
             "periodic toroidal simulation should accept at least one volume-increasing move"
         );
         assert_ne!(
@@ -102,7 +107,7 @@ mod integration_tests {
             "periodic toroidal volume moves should change the final volume profile"
         );
         assert_eq!(
-            results.triangulation().metadata().topology,
+            results.triangulation().metadata().topology(),
             CdtTopology::Toroidal
         );
         assert_eq!(results.triangulation().geometry().euler_characteristic(), 0);
@@ -274,7 +279,9 @@ mod integration_tests {
         let triangulation2 =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Failed to create second triangulation");
 
-        let config = MetropolisConfig::new(1.0, 10, 2, 2).with_seed(123);
+        let config = MetropolisConfig::new(1.0, 10, 2, 2)
+            .expect("integration Metropolis config should be valid")
+            .with_seed(123);
         let action_config = ActionConfig::default();
 
         let algorithm1 = MetropolisAlgorithm::new(config.clone(), action_config.clone());

@@ -6,7 +6,7 @@
 //! which is based on the Regge calculus formulation of general relativity.
 
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// Critical cosmological coupling for pure 1+1 CDT in the triangle-volume convention.
 ///
@@ -73,15 +73,37 @@ pub fn compute_regge_action(
     cosmological_constant.mul_add(n_1, (-coupling_0).mul_add(n_0, -(coupling_2 * n_2)))
 }
 
-/// Configuration for CDT action parameters.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Validated configuration for CDT action parameters.
+///
+/// The stored couplings are always finite. Raw action parameters enter through
+/// [`Self::new`] or deserialization, both of which reject NaN and infinite values
+/// before the configuration can be used by action or Metropolis code.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ActionConfig {
     /// Coupling constant for vertices (κ₀)
-    pub coupling_0: f64,
+    coupling_0: f64,
     /// Coupling constant for triangles (κ₂)
-    pub coupling_2: f64,
+    coupling_2: f64,
     /// Cosmological constant (λ)
-    pub cosmological_constant: f64,
+    cosmological_constant: f64,
+}
+
+#[derive(Deserialize)]
+struct ActionConfigWire {
+    coupling_0: f64,
+    coupling_2: f64,
+    cosmological_constant: f64,
+}
+
+impl<'de> Deserialize<'de> for ActionConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = ActionConfigWire::deserialize(deserializer)?;
+        Self::new(wire.coupling_0, wire.coupling_2, wire.cosmological_constant)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 impl Default for ActionConfig {
@@ -92,36 +114,12 @@ impl Default for ActionConfig {
     /// at zero and use the edge-count cosmological coupling that maps to the
     /// standard 2D CDT critical value `λ_c = ln 2` for toroidal triangulations.
     fn default() -> Self {
-        Self {
-            coupling_0: 0.0,
-            coupling_2: 0.0,
-            cosmological_constant: DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
-        }
+        Self::from_validated_parts(0.0, 0.0, DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT)
     }
 }
 
 impl ActionConfig {
-    /// Creates a new action configuration.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use approx::assert_relative_eq;
-    /// use causal_triangulations::prelude::action::ActionConfig;
-    ///
-    /// let config = ActionConfig::new(2.0, 1.5, 0.2);
-    /// assert_relative_eq!(config.coupling_0, 2.0);
-    /// ```
-    #[must_use]
-    pub const fn new(coupling_0: f64, coupling_2: f64, cosmological_constant: f64) -> Self {
-        Self {
-            coupling_0,
-            coupling_2,
-            cosmological_constant,
-        }
-    }
-
-    /// Validates that action couplings are finite.
+    /// Creates a new validated action configuration.
     ///
     /// # Errors
     ///
@@ -131,18 +129,112 @@ impl ActionConfig {
     /// # Examples
     ///
     /// ```
+    /// use approx::assert_relative_eq;
     /// use causal_triangulations::prelude::action::ActionConfig;
     ///
-    /// assert!(ActionConfig::default().validate().is_ok());
-    /// assert!(ActionConfig::new(f64::NAN, 1.0, 0.1).validate().is_err());
+    /// let config = ActionConfig::new(2.0, 1.5, 0.2)?;
+    /// assert_relative_eq!(config.coupling_0(), 2.0);
+    /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
-    pub fn validate(&self) -> CdtResult<()> {
-        validate_coupling(ConfigurationSetting::Coupling0, self.coupling_0)?;
-        validate_coupling(ConfigurationSetting::Coupling2, self.coupling_2)?;
+    pub fn new(coupling_0: f64, coupling_2: f64, cosmological_constant: f64) -> CdtResult<Self> {
+        validate_coupling(ConfigurationSetting::Coupling0, coupling_0)?;
+        validate_coupling(ConfigurationSetting::Coupling2, coupling_2)?;
         validate_coupling(
             ConfigurationSetting::CosmologicalConstant,
-            self.cosmological_constant,
-        )
+            cosmological_constant,
+        )?;
+        Ok(Self::from_validated_parts(
+            coupling_0,
+            coupling_2,
+            cosmological_constant,
+        ))
+    }
+
+    /// Builds an action configuration after the caller has already checked coupling finiteness.
+    ///
+    /// This keeps validated higher-level configuration conversion infallible
+    /// without opening a second public path that could store invalid couplings.
+    pub(crate) const fn from_validated_parts(
+        coupling_0: f64,
+        coupling_2: f64,
+        cosmological_constant: f64,
+    ) -> Self {
+        Self {
+            coupling_0,
+            coupling_2,
+            cosmological_constant,
+        }
+    }
+
+    /// Returns the vertex coupling (κ₀).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use approx::assert_relative_eq;
+    /// use causal_triangulations::prelude::action::ActionConfig;
+    ///
+    /// let config = ActionConfig::new(2.0, 1.5, 0.2)?;
+    /// assert_relative_eq!(config.coupling_0(), 2.0);
+    /// # Ok::<(), causal_triangulations::CdtError>(())
+    /// ```
+    #[must_use]
+    pub const fn coupling_0(&self) -> f64 {
+        self.coupling_0
+    }
+
+    /// Returns the triangle coupling (κ₂).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use approx::assert_relative_eq;
+    /// use causal_triangulations::prelude::action::ActionConfig;
+    ///
+    /// let config = ActionConfig::new(2.0, 1.5, 0.2)?;
+    /// assert_relative_eq!(config.coupling_2(), 1.5);
+    /// # Ok::<(), causal_triangulations::CdtError>(())
+    /// ```
+    #[must_use]
+    pub const fn coupling_2(&self) -> f64 {
+        self.coupling_2
+    }
+
+    /// Returns the cosmological coupling (λ).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use approx::assert_relative_eq;
+    /// use causal_triangulations::prelude::action::ActionConfig;
+    ///
+    /// let config = ActionConfig::new(2.0, 1.5, 0.2)?;
+    /// assert_relative_eq!(config.cosmological_constant(), 0.2);
+    /// # Ok::<(), causal_triangulations::CdtError>(())
+    /// ```
+    #[must_use]
+    pub const fn cosmological_constant(&self) -> f64 {
+        self.cosmological_constant
+    }
+
+    /// Confirms that stored action couplings are finite.
+    ///
+    /// This method is kept for code that wants a common validation hook across
+    /// configuration-like types. Because [`ActionConfig`] validates before
+    /// storage, it is an infallible debug assertion of the stored invariant.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::action::ActionConfig;
+    ///
+    /// ActionConfig::default().validate();
+    /// assert!(ActionConfig::new(f64::NAN, 1.0, 0.1).is_err());
+    /// ```
+    pub fn validate(&self) {
+        debug_assert!(self.coupling_0.is_finite());
+        debug_assert!(self.coupling_2.is_finite());
+        debug_assert!(self.cosmological_constant.is_finite());
     }
 
     /// Calculates the action for given simplex counts.
@@ -153,9 +245,10 @@ impl ActionConfig {
     /// use approx::assert_relative_eq;
     /// use causal_triangulations::prelude::action::ActionConfig;
     ///
-    /// let config = ActionConfig::new(2.0, 1.5, 0.2);
+    /// let config = ActionConfig::new(2.0, 1.5, 0.2)?;
     /// let action = config.calculate_action(5, 10, 8);
     /// assert_relative_eq!(action, -20.0, epsilon = 1e-12);
+    /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     #[must_use]
     pub fn calculate_action(&self, vertices: u32, edges: u32, triangles: u32) -> f64 {
@@ -214,22 +307,44 @@ mod tests {
     #[test]
     fn test_action_config_default() {
         let config = ActionConfig::default();
-        assert_relative_eq!(config.coupling_0, 0.0);
-        assert_relative_eq!(config.coupling_2, 0.0);
+        assert_relative_eq!(config.coupling_0(), 0.0);
+        assert_relative_eq!(config.coupling_2(), 0.0);
         assert_relative_eq!(
-            config.cosmological_constant,
+            config.cosmological_constant(),
             DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT
         );
     }
 
     #[test]
     fn test_action_config_calculate() {
-        let config = ActionConfig::new(2.0, 1.5, 0.2);
+        let config = ActionConfig::new(2.0, 1.5, 0.2).expect("finite couplings are valid");
         let action = config.calculate_action(5, 10, 8);
 
         // Expected: -2.0 * 5 - 1.5 * 8 + 0.2 * 10 = -10 - 12 + 2 = -20
         let expected = -20.0;
         assert_relative_eq!(action, expected);
+    }
+
+    #[test]
+    fn action_config_deserialization_rejects_non_finite_couplings() {
+        let payload = r#"{"coupling_0":null,"coupling_2":0.0,"cosmological_constant":0.0}"#;
+        let error = serde_json::from_str::<ActionConfig>(payload)
+            .expect_err("non-finite action coupling should be rejected");
+
+        assert!(
+            error.to_string().contains("invalid type"),
+            "serde error should reject non-number coupling before storage, got {error}"
+        );
+
+        let payload = r#"{"coupling_0":1e999,"coupling_2":0.0,"cosmological_constant":0.0}"#;
+        let error = serde_json::from_str::<ActionConfig>(payload)
+            .expect_err("infinite action coupling should be rejected");
+
+        assert!(
+            error.to_string().contains("number out of range"),
+            "serde error should reject out-of-range JSON numbers before storage, got {error}"
+        );
+        assert!(ActionConfig::new(f64::INFINITY, 0.0, 0.0).is_err());
     }
 }
 
@@ -267,21 +382,22 @@ mod prop_tests {
             coupling_2 in -5.0f64..5.0,
             cosmological_constant in -2.0f64..2.0
         ) {
-            let config = ActionConfig::new(coupling_0, coupling_2, cosmological_constant);
+            let config = ActionConfig::new(coupling_0, coupling_2, cosmological_constant)
+                .expect("proptest finite ranges are valid action couplings");
 
             // Config should preserve values
             prop_assert!(relative_eq!(
-                config.coupling_0,
+                config.coupling_0(),
                 coupling_0,
                 epsilon = f64::EPSILON
             ));
             prop_assert!(relative_eq!(
-                config.coupling_2,
+                config.coupling_2(),
                 coupling_2,
                 epsilon = f64::EPSILON
             ));
             prop_assert!(relative_eq!(
-                config.cosmological_constant,
+                config.cosmological_constant(),
                 cosmological_constant,
                 epsilon = f64::EPSILON
             ));

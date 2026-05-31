@@ -12,7 +12,13 @@ fn main() {
     // Initialize logging
     env_logger::init();
 
-    let config = CdtConfig::from_args();
+    let config = match CdtConfig::from_args().into_validated() {
+        Ok(config) => config,
+        Err(e) => {
+            log::error!("CDT configuration failed: {e}");
+            exit(1);
+        }
+    };
     match run_simulation(&config) {
         Ok(_results) => {
             log::info!("CDT simulation completed successfully");

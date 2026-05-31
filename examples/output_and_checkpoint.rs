@@ -29,7 +29,8 @@ fn main() -> CdtResult<()> {
         output_csv: Some(csv_path.clone()),
         output_json: Some(json_path.clone()),
         ..CdtConfig::new(12, 3)
-    };
+    }
+    .into_validated()?;
 
     let results = run_simulation(&config)?;
 
@@ -41,10 +42,10 @@ fn main() -> CdtResult<()> {
         detail: err.to_string(),
     })?;
     assert!(csv.starts_with("step,action,vertices,edges,triangles,accepted,delta_action\n"));
-    assert_eq!(summary["config"]["vertices"], config.vertices);
+    assert_eq!(summary["config"]["vertices"], config.vertices());
     assert_eq!(
         summary["final_triangulation"]["time_slices"],
-        config.timeslices
+        config.timeslices()
     );
     assert_eq!(
         summary["measurements"].as_array().map_or(0, Vec::len),
@@ -70,12 +71,12 @@ fn main() -> CdtResult<()> {
     restored.validate_simplex_classification()?;
 
     let mcmc_checkpoint = MetropolisAlgorithm::new(
-        MetropolisConfig::new(1.0, 2, 0, 1).with_seed(13),
+        MetropolisConfig::new(1.0, 2, 0, 1)?.with_seed(13),
         ActionConfig::default(),
     )
     .run_to_checkpoint(CdtTriangulation2D::from_cdt_strip(4, 3)?)?;
     let resumed = MetropolisAlgorithm::new(
-        MetropolisConfig::new(1.0, 2, 0, 1).with_seed(999),
+        MetropolisConfig::new(1.0, 2, 0, 1)?.with_seed(999),
         ActionConfig::default(),
     )
     .resume_from_checkpoint(mcmc_checkpoint)?;

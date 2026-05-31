@@ -17,7 +17,9 @@ fn toroidal_observables_run_accepts_periodic_moves_after_offset_support() {
     let triangulation =
         CdtTriangulation::from_toroidal_cdt(4, 3).expect("observables fixture should build");
 
-    let metropolis_config = MetropolisConfig::new(1.0, 20, 0, 5).with_seed(7);
+    let metropolis_config = MetropolisConfig::new(1.0, 20, 0, 5)
+        .expect("regression Metropolis config should be valid")
+        .with_seed(7);
     let results =
         MetropolisAlgorithm::new(metropolis_config, ActionConfig::default()).run(triangulation);
     let results = results.expect("toroidal observables regression run should complete");
@@ -58,7 +60,7 @@ fn proposal_site_cache_does_not_reuse_sites_for_replaced_triangulation_instances
     let mut system = ErgodicsSystem::with_seed(11);
     let mut triangulation =
         CdtTriangulation::from_toroidal_cdt(4, 3).expect("toroidal fixture should build");
-    assert_eq!(triangulation.metadata().modification_count, 0);
+    assert_eq!(triangulation.metadata().modification_count(), 0);
 
     let first_result = system.attempt_13_move(&mut triangulation);
     assert_matches!(
@@ -71,7 +73,7 @@ fn proposal_site_cache_does_not_reuse_sites_for_replaced_triangulation_instances
         .expect("initial cached triangulation should remain valid");
 
     triangulation = CdtTriangulation::from_cdt_strip(4, 3).expect("strip fixture should build");
-    assert_eq!(triangulation.metadata().modification_count, 0);
+    assert_eq!(triangulation.metadata().modification_count(), 0);
 
     let second_result = system.attempt_13_move(&mut triangulation);
     assert_eq!(

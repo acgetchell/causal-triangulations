@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Shared CDT-domain helpers for Metropolis sampling.
 
 use crate::cdt::action::ActionConfig;

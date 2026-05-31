@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
 
-//! CDT triangulation wrapper - backend-agnostic.
+//! CDT triangulation state - backend-agnostic.
 //!
-//! This module provides CDT-specific triangulation data structures that work
-//! with any geometry backend implementing the trait interfaces.
+//! This module owns the backend-agnostic CDT triangulation state. It stores
+//! CDT metadata, cached derived quantities, foliation bookkeeping, and the
+//! underlying geometry backend behind validated construction and mutation paths.
 
 use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::{Foliation, FoliationError};
@@ -35,7 +36,10 @@ fn next_triangulation_instance_id() -> u64 {
     instance_id
 }
 
-/// CDT-specific triangulation wrapper - completely geometry-agnostic
+/// CDT triangulation state paired with a geometry backend.
+///
+/// Constructors and fallible setters validate CDT metadata before storage so
+/// normal accessors can expose the accepted state infallibly.
 pub struct CdtTriangulation<B> {
     /// Process-local identity used only to reject stale transient caches.
     instance_id: u64,
@@ -81,21 +85,164 @@ impl<B: Clone> Clone for CdtTriangulation<B> {
 #[derive(Debug, Clone)]
 pub struct CdtMetadata {
     /// Number of time slices in the CDT foliation
-    pub time_slices: u32,
+    time_slices: u32,
     /// Dimensionality of the spacetime
-    pub dimension: u8,
+    dimension: u8,
     /// Topology of the spatial slices
-    pub topology: CdtTopology,
+    topology: CdtTopology,
     /// Time when this triangulation was created
-    pub creation_time: Instant,
+    creation_time: Instant,
     /// Time of last modification
-    pub last_modified: Instant,
+    last_modified: Instant,
     /// Count of modifications made to the triangulation
-    pub modification_count: u64,
+    modification_count: u64,
     /// Ordered simulation event history recorded for this triangulation.
     ///
     /// Move events identify proposals and acceptances with [`MoveType`].
-    pub simulation_history: Vec<SimulationEvent>,
+    simulation_history: Vec<SimulationEvent>,
+}
+
+impl CdtMetadata {
+    /// Returns the number of time slices in the CDT foliation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::cdt::triangulation::CdtTriangulation;
+    /// use causal_triangulations::geometry::backends::mock::MockBackend;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
+    ///     assert_eq!(tri.metadata().time_slices(), 2);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn time_slices(&self) -> u32 {
+        self.time_slices
+    }
+
+    /// Returns the dimensionality of the spacetime.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::cdt::triangulation::CdtTriangulation;
+    /// use causal_triangulations::geometry::backends::mock::MockBackend;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
+    ///     assert_eq!(tri.metadata().dimension(), 2);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn dimension(&self) -> u8 {
+        self.dimension
+    }
+
+    /// Returns the spatial-slice topology.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::cdt::triangulation::CdtTriangulation;
+    /// use causal_triangulations::config::CdtTopology;
+    /// use causal_triangulations::geometry::backends::mock::MockBackend;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
+    ///     assert_eq!(tri.metadata().topology(), CdtTopology::OpenBoundary);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn topology(&self) -> CdtTopology {
+        self.topology
+    }
+
+    /// Returns the creation timestamp for this triangulation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::cdt::triangulation::CdtTriangulation;
+    /// use causal_triangulations::geometry::backends::mock::MockBackend;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
+    ///     assert!(tri.metadata().creation_time() <= tri.metadata().last_modified());
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn creation_time(&self) -> Instant {
+        self.creation_time
+    }
+
+    /// Returns the timestamp for the most recent triangulation mutation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::cdt::triangulation::CdtTriangulation;
+    /// use causal_triangulations::geometry::backends::mock::MockBackend;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
+    ///     assert!(tri.metadata().last_modified() >= tri.metadata().creation_time());
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn last_modified(&self) -> Instant {
+        self.last_modified
+    }
+
+    /// Returns the mutation counter used to invalidate derived caches.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::cdt::triangulation::CdtTriangulation;
+    /// use causal_triangulations::geometry::backends::mock::MockBackend;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
+    ///     assert_eq!(tri.metadata().modification_count(), 0);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn modification_count(&self) -> u64 {
+        self.modification_count
+    }
+
+    /// Returns the ordered simulation event history.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::cdt::triangulation::CdtTriangulation;
+    /// use causal_triangulations::geometry::backends::mock::MockBackend;
+    /// use causal_triangulations::prelude::errors::CdtResult;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
+    ///     assert_eq!(tri.metadata().simulation_history().len(), 1);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub fn simulation_history(&self) -> &[SimulationEvent] {
+        &self.simulation_history
+    }
 }
 
 /// Cached geometry measurements
@@ -113,7 +260,7 @@ struct CachedValue<T> {
 
 /// Event recorded in a CDT simulation history.
 ///
-/// The history is stored on [`CdtMetadata::simulation_history`]. Move events
+/// The history is exposed by [`CdtMetadata::simulation_history`]. Move events
 /// use [`MoveType`] to keep history, checkpoint serialization, and move
 /// statistics aligned with the crate's supported ergodic move set.
 ///
@@ -258,21 +405,250 @@ impl<'de> Deserialize<'de> for CdtTriangulation<DelaunayBackend2D> {
 }
 
 impl CdtTriangulation<DelaunayBackend2D> {
+    /// Validates a deserialized checkpoint before exposing restored CDT state.
+    ///
+    /// This keeps serde deserialization aligned with the public constructor and
+    /// post-move contracts: checkpoint data must restore to a fully valid CDT
+    /// triangulation, including geometry, topology, foliation, and causality.
     fn validate_checkpoint_invariants(&self) -> CdtResult<()> {
         self.validate_evolved_cdt()
     }
 }
 
-impl<B: TriangulationQuery> CdtTriangulation<B> {
-    /// Fallible constructor for a CDT triangulation with open boundary topology.
+impl<B> CdtTriangulation<B> {
+    /// Encodes topology-specific time-slice metadata invariants in one reusable check.
+    fn check_time_slices(topology: CdtTopology, time_slices: u32) -> CdtResult<()> {
+        if time_slices == 0 {
+            return Err(CdtError::InvalidTriangulationMetadata {
+                field: TriangulationMetadataField::Timeslices,
+                topology,
+                provided_value: "0".to_string(),
+                expected: "≥ 1".to_string(),
+            });
+        }
+
+        if matches!(topology, CdtTopology::Toroidal) && time_slices < 3 {
+            return Err(CdtError::InvalidTriangulationMetadata {
+                field: TriangulationMetadataField::Timeslices,
+                topology,
+                provided_value: time_slices.to_string(),
+                expected: "≥ 3".to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Get immutable reference to underlying geometry.
     ///
-    /// Validates metadata before returning so callers cannot accidentally wrap a
-    /// backend with a mismatched dimension or zero time slices.
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::testing::*;
+    /// use causal_triangulations::{CdtResult, CdtTriangulation};
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
+    ///     assert_eq!(tri.geometry().vertex_count(), 3);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn geometry(&self) -> &B {
+        &self.geometry
+    }
+
+    /// Get the number of time slices in the CDT foliation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::testing::*;
+    /// use causal_triangulations::{CdtResult, CdtTriangulation};
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
+    ///     assert_eq!(tri.time_slices(), 2);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn time_slices(&self) -> u32 {
+        self.metadata.time_slices
+    }
+
+    /// Get the dimensionality of the spacetime.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::testing::*;
+    /// use causal_triangulations::{CdtResult, CdtTriangulation};
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
+    ///     assert_eq!(tri.dimension(), 2);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn dimension(&self) -> u8 {
+        self.metadata.dimension
+    }
+
+    /// Returns immutable CDT metadata.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::testing::*;
+    /// use causal_triangulations::{CdtResult, CdtTriangulation};
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
+    ///     assert_eq!(tri.metadata().time_slices(), 2);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn metadata(&self) -> &CdtMetadata {
+        &self.metadata
+    }
+
+    /// Returns the transient process-local identity used for cache invalidation.
+    #[must_use]
+    pub(crate) const fn instance_id(&self) -> u64 {
+        self.instance_id
+    }
+
+    /// Writes time-slice metadata through the central invariant and foliation invalidation path.
+    fn apply_time_slices(&mut self, time_slices: u32) -> CdtResult<()> {
+        Self::check_time_slices(self.metadata.topology, time_slices)?;
+        self.metadata.time_slices = time_slices;
+        if self
+            .foliation
+            .as_ref()
+            .is_some_and(|foliation| foliation.num_slices() != time_slices)
+        {
+            self.foliation = None;
+            self.foliation_synced_at_modification = None;
+        }
+        Ok(())
+    }
+
+    /// Distinguishes synchronized foliation data from stale bookkeeping after geometry mutation.
+    #[must_use]
+    fn has_current_foliation(&self) -> bool {
+        self.foliation.is_some()
+            && self.foliation_synced_at_modification == Some(self.metadata.modification_count)
+    }
+
+    /// Records that stored foliation data matches the current geometry mutation count.
+    fn mark_foliation_synchronized(&mut self) {
+        self.foliation_synced_at_modification = self
+            .foliation
+            .as_ref()
+            .map(|_| self.metadata.modification_count);
+    }
+
+    /// Builds the typed error used when callers try to trust stale foliation data.
+    fn stale_foliation_error(&self) -> CdtError {
+        FoliationError::StaleBookkeeping {
+            synced_at_modification: self.foliation_synced_at_modification,
+            current_modification_count: self.metadata.modification_count,
+        }
+        .into()
+    }
+
+    /// Marks existing foliation data stale without dropping it when geometry has changed.
+    const fn invalidate_foliation_bookkeeping(&mut self) {
+        if self.foliation.is_some() {
+            self.foliation_synced_at_modification = None;
+        }
+    }
+
+    /// Updates the configured number of time slices.
+    ///
+    /// If an existing foliation uses a different slice count, the foliation is
+    /// cleared to avoid stale bookkeeping.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidTriangulationMetadata`] if the new slice
+    /// count would violate topology metadata invariants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::errors::{CdtError, TriangulationMetadataField};
+    /// use causal_triangulations::prelude::triangulation::{CdtTopology, CdtTriangulation};
+    /// use std::assert_matches;
+    ///
+    /// fn main() -> causal_triangulations::CdtResult<()> {
+    /// let mut tri = CdtTriangulation::from_toroidal_cdt(4, 3)?;
+    ///
+    /// let err = tri.set_time_slices(2).expect_err("T < 3 is invalid");
+    /// assert_matches!(
+    ///     err,
+    ///     CdtError::InvalidTriangulationMetadata {
+    ///         field,
+    ///         topology,
+    ///         provided_value,
+    ///         expected,
+    ///     } if field == TriangulationMetadataField::Timeslices
+    ///         && topology == CdtTopology::Toroidal
+    ///         && provided_value == "2"
+    ///         && expected == "≥ 3"
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn set_time_slices(&mut self, time_slices: u32) -> CdtResult<()> {
+        if self.metadata.time_slices == time_slices {
+            return self.apply_time_slices(time_slices);
+        }
+
+        self.apply_time_slices(time_slices)?;
+        self.bump_modification_count();
+        Ok(())
+    }
+
+    /// Marks the triangulation metadata as modified.
+    ///
+    /// This crate-internal hook invalidates cached derived geometry quantities.
+    pub(crate) fn bump_modification_count(&mut self) {
+        self.invalidate_cache();
+        self.invalidate_foliation_bookkeeping();
+        self.metadata.last_modified = Instant::now();
+        self.metadata.modification_count += 1;
+    }
+
+    /// Records a simulation event without marking the geometry as mutated.
+    pub(crate) fn record_event(&mut self, event: SimulationEvent) {
+        self.metadata.simulation_history.push(event);
+        self.metadata.last_modified = Instant::now();
+    }
+
+    /// Clears derived geometry counts so later queries recompute from the backend.
+    fn invalidate_cache(&mut self) {
+        self.cache = GeometryCache::default();
+    }
+}
+
+impl<B: TriangulationQuery> CdtTriangulation<B> {
+    /// Fallible constructor for a CDT triangulation with open-boundary topology.
+    ///
+    /// Validates metadata and topology before returning so callers cannot
+    /// accidentally wrap a backend with a mismatched dimension, zero time slices,
+    /// or an Euler characteristic that cannot represent an open-boundary CDT
+    /// triangulation.
     ///
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidTriangulationMetadata`] if the supplied
-    /// metadata is inconsistent with the backend or topology.
+    /// metadata is inconsistent with the backend or topology. Returns
+    /// [`CdtError::TopologyMismatch`] when the backend Euler characteristic does
+    /// not match open-boundary topology.
     ///
     /// # Examples
     ///
@@ -295,6 +671,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             CdtTopology::OpenBoundary,
         );
         tri.validate_metadata()?;
+        tri.validate_topology()?;
         Ok(tri)
     }
 
@@ -337,7 +714,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///     })?;
     ///
     ///     let tri = CdtTriangulation::with_topology(backend, 2, 2, CdtTopology::OpenBoundary)?;
-    ///     assert_matches!(tri.metadata().topology, CdtTopology::OpenBoundary);
+    ///     assert_matches!(tri.metadata().topology(), CdtTopology::OpenBoundary);
     ///     assert_eq!(tri.time_slices(), 2);
     ///     assert_eq!(tri.dimension(), 2);
     ///     Ok(())
@@ -461,29 +838,6 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         }
     }
 
-    /// Encodes topology-specific time-slice metadata invariants in one reusable check.
-    fn check_time_slices(topology: CdtTopology, time_slices: u32) -> CdtResult<()> {
-        if time_slices == 0 {
-            return Err(CdtError::InvalidTriangulationMetadata {
-                field: TriangulationMetadataField::Timeslices,
-                topology,
-                provided_value: "0".to_string(),
-                expected: "≥ 1".to_string(),
-            });
-        }
-
-        if matches!(topology, CdtTopology::Toroidal) && time_slices < 3 {
-            return Err(CdtError::InvalidTriangulationMetadata {
-                field: TriangulationMetadataField::Timeslices,
-                topology,
-                provided_value: time_slices.to_string(),
-                expected: "≥ 3".to_string(),
-            });
-        }
-
-        Ok(())
-    }
-
     /// Validates CDT metadata against backend and topology invariants.
     fn validate_metadata(&self) -> CdtResult<()> {
         Self::check_time_slices(self.metadata.topology, self.metadata.time_slices)?;
@@ -499,25 +853,6 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         }
 
         Ok(())
-    }
-
-    /// Get immutable reference to underlying geometry.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::testing::*;
-    /// use causal_triangulations::{CdtResult, CdtTriangulation};
-    ///
-    /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
-    ///     assert_eq!(tri.geometry().vertex_count(), 3);
-    ///     Ok(())
-    /// }
-    /// ```
-    #[must_use]
-    pub const fn geometry(&self) -> &B {
-        &self.geometry
     }
 
     /// Returns the number of vertices in the backend triangulation.
@@ -554,69 +889,6 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// ```
     pub fn face_count(&self) -> usize {
         self.geometry.face_count()
-    }
-
-    /// Get the number of time slices in the CDT foliation.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::testing::*;
-    /// use causal_triangulations::{CdtResult, CdtTriangulation};
-    ///
-    /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
-    ///     assert_eq!(tri.time_slices(), 2);
-    ///     Ok(())
-    /// }
-    /// ```
-    #[must_use]
-    pub const fn time_slices(&self) -> u32 {
-        self.metadata.time_slices
-    }
-
-    /// Get the dimensionality of the spacetime.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::testing::*;
-    /// use causal_triangulations::{CdtResult, CdtTriangulation};
-    ///
-    /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
-    ///     assert_eq!(tri.dimension(), 2);
-    ///     Ok(())
-    /// }
-    /// ```
-    #[must_use]
-    pub const fn dimension(&self) -> u8 {
-        self.metadata.dimension
-    }
-
-    /// Returns immutable CDT metadata.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::testing::*;
-    /// use causal_triangulations::{CdtResult, CdtTriangulation};
-    ///
-    /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
-    ///     assert_eq!(tri.metadata().time_slices, 2);
-    ///     Ok(())
-    /// }
-    /// ```
-    #[must_use]
-    pub const fn metadata(&self) -> &CdtMetadata {
-        &self.metadata
-    }
-
-    /// Returns the transient process-local identity used for cache invalidation.
-    #[must_use]
-    pub(crate) const fn instance_id(&self) -> u64 {
-        self.instance_id
     }
 
     /// Cached edge count with automatic invalidation.
@@ -732,124 +1004,12 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
 
         Ok(())
     }
-
-    /// Writes time-slice metadata through the central invariant and foliation invalidation path.
-    fn apply_time_slices(&mut self, time_slices: u32) -> CdtResult<()> {
-        Self::check_time_slices(self.metadata.topology, time_slices)?;
-        self.metadata.time_slices = time_slices;
-        if self
-            .foliation
-            .as_ref()
-            .is_some_and(|foliation| foliation.num_slices() != time_slices)
-        {
-            self.foliation = None;
-            self.foliation_synced_at_modification = None;
-        }
-        Ok(())
-    }
-
-    /// Distinguishes synchronized foliation data from stale bookkeeping after geometry mutation.
-    #[must_use]
-    fn has_current_foliation(&self) -> bool {
-        self.foliation.is_some()
-            && self.foliation_synced_at_modification == Some(self.metadata.modification_count)
-    }
-
-    /// Records that stored foliation data matches the current geometry mutation count.
-    fn mark_foliation_synchronized(&mut self) {
-        self.foliation_synced_at_modification = self
-            .foliation
-            .as_ref()
-            .map(|_| self.metadata.modification_count);
-    }
-
-    /// Builds the typed error used when callers try to trust stale foliation data.
-    fn stale_foliation_error(&self) -> CdtError {
-        FoliationError::StaleBookkeeping {
-            synced_at_modification: self.foliation_synced_at_modification,
-            current_modification_count: self.metadata.modification_count,
-        }
-        .into()
-    }
-
-    /// Marks existing foliation data stale without dropping it when geometry has changed.
-    const fn invalidate_foliation_bookkeeping(&mut self) {
-        if self.foliation.is_some() {
-            self.foliation_synced_at_modification = None;
-        }
-    }
-
-    /// Updates the configured number of time slices.
-    ///
-    /// If an existing foliation uses a different slice count, the foliation is
-    /// cleared to avoid stale bookkeeping.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CdtError::InvalidTriangulationMetadata`] if the new slice
-    /// count would violate topology metadata invariants.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::errors::{CdtError, TriangulationMetadataField};
-    /// use causal_triangulations::prelude::triangulation::{CdtTopology, CdtTriangulation};
-    /// use std::assert_matches;
-    ///
-    /// fn main() -> causal_triangulations::CdtResult<()> {
-    /// let mut tri = CdtTriangulation::from_toroidal_cdt(4, 3)?;
-    ///
-    /// let err = tri.set_time_slices(2).expect_err("T < 3 is invalid");
-    /// assert_matches!(
-    ///     err,
-    ///     CdtError::InvalidTriangulationMetadata {
-    ///         field,
-    ///         topology,
-    ///         provided_value,
-    ///         expected,
-    ///     } if field == TriangulationMetadataField::Timeslices
-    ///         && topology == CdtTopology::Toroidal
-    ///         && provided_value == "2"
-    ///         && expected == "≥ 3"
-    /// );
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn set_time_slices(&mut self, time_slices: u32) -> CdtResult<()> {
-        if self.metadata.time_slices == time_slices {
-            return self.apply_time_slices(time_slices);
-        }
-
-        self.apply_time_slices(time_slices)?;
-        self.bump_modification_count();
-        Ok(())
-    }
-
-    /// Marks the triangulation metadata as modified.
-    ///
-    /// This crate-internal hook invalidates cached derived geometry quantities.
-    pub(crate) fn bump_modification_count(&mut self) {
-        self.invalidate_cache();
-        self.invalidate_foliation_bookkeeping();
-        self.metadata.last_modified = Instant::now();
-        self.metadata.modification_count += 1;
-    }
-
-    /// Records a simulation event without marking the geometry as mutated.
-    pub(crate) fn record_event(&mut self, event: SimulationEvent) {
-        self.metadata.simulation_history.push(event);
-        self.metadata.last_modified = Instant::now();
-    }
-
-    /// Clears derived geometry counts so later queries recompute from the backend.
-    fn invalidate_cache(&mut self) {
-        self.cache = GeometryCache::default();
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::geometry::backends::mock::MockBackend;
     use crate::geometry::generators::build_delaunay2_with_data;
     use serde_json::error::Category;
     use serde_json::{from_str, from_value, json, to_string, to_value};
@@ -881,6 +1041,41 @@ mod tests {
         ])
         .expect("Should build labeled triangle");
         DelaunayBackend2D::from_triangulation(dt).expect("test Delaunay triangle should validate")
+    }
+
+    #[test]
+    fn metadata_accessors_do_not_require_backend_query_trait() {
+        struct MetadataOnlyBackend;
+
+        let now = Instant::now();
+        let mut triangulation = CdtTriangulation {
+            instance_id: next_triangulation_instance_id(),
+            geometry: MetadataOnlyBackend,
+            metadata: CdtMetadata {
+                time_slices: 2,
+                dimension: 2,
+                topology: CdtTopology::OpenBoundary,
+                creation_time: now,
+                last_modified: now,
+                modification_count: 0,
+                simulation_history: Vec::new(),
+            },
+            cache: GeometryCache::default(),
+            foliation: None,
+            foliation_synced_at_modification: None,
+        };
+
+        assert_eq!(triangulation.time_slices(), 2);
+        assert_eq!(triangulation.dimension(), 2);
+        assert_eq!(
+            triangulation.metadata().topology(),
+            CdtTopology::OpenBoundary
+        );
+        triangulation
+            .set_time_slices(3)
+            .expect("open-boundary metadata update should validate");
+        assert_eq!(triangulation.time_slices(), 3);
+        assert_eq!(triangulation.metadata().modification_count(), 1);
     }
 
     /// Builds intentionally unchecked metadata for legacy validation tests.
@@ -932,6 +1127,23 @@ mod tests {
                 && topology == CdtTopology::OpenBoundary
                 && provided_value == "3"
                 && expected == "backend dimension (2)"
+        );
+    }
+
+    #[test]
+    fn test_try_new_rejects_open_boundary_topology_mismatch() {
+        let backend = MockBackend::new_2d();
+        let result = CdtTriangulation::try_new(backend, 3, 2);
+
+        assert_matches!(
+            result,
+            Err(CdtError::TopologyMismatch {
+                topology,
+                euler_characteristic: 0,
+                ref expected_euler_characteristics,
+                ..
+            }) if topology == CdtTopology::OpenBoundary
+                && expected_euler_characteristics.as_slice() == [1, 2]
         );
     }
 
@@ -2046,7 +2258,7 @@ mod prop_tests {
 
             // Dimension should be consistent
             prop_assert_eq!(usize::from(triangulation.dimension()), triangulation.geometry().dimension(),
-                          "Dimension should be consistent between wrapper and geometry");
+                          "Dimension should be consistent between CDT state and geometry");
         }
 
     }

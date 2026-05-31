@@ -99,11 +99,11 @@ causal-triangulations/
 │   │   │   └── telemetry.rs
 │   │   ├── observables.rs
 │   │   ├── results.rs
-│   │   ├── triangulation.rs
 │   │   └── triangulation/
 │   │       ├── builders.rs
 │   │       ├── foliation.rs
 │   │       ├── moves.rs
+│   │       ├── state.rs
 │   │       └── validation.rs
 │   ├── geometry/
 │   │   ├── backends/
@@ -201,13 +201,13 @@ design details.
 - `SimplexType` — `Up` (2,1) or `Down` (1,2) triangle classification, encoded as `i32` simplex data
 - Time labels are stored directly as vertex data (`Vertex.data: Option<u32>`), mirroring CDT-plusplus’s `vertex->info()`
 
-### `cdt/triangulation.rs` — Foliation integration
+### `cdt/triangulation/` — Foliation integration
 
 This is CDT domain logic layered over the geometry backend interface. It may use `DelaunayBackend2D` and crate-owned Delaunay handles, but it does not reach
 through to upstream `delaunay::` APIs directly.
 
-- Owns the `CdtTriangulation` wrapper, `CdtMetadata`, `SimulationEvent`, metadata validation, cached simplex-count accessors, and common backend-agnostic
-  wrapper methods
+- Owns the `CdtTriangulation` state, `CdtMetadata`, `SimulationEvent`, metadata validation, cached simplex-count accessors, and common backend-agnostic state
+  methods
 - `from_cdt_strip(vertices_per_slice, num_slices)` — Delaunay-built open-boundary 1+1 CDT strip with strict Up/Down simplex classification and upstream Level
   1–4 Delaunay validation before wrapping
 - `from_cdt_strip_profile(volume_profile)` — open-boundary 1+1 CDT strip from explicit nonuniform per-slice vertex counts; builds labeled point data and
@@ -223,11 +223,13 @@ through to upstream `delaunay::` APIs directly.
 - Mutable backend access is not exposed. CDT code mutates Delaunay state only through narrow crate-internal operations (`flip_edge`, `subdivide_face`,
   `remove_vertex`, `set_vertex_data`) that invalidate cached counts and foliation synchronization bookkeeping on success.
 
-The implementation is split into child modules under `src/cdt/triangulation/`:
+The implementation lives under `src/cdt/triangulation/` and is wired from `src/lib.rs` to avoid `mod.rs` files:
 
 - `builders.rs` — Delaunay-backed random/seeded/labeled builders plus strip and periodic toroidal CDT builders
 - `foliation.rs` — foliation assignment, slice and label queries, volume profiles, simplex/edge classification, and foliation synchronization
 - `moves.rs` — narrow crate-internal Delaunay mutation hooks used by ergodic moves
+- `state.rs` — module entry point, `CdtTriangulation`, `CdtMetadata`, `SimulationEvent`, serialization, cached geometry accessors, and backend-agnostic
+  state methods
 - `validation.rs` — full CDT validation and Delaunay-backed causality checks
 
 ### `config.rs` — `CdtTopology` enum
@@ -235,8 +237,8 @@ The implementation is split into child modules under `src/cdt/triangulation/`:
 - `OpenBoundary` (default) — finite strip with boundary, χ ∈ {1, 2}
 - `Toroidal` — periodic in space and time, S¹×S¹, χ = 0
 - Wired through `CdtConfig.topology`, `CdtConfigOverrides.topology`, the CLI `--topology` flag, and `CdtMetadata.topology`
-- `run_simulation()` dispatches on topology and profile mode: regular `Toroidal` → `from_toroidal_cdt`, regular `OpenBoundary` → `from_cdt_strip`, and
-  explicit `CdtConfig.volume_profile` → the matching profile constructor; `vertices` is always the total vertex count
+- `run_simulation()` accepts `ValidatedCdtConfig` and dispatches on topology and profile mode: regular `Toroidal` → `from_toroidal_cdt`, regular
+  `OpenBoundary` → `from_cdt_strip`, and explicit `CdtConfig.volume_profile` → the matching profile constructor; `vertices` is always the total vertex count
 
 ### `cdt/metropolis/` — Metropolis move ordering
 
@@ -277,7 +279,7 @@ detailed ordering and
 
 - `GeometryBackend` defines associated coordinate, handle, and error types for a geometry implementation
 - `TriangulationQuery` is the read-only surface used by CDT logic for counts, handles, adjacency, coordinates, face vertices, and validation
-- `TriangulationMut` is the narrow mutation surface used by CDT-owned move kernels through wrapper methods, not broad mutable backend exposure
+- `TriangulationMut` is the narrow mutation surface used by CDT-owned move kernels through CDT state mutation methods, not broad mutable backend exposure
 - Result structs such as `FlipResult`, `EdgeAdjacentFaces`, and `SubdivisionResult` keep local topology operations backend-neutral
 - Use `prelude::geometry` for real backend construction and geometry traits; use `prelude::testing` for mock-backend doctests or downstream fixture code
 

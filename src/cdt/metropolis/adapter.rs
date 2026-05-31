@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Adapter boundary between CDT state and `markov-chain-monte-carlo`.
 
 use crate::cdt::action::ActionConfig;
@@ -40,7 +42,7 @@ impl CdtTarget {
     /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     pub fn new(action_config: ActionConfig, temperature: f64) -> CdtResult<Self> {
-        action_config.validate()?;
+        action_config.validate();
         validate_temperature(temperature)?;
         Ok(Self {
             action_config,
@@ -79,7 +81,7 @@ impl Target<CdtTriangulation2D> for CdtTarget {
 ///
 /// # fn main() -> CdtResult<()> {
 /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-/// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7)?;
+/// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
 /// let mut rng = StdRng::seed_from_u64(11);
 ///
 /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
@@ -131,7 +133,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7)?;
+    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
     ///     return Ok(());
@@ -160,7 +162,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7)?;
+    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
     ///     return Ok(());
@@ -190,7 +192,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7)?;
+    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
     ///     return Ok(());
@@ -216,7 +218,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7)?;
+    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
     ///     return Ok(());
@@ -253,7 +255,7 @@ impl CdtProposalPlan {
 ///
 /// # fn main() -> CdtResult<()> {
 /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-/// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7)?;
+/// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
 /// let mut rng = StdRng::seed_from_u64(11);
 /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
 ///     return Ok(());
@@ -377,7 +379,7 @@ impl From<CdtProposalError> for CdtError {
 ///
 /// # fn main() -> CdtResult<()> {
 /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-/// let mut proposal = CdtProposal::new(ActionConfig::default())?;
+/// let mut proposal = CdtProposal::new(ActionConfig::default());
 /// let mut rng = StdRng::seed_from_u64(7);
 ///
 /// let plan = proposal.propose_plan(&tri, &mut rng)?;
@@ -398,25 +400,20 @@ impl CdtProposal {
     /// Delayed scoring is delegated to the target passed to
     /// [`DelayedProposal::proposed_log_prob`].
     ///
-    /// # Errors
-    ///
-    /// Returns [`CdtError::InvalidConfiguration`] if the action couplings are
-    /// non-finite.
-    ///
     /// # Examples
     ///
     /// ```
     /// use causal_triangulations::prelude::simulation::{ActionConfig, CdtProposal};
     ///
-    /// let _proposal = CdtProposal::new(ActionConfig::default())?;
-    /// # Ok::<(), causal_triangulations::CdtError>(())
+    /// let _proposal = CdtProposal::new(ActionConfig::default());
     /// ```
-    pub fn new(action_config: ActionConfig) -> CdtResult<Self> {
-        action_config.validate()?;
-        Ok(Self {
+    #[must_use]
+    pub fn new(action_config: ActionConfig) -> Self {
+        action_config.validate();
+        Self {
             action_config,
             moves: ErgodicsSystem::new(),
-        })
+        }
     }
 
     /// Creates a seeded delayed CDT proposal distribution.
@@ -425,25 +422,20 @@ impl CdtProposal {
     /// [`DelayedProposal::propose_plan`] is still accepted for compatibility
     /// with generic MCMC drivers.
     ///
-    /// # Errors
-    ///
-    /// Returns [`CdtError::InvalidConfiguration`] if the action couplings are
-    /// non-finite.
-    ///
     /// # Examples
     ///
     /// ```
     /// use causal_triangulations::prelude::simulation::{ActionConfig, CdtProposal};
     ///
-    /// let _proposal = CdtProposal::with_seed(ActionConfig::default(), 42)?;
-    /// # Ok::<(), causal_triangulations::CdtError>(())
+    /// let _proposal = CdtProposal::with_seed(ActionConfig::default(), 42);
     /// ```
-    pub fn with_seed(action_config: ActionConfig, seed: u64) -> CdtResult<Self> {
-        action_config.validate()?;
-        Ok(Self {
+    #[must_use]
+    pub fn with_seed(action_config: ActionConfig, seed: u64) -> Self {
+        action_config.validate();
+        Self {
             action_config,
             moves: ErgodicsSystem::with_seed(seed),
-        })
+        }
     }
 }
 
@@ -564,9 +556,9 @@ pub(crate) fn propose_concrete_plan(
     };
 
     let mut proposed_state = state.clone();
-    let move_stats_before = moves.stats.clone();
+    let move_stats_before = moves.stats().clone();
     let result = moves.apply_proposal_site(&mut proposed_state, move_type, site);
-    moves.stats = move_stats_before;
+    moves.replace_stats(move_stats_before);
     let action_after = match result {
         MoveResult::Success => action_for(action_config, &proposed_state),
         MoveResult::HardFailure(err) => {
