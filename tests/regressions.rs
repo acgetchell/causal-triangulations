@@ -4,7 +4,7 @@
 
 use causal_triangulations::{
     ActionConfig, CdtTriangulation, ErgodicsSystem, MetropolisAlgorithm, MetropolisConfig,
-    MoveResult,
+    MoveResult, SimulationEvent,
 };
 use std::assert_matches;
 
@@ -48,6 +48,50 @@ fn toroidal_observables_run_accepts_periodic_moves_after_offset_support() {
     assert!(
         results.spectral_dimension_estimate().is_some(),
         "observables workflow should still report a spectral estimate"
+    );
+}
+
+#[test]
+fn accepted_move_history_keeps_matching_attempt_after_planned_proposal_handoff() {
+    // Regression for causal-triangulations#153: accepted planned-proposal steps
+    // replace the live triangulation with the committed chain state. The final
+    // state must retain the MoveAttempted event for each accepted move, not only
+    // the MoveAccepted event recorded after the replacement.
+    let triangulation =
+        CdtTriangulation::from_toroidal_cdt(4, 3).expect("history fixture should build");
+    let metropolis_config = MetropolisConfig::new(1.0, 20, 0, 5)
+        .expect("history regression Metropolis config should be valid")
+        .with_seed(7);
+
+    let results =
+        MetropolisAlgorithm::new(metropolis_config, ActionConfig::default()).run(triangulation);
+    let results = results.expect("history regression run should complete");
+    let history = results.triangulation().metadata().simulation_history();
+
+    let mut accepted_events = 0_u64;
+    for event in history {
+        let SimulationEvent::MoveAccepted {
+            move_type, step, ..
+        } = event
+        else {
+            continue;
+        };
+        accepted_events = accepted_events.saturating_add(1);
+        assert!(
+            history.iter().any(|candidate| matches!(
+                candidate,
+                SimulationEvent::MoveAttempted {
+                    move_type: attempted_move,
+                    step: attempted_step,
+                } if attempted_move == move_type && attempted_step == step
+            )),
+            "accepted move {move_type:?} at step {step} should retain its matching attempt event"
+        );
+    }
+
+    assert!(
+        accepted_events > 0,
+        "deterministic history regression should accept at least one move"
     );
 }
 

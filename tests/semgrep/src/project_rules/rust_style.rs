@@ -3,6 +3,38 @@
 
 use num_traits::cast::NumCast;
 
+struct ProposalRefFixture;
+
+impl ProposalRefFixture {
+    fn last_step_info(&self) -> Option<u32> {
+        Some(1)
+    }
+}
+
+struct SamplerFixture;
+
+impl SamplerFixture {
+    fn proposal_ref(&self) -> ProposalRefFixture {
+        ProposalRefFixture
+    }
+
+    fn replace_state(&mut self, _state: u32) -> Result<(), &'static str> {
+        Ok(())
+    }
+}
+
+struct StateFixture {
+    current_step: u32,
+    triangulation: u32,
+}
+
+fn record_planned_step(
+    _sampler: &SamplerFixture,
+    _state: &mut StateFixture,
+) -> Result<(), &'static str> {
+    Ok(())
+}
+
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 use delaunay::prelude::DelaunayTriangulation;
 
@@ -238,4 +270,42 @@ fn stringly_domain_validation_errors() {
         check: "geometry".to_string(),
         detail: "backend rejected structure".to_string(),
     };
+}
+
+fn planned_step_info_from_proposal_cache_fixture(sampler: &SamplerFixture, step_info: Option<u32>) {
+    // ruleid: causal-triangulations.rust.planned-step-info-not-proposal-cache
+    let _ = sampler.proposal_ref().last_step_info();
+
+    // ok: causal-triangulations.rust.planned-step-info-not-proposal-cache
+    let _ = step_info.expect("planned step should provide proposal info");
+
+    // ok: causal-triangulations.rust.planned-step-info-not-proposal-cache
+    debug_assert_eq!(
+        sampler.proposal_ref().last_step_info(),
+        step_info,
+        "proposal telemetry cache should mirror planned step info"
+    );
+}
+
+fn planned_step_record_without_sampler_sync_fixture(
+    sampler: &mut SamplerFixture,
+    state: &mut StateFixture,
+    step: u32,
+) -> Result<(), &'static str> {
+    // ruleid: causal-triangulations.rust.planned-step-record-requires-sampler-state-sync
+    record_planned_step(sampler, state)?;
+    state.current_step = step;
+    Ok(())
+}
+
+fn planned_step_record_with_sampler_sync_fixture(
+    sampler: &mut SamplerFixture,
+    state: &mut StateFixture,
+    step: u32,
+) -> Result<(), &'static str> {
+    // ok: causal-triangulations.rust.planned-step-record-requires-sampler-state-sync
+    record_planned_step(sampler, state)?;
+    sampler.replace_state(state.triangulation)?;
+    state.current_step = step;
+    Ok(())
 }

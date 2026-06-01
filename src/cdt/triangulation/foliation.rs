@@ -7,7 +7,7 @@ use crate::cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType, cl
 use crate::config::CdtTopology;
 use crate::errors::{
     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
-    GenerationParameterIssue, TriangulationMetadataField,
+    TriangulationMetadataField,
 };
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
@@ -16,6 +16,7 @@ use crate::geometry::backends::delaunay::{
 use crate::geometry::traits::TriangulationQuery;
 use crate::util::f64_band_to_u32;
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroU32;
 
 impl CdtTriangulation<DelaunayBackend2D> {
     /// Validate foliation consistency.
@@ -38,10 +39,14 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// ```
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::num::NonZeroU32;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let mut tri = CdtTriangulation::from_seeded_points(12, 3, 2, 42)?;
-    ///     tri.assign_foliation_by_y(3)?;
+    ///     let Some(num_slices) = NonZeroU32::new(3) else {
+    ///         return Ok(());
+    ///     };
+    ///     tri.assign_foliation_by_y(num_slices)?;
     ///     tri.validate_foliation()?;
     ///     Ok(())
     /// }
@@ -282,19 +287,23 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// # Errors
     ///
-    /// Returns error if `num_slices` is zero, if vertex coordinates cannot be
-    /// read, if y-bucket assignment would leave any time slice empty, if the
-    /// requested slice count violates the triangulation topology, or if writing
-    /// vertex labels or clearing stale simplex labels in the backend fails.
+    /// Returns error if vertex coordinates cannot be read, if y-bucket
+    /// assignment would leave any time slice empty, if the requested slice count
+    /// violates the triangulation topology, or if writing vertex labels or
+    /// clearing stale simplex labels in the backend fails.
     ///
     /// # Examples
     ///
     /// ```
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use std::num::NonZeroU32;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let mut tri = CdtTriangulation::from_seeded_points(12, 3, 2, 42)?;
-    ///     tri.assign_foliation_by_y(3)?;
+    ///     let Some(num_slices) = NonZeroU32::new(3) else {
+    ///         return Ok(());
+    ///     };
+    ///     tri.assign_foliation_by_y(num_slices)?;
     ///
     ///     assert!(tri.has_foliation());
     ///     assert_eq!(tri.slice_sizes().iter().sum::<usize>(), tri.vertex_count());
@@ -305,15 +314,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         clippy::too_many_lines,
         reason = "foliation assignment stages labels, writes backend payloads, and rolls back on failure to preserve atomic metadata/foliation invariants"
     )]
-    pub fn assign_foliation_by_y(&mut self, num_slices: u32) -> CdtResult<()> {
-        if num_slices == 0 {
-            return Err(CdtError::InvalidGenerationParameters {
-                issue: GenerationParameterIssue::NonPositiveSliceCount,
-                provided_value: "0".to_string(),
-                expected_range: "≥ 1".to_string(),
-            });
-        }
-
+    pub fn assign_foliation_by_y(&mut self, num_slices: NonZeroU32) -> CdtResult<()> {
+        let raw_num_slices = num_slices.get();
         let y_coords: Vec<(DelaunayVertexHandle, f64)> = self
             .geometry
             .vertices()
@@ -354,23 +356,23 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let band_height = if range.abs() < f64::EPSILON {
             1.0
         } else {
-            range / f64::from(num_slices)
+            range / f64::from(raw_num_slices)
         };
 
         let mut assignments = Vec::with_capacity(y_coords.len());
-        let mut slice_sizes = vec![0usize; num_slices as usize];
+        let mut slice_sizes = vec![0usize; raw_num_slices as usize];
         for (vh, y) in &y_coords {
             let t = if range.abs() < f64::EPSILON {
                 0
             } else {
                 let band_index = ((y - y_min) / band_height).floor();
-                f64_band_to_u32(band_index, num_slices - 1)
+                f64_band_to_u32(band_index, raw_num_slices - 1)
             };
             assignments.push((vh.vertex_key(), t));
             slice_sizes[t as usize] += 1;
         }
 
-        Self::check_time_slices(self.metadata.topology, num_slices)?;
+        Self::check_time_slices(self.metadata.topology, raw_num_slices)?;
 
         let foliation =
             Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
@@ -449,7 +451,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             }
         }
 
-        self.metadata.time_slices = Self::parse_time_slices(self.metadata.topology, num_slices)?;
+        self.metadata.time_slices = num_slices;
         self.bump_modification_count();
         self.foliation = Some(foliation);
         self.mark_foliation_synchronized();
@@ -1012,7 +1014,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             &self.geometry,
             self.metadata.time_slices.get(),
         )?;
-        let foliation = Foliation::from_slice_sizes(slice_sizes, self.metadata.time_slices.get())
+        let foliation = Foliation::from_slice_sizes(slice_sizes, self.metadata.time_slices)
             .map_err(CdtError::from)?;
 
         self.foliation = Some(foliation);
@@ -1036,6 +1038,10 @@ mod tests {
     use std::assert_matches;
     use std::thread;
     use std::time::Duration;
+
+    fn slice_count(value: u32) -> NonZeroU32 {
+        NonZeroU32::new(value).expect("test slice count should be nonzero")
+    }
 
     /// Builds a minimal labeled Delaunay backend for foliation tests.
     fn labeled_triangle_backend(labels: [u32; 3]) -> DelaunayBackend2D {
@@ -1152,8 +1158,11 @@ mod tests {
         let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
             .expect("Should preserve labels as foliation");
         tri.foliation = Some(
-            Foliation::from_slice_sizes(vec![1, 1], 2)
-                .expect("non-empty mismatched bookkeeping is constructible"),
+            Foliation::from_slice_sizes(
+                vec![1, 1],
+                NonZeroU32::new(2).expect("test slice count should be nonzero"),
+            )
+            .expect("non-empty mismatched bookkeeping is constructible"),
         );
 
         assert_matches!(
@@ -1176,7 +1185,7 @@ mod tests {
         assert!(tri.cache.edge_count.is_some());
 
         thread::sleep(Duration::from_millis(5));
-        tri.assign_foliation_by_y(3)
+        tri.assign_foliation_by_y(slice_count(3))
             .expect("Should assign foliation");
 
         assert!(tri.has_foliation());
@@ -1206,7 +1215,7 @@ mod tests {
             .map(|vh| vh.vertex_key())
             .collect();
 
-        assert!(tri.assign_foliation_by_y(0).is_err());
+        assert!(NonZeroU32::new(0).is_none());
         assert_eq!(tri.time_slices(), initial_time_slices);
         assert_eq!(
             tri.metadata().modification_count,
@@ -1216,7 +1225,7 @@ mod tests {
         let requested_slices = u32::try_from(tri.vertex_count())
             .expect("vertex count should fit into u32 for this test")
             .saturating_add(1);
-        let result = tri.assign_foliation_by_y(requested_slices);
+        let result = tri.assign_foliation_by_y(slice_count(requested_slices));
 
         assert_matches!(
             result,
@@ -1238,7 +1247,7 @@ mod tests {
         let mut tri = CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
         let initial_slice_sizes = tri.slice_sizes().to_vec();
 
-        let result = tri.assign_foliation_by_y(2);
+        let result = tri.assign_foliation_by_y(slice_count(2));
 
         assert_matches!(
             result,
@@ -1266,7 +1275,7 @@ mod tests {
         assert!(tri.slice_sizes().is_empty());
         assert!(tri.vertices_at_time(0).is_empty());
 
-        tri.assign_foliation_by_y(1)
+        tri.assign_foliation_by_y(slice_count(1))
             .expect("Should assign single-slice foliation");
 
         assert!(tri.has_foliation());
@@ -1419,13 +1428,13 @@ mod tests {
         let mut tri =
             CdtTriangulation::from_cdt_strip(5, 3).expect("Failed to create deterministic strip");
 
-        tri.assign_foliation_by_y(3)
+        tri.assign_foliation_by_y(slice_count(3))
             .expect("First foliation assignment should succeed");
         tri.classify_all_simplices()
             .expect("classify_all_simplices should succeed")
             .expect("foliation is present");
 
-        tri.assign_foliation_by_y(2)
+        tri.assign_foliation_by_y(slice_count(2))
             .expect("Re-assignment with different slice count should succeed");
 
         assert_eq!(tri.time_slices().get(), 2);

@@ -6,7 +6,9 @@ use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType, proposal_site_count};
 use crate::errors::{CdtError, CdtResult, MetropolisMoveApplicationFailure};
 use crate::geometry::CdtTriangulation2D;
-use markov_chain_monte_carlo::{Chain, ChainCheckpoint, DelayedProposal, McmcError, Target};
+use markov_chain_monte_carlo::{
+    Chain, ChainCheckpoint, DelayedProposal, DiscreteProposalRatio, McmcError, Target,
+};
 use rand::Rng;
 use std::error::Error;
 use std::fmt;
@@ -61,14 +63,15 @@ impl Target<CdtTriangulation2D> for CdtTarget {
     }
 }
 
-/// Concrete delayed CDT move proposal selected before committing live state.
+/// Concrete CDT proposal plan selected before committing live state.
 ///
 /// A plan records the selected [`MoveType`], the action before and after the
 /// move, and a cloned triangulation containing the proposed mutation. Planning
 /// may mutate that clone to realize a concrete local site, but it never mutates
-/// the live simulation state. The delayed proposal API scores this plan with
-/// the Metropolis-Hastings forward/reverse proposal-site ratio, then commits
-/// the cloned state only if the Metropolis step accepts it.
+/// the live simulation state. The sampler scores this plan with the
+/// Metropolis-Hastings forward/reverse proposal-site ratio, then commits the
+/// cloned state only if the Metropolis step accepts it. This planning boundary
+/// is the natural hook for future adaptive or self-learning proposal selection.
 ///
 /// # Examples
 ///
@@ -239,7 +242,7 @@ impl CdtProposalPlan {
     }
 }
 
-/// Telemetry returned by delayed CDT proposal steps.
+/// Telemetry returned by planned CDT proposal steps.
 ///
 /// The sampler receives this compact record after a plan has been scored. It is
 /// intended for diagnostics and measurement backends that need to report which
@@ -282,11 +285,11 @@ pub struct CdtProposalInfo {
     pub delta_action: Option<f64>,
 }
 
-/// Error reported by delayed CDT proposal planning or commit.
+/// Error reported by planned CDT proposal planning or commit.
 ///
 /// No-site outcomes are ordinary proposal absence and are reported from
 /// [`DelayedProposal::propose_plan`] as `Ok(None)`, matching the upstream
-/// delayed-commit contract. `ApplicationFailed` represents a hard backend or
+/// plan-before-commit contract. `ApplicationFailed` represents a hard backend or
 /// invariant failure while constructing or committing a concrete proposal, and
 /// preserves the typed [`CdtError`] that caused the failed application.
 ///
@@ -360,14 +363,16 @@ impl From<CdtProposalError> for CdtError {
     }
 }
 
-/// Delayed-commit CDT proposal distribution.
+/// Planned CDT proposal distribution.
 ///
-/// This adapter exposes CDT's clone-plan-commit move ordering through the
-/// [`DelayedProposal`] API. It plans a concrete local move on a cloned
+/// This adapter exposes CDT's clone-plan-score-commit move ordering through the
+/// upstream [`DelayedProposal`] API. It plans a concrete local move on a cloned
 /// triangulation, scores the proposed state with the same [`ActionConfig`] as
 /// the matching [`CdtTarget`] or [`MetropolisAlgorithm`](super::MetropolisAlgorithm), corrects for
 /// forward/reverse proposal-site counts, and commits the clone only after
-/// acceptance.
+/// acceptance. Future self-learning Metropolis-Hastings proposal policies
+/// should plug into this planner boundary instead of mutating the live chain
+/// before acceptance.
 ///
 /// # Examples
 ///
@@ -392,12 +397,15 @@ impl From<CdtProposalError> for CdtError {
 pub struct CdtProposal {
     action_config: ActionConfig,
     moves: ErgodicsSystem,
+    last_step_info: Option<CdtProposalInfo>,
+    last_no_plan_info: Option<CdtProposalInfo>,
+    last_proposal_stats: ProposalStatistics,
 }
 
 impl CdtProposal {
-    /// Creates a new unseeded delayed CDT proposal distribution.
+    /// Creates a new unseeded CDT proposal planner.
     ///
-    /// Delayed scoring is delegated to the target passed to
+    /// Proposed-state scoring is delegated to the target passed to
     /// [`DelayedProposal::proposed_log_prob`].
     ///
     /// # Examples
@@ -413,10 +421,13 @@ impl CdtProposal {
         Self {
             action_config,
             moves: ErgodicsSystem::new(),
+            last_step_info: None,
+            last_no_plan_info: None,
+            last_proposal_stats: ProposalStatistics::new(),
         }
     }
 
-    /// Creates a seeded delayed CDT proposal distribution.
+    /// Creates a seeded CDT proposal planner.
     ///
     /// The seed controls the internal move-family selector. The `rng` passed to
     /// [`DelayedProposal::propose_plan`] is still accepted for compatibility
@@ -435,7 +446,52 @@ impl CdtProposal {
         Self {
             action_config,
             moves: ErgodicsSystem::with_seed(seed),
+            last_step_info: None,
+            last_no_plan_info: None,
+            last_proposal_stats: ProposalStatistics::new(),
         }
+    }
+
+    /// Rebuilds a proposal planner from checkpointed ergodic-move state.
+    ///
+    /// Resumed simulations use this to hand the upstream sampler the exact
+    /// proposal RNG stream stored in a CDT checkpoint while resetting
+    /// per-step telemetry caches.
+    pub(crate) fn from_ergodics(action_config: ActionConfig, moves: ErgodicsSystem) -> Self {
+        action_config.validate();
+        Self {
+            action_config,
+            moves,
+            last_step_info: None,
+            last_no_plan_info: None,
+            last_proposal_stats: ProposalStatistics::new(),
+        }
+    }
+
+    /// Extracts the ergodic-move state after upstream sampler execution.
+    ///
+    /// The caller writes the returned state back into the CDT checkpoint/run
+    /// state so later chunks continue from the same proposal RNG stream.
+    pub(crate) fn into_ergodics(self) -> ErgodicsSystem {
+        self.moves
+    }
+
+    /// Returns telemetry recorded by the most recent planned proposal attempt.
+    ///
+    /// [`MetropolisAlgorithm`](super::runner::MetropolisAlgorithm) merges this
+    /// snapshot into CDT-owned proposal counters after the upstream sampler
+    /// reports the planned-step outcome.
+    pub(crate) const fn last_proposal_stats(&self) -> &ProposalStatistics {
+        &self.last_proposal_stats
+    }
+
+    /// Returns proposal metadata recorded by the most recent planned sampler step.
+    ///
+    /// CDT step history and move statistics depend on this metadata even for
+    /// self-loop proposals, so missing values are translated into an explicit
+    /// telemetry error during runner bookkeeping.
+    pub(crate) const fn last_step_info(&self) -> Option<CdtProposalInfo> {
+        self.last_step_info
     }
 }
 
@@ -451,6 +507,12 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
     ) -> Result<Option<Self::Plan>, Self::Error> {
         let move_type = self.moves.select_random_move();
         let action_before = action_for(&self.action_config, state);
+        let no_plan_info = CdtProposalInfo {
+            move_type,
+            action_before,
+            action_after: None,
+            delta_action: None,
+        };
         let mut proposal_stats = ProposalStatistics::new();
         let plan = match propose_concrete_plan(
             state,
@@ -462,10 +524,17 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
         ) {
             Ok(Some(plan)) => plan,
             Ok(None) => {
+                self.last_step_info = Some(no_plan_info);
+                self.last_no_plan_info = Some(no_plan_info);
+                self.last_proposal_stats = proposal_stats;
                 cold_path();
                 return Ok(None);
             }
             Err(err) => {
+                self.last_step_info = Some(no_plan_info);
+                self.last_no_plan_info = None;
+                proposal_stats.record_hard_failure();
+                self.last_proposal_stats = proposal_stats;
                 cold_path();
                 return Err(CdtProposalError::ApplicationFailed {
                     move_type,
@@ -474,7 +543,19 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
                 });
             }
         };
+        self.last_step_info = Some(CdtProposalInfo {
+            move_type: plan.move_type,
+            action_before: plan.action_before,
+            action_after: plan.action_after,
+            delta_action: plan.delta_action,
+        });
+        self.last_no_plan_info = None;
+        self.last_proposal_stats = proposal_stats;
         Ok(Some(plan))
+    }
+
+    fn no_plan_info(&mut self) -> Option<Self::Info> {
+        self.last_no_plan_info.take()
     }
 
     fn proposed_log_prob<T: Target<CdtTriangulation2D>>(
@@ -527,7 +608,7 @@ pub(crate) struct MoveApplicationError {
 /// The helper samples a local site, applies it to a cloned triangulation, and
 /// records the forward and reverse proposal-site counts needed for the
 /// Hastings correction. Ordinary no-site, causality, geometry, and recoverable
-/// backend rejections return `Ok(None)` so the public delayed proposal API can
+/// backend rejections return `Ok(None)` so the public planned-proposal API can
 /// expose them as self-loop proposals.
 ///
 /// # Errors
@@ -600,17 +681,8 @@ pub(crate) fn propose_concrete_plan(
 /// the selected move family. Zero denominators represent impossible proposal
 /// weights and are scored as negative infinity rather than panicking.
 pub(crate) fn concrete_log_q_ratio(_state: &CdtTriangulation2D, plan: &CdtProposalPlan) -> f64 {
-    let forward_sites = plan.forward_site_count;
-    if forward_sites == 0 {
-        return f64::NEG_INFINITY;
-    }
-
-    let reverse_sites = plan.reverse_site_count;
-    if reverse_sites == 0 {
-        return f64::NEG_INFINITY;
-    }
-
-    site_count_to_f64(forward_sites).ln() - site_count_to_f64(reverse_sites).ln()
+    DiscreteProposalRatio::from_counts(plan.forward_site_count, plan.reverse_site_count)
+        .map_or(f64::NEG_INFINITY, DiscreteProposalRatio::log_q_ratio)
 }
 
 /// Restores a checkpointed triangulation through the upstream MCMC chain type.
@@ -637,13 +709,4 @@ const fn reverse_move_type(move_type: MoveType) -> MoveType {
         MoveType::Move31Remove => MoveType::Move13Add,
         MoveType::EdgeFlip => MoveType::EdgeFlip,
     }
-}
-
-/// Converts local-site counts to finite values for proposal-ratio accounting.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "site counts are converted only for logarithmic Metropolis-Hastings ratios"
-)]
-pub(crate) const fn site_count_to_f64(count: usize) -> f64 {
-    count as f64
 }

@@ -571,6 +571,60 @@ rules:
       )
       \s*;
 
+  - id: causal-triangulations.rust.planned-step-info-not-proposal-cache
+    languages:
+      - rust
+    severity: WARNING
+    message: "Use the planned step's returned info for runtime bookkeeping; keep proposal cache reads to debug/test checks."
+    metadata:
+      category: correctness
+      rationale: >-
+        Planned-proposal telemetry should come from the step returned by the
+        upstream sampler. Reading CdtProposal::last_step_info() as the runtime
+        source of truth can drift from the authoritative sampler result.
+    paths:
+      include:
+        - "/src/cdt/metropolis/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+    patterns:
+      - pattern: $SAMPLER.proposal_ref().last_step_info()
+      - pattern-not-inside: |
+          debug_assert_eq!(
+              $SAMPLER.proposal_ref().last_step_info(),
+              ...,
+              ...
+          );
+      - pattern-not-inside: |
+          mod tests {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $MOD {
+              ...
+          }
+
+  - id: causal-triangulations.rust.planned-step-record-requires-sampler-state-sync
+    languages:
+      - rust
+    severity: WARNING
+    message: "Sync the annotated CDT state back into the sampler after recording a planned proposal step."
+    metadata:
+      category: correctness
+      rationale: >-
+        CDT records metadata and history after planned-proposal outcomes, while
+        the upstream sampler owns the state used by later proposals. Advancing
+        the step counter without sampler.replace_state(...) can discard those
+        annotations on a later handoff.
+    paths:
+      include:
+        - "/src/cdt/metropolis/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+    pattern-regex: >-
+      (?s)record_planned_step\([^;]*\)\?;\s*
+      (?:(?!replace_state\s*\().)*?
+      state\.current_step\s*=
+
   - id: causal-triangulations.rust.expect-requires-reason
     languages:
       - rust

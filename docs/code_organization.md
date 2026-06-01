@@ -186,7 +186,7 @@ handle wrappers, `DelaunayBackend2D`, and generator functions from `crate::geome
 
 Generic MCMC mechanics should be delegated to `markov-chain-monte-carlo` through thin CDT adapters. CDT owns domain state, proposal-site enumeration,
 foliation/topology validation, measurements, and result translation; the upstream MCMC crate should own Metropolis-Hastings acceptance, proposal-ratio
-application, chain counters, delayed-proposal commit ordering, and reusable sampler continuation behavior. The current boundary refactor is tracked by
+application, chain counters, planned-proposal commit ordering, and reusable sampler continuation behavior. The current boundary refactor is tracked by
 [`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155).
 
 ## Key Modules
@@ -253,7 +253,7 @@ for `markov-chain-monte-carlo` proposal and target traits. `runner.rs` keeps the
 state and resume validation, `telemetry.rs` owns public step/proposal telemetry, and `helpers.rs` holds shared CDT-domain calculations.
 
 This direct M-H loop is transitional. The production runner should migrate toward delegating generic acceptance, proposal-ratio application, chain counters, and
-delayed-proposal commit ordering to the upstream MCMC crate while retaining CDT-specific telemetry and result conversion. See `docs/metropolis.md` for the
+planned-proposal commit ordering to the upstream MCMC crate while retaining CDT-specific telemetry and result conversion. See `docs/metropolis.md` for the
 detailed ordering and
 [`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155) for the boundary refactor.
 

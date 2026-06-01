@@ -42,10 +42,10 @@ fn main() -> CdtResult<()> {
         detail: err.to_string(),
     })?;
     assert!(csv.starts_with("step,action,vertices,edges,triangles,accepted,delta_action\n"));
-    assert_eq!(summary["config"]["vertices"], config.vertices());
+    assert_eq!(summary["config"]["vertices"], config.vertices().get());
     assert_eq!(
         summary["final_triangulation"]["time_slices"],
-        config.timeslices()
+        config.timeslices().get()
     );
     assert_eq!(
         summary["measurements"].as_array().map_or(0, Vec::len),

@@ -18,6 +18,7 @@ use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
 use std::fmt::{self, Display};
+use std::num::NonZeroU32;
 use std::path::{Component, Path, PathBuf};
 
 /// Topology of the spatial slices in the CDT triangulation.
@@ -140,7 +141,7 @@ pub struct CdtConfig {
 ///
 /// [`CdtConfig`] remains the raw DTO for CLI, file, and test construction. Convert it
 /// into [`ValidatedCdtConfig`] before running algorithms that rely on topology,
-/// schedule, dimensionality, and finite-coupling invariants.
+/// schedule, dimensionality, finite-coupling, and nonzero count invariants.
 ///
 /// # Examples
 ///
@@ -150,7 +151,7 @@ pub struct CdtConfig {
 ///
 /// fn main() -> CdtResult<()> {
 ///     let validated = ValidatedCdtConfig::new(CdtConfig::new(16, 4))?;
-///     assert_eq!(validated.regular_vertices_per_slice(), Some(4));
+///     assert_eq!(validated.regular_vertices_per_slice().map(|count| count.get()), Some(4));
 ///     Ok(())
 /// }
 /// ```
@@ -158,6 +159,15 @@ pub struct CdtConfig {
 pub struct ValidatedCdtConfig {
     config: CdtConfig,
     metropolis_config: MetropolisConfig,
+    vertices: NonZeroU32,
+    timeslices: NonZeroU32,
+    initial_volume: ValidatedInitialVolumeData,
+}
+
+#[derive(Debug, Clone)]
+enum ValidatedInitialVolumeData {
+    Regular { vertices_per_slice: NonZeroU32 },
+    ExplicitProfile(Vec<NonZeroU32>),
 }
 
 /// Validated initial spatial-volume input for CDT construction.
@@ -178,8 +188,8 @@ pub struct ValidatedCdtConfig {
 ///     assert_matches!(
 ///         config.initial_volume(),
 ///         ValidatedInitialVolume::Regular {
-///             vertices_per_slice: 4
-///         }
+///             vertices_per_slice
+///         } if vertices_per_slice.get() == 4
 ///     );
 ///     Ok(())
 /// }
@@ -189,10 +199,10 @@ pub enum ValidatedInitialVolume<'a> {
     /// Regular equal-size spatial slices.
     Regular {
         /// Number of vertices in each slice.
-        vertices_per_slice: u32,
+        vertices_per_slice: NonZeroU32,
     },
     /// Explicit nonuniform spatial slice volumes.
-    ExplicitProfile(&'a [u32]),
+    ExplicitProfile(&'a [NonZeroU32]),
 }
 
 impl ValidatedCdtConfig {
@@ -212,12 +222,31 @@ impl ValidatedCdtConfig {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let validated = ValidatedCdtConfig::new(CdtConfig::new(16, 4))?;
-    ///     assert_eq!(validated.timeslices(), 4);
+    ///     assert_eq!(validated.timeslices().get(), 4);
     ///     Ok(())
     /// }
     /// ```
     pub fn new(config: CdtConfig) -> CdtResult<Self> {
         config.ensure_valid()?;
+        let vertices = nonzero_config_count(ConfigurationSetting::Vertices, config.vertices)?;
+        let timeslices = nonzero_config_count(ConfigurationSetting::Timeslices, config.timeslices)?;
+        let initial_volume = if let Some(profile) = &config.volume_profile {
+            ValidatedInitialVolumeData::ExplicitProfile(
+                profile
+                    .iter()
+                    .copied()
+                    .map(|volume| nonzero_config_count(ConfigurationSetting::VolumeProfile, volume))
+                    .collect::<CdtResult<Vec<_>>>()?,
+            )
+        } else {
+            let vertices_per_slice = config.vertices / config.timeslices;
+            ValidatedInitialVolumeData::Regular {
+                vertices_per_slice: nonzero_config_count(
+                    ConfigurationSetting::Vertices,
+                    vertices_per_slice,
+                )?,
+            }
+        };
         let metropolis_config = MetropolisConfig::new_with_seed(
             config.temperature,
             config.steps,
@@ -228,6 +257,9 @@ impl ValidatedCdtConfig {
         Ok(Self {
             config,
             metropolis_config,
+            vertices,
+            timeslices,
+            initial_volume,
         })
     }
 
@@ -293,7 +325,7 @@ impl ValidatedCdtConfig {
         }
     }
 
-    /// Total number of vertices in the initial triangulation.
+    /// Returns the nonzero total number of vertices in the initial triangulation.
     ///
     /// # Examples
     ///
@@ -303,16 +335,16 @@ impl ValidatedCdtConfig {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let config = CdtConfig::new(16, 4).into_validated()?;
-    ///     assert_eq!(config.vertices(), 16);
+    ///     assert_eq!(config.vertices().get(), 16);
     ///     Ok(())
     /// }
     /// ```
     #[must_use]
-    pub const fn vertices(&self) -> u32 {
-        self.config.vertices
+    pub const fn vertices(&self) -> NonZeroU32 {
+        self.vertices
     }
 
-    /// Number of initial time slices.
+    /// Returns the nonzero number of initial time slices.
     ///
     /// # Examples
     ///
@@ -322,16 +354,19 @@ impl ValidatedCdtConfig {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let config = CdtConfig::new(16, 4).into_validated()?;
-    ///     assert_eq!(config.timeslices(), 4);
+    ///     assert_eq!(config.timeslices().get(), 4);
     ///     Ok(())
     /// }
     /// ```
     #[must_use]
-    pub const fn timeslices(&self) -> u32 {
-        self.config.timeslices
+    pub const fn timeslices(&self) -> NonZeroU32 {
+        self.timeslices
     }
 
-    /// Optional explicit initial spatial volume profile.
+    /// Returns the optional explicit initial spatial volume profile.
+    ///
+    /// Each returned profile entry is nonzero because [`Self::new`] has already
+    /// rejected empty slices.
     ///
     /// # Examples
     ///
@@ -347,16 +382,22 @@ impl ValidatedCdtConfig {
     ///         ..CdtConfig::new(15, 3)
     ///     }
     ///     .into_validated()?;
-    ///     assert_eq!(config.volume_profile(), Some([4, 6, 5].as_slice()));
+    ///     let Some(profile) = config.volume_profile() else {
+    ///         return Ok(());
+    ///     };
+    ///     assert!(profile.iter().map(|volume| volume.get()).eq([4, 6, 5]));
     ///     Ok(())
     /// }
     /// ```
     #[must_use]
-    pub fn volume_profile(&self) -> Option<&[u32]> {
-        self.config.volume_profile.as_deref()
+    pub fn volume_profile(&self) -> Option<&[NonZeroU32]> {
+        match &self.initial_volume {
+            ValidatedInitialVolumeData::Regular { .. } => None,
+            ValidatedInitialVolumeData::ExplicitProfile(profile) => Some(profile),
+        }
     }
 
-    /// Vertices per slice for validated regular equal-slice initial data.
+    /// Returns the nonzero vertices per slice for regular equal-slice initial data.
     ///
     /// Returns `None` when the configuration uses an explicit volume profile.
     ///
@@ -368,19 +409,19 @@ impl ValidatedCdtConfig {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let regular = CdtConfig::new(16, 4).into_validated()?;
-    ///     assert_eq!(regular.regular_vertices_per_slice(), Some(4));
+    ///     assert_eq!(regular.regular_vertices_per_slice().map(|count| count.get()), Some(4));
     ///     Ok(())
     /// }
     /// ```
     #[must_use]
-    pub fn regular_vertices_per_slice(&self) -> Option<u32> {
-        self.config
-            .volume_profile
-            .is_none()
-            .then_some(self.config.vertices / self.config.timeslices)
+    pub const fn regular_vertices_per_slice(&self) -> Option<NonZeroU32> {
+        match &self.initial_volume {
+            ValidatedInitialVolumeData::Regular { vertices_per_slice } => Some(*vertices_per_slice),
+            ValidatedInitialVolumeData::ExplicitProfile(_) => None,
+        }
     }
 
-    /// Initial spatial-volume input with validation proof attached.
+    /// Returns initial spatial-volume input with validation proof attached.
     ///
     /// The returned value is safe to feed directly into CDT constructors because
     /// [`Self::new`] has already checked topology-specific slice constraints.
@@ -403,19 +444,24 @@ impl ValidatedCdtConfig {
     ///
     ///     assert_matches!(
     ///         config.initial_volume(),
-    ///         ValidatedInitialVolume::ExplicitProfile([4, 6, 5])
+    ///         ValidatedInitialVolume::ExplicitProfile(profile)
+    ///             if profile.iter().map(|volume| volume.get()).eq([4, 6, 5])
     ///     );
     ///     Ok(())
     /// }
     /// ```
     #[must_use]
     pub fn initial_volume(&self) -> ValidatedInitialVolume<'_> {
-        self.config.volume_profile.as_ref().map_or_else(
-            || ValidatedInitialVolume::Regular {
-                vertices_per_slice: self.config.vertices / self.config.timeslices,
-            },
-            |profile| ValidatedInitialVolume::ExplicitProfile(profile),
-        )
+        match &self.initial_volume {
+            ValidatedInitialVolumeData::Regular { vertices_per_slice } => {
+                ValidatedInitialVolume::Regular {
+                    vertices_per_slice: *vertices_per_slice,
+                }
+            }
+            ValidatedInitialVolumeData::ExplicitProfile(profile) => {
+                ValidatedInitialVolume::ExplicitProfile(profile)
+            }
+        }
     }
 
     /// Selected initial topology.
@@ -864,7 +910,7 @@ impl CdtConfig {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let config = CdtConfig::new(16, 4).into_validated()?;
-    ///     assert_eq!(config.vertices(), 16);
+    ///     assert_eq!(config.vertices().get(), 16);
     ///     Ok(())
     /// }
     /// ```
@@ -901,8 +947,8 @@ impl CdtConfig {
     ///
     ///     let merged = base.merge_with_override(&overrides)?;
     ///     assert_eq!(merged.config().dimension, None);
-    ///     assert_eq!(merged.vertices(), 24);
-    ///     assert_eq!(merged.timeslices(), 2);
+    ///     assert_eq!(merged.vertices().get(), 24);
+    ///     assert_eq!(merged.timeslices().get(), 2);
     ///     Ok(())
     /// }
     /// ```
@@ -1155,6 +1201,15 @@ fn validate_coupling(setting: ConfigurationSetting, value: f64) -> CdtResult<()>
     }
 }
 
+/// Converts a validated positive configuration count into a `NonZeroU32`.
+///
+/// [`ValidatedCdtConfig`] uses this helper after raw [`CdtConfig`] validation so
+/// downstream callers can preserve nonzero proof instead of rechecking raw
+/// counts.
+fn nonzero_config_count(setting: ConfigurationSetting, value: u32) -> CdtResult<NonZeroU32> {
+    NonZeroU32::new(value).ok_or_else(|| invalid_config(setting, &value, &"≥ 1"))
+}
+
 /// Parses a comma-separated spatial volume profile from the CLI.
 fn parse_volume_profile(raw: &str) -> Result<Vec<u32>, String> {
     let mut profile = Vec::new();
@@ -1404,7 +1459,7 @@ impl CdtConfig {
     /// use causal_triangulations::CdtConfig;
     ///
     /// let config = CdtConfig::new(16, 4).into_validated()?;
-    /// assert_eq!(config.timeslices(), 4);
+    /// assert_eq!(config.timeslices().get(), 4);
     /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     fn ensure_valid(&self) -> CdtResult<()> {
@@ -1801,14 +1856,17 @@ mod tests {
             .into_validated()
             .expect("regular config should validate");
         assert_eq!(regular.dimension(), 2);
-        assert_eq!(regular.vertices(), 64);
-        assert_eq!(regular.timeslices(), 4);
-        assert_eq!(regular.regular_vertices_per_slice(), Some(16));
+        assert_eq!(regular.vertices().get(), 64);
+        assert_eq!(regular.timeslices().get(), 4);
+        assert_eq!(
+            regular.regular_vertices_per_slice().map(NonZeroU32::get),
+            Some(16)
+        );
         assert_matches!(
             regular.initial_volume(),
             ValidatedInitialVolume::Regular {
-                vertices_per_slice: 16
-            }
+                vertices_per_slice
+            } if vertices_per_slice.get() == 16
         );
 
         let profiled = CdtConfig {
@@ -1821,9 +1879,18 @@ mod tests {
         .expect("profile config should validate");
 
         assert_eq!(profiled.regular_vertices_per_slice(), None);
+        assert!(
+            profiled
+                .volume_profile()
+                .expect("explicit profile should be present")
+                .iter()
+                .map(|volume| volume.get())
+                .eq([4, 6, 5])
+        );
         assert_matches!(
             profiled.initial_volume(),
-            ValidatedInitialVolume::ExplicitProfile([4, 6, 5])
+            ValidatedInitialVolume::ExplicitProfile(profile)
+                if profile.iter().map(|volume| volume.get()).eq([4, 6, 5])
         );
     }
 

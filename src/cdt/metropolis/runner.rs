@@ -19,12 +19,16 @@ use crate::errors::{
     MetropolisMoveApplicationFailure,
 };
 use crate::geometry::CdtTriangulation2D;
-use rand::{Rng, RngExt, SeedableRng, rngs::Xoshiro256PlusPlus};
+use markov_chain_monte_carlo::{
+    Chain, ChainCheckpoint, DelayedStep, DelayedStepError, Sampler, StepOutcome,
+};
+use rand::{SeedableRng, rngs::Xoshiro256PlusPlus};
 use serde::{Deserialize, Serialize};
+use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
 
 use super::adapter::{
-    CdtTarget, concrete_log_q_ratio, propose_concrete_plan, restore_checkpoint_state,
+    CdtProposal, CdtProposalError, CdtProposalInfo, CdtTarget, restore_checkpoint_state,
 };
 use super::checkpoint::{
     CdtMcmcCheckpoint, CdtMcmcCheckpointParts, chain_counters, checkpoint_resume_failed,
@@ -34,7 +38,6 @@ use super::helpers::{
     action_for, actions_match, measurement_for, measurement_is_due, validate_metropolis_schedule,
 };
 use super::telemetry::{MonteCarloStep, ProposalStatistics};
-use std::num::NonZeroU32;
 
 /// Validated configuration for the Metropolis-Hastings algorithm.
 ///
@@ -495,7 +498,7 @@ impl MetropolisAlgorithm {
     /// Run the simulation and return a resumable checkpoint.
     ///
     /// The checkpoint embeds the current triangulation in the MCMC crate's
-    /// [`ChainCheckpoint`](markov_chain_monte_carlo::ChainCheckpoint) and stores CDT-specific
+    /// [`ChainCheckpoint`] and stores CDT-specific
     /// proposal state, telemetry, and RNG streams beside it.
     ///
     /// Direct in-memory resume through [`Self::resume_from_checkpoint`] or
@@ -691,19 +694,72 @@ impl MetropolisAlgorithm {
         }
     }
 
+    /// Advances mutable run state through the planned-proposal sampler.
+    ///
+    /// This is the only step loop used by fresh runs and checkpoint
+    /// continuation. It rebuilds the generic chain view from CDT counters,
+    /// persists the proposal RNG stream after each chunk, and keeps CDT-owned
+    /// telemetry synchronized with upstream planned-proposal outcomes.
     fn run_steps(
         &self,
         state: &mut MetropolisRunState,
         additional_steps: NonZeroU32,
     ) -> CdtResult<()> {
         let start = Instant::now();
-        for _ in 0..additional_steps.get() {
-            let step = state.current_step.checked_add(1).ok_or_else(|| {
-                checkpoint_resume_failed(CheckpointResumeFailure::StepCountOverflow)
-            })?;
-            run_one_step(self, state, step)?;
-            state.current_step = step;
+        let target = CdtTarget::new(self.action_config.clone(), self.config.temperature())?;
+        let (accepted, rejected) = chain_counters(&state.move_stats)?;
+        let checkpoint = ChainCheckpoint::new(state.triangulation.clone(), accepted, rejected);
+        let chain = Chain::from_checkpoint(checkpoint, &target)?;
+        let mut proposal =
+            CdtProposal::from_ergodics(self.action_config.clone(), state.ergodics.clone());
+        let mut acceptance_rng = state.acceptance_rng.clone();
+
+        {
+            let mut sampler = Sampler::new(chain, &target, &mut proposal, &mut acceptance_rng)?;
+
+            for _ in 0..additional_steps.get() {
+                let step = state.current_step.checked_add(1).ok_or_else(|| {
+                    checkpoint_resume_failed(CheckpointResumeFailure::StepCountOverflow)
+                })?;
+                let planned_step = match sampler.step_delayed() {
+                    Ok(planned_step) => planned_step,
+                    Err(err) => {
+                        let error = planned_step_error(step, err);
+                        state.triangulation = sampler.chain_ref().state().clone();
+                        drop(sampler);
+                        state.acceptance_rng = acceptance_rng;
+                        state.ergodics = proposal.into_ergodics();
+                        state.elapsed_time += start.elapsed();
+                        return Err(error);
+                    }
+                };
+                debug_assert_eq!(
+                    sampler.proposal_ref().last_step_info(),
+                    planned_step.info,
+                    "CDT proposal telemetry cache should mirror the upstream planned-step info"
+                );
+                record_planned_step(
+                    self,
+                    state,
+                    step,
+                    &planned_step,
+                    planned_step
+                        .info
+                        .ok_or_else(|| missing_planned_step_info(step))?,
+                    sampler.proposal_ref().last_proposal_stats(),
+                    sampler.chain_ref().state(),
+                )?;
+                // The upstream chain owns the geometry used by later proposals,
+                // while CDT owns simulation metadata/history. Keep them in sync
+                // after annotating the CDT state so final handoff and future
+                // accepted proposals cannot discard recorded events.
+                sampler.replace_state(state.triangulation.clone())?;
+                state.current_step = step;
+            }
         }
+
+        state.acceptance_rng = acceptance_rng;
+        state.ergodics = proposal.into_ergodics();
         state.elapsed_time += start.elapsed();
         Ok(())
     }
@@ -778,17 +834,73 @@ impl MetropolisRunState {
     }
 }
 
-/// Executes one additional Metropolis step against an initialized run state.
+/// Records one upstream planned-proposal result into CDT-specific telemetry.
 ///
-/// Fresh and resumed simulations use this shared path so checkpoint
-/// continuation cannot drift from ordinary sampling behavior.
-fn run_one_step(
+/// Fresh and resumed simulations use the same upstream sampler path so
+/// checkpoint continuation cannot drift from ordinary sampling behavior.
+fn record_planned_step(
     algorithm: &MetropolisAlgorithm,
     state: &mut MetropolisRunState,
     step: u32,
+    planned_step: &DelayedStep<CdtProposalInfo>,
+    info: CdtProposalInfo,
+    proposal_stats: &ProposalStatistics,
+    triangulation: &CdtTriangulation2D,
 ) -> CdtResult<()> {
-    let move_type = state.ergodics.select_random_move();
+    record_planned_step_parts(
+        algorithm,
+        state,
+        step,
+        PlannedStepRecord {
+            outcome: planned_step.outcome,
+            log_prob_before: planned_step.log_prob_before,
+            log_prob_after: planned_step.log_prob_after,
+            info,
+            proposal_stats,
+            triangulation,
+        },
+    )
+}
+
+#[derive(Clone, Copy)]
+struct PlannedStepRecord<'a> {
+    outcome: StepOutcome,
+    log_prob_before: f64,
+    log_prob_after: Option<f64>,
+    info: CdtProposalInfo,
+    proposal_stats: &'a ProposalStatistics,
+    triangulation: &'a CdtTriangulation2D,
+}
+
+fn record_planned_step_parts(
+    algorithm: &MetropolisAlgorithm,
+    state: &mut MetropolisRunState,
+    step: u32,
+    record: PlannedStepRecord<'_>,
+) -> CdtResult<()> {
+    let PlannedStepRecord {
+        outcome,
+        log_prob_before,
+        log_prob_after,
+        info,
+        proposal_stats,
+        triangulation,
+    } = record;
+    let move_type = info.move_type;
     state.move_stats.record_attempt(move_type);
+
+    let action_before = state.current_action;
+    let accepted = outcome == StepOutcome::Accepted;
+    let action_after = accepted.then(|| {
+        info.action_after.unwrap_or_else(|| {
+            -algorithm.config.temperature() * log_prob_after.unwrap_or(log_prob_before)
+        })
+    });
+    if let Some(applied_action) = action_after {
+        state.triangulation = triangulation.clone();
+        state.current_action = applied_action;
+    }
+
     state
         .triangulation
         .record_event(SimulationEvent::MoveAttempted {
@@ -796,60 +908,22 @@ fn run_one_step(
             step: step.into(),
         });
 
-    let action_before = state.current_action;
-    // A selected move family is not yet a concrete proposal; self-loop outcomes
-    // such as no usable site or a rejected sampled site must not report a ΔS.
-    let mut delta_action = None;
-
-    let mut accepted = false;
-    let mut action_after = None;
-
-    let plan = match propose_concrete_plan(
-        &state.triangulation,
-        &mut state.ergodics,
-        &mut state.proposal_stats,
-        &algorithm.action_config,
-        move_type,
-        action_before,
-    ) {
-        Ok(plan) => plan,
-        Err(err) => {
-            state.move_stats.record_hard_failure(move_type);
-            state.proposal_stats.record_hard_failure();
-            return Err(accepted_move_error(
-                step,
+    if let Some(applied_action) = action_after {
+        state.move_stats.record_success(move_type);
+        state
+            .triangulation
+            .record_event(SimulationEvent::MoveAccepted {
                 move_type,
-                err.attempt,
-                err.source,
-            ));
-        }
-    };
-
-    if let Some(plan) = plan {
-        delta_action = plan.delta_action;
-        let log_alpha = -(plan.action_after.expect("planned moves have actions") - action_before)
-            / algorithm.config.temperature()
-            + concrete_log_q_ratio(&state.triangulation, &plan);
-
-        if metropolis_accept_log_alpha(log_alpha, &mut state.acceptance_rng) {
-            let applied_action = plan.action_after.expect("planned moves have actions");
-            state.triangulation = plan.proposed_state;
-            accepted = true;
-            action_after = Some(applied_action);
-            state.current_action = applied_action;
-            state.move_stats.record_success(move_type);
-            state.proposal_stats.record_accepted_transition();
-            state
-                .triangulation
-                .record_event(SimulationEvent::MoveAccepted {
-                    move_type,
-                    step: step.into(),
-                    action_change: applied_action - action_before,
-                });
-            validate_evolved_cdt_if_due(state)?;
-        } else {
-            state.proposal_stats.record_metropolis_rejection();
-        }
+                step: step.into(),
+                action_change: applied_action - action_before,
+            });
+        validate_evolved_cdt_if_due(state)?;
+    }
+    state.proposal_stats.extend(proposal_stats);
+    if outcome == StepOutcome::Accepted {
+        state.proposal_stats.record_accepted_transition();
+    } else if outcome == StepOutcome::RejectedProposal {
+        state.proposal_stats.record_metropolis_rejection();
     }
 
     state.steps.push(MonteCarloStep {
@@ -858,7 +932,7 @@ fn run_one_step(
         accepted,
         action_before,
         action_after,
-        delta_action,
+        delta_action: info.delta_action,
     });
 
     if measurement_is_due(
@@ -882,6 +956,45 @@ fn run_one_step(
     Ok(())
 }
 
+/// Maps upstream planned-proposal failures into CDT runner errors.
+///
+/// Proposal-stage errors preserve move-family context through
+/// [`CdtError::MetropolisMoveApplicationFailed`]. Future upstream variants use
+/// [`CdtError::PlannedProposalStepFailed`] so they remain distinct from CDT's
+/// own missing-telemetry invariant.
+fn planned_step_error(step: u32, error: DelayedStepError<CdtProposalError>) -> CdtError {
+    match error {
+        DelayedStepError::Mcmc(err) => CdtError::Mcmc(err),
+        DelayedStepError::Plan(err)
+        | DelayedStepError::ProposedLogProb(err)
+        | DelayedStepError::LogQRatio(err)
+        | DelayedStepError::Commit(err) => proposal_step_error(step, err),
+        unexpected => CdtError::PlannedProposalStepFailed {
+            step,
+            detail: unexpected.to_string(),
+        },
+    }
+}
+
+/// Converts a CDT proposal error into the public accepted-move failure shape.
+///
+/// This keeps planned-proposal sampler errors compatible with the historical CDT error
+/// contract for hard move-application failures.
+fn proposal_step_error(step: u32, error: CdtProposalError) -> CdtError {
+    match error {
+        CdtProposalError::ApplicationFailed {
+            move_type,
+            attempt,
+            source,
+        } => accepted_move_error(step, move_type, attempt, source),
+    }
+}
+
+/// Builds the explicit error used when upstream planned-step telemetry is absent.
+const fn missing_planned_step_info(step: u32) -> CdtError {
+    CdtError::PlannedProposalTelemetryMissing { step }
+}
+
 /// Runs the expensive full evolved-state validation only when the backend policy is due.
 fn validate_evolved_cdt_if_due(state: &MetropolisRunState) -> CdtResult<()> {
     if state
@@ -900,19 +1013,6 @@ fn validate_evolved_cdt_if_due(state: &MetropolisRunState) -> CdtResult<()> {
 /// simulations are reproducible while unseeded simulations still draw fresh entropy.
 fn simulation_rng(seed: Option<u64>) -> Xoshiro256PlusPlus {
     seed.map_or_else(rand::make_rng, Xoshiro256PlusPlus::seed_from_u64)
-}
-
-/// Applies the Metropolis acceptance rule to a proposed action change.
-///
-/// Factoring this out keeps the probability rule isolated from move selection
-/// and makes deterministic unit tests possible with a seeded RNG.
-#[cfg(test)]
-fn metropolis_accept<R: Rng + ?Sized>(delta_action: f64, temperature: f64, rng: &mut R) -> bool {
-    metropolis_accept_log_alpha(-delta_action / temperature, rng)
-}
-
-fn metropolis_accept_log_alpha<R: Rng + ?Sized>(log_alpha: f64, rng: &mut R) -> bool {
-    log_alpha >= 0.0 || rng.random::<f64>() < log_alpha.exp()
 }
 
 /// Builds the simulation-level error for an accepted move that could not be applied.
@@ -937,7 +1037,7 @@ fn accepted_move_error(
 #[cfg(test)]
 mod tests {
     use super::super::adapter::{
-        CdtProposal, CdtProposalError, CdtProposalPlan, site_count_to_f64,
+        CdtProposal, CdtProposalError, CdtProposalPlan, concrete_log_q_ratio, propose_concrete_plan,
     };
     use super::super::helpers::{SimplexCounts, proposed_delta_action, simplex_counts};
     use super::super::telemetry::CdtProposalSiteRejection;
@@ -948,12 +1048,28 @@ mod tests {
     use crate::errors::{BackendMutationOperation, CheckpointMoveCounter, ConfigurationSetting};
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
-    use markov_chain_monte_carlo::{Chain, DelayedProposal, Target};
-    use rand::rngs::StdRng;
+    use markov_chain_monte_carlo::{Chain, DelayedProposal, DiscreteProposalRatio, Target};
+    use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
     use serde_json::{from_str, to_string, to_value};
     use std::assert_matches;
     use std::error::Error;
     use std::num::NonZeroUsize;
+
+    /// Applies the Metropolis acceptance rule to a proposed action change.
+    ///
+    /// Factoring this out keeps the probability rule isolated from move selection
+    /// and makes deterministic unit tests possible with a seeded RNG.
+    fn metropolis_accept<R: Rng + ?Sized>(
+        delta_action: f64,
+        temperature: f64,
+        rng: &mut R,
+    ) -> bool {
+        metropolis_accept_log_alpha(-delta_action / temperature, rng)
+    }
+
+    fn metropolis_accept_log_alpha<R: Rng + ?Sized>(log_alpha: f64, rng: &mut R) -> bool {
+        log_alpha >= 0.0 || rng.random::<f64>() < log_alpha.exp()
+    }
 
     fn assert_optional_relative_eq(left: Option<f64>, right: Option<f64>) {
         match (left, right) {
@@ -2399,6 +2515,63 @@ mod tests {
     }
 
     #[test]
+    fn accepted_planned_step_records_attempt_on_committed_state() {
+        let config = seeded_metropolis_config(1.0, 1, 0, 1, 2);
+        let algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let committed = triangulation.clone();
+        let mut state = algorithm.initial_state(triangulation);
+        let action = state.current_action;
+        let move_type = MoveType::Move22;
+        let info = CdtProposalInfo {
+            move_type,
+            action_before: action,
+            action_after: Some(action),
+            delta_action: Some(0.0),
+        };
+        let proposal_stats = ProposalStatistics::from_validated_parts(1, 0, 0, 0, 0, 0, 0, 0, 0);
+
+        record_planned_step_parts(
+            &algorithm,
+            &mut state,
+            1,
+            PlannedStepRecord {
+                outcome: StepOutcome::Accepted,
+                log_prob_before: -action,
+                log_prob_after: Some(-action),
+                info,
+                proposal_stats: &proposal_stats,
+                triangulation: &committed,
+            },
+        )
+        .expect("accepted planned step should record telemetry");
+
+        let history = state.triangulation.metadata().simulation_history();
+        assert!(
+            history.iter().any(|event| matches!(
+                event,
+                SimulationEvent::MoveAttempted {
+                    move_type: recorded_move,
+                    step
+                } if *recorded_move == move_type && *step == 1
+            )),
+            "attempt event should remain on the committed triangulation"
+        );
+        assert!(
+            history.iter().any(|event| matches!(
+                event,
+                SimulationEvent::MoveAccepted {
+                    move_type: recorded_move,
+                    step,
+                    ..
+                } if *recorded_move == move_type && *step == 1
+            )),
+            "accepted move event should remain on the committed triangulation"
+        );
+    }
+
+    #[test]
     fn run_rejects_zero_frequency() {
         let err = MetropolisConfig::new(1.0, 10, 2, 0).expect_err("zero cadence is invalid");
         match err {
@@ -2586,7 +2759,7 @@ mod tests {
     }
 
     #[test]
-    fn cdt_proposal_scores_delayed_plan() {
+    fn cdt_proposal_scores_planned_proposal() {
         let action_config = ActionConfig::default();
         let target =
             CdtTarget::new(action_config.clone(), 1.0).expect("valid target configuration");
@@ -2636,8 +2809,9 @@ mod tests {
         assert!(forward_sites > 0);
         assert!(reverse_sites > 0);
 
-        let expected =
-            site_count_to_f64(forward_sites).ln() - site_count_to_f64(reverse_sites).ln();
+        let expected = DiscreteProposalRatio::from_counts(forward_sites, reverse_sites)
+            .expect("positive forward proposal sites should build a ratio")
+            .log_q_ratio();
         assert_relative_eq!(
             concrete_log_q_ratio(&triangulation, &plan),
             expected,
@@ -2704,7 +2878,7 @@ mod tests {
     }
 
     #[test]
-    fn cdt_proposal_uses_delayed_chain() {
+    fn cdt_proposal_uses_planned_sampler_path() {
         let action_config = ActionConfig::default();
         let target =
             CdtTarget::new(action_config.clone(), 1.0).expect("valid target configuration");
@@ -2716,9 +2890,15 @@ mod tests {
 
         let step = chain
             .step_delayed(&target, &mut proposal, &mut rng)
-            .expect("ordinary no-site outcomes must be delayed-step rejections, not errors");
+            .expect("ordinary no-site outcomes must be planned-step rejections, not errors");
 
-        assert_eq!(step.outcome.has_proposal(), step.info.is_some());
+        let info = step
+            .info
+            .expect("planned CDT steps should report proposal info");
+        assert_eq!(proposal.last_step_info(), Some(info));
+        assert_eq!(proposal.last_proposal_stats().move_family_proposals(), 1);
+        assert_eq!(proposal.last_proposal_stats().accepted_transitions(), 0);
+        assert_eq!(proposal.last_proposal_stats().metropolis_rejections(), 0);
         assert!(!step.outcome.is_accepted() || step.log_prob_after.is_some());
     }
 

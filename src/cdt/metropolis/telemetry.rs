@@ -208,8 +208,7 @@ impl ProposalStatistics {
             wire.hard_failures,
         ]
         .into_iter()
-        .try_fold(0_u64, u64::checked_add)
-        .ok_or_else(|| "proposal terminal-outcome counters exceed u64::MAX".to_string())?;
+        .fold(0_u64, u64::saturating_add);
         if terminal_outcomes != wire.move_family_proposals {
             return Err(format!(
                 "proposal terminal outcomes ({terminal_outcomes}) do not match move-family proposals ({})",
@@ -440,6 +439,39 @@ impl ProposalStatistics {
     pub(crate) const fn record_hard_failure(&mut self) {
         self.hard_failures = self.hard_failures.saturating_add(1);
     }
+
+    /// Adds another proposal-telemetry snapshot into this accumulator.
+    ///
+    /// Chunked Metropolis continuation merges per-step telemetry from the
+    /// upstream planned-proposal sampler into CDT-owned counters. All additions saturate
+    /// so already-saturated checkpoint telemetry remains serializable.
+    pub(crate) const fn extend(&mut self, other: &Self) {
+        self.move_family_proposals = self
+            .move_family_proposals
+            .saturating_add(other.move_family_proposals);
+        self.observed_forward_sites = self
+            .observed_forward_sites
+            .saturating_add(other.observed_forward_sites);
+        self.no_site_proposals = self
+            .no_site_proposals
+            .saturating_add(other.no_site_proposals);
+        self.site_causality_rejections = self
+            .site_causality_rejections
+            .saturating_add(other.site_causality_rejections);
+        self.site_geometric_rejections = self
+            .site_geometric_rejections
+            .saturating_add(other.site_geometric_rejections);
+        self.site_backend_rejections = self
+            .site_backend_rejections
+            .saturating_add(other.site_backend_rejections);
+        self.metropolis_rejections = self
+            .metropolis_rejections
+            .saturating_add(other.metropolis_rejections);
+        self.accepted_transitions = self
+            .accepted_transitions
+            .saturating_add(other.accepted_transitions);
+        self.hard_failures = self.hard_failures.saturating_add(other.hard_failures);
+    }
 }
 
 #[cfg(test)]
@@ -513,5 +545,34 @@ mod tests {
             error.to_string().contains("forward-site"),
             "serde error should explain forward-site invariant, got {error}"
         );
+    }
+
+    #[test]
+    fn proposal_statistics_extend_preserves_saturated_round_trip_invariant() {
+        let mut stats = ProposalStatistics::from_validated_parts(
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        let other = ProposalStatistics::from_validated_parts(1, 1, 0, 0, 0, 0, 0, 1, 0);
+
+        stats.extend(&other);
+
+        assert_eq!(stats.move_family_proposals(), u64::MAX);
+        assert_eq!(stats.no_site_proposals(), u64::MAX);
+        assert_eq!(stats.accepted_transitions(), 1);
+
+        let serialized =
+            serde_json::to_string(&stats).expect("saturated telemetry should serialize");
+        let round_tripped: ProposalStatistics = serde_json::from_str(&serialized)
+            .expect("saturated merged telemetry should deserialize");
+
+        assert_eq!(round_tripped, stats);
     }
 }
