@@ -571,6 +571,74 @@ rules:
       )
       \s*;
 
+  - id: causal-triangulations.rust.no-local-metropolis-acceptance-draws
+    languages:
+      - rust
+    severity: WARNING
+    message: "Delegate Metropolis-Hastings acceptance draws to markov-chain-monte-carlo instead of recomputing exp(log_alpha) locally."
+    metadata:
+      category: architecture
+      rationale: >-
+        CDT owns proposal planning and telemetry, while markov-chain-monte-carlo
+        owns generic Metropolis-Hastings acceptance, RNG draws, and delayed
+        proposal commit ordering.
+      issue: "https://github.com/acgetchell/causal-triangulations/issues/155"
+    paths:
+      include:
+        - "/src/cdt/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+    patterns:
+      - pattern-regex: '\brandom\s*::\s*<\s*f64\s*>\s*\(\s*\)\s*<=?\s*[^;\n]*\.exp\s*\('
+      - pattern-not-inside: |
+          mod tests {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          fn $FUNC(...) {
+              ...
+          }
+
+  - id: causal-triangulations.rust.no-local-mcmc-chain-counter-increments
+    languages:
+      - rust
+    severity: WARNING
+    message: "Use upstream Chain/Sampler counters instead of maintaining local generic accepted/rejected MCMC counters."
+    metadata:
+      category: architecture
+      rationale: >-
+        CDT may translate upstream outcomes into domain telemetry, but generic
+        accepted/rejected sampler counters should remain owned by
+        markov-chain-monte-carlo.
+      issue: "https://github.com/acgetchell/causal-triangulations/issues/155"
+    paths:
+      include:
+        - "/src/cdt/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+    patterns:
+      - pattern-either:
+          - pattern-regex: '\baccepted\s*(?:\+=|=\s*accepted\s*\+)'
+          - pattern-regex: '\brejected\s*(?:\+=|=\s*rejected\s*\+)'
+      - pattern-not-inside: |
+          mod tests {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $MOD {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          fn $FUNC(...) {
+              ...
+          }
+
   - id: causal-triangulations.rust.planned-step-info-not-proposal-cache
     languages:
       - rust
