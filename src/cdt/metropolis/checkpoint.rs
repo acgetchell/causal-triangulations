@@ -13,6 +13,7 @@ use markov_chain_monte_carlo::ChainCheckpoint;
 use rand::rngs::Xoshiro256PlusPlus;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize};
+use std::num::NonZeroU32;
 use std::time::Duration;
 
 use super::helpers::{actions_match, expected_measurement_count, expected_measurement_step};
@@ -25,7 +26,7 @@ pub(crate) struct CdtMcmcCheckpointParts {
     pub(crate) rejected: usize,
     pub(crate) config: MetropolisConfig,
     pub(crate) action_config: ActionConfig,
-    pub(crate) current_step: u32,
+    pub(crate) current_step: NonZeroU32,
     pub(crate) current_action: f64,
     pub(crate) move_stats: MoveStatistics,
     pub(crate) proposal_stats: ProposalStatistics,
@@ -44,6 +45,11 @@ pub(crate) struct CdtMcmcCheckpointParts {
 /// scientific continuation: action/config metadata, accumulated telemetry,
 /// both RNG streams, and the ergodic move system.
 ///
+/// Checkpoints represent resumable runs after at least one completed
+/// Metropolis step. Their current step is therefore stored and exposed as a
+/// [`NonZeroU32`]; initial step-0 samples are measurement telemetry, not a
+/// checkpoint position.
+///
 /// # Examples
 ///
 /// ```
@@ -59,7 +65,7 @@ pub(crate) struct CdtMcmcCheckpointParts {
 ///     )
 ///     .run_to_checkpoint(tri)?;
 ///
-///     assert_eq!(checkpoint.current_step(), 1);
+///     assert_eq!(checkpoint.current_step().get(), 1);
 ///     assert_eq!(checkpoint.measurements().len(), 2);
 ///     Ok(())
 /// }
@@ -69,7 +75,7 @@ pub struct CdtMcmcCheckpoint {
     pub(crate) chain: ChainCheckpoint<CdtTriangulation2D>,
     pub(crate) config: MetropolisConfig,
     pub(crate) action_config: ActionConfig,
-    pub(crate) current_step: u32,
+    pub(crate) current_step: NonZeroU32,
     pub(crate) current_action: f64,
     pub(crate) move_stats: MoveStatistics,
     #[serde(default)]
@@ -104,11 +110,13 @@ impl<'de> Deserialize<'de> for CdtMcmcCheckpoint {
         D: Deserializer<'de>,
     {
         let wire = CdtMcmcCheckpointWire::deserialize(deserializer)?;
+        let current_step = NonZeroU32::new(wire.current_step)
+            .ok_or_else(|| DeError::custom("checkpoint current_step must be nonzero"))?;
         let checkpoint = Self {
             chain: wire.chain,
             config: wire.config,
             action_config: wire.action_config,
-            current_step: wire.current_step,
+            current_step,
             current_action: wire.current_action,
             move_stats: wire.move_stats,
             proposal_stats: wire.proposal_stats,
@@ -246,7 +254,12 @@ impl CdtMcmcCheckpoint {
         &self.action_config
     }
 
-    /// Returns the last completed Monte Carlo step.
+    /// Returns the nonzero last completed Monte Carlo step.
+    ///
+    /// The value is a [`NonZeroU32`] because checkpoints are produced only
+    /// after at least one Metropolis step has completed. Use
+    /// [`NonZeroU32::get`] when interoperating with raw serialized step
+    /// counters or measurement rows.
     ///
     /// # Examples
     ///
@@ -264,11 +277,11 @@ impl CdtMcmcCheckpoint {
     /// .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)
     /// # }
     /// # let checkpoint = checkpoint()?;
-    /// assert_eq!(checkpoint.current_step(), 1);
+    /// assert_eq!(checkpoint.current_step().get(), 1);
     /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     #[must_use]
-    pub const fn current_step(&self) -> u32 {
+    pub const fn current_step(&self) -> NonZeroU32 {
         self.current_step
     }
 
@@ -356,6 +369,11 @@ impl CdtMcmcCheckpoint {
 
     /// Returns accumulated step telemetry through the checkpoint step.
     ///
+    /// Step telemetry starts at step 1 and uses
+    /// [`MonteCarloStep::step`](super::MonteCarloStep::step) to preserve that
+    /// nonzero invariant. Initial step-0 samples, when present, are returned by
+    /// [`Self::measurements`].
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -372,7 +390,7 @@ impl CdtMcmcCheckpoint {
     /// .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)
     /// # }
     /// # let checkpoint = checkpoint()?;
-    /// assert_eq!(checkpoint.steps().len(), checkpoint.current_step() as usize);
+    /// assert_eq!(checkpoint.steps().len(), checkpoint.current_step().get() as usize);
     /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     #[must_use]
@@ -529,12 +547,13 @@ pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> Cd
             },
         ));
     }
-    let checkpoint_step = usize::try_from(checkpoint.current_step).unwrap_or(usize::MAX);
+    let current_step = checkpoint.current_step.get();
+    let checkpoint_step = usize::try_from(current_step).unwrap_or(usize::MAX);
     if checkpoint.chain.total_steps() != checkpoint_step {
         return Err(checkpoint_resume_failed(
             CheckpointResumeFailure::ChainStepMismatch {
                 chain_steps: checkpoint.chain.total_steps(),
-                checkpoint_step: checkpoint.current_step,
+                checkpoint_step: current_step,
             },
         ));
     }
@@ -632,29 +651,30 @@ fn validate_checkpoint_steps(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
         let expected_step = u32::try_from(index + 1).map_err(|_| {
             checkpoint_resume_failed(CheckpointResumeFailure::StepTelemetryIndexOverflow)
         })?;
-        if step.step != expected_step {
+        let step_number = step.step.get();
+        if step_number != expected_step {
             return Err(checkpoint_resume_failed(
                 CheckpointResumeFailure::StepTelemetrySequenceMismatch {
-                    actual: step.step,
+                    actual: step_number,
                     expected: expected_step,
                 },
             ));
         }
         if !step.action_before.is_finite() {
             return Err(checkpoint_resume_failed(
-                CheckpointResumeFailure::NonFiniteStepActionBefore { step: step.step },
+                CheckpointResumeFailure::NonFiniteStepActionBefore { step: step_number },
             ));
         }
         if let Some(delta_action) = step.delta_action
             && !delta_action.is_finite()
         {
             return Err(checkpoint_resume_failed(
-                CheckpointResumeFailure::NonFiniteStepDeltaAction { step: step.step },
+                CheckpointResumeFailure::NonFiniteStepDeltaAction { step: step_number },
             ));
         }
         if step.accepted && step.delta_action.is_none() {
             return Err(checkpoint_resume_failed(
-                CheckpointResumeFailure::AcceptedStepMissingDeltaAction { step: step.step },
+                CheckpointResumeFailure::AcceptedStepMissingDeltaAction { step: step_number },
             ));
         }
         match (step.accepted, step.action_after) {
@@ -663,23 +683,23 @@ fn validate_checkpoint_steps(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
                     && !actions_match(action_after, step.action_before + delta_action)
                 {
                     return Err(checkpoint_resume_failed(
-                        CheckpointResumeFailure::StepActionAfterDeltaMismatch { step: step.step },
+                        CheckpointResumeFailure::StepActionAfterDeltaMismatch { step: step_number },
                     ));
                 }
             }
             (true, Some(_)) => {
                 return Err(checkpoint_resume_failed(
-                    CheckpointResumeFailure::NonFiniteStepActionAfter { step: step.step },
+                    CheckpointResumeFailure::NonFiniteStepActionAfter { step: step_number },
                 ));
             }
             (true, None) => {
                 return Err(checkpoint_resume_failed(
-                    CheckpointResumeFailure::AcceptedStepMissingActionAfter { step: step.step },
+                    CheckpointResumeFailure::AcceptedStepMissingActionAfter { step: step_number },
                 ));
             }
             (false, Some(_)) => {
                 return Err(checkpoint_resume_failed(
-                    CheckpointResumeFailure::RejectedStepHasActionAfter { step: step.step },
+                    CheckpointResumeFailure::RejectedStepHasActionAfter { step: step_number },
                 ));
             }
             (false, None) => {}
@@ -691,7 +711,7 @@ fn validate_checkpoint_steps(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
 /// Checks that serialized measurements match the configured post-thermalization schedule.
 fn validate_checkpoint_measurements(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
     let expected_measurements = expected_measurement_count(
-        checkpoint.current_step,
+        checkpoint.current_step.get(),
         checkpoint.config.thermalization_steps(),
         checkpoint.config.measurement_frequency(),
     )

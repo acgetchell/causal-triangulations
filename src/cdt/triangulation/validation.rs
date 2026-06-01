@@ -331,6 +331,7 @@ mod tests {
     use crate::config::CdtTopology;
     use crate::geometry::generators::build_delaunay2_with_data;
     use std::assert_matches;
+    use std::num::NonZeroU32;
 
     /// Builds a minimal labeled Delaunay backend for validation tests.
     fn labeled_triangle_backend(labels: [u32; 3]) -> DelaunayBackend2D {
@@ -432,7 +433,7 @@ mod tests {
             .expect("test Delaunay triangle should validate");
         let mut tri = unchecked_open_boundary(backend, 2, 2);
 
-        tri.assign_foliation_by_y(2)
+        tri.assign_foliation_by_y(NonZeroU32::new(2).expect("test slice count should be nonzero"))
             .expect("Should derive foliation from triangle coordinates");
 
         assert_eq!(

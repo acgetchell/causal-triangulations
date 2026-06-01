@@ -186,7 +186,7 @@ handle wrappers, `DelaunayBackend2D`, and generator functions from `crate::geome
 
 Generic MCMC mechanics should be delegated to `markov-chain-monte-carlo` through thin CDT adapters. CDT owns domain state, proposal-site enumeration,
 foliation/topology validation, measurements, and result translation; the upstream MCMC crate should own Metropolis-Hastings acceptance, proposal-ratio
-application, chain counters, delayed-proposal commit ordering, and reusable sampler continuation behavior. The current boundary refactor is tracked by
+application, chain counters, planned-proposal commit ordering, and reusable sampler continuation behavior. The current boundary refactor is tracked by
 [`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155).
 
 ## Key Modules
@@ -249,13 +249,13 @@ geometric, and backend edit failures are self-loop proposal outcomes recorded in
 Toroidal move finalization rejects and rolls back candidate sites that would violate χ = 0 or the closed-S¹ per-slice foliation invariant.
 
 The module tree is declared from `src/lib.rs` to avoid the `metropolis.rs` plus `metropolis/` layout pattern. `adapter.rs` is the single CDT adapter boundary
-for `markov-chain-monte-carlo` proposal and target traits. `runner.rs` keeps the transitional production step loop, `checkpoint.rs` owns resumable checkpoint
-state and resume validation, `telemetry.rs` owns public step/proposal telemetry, and `helpers.rs` holds shared CDT-domain calculations.
+for `markov-chain-monte-carlo` proposal and target traits. `runner.rs` owns `MetropolisAlgorithm::run_steps`, which rebuilds the upstream `Chain`/`Sampler`
+continuation view, delegates generic acceptance, proposal-ratio application, chain counters, and planned-proposal commit ordering to the upstream MCMC crate,
+then records CDT-specific telemetry, measurements, and result state. `checkpoint.rs` owns resumable checkpoint state and resume validation, `telemetry.rs` owns
+public step/proposal telemetry, and `helpers.rs` holds shared CDT-domain calculations.
 
-This direct M-H loop is transitional. The production runner should migrate toward delegating generic acceptance, proposal-ratio application, chain counters, and
-delayed-proposal commit ordering to the upstream MCMC crate while retaining CDT-specific telemetry and result conversion. See `docs/metropolis.md` for the
-detailed ordering and
-[`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155) for the boundary refactor.
+See `docs/metropolis.md` for the current planned-proposal ordering and
+[`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155) for the remaining MCMC boundary follow-up.
 
 ### `cdt/results.rs` — Simulation outputs
 

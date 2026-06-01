@@ -7,21 +7,53 @@ use crate::errors::CdtError;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::error::Error;
 use std::fmt;
+use std::num::NonZeroU32;
 
-/// Result of a Monte Carlo step.
+/// Telemetry for one completed Monte Carlo step.
+///
+/// Step telemetry is emitted only for completed Metropolis transitions, so
+/// [`Self::step`] is always nonzero. A step-0 construction or initial-state
+/// sample appears as a [`Measurement`](crate::cdt::results::Measurement), not as
+/// a `MonteCarloStep`.
+///
+/// Accepted steps include both [`Self::action_after`] and [`Self::delta_action`]
+/// from the same recorded action. Rejected self-loop steps leave
+/// `action_after` empty while retaining the proposed action change when it was
+/// available.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::simulation::{
+///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+/// };
+///
+/// fn main() -> CdtResult<()> {
+///     let results = MetropolisAlgorithm::new(
+///         MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
+///         ActionConfig::default(),
+///     )
+///     .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+///
+///     let step = &results.steps()[0];
+///     assert_eq!(step.step.get(), 1);
+///     assert!(step.action_before.is_finite());
+///     Ok(())
+/// }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonteCarloStep {
-    /// Step number
-    pub step: u32,
-    /// Move type attempted
+    /// Nonzero Monte Carlo step number.
+    pub step: NonZeroU32,
+    /// Move type attempted during this step.
     pub move_type: MoveType,
-    /// Whether the move was accepted
+    /// Whether the move was accepted by the Metropolis-Hastings transition.
     pub accepted: bool,
-    /// Action before the move
+    /// Action before the proposed move.
     pub action_before: f64,
-    /// Action after the move (if accepted)
+    /// Action after the move, present only for accepted steps.
     pub action_after: Option<f64>,
-    /// Change in action (ΔS)
+    /// Proposed or accepted change in action.
     pub delta_action: Option<f64>,
 }
 
@@ -208,8 +240,7 @@ impl ProposalStatistics {
             wire.hard_failures,
         ]
         .into_iter()
-        .try_fold(0_u64, u64::checked_add)
-        .ok_or_else(|| "proposal terminal-outcome counters exceed u64::MAX".to_string())?;
+        .fold(0_u64, u64::saturating_add);
         if terminal_outcomes != wire.move_family_proposals {
             return Err(format!(
                 "proposal terminal outcomes ({terminal_outcomes}) do not match move-family proposals ({})",
@@ -440,6 +471,42 @@ impl ProposalStatistics {
     pub(crate) const fn record_hard_failure(&mut self) {
         self.hard_failures = self.hard_failures.saturating_add(1);
     }
+
+    /// Adds another proposal-telemetry snapshot into this accumulator.
+    ///
+    /// Chunked Metropolis continuation merges per-step telemetry from the
+    /// upstream planned-proposal sampler into CDT-owned counters. All additions
+    /// saturate at `u64::MAX`, so already-saturated checkpoint telemetry remains
+    /// serializable. Once any counter saturates, the merged totals may no longer
+    /// preserve an exact one-to-one terminal-outcome partition; saturation can
+    /// coarsen the precise accepted, rejected, and hard-failure split.
+    pub(crate) const fn extend(&mut self, other: &Self) {
+        self.move_family_proposals = self
+            .move_family_proposals
+            .saturating_add(other.move_family_proposals);
+        self.observed_forward_sites = self
+            .observed_forward_sites
+            .saturating_add(other.observed_forward_sites);
+        self.no_site_proposals = self
+            .no_site_proposals
+            .saturating_add(other.no_site_proposals);
+        self.site_causality_rejections = self
+            .site_causality_rejections
+            .saturating_add(other.site_causality_rejections);
+        self.site_geometric_rejections = self
+            .site_geometric_rejections
+            .saturating_add(other.site_geometric_rejections);
+        self.site_backend_rejections = self
+            .site_backend_rejections
+            .saturating_add(other.site_backend_rejections);
+        self.metropolis_rejections = self
+            .metropolis_rejections
+            .saturating_add(other.metropolis_rejections);
+        self.accepted_transitions = self
+            .accepted_transitions
+            .saturating_add(other.accepted_transitions);
+        self.hard_failures = self.hard_failures.saturating_add(other.hard_failures);
+    }
 }
 
 #[cfg(test)]
@@ -513,5 +580,34 @@ mod tests {
             error.to_string().contains("forward-site"),
             "serde error should explain forward-site invariant, got {error}"
         );
+    }
+
+    #[test]
+    fn proposal_statistics_extend_preserves_saturated_round_trip_invariant() {
+        let mut stats = ProposalStatistics::from_validated_parts(
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        let other = ProposalStatistics::from_validated_parts(1, 1, 0, 0, 0, 0, 0, 1, 0);
+
+        stats.extend(&other);
+
+        assert_eq!(stats.move_family_proposals(), u64::MAX);
+        assert_eq!(stats.no_site_proposals(), u64::MAX);
+        assert_eq!(stats.accepted_transitions(), 1);
+
+        let serialized =
+            serde_json::to_string(&stats).expect("saturated telemetry should serialize");
+        let round_tripped: ProposalStatistics = serde_json::from_str(&serialized)
+            .expect("saturated merged telemetry should deserialize");
+
+        assert_eq!(round_tripped, stats);
     }
 }

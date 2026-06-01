@@ -13,7 +13,7 @@ The v0.1.0 foundation work focuses on making the crate a usable, validated 1+1 C
 - [x] Explicit toroidal S¹×S¹ CDT construction with χ = 0 validation
 - [x] Per-vertex foliation labels, causality checks, and strict Up/Down simplex classification
 - [x] Real 2D ergodic move kernels over Delaunay backend edit operations
-- [x] Concrete delayed-proposal Metropolis-Hastings loop with forward/reverse local-site weighting
+- [x] Concrete planned-proposal Metropolis-Hastings loop with forward/reverse local-site weighting
 - [x] Toroidal Metropolis regression coverage requiring accepted periodic moves while preserving topology and foliation
 - [x] CLI and configuration support for open-boundary and toroidal topology selection
 - [x] Volume-profile, Hausdorff-dimension, and spectral-dimension observables on the combinatorial dual graph
@@ -27,13 +27,13 @@ The v0.1.0 foundation work focuses on making the crate a usable, validated 1+1 C
 - [x] Use chunked Metropolis sweeps in large-scale 1+1 CDT debug runs
   ([#152](https://github.com/acgetchell/causal-triangulations/issues/152)). The v0.1.0 scientific-utility bar requires the large-scale debug path to exercise
   Metropolis CDT behavior with literature-style sweeps sized from the current simplex count, not only the raw move kernel.
-- [ ] Align chunked Metropolis continuation with the upstream resumable sampler pattern
-  ([#153](https://github.com/acgetchell/causal-triangulations/issues/153)). Since #155 already requires a new `markov-chain-monte-carlo` release, chunked CDT
-  continuation should also move onto the upstream continuation/checkpoint API before the DOI-backed `v0.1.0` release.
+- [x] Align chunked Metropolis continuation with the upstream resumable sampler pattern
+  ([#153](https://github.com/acgetchell/causal-triangulations/issues/153)). CDT chunk execution now drives the proposal-plan adapter through
+  `markov-chain-monte-carlo` v0.4 sampler continuation while preserving CDT-owned measurements, proposal telemetry, and current-volume sweep sizing.
 - [ ] Enforce the MCMC backend boundary
   ([#155](https://github.com/acgetchell/causal-triangulations/issues/155)). Because GitHub releases are archived by Zenodo, the DOI-backed `v0.1.0` release
   should not ship with generic Metropolis-Hastings mechanics duplicated in CDT-local code. Complete this after an updated `markov-chain-monte-carlo` release
-  provides the needed upstream resumable-sampler and delayed-step telemetry APIs
+  provides the needed upstream resumable-sampler and planned-step telemetry APIs
   ([markov-chain-monte-carlo#60](https://github.com/acgetchell/markov-chain-monte-carlo/issues/60),
   [markov-chain-monte-carlo#61](https://github.com/acgetchell/markov-chain-monte-carlo/issues/61)).
 

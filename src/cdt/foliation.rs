@@ -378,7 +378,7 @@ impl<'de> Deserialize<'de> for Foliation {
         D: Deserializer<'de>,
     {
         let serialized = SerializedFoliation::deserialize(deserializer)?;
-        Self::from_slice_sizes(serialized.slice_sizes, serialized.num_slices)
+        Self::from_raw_slice_sizes(serialized.slice_sizes, serialized.num_slices)
             .map_err(D::Error::custom)
     }
 }
@@ -394,34 +394,59 @@ impl Foliation {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{CdtResult, Foliation, FoliationError};
+    /// use causal_triangulations::{CdtResult, Foliation};
+    /// use std::num::NonZeroU32;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let foliation = Foliation::from_slice_sizes(vec![3, 4], 2)?;
+    ///     let Some(num_slices) = NonZeroU32::new(2) else {
+    ///         return Ok(());
+    ///     };
+    ///     let foliation = Foliation::from_slice_sizes(vec![3, 4], num_slices)?;
     ///     assert_eq!(foliation.num_slices().get(), 2);
     ///     assert_eq!(foliation.labeled_vertex_count(), 7);
-    ///
-    ///     let err = Foliation::from_slice_sizes(vec![], 0).expect_err("zero slices are invalid");
-    ///     assert_eq!(err, FoliationError::EmptyFoliation);
     ///     Ok(())
     /// }
     /// ```
     pub fn from_slice_sizes(
         slice_sizes: Vec<usize>,
+        num_slices: NonZeroU32,
+    ) -> Result<Self, FoliationError> {
+        Self::from_nonzero_slice_sizes(slice_sizes, num_slices)
+    }
+
+    /// Parses raw serialized slice counts before rebuilding validated foliation state.
+    ///
+    /// Public constructors require [`NonZeroU32`], but checkpoint payloads still
+    /// carry raw integers. This helper keeps serde restore on the same
+    /// validation path as normal construction without exposing a raw-count API.
+    fn from_raw_slice_sizes(
+        slice_sizes: Vec<usize>,
         num_slices: u32,
+    ) -> Result<Self, FoliationError> {
+        let Some(num_slices) = NonZeroU32::new(num_slices) else {
+            return Err(FoliationError::EmptyFoliation);
+        };
+        Self::from_nonzero_slice_sizes(slice_sizes, num_slices)
+    }
+
+    /// Builds foliation bookkeeping after the slice-count nonzero proof exists.
+    ///
+    /// The remaining checks protect the public [`Self::from_slice_sizes`]
+    /// contract: the number of per-slice counts must match `num_slices`, and no
+    /// slice may be empty.
+    fn from_nonzero_slice_sizes(
+        slice_sizes: Vec<usize>,
+        num_slices: NonZeroU32,
     ) -> Result<Self, FoliationError> {
         if slice_sizes.is_empty() {
             return Err(FoliationError::EmptyFoliation);
         }
-        if slice_sizes.len() != num_slices as usize {
+        if slice_sizes.len() != num_slices.get() as usize {
             return Err(FoliationError::SliceSizeMismatch {
                 slice_sizes_len: slice_sizes.len(),
-                num_slices,
+                num_slices: num_slices.get(),
             });
         }
-        let Some(num_slices) = NonZeroU32::new(num_slices) else {
-            return Err(FoliationError::EmptyFoliation);
-        };
         if let Some(slice) = slice_sizes.iter().position(|&slice_size| slice_size == 0) {
             return Err(FoliationError::EmptySlice { slice });
         }
@@ -437,9 +462,16 @@ impl Foliation {
     ///
     /// ```
     /// use causal_triangulations::{CdtResult, Foliation};
+    /// use std::num::NonZeroU32;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let foliation = Foliation::from_slice_sizes(vec![3, 4], 2)?;
+    ///     let Some(num_slices) = NonZeroU32::new(2) else {
+    ///         return Ok(());
+    ///     };
+    ///     let foliation = Foliation::from_slice_sizes(
+    ///         vec![3, 4],
+    ///         num_slices,
+    ///     )?;
     ///     assert_eq!(foliation.slice_sizes(), &[3, 4]);
     ///     Ok(())
     /// }
@@ -455,9 +487,16 @@ impl Foliation {
     ///
     /// ```
     /// use causal_triangulations::{CdtResult, Foliation};
+    /// use std::num::NonZeroU32;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let foliation = Foliation::from_slice_sizes(vec![3, 4], 2)?;
+    ///     let Some(num_slices) = NonZeroU32::new(2) else {
+    ///         return Ok(());
+    ///     };
+    ///     let foliation = Foliation::from_slice_sizes(
+    ///         vec![3, 4],
+    ///         num_slices,
+    ///     )?;
     ///     assert_eq!(foliation.num_slices().get(), 2);
     ///     Ok(())
     /// }
@@ -473,9 +512,16 @@ impl Foliation {
     ///
     /// ```
     /// use causal_triangulations::{CdtResult, Foliation};
+    /// use std::num::NonZeroU32;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let foliation = Foliation::from_slice_sizes(vec![3, 4], 2)?;
+    ///     let Some(num_slices) = NonZeroU32::new(2) else {
+    ///         return Ok(());
+    ///     };
+    ///     let foliation = Foliation::from_slice_sizes(
+    ///         vec![3, 4],
+    ///         num_slices,
+    ///     )?;
     ///     assert_eq!(foliation.labeled_vertex_count(), 7);
     ///     Ok(())
     /// }
@@ -491,6 +537,10 @@ mod tests {
     use super::*;
     use serde_json::from_str;
 
+    fn slice_count(value: u32) -> NonZeroU32 {
+        NonZeroU32::new(value).expect("test slice count should be nonzero")
+    }
+
     #[test]
     fn test_edge_type_equality() {
         assert_eq!(EdgeType::Spacelike, EdgeType::Spacelike);
@@ -500,21 +550,21 @@ mod tests {
 
     #[test]
     fn test_foliation_empty_slice_rejected() {
-        let result = Foliation::from_slice_sizes(vec![0, 0, 0], 3);
+        let result = Foliation::from_slice_sizes(vec![0, 0, 0], slice_count(3));
         let err = result.expect_err("empty slices should be rejected");
         assert_eq!(err, FoliationError::EmptySlice { slice: 0 });
     }
 
     #[test]
     fn test_foliation_zero_slices_rejected() {
-        let result = Foliation::from_slice_sizes(vec![], 0);
+        let result = Foliation::from_raw_slice_sizes(vec![], 0);
         let err = result.expect_err("zero-slice foliations should be rejected");
         assert_eq!(err, FoliationError::EmptyFoliation);
     }
 
     #[test]
     fn test_foliation_populated() {
-        let fol = Foliation::from_slice_sizes(vec![3, 3], 2).expect("valid foliation");
+        let fol = Foliation::from_slice_sizes(vec![3, 3], slice_count(2)).expect("valid foliation");
         assert_eq!(fol.num_slices().get(), 2);
         assert_eq!(fol.labeled_vertex_count(), 6);
         assert_eq!(fol.slice_sizes()[0], 3);
@@ -523,7 +573,7 @@ mod tests {
 
     #[test]
     fn test_foliation_slice_size_mismatch() {
-        let result = Foliation::from_slice_sizes(vec![3, 3], 3);
+        let result = Foliation::from_slice_sizes(vec![3, 3], slice_count(3));
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert_eq!(

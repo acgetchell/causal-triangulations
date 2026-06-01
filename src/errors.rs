@@ -932,6 +932,8 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             | CdtError::InvalidGenerationParameters { .. }
             | CdtError::InvalidConfiguration { .. }
             | CdtError::InvalidSimulationConfiguration { .. }
+            | CdtError::PlannedProposalStepFailed { .. }
+            | CdtError::PlannedProposalTelemetryMissing { .. }
             | CdtError::InvalidTriangulationMetadata { .. }
             | CdtError::VertexBuildFailed { .. }
             | CdtError::Mcmc(_)
@@ -1031,7 +1033,7 @@ pub enum CdtError {
         /// Most specific lower-level rejection or failure observed.
         source: MetropolisMoveApplicationFailure,
     },
-    /// Planning or committing a standalone delayed CDT proposal hit a hard failure.
+    /// Planning or committing a standalone planned CDT proposal hit a hard failure.
     #[error("CDT proposal failed while applying {move_type:?} on attempt {attempt}: {source}")]
     ProposalApplicationFailed {
         /// Move type whose concrete proposal application failed.
@@ -1040,6 +1042,20 @@ pub enum CdtError {
         attempt: usize,
         /// Most specific lower-level rejection or failure observed.
         source: MetropolisMoveApplicationFailure,
+    },
+    /// A planned CDT proposal step completed without required proposal telemetry.
+    #[error("planned CDT proposal step {step} completed without required proposal telemetry")]
+    PlannedProposalTelemetryMissing {
+        /// Monte Carlo step that was missing metadata or accepted-step action evidence.
+        step: u32,
+    },
+    /// A planned CDT proposal step failed in a way CDT cannot classify yet.
+    #[error("planned CDT proposal step {step} failed: {detail}")]
+    PlannedProposalStepFailed {
+        /// Monte Carlo step whose planned-proposal execution failed.
+        step: u32,
+        /// Upstream sampler diagnostic.
+        detail: String,
     },
     /// Constructed triangulation metadata is internally inconsistent.
     #[error(
@@ -1755,6 +1771,31 @@ mod tests {
             Error::source(&error).map(ToString::to_string),
             Some(source.to_string())
         );
+    }
+
+    #[test]
+    fn planned_proposal_telemetry_missing_reports_step_without_fake_move_type() {
+        let error = CdtError::PlannedProposalTelemetryMissing { step: 23 };
+
+        assert_eq!(
+            format!("{error}"),
+            "planned CDT proposal step 23 completed without required proposal telemetry"
+        );
+        assert!(Error::source(&error).is_none());
+    }
+
+    #[test]
+    fn planned_proposal_step_failed_preserves_upstream_detail() {
+        let error = CdtError::PlannedProposalStepFailed {
+            step: 23,
+            detail: "future upstream sampler failure".to_string(),
+        };
+
+        assert_eq!(
+            format!("{error}"),
+            "planned CDT proposal step 23 failed: future upstream sampler failure"
+        );
+        assert!(Error::source(&error).is_none());
     }
 
     #[test]

@@ -12,6 +12,7 @@ use crate::geometry::generators::{
     generate_delaunay2,
 };
 use crate::geometry::traits::TriangulationQuery;
+use std::num::NonZeroU32;
 
 /// Rewrites toroidal builder failures with CDT-level generation context.
 ///
@@ -292,6 +293,15 @@ fn profile_slice_sizes(
         .iter()
         .map(|&volume| usize::try_from(volume).map_err(|err| generation_failed(err.to_string())))
         .collect()
+}
+
+/// Carries constructor-validated slice counts into foliation construction.
+///
+/// CDT builders validate topology-specific slice bounds before constructing
+/// foliation metadata, so reaching this helper with zero would indicate an
+/// internal constructor invariant regression.
+const fn checked_nonzero_slice_count(num_slices: u32) -> NonZeroU32 {
+    NonZeroU32::new(num_slices).expect("validated CDT slice count should be nonzero")
 }
 
 /// Builds labeled periodic coordinates for a toroidal CDT profile.
@@ -594,7 +604,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
             }
         }
         let foliation =
-            Foliation::from_slice_sizes(slice_sizes, time_slices).map_err(CdtError::from)?;
+            Foliation::from_slice_sizes(slice_sizes, checked_nonzero_slice_count(time_slices))
+                .map_err(CdtError::from)?;
 
         let mut tri = Self::try_new(backend, time_slices, dimension)?;
         tri.foliation = Some(foliation);
@@ -758,7 +769,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         )?;
         let slice_sizes = vec![n; t_count];
         let foliation =
-            Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
+            Foliation::from_slice_sizes(slice_sizes, checked_nonzero_slice_count(num_slices))
+                .map_err(CdtError::from)?;
 
         let mut tri = Self::try_new(backend, num_slices, 2)?;
         tri.foliation = Some(foliation);
@@ -831,7 +843,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         })?;
 
         let foliation =
-            Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
+            Foliation::from_slice_sizes(slice_sizes, checked_nonzero_slice_count(num_slices))
+                .map_err(CdtError::from)?;
         let mut tri = Self::try_new(backend, num_slices, 2)?;
         tri.foliation = Some(foliation);
         tri.mark_foliation_synchronized();
@@ -983,7 +996,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         let slice_sizes = vec![n; t_count];
         let foliation =
-            Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
+            Foliation::from_slice_sizes(slice_sizes, checked_nonzero_slice_count(num_slices))
+                .map_err(CdtError::from)?;
 
         let mut tri = Self::with_topology(backend, num_slices, 2, CdtTopology::Toroidal)?;
         tri.foliation = Some(foliation);
@@ -1066,7 +1080,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         let slice_sizes = profile_slice_sizes(volume_profile, generation_failed)?;
         let foliation =
-            Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
+            Foliation::from_slice_sizes(slice_sizes, checked_nonzero_slice_count(num_slices))
+                .map_err(CdtError::from)?;
 
         let mut tri = Self::with_topology(backend, num_slices, 2, CdtTopology::Toroidal)?;
         tri.foliation = Some(foliation);

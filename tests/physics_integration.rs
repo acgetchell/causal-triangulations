@@ -51,7 +51,7 @@ fn assert_physics_pipeline(config: CdtConfig) {
     let profile = results.average_volume_profile();
     assert_eq!(
         profile.len(),
-        usize::try_from(config.timeslices()).expect("timeslices should fit usize"),
+        usize::try_from(config.timeslices().get()).expect("timeslices should fit usize"),
         "volume profile should cover every time slice"
     );
     assert!(
@@ -74,8 +74,8 @@ fn assert_physics_pipeline(config: CdtConfig) {
 /// Counts slabs expected to have volume in the measured CDT profile.
 fn occupied_time_slabs(config: &ValidatedCdtConfig) -> usize {
     let slabs = match config.topology() {
-        CdtTopology::OpenBoundary => config.timeslices().saturating_sub(1),
-        CdtTopology::Toroidal => config.timeslices(),
+        CdtTopology::OpenBoundary => config.timeslices().get().saturating_sub(1),
+        CdtTopology::Toroidal => config.timeslices().get(),
     };
     usize::try_from(slabs).expect("time slab count should fit usize")
 }

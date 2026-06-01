@@ -1,10 +1,10 @@
 # Metropolis Move Ordering And Detailed Balance
 
 > **MCMC backend boundary:** this page describes the current CDT production Metropolis runner. Its proposal-before-mutation contract should be preserved, but
-> generic Metropolis-Hastings mechanics should migrate behind `markov-chain-monte-carlo` adapters rather than remain as CDT-local sampler logic. The boundary
-> refactor is tracked by [`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155); upstream delayed-step hooks and
-> telemetry needs are tracked by
-> [`markov-chain-monte-carlo#61`](https://github.com/acgetchell/markov-chain-monte-carlo/issues/61).
+> generic Metropolis-Hastings mechanics should live behind `markov-chain-monte-carlo` adapters rather than CDT-local sampler logic. Chunked continuation now
+> uses upstream proposal planning and checkpoint-compatible continuation from `markov-chain-monte-carlo` v0.4. The remaining boundary refactor is
+> tracked by [`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155); any further upstream planned-step hooks and
+> telemetry needs are tracked by [`markov-chain-monte-carlo#61`](https://github.com/acgetchell/markov-chain-monte-carlo/issues/61).
 
 `MetropolisAlgorithm::run()` uses a proposal-before-mutation ordering for CDT Monte Carlo steps.
 
@@ -72,10 +72,12 @@ volume-fixing follow-up should cite the higher-dimensional CDT simulation litera
 checkpoint. This keeps the checkpointed triangulation, Metropolis acceptance RNG, ergodic proposal RNG, counters, measurements, and elapsed-time telemetry
 together between chunks.
 
-The large-scale 1+1 debug harness uses this CDT-local chunking path to run one Metropolis sweep at a time. This behavior should eventually align with the
-upstream resumable sampler pattern tracked by
-[`markov-chain-monte-carlo#60`](https://github.com/acgetchell/markov-chain-monte-carlo/issues/60) and
-[`causal-triangulations#153`](https://github.com/acgetchell/causal-triangulations/issues/153):
+Chunk execution is implemented through `markov-chain-monte-carlo::Sampler::step_delayed` on the CDT proposal-plan adapter. The upstream sampler owns the
+Metropolis-Hastings accept/reject draw, log-probability cache, chain counters, and checkpoint-compatible continuation view. CDT keeps domain-specific state
+outside that generic sampler: action and schedule metadata, proposal telemetry, move statistics, measurements, elapsed time, and the serialized ergodic proposal
+RNG.
+
+The large-scale 1+1 debug harness uses this upstream-backed chunking path to run one Metropolis sweep at a time:
 
 1. Read the current number of top-dimensional simplices at the start of the sweep.
 2. Run exactly that many Metropolis proposal steps.
@@ -200,4 +202,4 @@ These counters explain chain stickiness and backend behavior, but detailed balan
 empirical frequencies accumulated earlier in the run.
 
 The explicit-site model avoids dry-run cloning every candidate during site counting. The only required full triangulation clone is the planned proposed state
-used by delayed Metropolis acceptance, plus a narrow rollback snapshot around composite mutations whose intermediate backend steps can partially commit.
+used by planned Metropolis acceptance, plus a narrow rollback snapshot around composite mutations whose intermediate backend steps can partially commit.

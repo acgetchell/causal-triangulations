@@ -353,7 +353,7 @@ Delegate generic sampler work to upstream APIs such as `Target`, `DelayedProposa
 - Metropolis-Hastings accept/reject decisions
 - proposal-ratio application
 - chain accepted/rejected counters
-- delayed-proposal commit ordering
+- planned-proposal commit ordering
 - RNG-driven acceptance draws
 - checkpoint-compatible sampler continuation mechanics
 
@@ -367,7 +367,7 @@ CDT may own thin domain adapters and result plumbing:
 Do not add new local generic M-H loops, direct `exp(log_alpha)` acceptance draws, one-off proposal schedulers, or generic chain counter logic in `src/cdt/` when
 `markov-chain-monte-carlo` can own that behavior. If CDT needs temporary local sampler logic because the upstream API lacks a hook, document the gap in the
 code or nearby docs and open or link an upstream issue before extending the local implementation. The current production migration is tracked by
-[`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155), with upstream delayed-step telemetry tracked by
+[`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155), with upstream planned-step telemetry tracked by
 [`markov-chain-monte-carlo#61`](https://github.com/acgetchell/markov-chain-monte-carlo/issues/61).
 
 Once the production runner delegates fully to upstream sampler mechanics, add a static check so future CDT changes cannot reintroduce local generic

@@ -135,8 +135,8 @@ This crate is part of a broader Rust ecosystem for computational geometry and si
 
 - [`delaunay`](https://crates.io/crates/delaunay) — geometric primitives and triangulations
 - `la-stack` — linear algebra utilities
-- [`markov-chain-monte-carlo`](https://crates.io/crates/markov-chain-monte-carlo) — composable MCMC traits, including delayed-commit proposals for CDT move
-  ordering
+- [`markov-chain-monte-carlo`](https://crates.io/crates/markov-chain-monte-carlo) — composable MCMC traits, including plan-before-commit proposals for CDT
+  move ordering
 
 The long-term design separates:
 

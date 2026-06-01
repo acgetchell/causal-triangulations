@@ -133,7 +133,7 @@ pub mod cdt {
     ///
     /// The module is split by API boundary:
     /// [`adapter`](crate::cdt::metropolis::adapter) exposes the CDT target and
-    /// delayed proposal types used by `markov-chain-monte-carlo`,
+    /// planned proposal types used through `markov-chain-monte-carlo`,
     /// [`runner`](crate::cdt::metropolis::runner) provides the transitional
     /// [`MetropolisAlgorithm`](crate::cdt::metropolis::MetropolisAlgorithm)
     /// facade, [`checkpoint`](crate::cdt::metropolis::checkpoint) owns
@@ -335,7 +335,7 @@ pub mod prelude {
     /// Focused exports for running CDT simulations.
     ///
     /// This prelude includes [`run_simulation`], validated simulation
-    /// configuration, the Metropolis runner, delayed proposal adapter, telemetry
+    /// configuration, the Metropolis runner, proposal-plan adapter, telemetry
     /// structs, result containers, and typed proposal errors needed by MCMC
     /// workflows. It also includes the triangulation query trait so callers can
     /// inspect final or checkpointed states returned by simulation APIs. The
@@ -562,19 +562,21 @@ pub fn run_simulation(config: &ValidatedCdtConfig) -> CdtResult<SimulationResult
     let triangulation = match (config.topology(), config.initial_volume()) {
         (CdtTopology::Toroidal, ValidatedInitialVolume::ExplicitProfile(profile)) => {
             log::info!("Constructing toroidal CDT (S¹×S¹)");
-            CdtTriangulation::from_toroidal_cdt_profile(profile)?
+            let profile: Vec<_> = profile.iter().map(|volume| volume.get()).collect();
+            CdtTriangulation::from_toroidal_cdt_profile(&profile)?
         }
         (CdtTopology::Toroidal, ValidatedInitialVolume::Regular { vertices_per_slice }) => {
             log::info!("Constructing toroidal CDT (S¹×S¹)");
-            CdtTriangulation::from_toroidal_cdt(vertices_per_slice, timeslices)?
+            CdtTriangulation::from_toroidal_cdt(vertices_per_slice.get(), timeslices.get())?
         }
         (CdtTopology::OpenBoundary, ValidatedInitialVolume::ExplicitProfile(profile)) => {
             log::info!("Constructing open-boundary CDT strip");
-            CdtTriangulation::from_cdt_strip_profile(profile)?
+            let profile: Vec<_> = profile.iter().map(|volume| volume.get()).collect();
+            CdtTriangulation::from_cdt_strip_profile(&profile)?
         }
         (CdtTopology::OpenBoundary, ValidatedInitialVolume::Regular { vertices_per_slice }) => {
             log::info!("Constructing open-boundary CDT strip");
-            CdtTriangulation::from_cdt_strip(vertices_per_slice, timeslices)?
+            CdtTriangulation::from_cdt_strip(vertices_per_slice.get(), timeslices.get())?
         }
     };
 
@@ -836,10 +838,10 @@ mod tests {
         let parsed: Value = from_str(&json).expect("JSON output should parse");
 
         assert!(csv.starts_with("step,action,vertices,edges,triangles,accepted,delta_action\n"));
-        assert_eq!(parsed["config"]["vertices"], config.vertices());
+        assert_eq!(parsed["config"]["vertices"], config.vertices().get());
         assert_eq!(
             parsed["final_triangulation"]["time_slices"],
-            config.timeslices()
+            config.timeslices().get()
         );
     }
 
