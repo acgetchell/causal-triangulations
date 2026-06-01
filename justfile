@@ -443,8 +443,9 @@ markdown-check: _ensure-rumdl
             line_number=0
             while IFS= read -r line || [[ -n "$line" ]]; do
                 line_number=$((line_number + 1))
-                if [ "${#line}" -gt 160 ]; then
-                    printf '%s:%d: line length %d exceeds 160\n' "$file" "$line_number" "${#line}" >&2
+                line_length="$(LC_ALL=C printf '%s' "$line" | wc -c | tr -d ' ')"
+                if [ "$line_length" -gt 160 ]; then
+                    printf '%s:%d: line length %d exceeds 160\n' "$file" "$line_number" "$line_length" >&2
                     violations=$((violations + 1))
                 fi
             done < "$file"

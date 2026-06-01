@@ -2,6 +2,7 @@
 
 //! Regression tests for previously observed CDT failures.
 
+use approx::assert_relative_eq;
 use causal_triangulations::{
     ActionConfig, CdtTriangulation, ErgodicsSystem, MetropolisAlgorithm, MetropolisConfig,
     MoveResult, SimulationEvent,
@@ -92,6 +93,50 @@ fn accepted_move_history_keeps_matching_attempt_after_planned_proposal_handoff()
     assert!(
         accepted_events > 0,
         "deterministic history regression should accept at least one move"
+    );
+}
+
+#[test]
+fn accepted_step_telemetry_keeps_action_delta_consistent_after_planned_proposal_handoff() {
+    // Regression for causal-triangulations#153: accepted public telemetry must
+    // keep reconstructed action_after and delta_action in sync after the
+    // planned-proposal sampler hands the committed state back to CDT.
+    let triangulation =
+        CdtTriangulation::from_toroidal_cdt(4, 3).expect("telemetry fixture should build");
+    let metropolis_config = MetropolisConfig::new(1.0, 20, 0, 5)
+        .expect("telemetry regression Metropolis config should be valid")
+        .with_seed(7);
+
+    let results =
+        MetropolisAlgorithm::new(metropolis_config, ActionConfig::default()).run(triangulation);
+    let results = results.expect("telemetry regression run should complete");
+
+    let mut accepted_steps = 0_u64;
+    for step in results.steps() {
+        if step.accepted {
+            accepted_steps = accepted_steps.saturating_add(1);
+            let action_after = step
+                .action_after
+                .expect("accepted steps should expose action_after");
+            let delta_action = step
+                .delta_action
+                .expect("accepted steps should expose delta_action");
+            assert_relative_eq!(
+                delta_action,
+                action_after - step.action_before,
+                epsilon = 1e-12
+            );
+        } else {
+            assert!(
+                step.action_after.is_none(),
+                "rejected steps should not expose action_after"
+            );
+        }
+    }
+
+    assert!(
+        accepted_steps > 0,
+        "deterministic telemetry regression should accept at least one move"
     );
 }
 

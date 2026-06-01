@@ -7,21 +7,53 @@ use crate::errors::CdtError;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::error::Error;
 use std::fmt;
+use std::num::NonZeroU32;
 
-/// Result of a Monte Carlo step.
+/// Telemetry for one completed Monte Carlo step.
+///
+/// Step telemetry is emitted only for completed Metropolis transitions, so
+/// [`Self::step`] is always nonzero. A step-0 construction or initial-state
+/// sample appears as a [`Measurement`](crate::cdt::results::Measurement), not as
+/// a `MonteCarloStep`.
+///
+/// Accepted steps include both [`Self::action_after`] and [`Self::delta_action`]
+/// from the same recorded action. Rejected self-loop steps leave
+/// `action_after` empty while retaining the proposed action change when it was
+/// available.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::simulation::{
+///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+/// };
+///
+/// fn main() -> CdtResult<()> {
+///     let results = MetropolisAlgorithm::new(
+///         MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
+///         ActionConfig::default(),
+///     )
+///     .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+///
+///     let step = &results.steps()[0];
+///     assert_eq!(step.step.get(), 1);
+///     assert!(step.action_before.is_finite());
+///     Ok(())
+/// }
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MonteCarloStep {
-    /// Step number
-    pub step: u32,
-    /// Move type attempted
+    /// Nonzero Monte Carlo step number.
+    pub step: NonZeroU32,
+    /// Move type attempted during this step.
     pub move_type: MoveType,
-    /// Whether the move was accepted
+    /// Whether the move was accepted by the Metropolis-Hastings transition.
     pub accepted: bool,
-    /// Action before the move
+    /// Action before the proposed move.
     pub action_before: f64,
-    /// Action after the move (if accepted)
+    /// Action after the move, present only for accepted steps.
     pub action_after: Option<f64>,
-    /// Change in action (ΔS)
+    /// Proposed or accepted change in action.
     pub delta_action: Option<f64>,
 }
 

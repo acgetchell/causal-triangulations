@@ -19,6 +19,8 @@ Non-Rust repository tooling is normalized to a 160-column width: Ruff for Python
 `dprint`/`pretty_yaml`, and the generated changelog postprocessor all use 160 columns. Rust remains on the narrower `rustfmt` `max_width = 100` setting because
 wide Rust signatures, trait bounds, and method chains become harder to scan at 160 columns.
 
+The Markdown raw line-length guard counts bytes with `LC_ALL=C` so macOS, Linux, and Windows agree on UTF-8 punctuation near the 160-column boundary.
+
 ## Python Tooling
 
 CDT's Python tooling is broader than MCMC's. MCMC currently has changelog and tag helpers; CDT also has benchmark, hardware, coverage, archive, and

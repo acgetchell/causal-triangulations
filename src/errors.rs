@@ -1043,10 +1043,10 @@ pub enum CdtError {
         /// Most specific lower-level rejection or failure observed.
         source: MetropolisMoveApplicationFailure,
     },
-    /// A planned CDT proposal step completed without proposal telemetry.
-    #[error("planned CDT proposal step {step} completed without proposal telemetry")]
+    /// A planned CDT proposal step completed without required proposal telemetry.
+    #[error("planned CDT proposal step {step} completed without required proposal telemetry")]
     PlannedProposalTelemetryMissing {
-        /// Monte Carlo step that was missing planned-proposal telemetry.
+        /// Monte Carlo step that was missing metadata or accepted-step action evidence.
         step: u32,
     },
     /// A planned CDT proposal step failed in a way CDT cannot classify yet.
@@ -1779,7 +1779,7 @@ mod tests {
 
         assert_eq!(
             format!("{error}"),
-            "planned CDT proposal step 23 completed without proposal telemetry"
+            "planned CDT proposal step 23 completed without required proposal telemetry"
         );
         assert!(Error::source(&error).is_none());
     }

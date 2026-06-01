@@ -279,29 +279,30 @@ fn validate_result_steps(steps: &[MonteCarloStep], accepted: usize) -> CdtResult
         let expected_step = u32::try_from(index + 1).map_err(|_| {
             checkpoint_resume_failed(CheckpointResumeFailure::StepTelemetryIndexOverflow)
         })?;
-        if step.step != expected_step {
+        let step_number = step.step.get();
+        if step_number != expected_step {
             return Err(checkpoint_resume_failed(
                 CheckpointResumeFailure::StepTelemetrySequenceMismatch {
-                    actual: step.step,
+                    actual: step_number,
                     expected: expected_step,
                 },
             ));
         }
         if !step.action_before.is_finite() {
             return Err(checkpoint_resume_failed(
-                CheckpointResumeFailure::NonFiniteStepActionBefore { step: step.step },
+                CheckpointResumeFailure::NonFiniteStepActionBefore { step: step_number },
             ));
         }
         if let Some(delta_action) = step.delta_action
             && !delta_action.is_finite()
         {
             return Err(checkpoint_resume_failed(
-                CheckpointResumeFailure::NonFiniteStepDeltaAction { step: step.step },
+                CheckpointResumeFailure::NonFiniteStepDeltaAction { step: step_number },
             ));
         }
         if step.accepted && step.delta_action.is_none() {
             return Err(checkpoint_resume_failed(
-                CheckpointResumeFailure::AcceptedStepMissingDeltaAction { step: step.step },
+                CheckpointResumeFailure::AcceptedStepMissingDeltaAction { step: step_number },
             ));
         }
         match (step.accepted, step.action_after) {
@@ -310,23 +311,23 @@ fn validate_result_steps(steps: &[MonteCarloStep], accepted: usize) -> CdtResult
                     && !actions_match(action_after, step.action_before + delta_action)
                 {
                     return Err(checkpoint_resume_failed(
-                        CheckpointResumeFailure::StepActionAfterDeltaMismatch { step: step.step },
+                        CheckpointResumeFailure::StepActionAfterDeltaMismatch { step: step_number },
                     ));
                 }
             }
             (true, Some(_)) => {
                 return Err(checkpoint_resume_failed(
-                    CheckpointResumeFailure::NonFiniteStepActionAfter { step: step.step },
+                    CheckpointResumeFailure::NonFiniteStepActionAfter { step: step_number },
                 ));
             }
             (true, None) => {
                 return Err(checkpoint_resume_failed(
-                    CheckpointResumeFailure::AcceptedStepMissingActionAfter { step: step.step },
+                    CheckpointResumeFailure::AcceptedStepMissingActionAfter { step: step_number },
                 ));
             }
             (false, Some(_)) => {
                 return Err(checkpoint_resume_failed(
-                    CheckpointResumeFailure::RejectedStepHasActionAfter { step: step.step },
+                    CheckpointResumeFailure::RejectedStepHasActionAfter { step: step_number },
                 ));
             }
             (false, None) => {}
@@ -660,6 +661,10 @@ impl SimulationResultsBackend {
 
     /// Returns recorded Monte Carlo step telemetry.
     ///
+    /// These entries describe completed Metropolis transitions and therefore
+    /// start at step 1. Step-0 construction or initial-state snapshots are
+    /// represented by [`Measurement`] values returned from [`Self::measurements`].
+    ///
     /// # Examples
     ///
     /// ```
@@ -674,6 +679,7 @@ impl SimulationResultsBackend {
     ///     )
     ///     .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
     ///     assert_eq!(results.steps().len(), 1);
+    ///     assert_eq!(results.steps()[0].step.get(), 1);
     ///     Ok(())
     /// }
     /// ```
@@ -1083,8 +1089,11 @@ impl SimulationResultsBackend {
         )
         .map_err(|err| output_error(path, OutputFormat::Csv, err))?;
 
-        let steps_by_number: HashMap<_, _> =
-            self.steps.iter().map(|step| (step.step, step)).collect();
+        let steps_by_number: HashMap<_, _> = self
+            .steps
+            .iter()
+            .map(|step| (step.step.get(), step))
+            .collect();
         for measurement in &self.measurements {
             let step = steps_by_number.get(&measurement.step).copied();
             let accepted = step.map_or(String::new(), |step| step.accepted.to_string());
@@ -1242,6 +1251,7 @@ mod tests {
     use std::assert_matches;
     use std::env;
     use std::fs;
+    use std::num::NonZeroU32;
     use std::path::PathBuf;
     use std::process;
     use std::thread;
@@ -1283,6 +1293,10 @@ mod tests {
             .expect("test action config should be valid")
     }
 
+    fn step_number(step: u32) -> NonZeroU32 {
+        NonZeroU32::new(step).expect("test step number should be nonzero")
+    }
+
     /// Builds a result container around deterministic geometry for summary-method tests.
     fn results_with(
         config: MetropolisConfig,
@@ -1311,7 +1325,7 @@ mod tests {
             move_stats,
             ProposalStatistics::from_validated_parts(1, 0, 1, 0, 0, 0, 0, 0, 0),
             vec![MonteCarloStep {
-                step: 1,
+                step: step_number(1),
                 move_type: MoveType::Move22,
                 accepted: false,
                 action_before: 0.0,
@@ -1381,7 +1395,7 @@ mod tests {
         move_stats.record_success(MoveType::Move22);
         let proposal_stats = ProposalStatistics::from_validated_parts(1, 7, 0, 0, 0, 0, 0, 1, 0);
         let step = MonteCarloStep {
-            step: 1,
+            step: step_number(1),
             move_type: MoveType::Move22,
             accepted: true,
             action_before: 4.0,
@@ -1413,7 +1427,7 @@ mod tests {
         assert_eq!(results.move_stats().total_attempted(), 1);
         assert_eq!(results.move_stats().total_accepted(), 1);
         assert_eq!(results.proposal_stats(), &proposal_stats);
-        assert_eq!(results.steps()[0].step, 1);
+        assert_eq!(results.steps()[0].step.get(), 1);
         assert_eq!(results.measurements()[0].volume_profile, vec![4, 4, 4]);
         assert_eq!(results.elapsed_time(), elapsed);
         assert_eq!(results.triangulation().slice_sizes(), &[4, 4, 4]);
@@ -1428,7 +1442,7 @@ mod tests {
         }
         let steps = (1..=4)
             .map(|step| MonteCarloStep {
-                step,
+                step: step_number(step),
                 move_type: MoveType::Move22,
                 accepted: false,
                 action_before: f64::from(step),
@@ -1475,7 +1489,7 @@ mod tests {
         }
         let steps = (1..=4)
             .map(|step| MonteCarloStep {
-                step,
+                step: step_number(step),
                 move_type: MoveType::Move22,
                 accepted: false,
                 action_before: f64::from(step),
@@ -1522,7 +1536,7 @@ mod tests {
             move_stats,
             ProposalStatistics::from_validated_parts(1, 0, 0, 0, 0, 0, 0, 0, 1),
             vec![MonteCarloStep {
-                step: 1,
+                step: step_number(1),
                 move_type: MoveType::Move22,
                 accepted: false,
                 action_before: 0.0,
@@ -1560,7 +1574,7 @@ mod tests {
             move_stats,
             ProposalStatistics::from_validated_parts(1, 1, 1, 0, 0, 0, 0, 0, 0),
             vec![MonteCarloStep {
-                step: 1,
+                step: step_number(1),
                 move_type: MoveType::Move22,
                 accepted: true,
                 action_before: 0.0,
@@ -1600,7 +1614,7 @@ mod tests {
             move_stats,
             ProposalStatistics::from_validated_parts(1, 0, 0, 0, 0, 0, 0, 0, 0),
             vec![MonteCarloStep {
-                step: 1,
+                step: step_number(1),
                 move_type: MoveType::Move22,
                 accepted: false,
                 action_before: 0.0,
@@ -1682,7 +1696,7 @@ mod tests {
             MoveStatistics::new(),
             ProposalStatistics::new(),
             vec![MonteCarloStep {
-                step: 1,
+                step: step_number(1),
                 move_type: MoveType::Move22,
                 accepted: false,
                 action_before: 0.0,
@@ -1723,6 +1737,22 @@ mod tests {
         assert!(
             message.contains("temperature") && message.contains("finite and positive"),
             "serde error should preserve validation context, got {message}"
+        );
+    }
+
+    #[test]
+    fn deserialization_rejects_zero_step_telemetry() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let results = valid_rejected_result(triangulation);
+        let mut payload = to_value(&results).expect("results should serialize");
+        payload["steps"][0]["step"] = to_value(0_u32).expect("step should serialize");
+
+        let error = from_str::<SimulationResultsBackend>(&payload.to_string())
+            .expect_err("zero Monte Carlo step telemetry should fail while parsing");
+        assert!(
+            error.to_string().contains("nonzero") || error.to_string().contains("invalid value"),
+            "unexpected serde error: {error}"
         );
     }
 
@@ -1813,7 +1843,7 @@ mod tests {
         let results = results_with(
             metropolis_config(1.0, 2, 1, 1),
             vec![MonteCarloStep {
-                step: 1,
+                step: step_number(1),
                 move_type: MoveType::Move22,
                 accepted: true,
                 action_before: 3.0,
@@ -1849,7 +1879,7 @@ mod tests {
         let results = results_with(
             metropolis_config(1.0, 1, 0, 1),
             vec![MonteCarloStep {
-                step: 1,
+                step: step_number(1),
                 move_type: MoveType::Move22,
                 accepted: true,
                 action_before: 3.0,
@@ -1980,7 +2010,7 @@ mod tests {
         let config = metropolis_config(1.0, 20, 10, 5);
         let steps = vec![
             MonteCarloStep {
-                step: 1,
+                step: step_number(1),
                 move_type: MoveType::Move22,
                 accepted: true,
                 action_before: 3.0,
@@ -1988,7 +2018,7 @@ mod tests {
                 delta_action: Some(-0.5),
             },
             MonteCarloStep {
-                step: 2,
+                step: step_number(2),
                 move_type: MoveType::Move13Add,
                 accepted: false,
                 action_before: 2.5,
@@ -1996,7 +2026,7 @@ mod tests {
                 delta_action: Some(0.8),
             },
             MonteCarloStep {
-                step: 3,
+                step: step_number(3),
                 move_type: MoveType::Move31Remove,
                 accepted: true,
                 action_before: 2.5,
