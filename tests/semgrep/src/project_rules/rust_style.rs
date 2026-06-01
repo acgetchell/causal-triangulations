@@ -2,6 +2,7 @@
 #![allow(dead_code, unused_imports)]
 
 use num_traits::cast::NumCast;
+use rand::Rng;
 
 struct ProposalRefFixture;
 
@@ -308,4 +309,48 @@ fn planned_step_record_with_sampler_sync_fixture(
     sampler.replace_state(state.triangulation)?;
     state.current_step = step;
     Ok(())
+}
+
+fn local_metropolis_acceptance_draw_fixture<R: Rng + ?Sized>(
+    log_alpha: f64,
+    rng: &mut R,
+) -> bool {
+    // ruleid: causal-triangulations.rust.no-local-metropolis-acceptance-draws
+    log_alpha >= 0.0 || rng.random::<f64>() < log_alpha.exp()
+}
+
+#[cfg(test)]
+fn test_only_metropolis_acceptance_draw_fixture<R: Rng + ?Sized>(
+    log_alpha: f64,
+    rng: &mut R,
+) -> bool {
+    // ok: causal-triangulations.rust.no-local-metropolis-acceptance-draws
+    log_alpha >= 0.0 || rng.random::<f64>() < log_alpha.exp()
+}
+
+fn local_mcmc_chain_counter_fixture(outcome: bool) -> (u64, u64) {
+    let mut accepted = 0_u64;
+    let mut rejected = 0_u64;
+    if outcome {
+        // ruleid: causal-triangulations.rust.no-local-mcmc-chain-counter-increments
+        accepted += 1;
+    } else {
+        // ruleid: causal-triangulations.rust.no-local-mcmc-chain-counter-increments
+        rejected = rejected + 1;
+    }
+    (accepted, rejected)
+}
+
+#[cfg(test)]
+fn test_only_mcmc_chain_counter_fixture(outcome: bool) -> (u64, u64) {
+    let mut accepted = 0_u64;
+    let mut rejected = 0_u64;
+    if outcome {
+        // ok: causal-triangulations.rust.no-local-mcmc-chain-counter-increments
+        accepted += 1;
+    } else {
+        // ok: causal-triangulations.rust.no-local-mcmc-chain-counter-increments
+        rejected = rejected + 1;
+    }
+    (accepted, rejected)
 }

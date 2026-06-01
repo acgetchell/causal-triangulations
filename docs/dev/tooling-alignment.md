@@ -107,6 +107,9 @@ The useful `justfile` updates ported from `delaunay` are:
   readable version comments. Dependabot remains the update path for pinned external actions, with review focused on preserving both the SHA and readable version
   comment.
 - Delaunay's non-Rust 160-column tooling policy, adapted for CDT while intentionally leaving Rust formatting at `rustfmt`'s 100-column width.
+- MCMC-boundary Semgrep rules for issue #155, which reject production CDT-local Metropolis-Hastings `exp(log_alpha)` acceptance draws and manual
+  accepted/rejected sampler counter increments. These are CDT-specific because this crate still owns proposal planning, proposal-site telemetry, and result
+  translation, while `markov-chain-monte-carlo` owns the reusable sampler mechanics.
 
 ## Issue #162 CI And Security Alignment
 

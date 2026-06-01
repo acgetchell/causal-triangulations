@@ -185,9 +185,9 @@ Code outside `src/geometry/` must not import `delaunay::` directly. CDT modules 
 handle wrappers, `DelaunayBackend2D`, and generator functions from `crate::geometry`.
 
 Generic MCMC mechanics should be delegated to `markov-chain-monte-carlo` through thin CDT adapters. CDT owns domain state, proposal-site enumeration,
-foliation/topology validation, measurements, and result translation; the upstream MCMC crate should own Metropolis-Hastings acceptance, proposal-ratio
-application, chain counters, planned-proposal commit ordering, and reusable sampler continuation behavior. The current boundary refactor is tracked by
-[`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155).
+foliation/topology validation, measurements, and result translation; the upstream MCMC crate owns Metropolis-Hastings acceptance, proposal-ratio application,
+chain counters, planned-proposal commit ordering, and reusable sampler continuation behavior. Repository-owned Semgrep rules enforce the issue #155 boundary
+against new CDT-local generic acceptance draws or manual accepted/rejected sampler counters.
 
 ## Key Modules
 
