@@ -65,7 +65,7 @@ fn assert_physics_pipeline(config: CdtConfig) {
     let stats = results.move_stats();
     assert_eq!(
         stats.total_attempted(),
-        u64::from(config.to_metropolis_config().steps()),
+        u64::from(config.to_metropolis_config().steps().get()),
         "one move proposal should be recorded for each configured simulation step"
     );
     assert!(stats.total_acceptance_rate() > 0.0);

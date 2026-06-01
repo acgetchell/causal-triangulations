@@ -186,7 +186,7 @@ impl CdtMcmcCheckpoint {
     /// .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)
     /// # }
     /// # let checkpoint = checkpoint()?;
-    /// assert_eq!(checkpoint.triangulation().time_slices(), 3);
+    /// assert_eq!(checkpoint.triangulation().time_slices().get(), 3);
     /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     #[must_use]
@@ -212,7 +212,7 @@ impl CdtMcmcCheckpoint {
     /// .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)
     /// # }
     /// # let checkpoint = checkpoint()?;
-    /// assert_eq!(checkpoint.config().steps(), 1);
+    /// assert_eq!(checkpoint.config().steps().get(), 1);
     /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     #[must_use]

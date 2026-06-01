@@ -9,6 +9,7 @@ use crate::config::validate_schedule;
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
 use crate::geometry::CdtTriangulation2D;
 use crate::util::saturating_usize_to_u32;
+use std::num::NonZeroU32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimplexCounts {
@@ -128,9 +129,9 @@ pub fn measurement_for(step: u32, action: f64, triangulation: &CdtTriangulation2
 pub const fn measurement_is_due(
     step: u32,
     thermalization_steps: u32,
-    measurement_frequency: u32,
+    measurement_frequency: NonZeroU32,
 ) -> bool {
-    step >= thermalization_steps && step.is_multiple_of(measurement_frequency)
+    step >= thermalization_steps && step.is_multiple_of(measurement_frequency.get())
 }
 
 /// Counts scheduled post-thermalization measurements through `current_step`.
@@ -142,13 +143,17 @@ pub const fn measurement_is_due(
 pub fn expected_measurement_count(
     current_step: u32,
     thermalization_steps: u32,
-    measurement_frequency: u32,
+    measurement_frequency: NonZeroU32,
 ) -> Option<usize> {
     let first = first_measurement_step(thermalization_steps, measurement_frequency)?;
     if first > current_step {
         return Some(0);
     }
-    usize::try_from((current_step - first) / measurement_frequency + 1).ok()
+    let current_step = u64::from(current_step);
+    let first = u64::from(first);
+    let measurement_frequency = u64::from(measurement_frequency.get());
+    let count = (current_step - first) / measurement_frequency + 1;
+    usize::try_from(count).ok()
 }
 
 /// Returns the scheduled post-thermalization step at a zero-based measurement index.
@@ -160,22 +165,23 @@ pub fn expected_measurement_count(
 pub fn expected_measurement_step(
     index: usize,
     thermalization_steps: u32,
-    measurement_frequency: u32,
+    measurement_frequency: NonZeroU32,
 ) -> Option<u32> {
     let first = first_measurement_step(thermalization_steps, measurement_frequency)?;
     let offset = u32::try_from(index)
         .ok()?
-        .checked_mul(measurement_frequency)?;
+        .checked_mul(measurement_frequency.get())?;
     first.checked_add(offset)
 }
 
 /// Finds the first measurement cadence at or after thermalization.
-fn first_measurement_step(thermalization_steps: u32, measurement_frequency: u32) -> Option<u32> {
-    if measurement_frequency == 0 {
-        return None;
-    }
-    let first = u64::from(thermalization_steps).div_ceil(u64::from(measurement_frequency))
-        * u64::from(measurement_frequency);
+fn first_measurement_step(
+    thermalization_steps: u32,
+    measurement_frequency: NonZeroU32,
+) -> Option<u32> {
+    let measurement_frequency = u64::from(measurement_frequency.get());
+    let first =
+        u64::from(thermalization_steps).div_ceil(measurement_frequency) * measurement_frequency;
     u32::try_from(first).ok()
 }
 
@@ -222,23 +228,31 @@ pub fn actions_match(left: f64, right: f64) -> bool {
 mod tests {
     use super::*;
 
+    fn frequency(value: u32) -> NonZeroU32 {
+        NonZeroU32::new(value).expect("test measurement frequency should be nonzero")
+    }
+
     #[test]
     fn measurement_count_ignores_steps_before_first_post_thermalization_cadence() {
-        assert_eq!(expected_measurement_count(1, 2, 2), Some(0));
-        assert_eq!(expected_measurement_count(2, 2, 2), Some(1));
-        assert_eq!(expected_measurement_count(4, 2, 2), Some(2));
+        assert_eq!(expected_measurement_count(1, 2, frequency(2)), Some(0));
+        assert_eq!(expected_measurement_count(2, 2, frequency(2)), Some(1));
+        assert_eq!(expected_measurement_count(4, 2, frequency(2)), Some(2));
     }
 
     #[test]
     fn measurement_step_rounds_thermalization_up_to_cadence() {
-        assert_eq!(expected_measurement_step(0, 3, 2), Some(4));
-        assert_eq!(expected_measurement_step(1, 3, 2), Some(6));
+        assert_eq!(expected_measurement_step(0, 3, frequency(2)), Some(4));
+        assert_eq!(expected_measurement_step(1, 3, frequency(2)), Some(6));
     }
 
     #[test]
-    fn measurement_helpers_reject_zero_frequency() {
-        assert_eq!(expected_measurement_count(4, 0, 0), None);
-        assert_eq!(expected_measurement_step(0, 0, 0), None);
+    fn measurement_count_widens_before_including_current_step() {
+        let expected = usize::try_from(u64::from(u32::MAX) + 1).ok();
+
+        assert_eq!(
+            expected_measurement_count(u32::MAX, 0, frequency(1)),
+            expected
+        );
     }
 
     #[test]

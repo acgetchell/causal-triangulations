@@ -157,6 +157,7 @@ pub struct CdtConfig {
 #[derive(Debug, Clone)]
 pub struct ValidatedCdtConfig {
     config: CdtConfig,
+    metropolis_config: MetropolisConfig,
 }
 
 /// Validated initial spatial-volume input for CDT construction.
@@ -217,7 +218,17 @@ impl ValidatedCdtConfig {
     /// ```
     pub fn new(config: CdtConfig) -> CdtResult<Self> {
         config.ensure_valid()?;
-        Ok(Self { config })
+        let metropolis_config = MetropolisConfig::new_with_seed(
+            config.temperature,
+            config.steps,
+            config.thermalization_steps,
+            config.measurement_frequency,
+            config.seed,
+        )?;
+        Ok(Self {
+            config,
+            metropolis_config,
+        })
     }
 
     /// Returns the validated configuration for serialization/reporting APIs.
@@ -521,8 +532,8 @@ impl ValidatedCdtConfig {
     /// }
     /// ```
     #[must_use]
-    pub const fn to_metropolis_config(&self) -> MetropolisConfig {
-        to_metropolis_config(&self.config)
+    pub fn to_metropolis_config(&self) -> MetropolisConfig {
+        self.metropolis_config.clone()
     }
 
     /// Creates a validated [`ActionConfig`].
@@ -1244,17 +1255,6 @@ pub(crate) fn validate_schedule(
     Ok(())
 }
 
-/// Builds the MCMC runtime configuration from an already validated raw config.
-const fn to_metropolis_config(config: &CdtConfig) -> MetropolisConfig {
-    MetropolisConfig::from_validated_parts(
-        config.temperature,
-        config.steps,
-        config.thermalization_steps,
-        config.measurement_frequency,
-        config.seed,
-    )
-}
-
 /// Builds the action runtime configuration from an already validated raw config.
 const fn to_action_config(config: &CdtConfig) -> ActionConfig {
     ActionConfig::from_validated_parts(
@@ -1784,7 +1784,7 @@ mod tests {
 
         let metropolis_config = config.to_metropolis_config();
         assert_relative_eq!(metropolis_config.temperature(), 1.0);
-        assert_eq!(metropolis_config.steps(), 1000);
+        assert_eq!(metropolis_config.steps().get(), 1000);
 
         let action_config = config.to_action_config();
         assert_relative_eq!(action_config.coupling_0(), 0.0);

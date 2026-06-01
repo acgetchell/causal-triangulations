@@ -7,7 +7,7 @@ use crate::cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType, cl
 use crate::config::CdtTopology;
 use crate::errors::{
     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
-    GenerationParameterIssue,
+    GenerationParameterIssue, TriangulationMetadataField,
 };
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
@@ -115,11 +115,18 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
     /// Validates that the time direction wraps for toroidal topology.
     fn validate_toroidal_temporal_wraparound(&self) -> CdtResult<()> {
-        let total = self.metadata.time_slices;
+        let total = self.metadata.time_slices.get();
         if total < 2 {
             return Ok(());
         }
-        let num_slices = total as usize;
+        let Ok(num_slices) = usize::try_from(total) else {
+            return Err(CdtError::InvalidTriangulationMetadata {
+                field: TriangulationMetadataField::Timeslices,
+                topology: self.metadata.topology,
+                provided_value: total.to_string(),
+                expected: "representable as usize".to_string(),
+            });
+        };
 
         let mut neighbor_slices: Vec<HashSet<usize>> = vec![HashSet::new(); num_slices];
         for edge in self.geometry.edges() {
@@ -442,7 +449,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             }
         }
 
-        self.metadata.time_slices = num_slices;
+        self.metadata.time_slices = Self::parse_time_slices(self.metadata.topology, num_slices)?;
         self.bump_modification_count();
         self.foliation = Some(foliation);
         self.mark_foliation_synchronized();
@@ -479,7 +486,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 2)?;
-    ///     assert_eq!(tri.foliation().map(Foliation::num_slices), Some(2));
+    ///     assert_eq!(tri.foliation().map(|foliation| foliation.num_slices().get()), Some(2));
     ///     Ok(())
     /// }
     /// ```
@@ -584,7 +591,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             return Vec::new();
         }
 
-        let Ok(slice_count) = usize::try_from(self.metadata.time_slices) else {
+        let Ok(slice_count) = usize::try_from(self.metadata.time_slices.get()) else {
             return Vec::new();
         };
         let mut profile = vec![0_u32; slice_count];
@@ -609,8 +616,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
     pub(super) fn time_step_distance(&self, t0: u32, t1: u32) -> u32 {
         let raw = t0.abs_diff(t1);
         if matches!(self.metadata.topology, CdtTopology::Toroidal) {
-            let total = self.metadata.time_slices;
-            if total > 0 && t0 < total && t1 < total {
+            let total = self.metadata.time_slices.get();
+            if t0 < total && t1 < total {
                 return raw.min(total - raw);
             }
         }
@@ -639,8 +646,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
             return None;
         };
 
-        let total = self.metadata.time_slices;
-        let toroidal = matches!(self.metadata.topology, CdtTopology::Toroidal) && total > 0;
+        let total = self.metadata.time_slices.get();
+        let toroidal = matches!(self.metadata.topology, CdtTopology::Toroidal);
         let up_apex = if toroidal {
             (base_slice + 1) % total
         } else {
@@ -682,10 +689,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         match self.metadata.topology {
             CdtTopology::OpenBoundary => Some(labels[0].min(labels[1]).min(labels[2])),
             CdtTopology::Toroidal => {
-                let total = self.metadata.time_slices;
-                if total == 0 {
-                    return None;
-                }
+                let total = self.metadata.time_slices.get();
 
                 let first = labels[0];
                 let mut second = None;
@@ -1004,9 +1008,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
             return Ok(());
         }
 
-        let slice_sizes =
-            Self::live_slice_sizes_from_vertex_labels(&self.geometry, self.metadata.time_slices)?;
-        let foliation = Foliation::from_slice_sizes(slice_sizes, self.metadata.time_slices)
+        let slice_sizes = Self::live_slice_sizes_from_vertex_labels(
+            &self.geometry,
+            self.metadata.time_slices.get(),
+        )?;
+        let foliation = Foliation::from_slice_sizes(slice_sizes, self.metadata.time_slices.get())
             .map_err(CdtError::from)?;
 
         self.foliation = Some(foliation);
@@ -1174,7 +1180,7 @@ mod tests {
             .expect("Should assign foliation");
 
         assert!(tri.has_foliation());
-        assert_eq!(tri.time_slices(), 3);
+        assert_eq!(tri.time_slices().get(), 3);
         assert_eq!(tri.slice_sizes().iter().sum::<usize>(), tri.vertex_count());
         assert!(tri.metadata().last_modified > initial_last_modified);
         assert_eq!(
@@ -1246,7 +1252,7 @@ mod tests {
                 && provided_value == "2"
                 && expected == "≥ 3"
         );
-        assert_eq!(tri.time_slices(), 3);
+        assert_eq!(tri.time_slices().get(), 3);
         assert_eq!(tri.slice_sizes(), initial_slice_sizes.as_slice());
         assert!(tri.has_foliation());
     }
@@ -1422,7 +1428,7 @@ mod tests {
         tri.assign_foliation_by_y(2)
             .expect("Re-assignment with different slice count should succeed");
 
-        assert_eq!(tri.time_slices(), 2);
+        assert_eq!(tri.time_slices().get(), 2);
         assert_eq!(tri.slice_sizes().len(), 2);
         assert_eq!(tri.slice_sizes().iter().sum::<usize>(), tri.vertex_count());
         for face in tri.geometry().faces() {

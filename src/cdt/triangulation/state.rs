@@ -15,6 +15,7 @@ use crate::geometry::traits::TriangulationQuery;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
+use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -84,8 +85,8 @@ impl<B: Clone> Clone for CdtTriangulation<B> {
 /// Metadata describing the CDT foliation, topology, and simulation history.
 #[derive(Debug, Clone)]
 pub struct CdtMetadata {
-    /// Number of time slices in the CDT foliation
-    time_slices: u32,
+    /// Nonzero number of time slices in the CDT foliation
+    time_slices: NonZeroU32,
     /// Dimensionality of the spacetime
     dimension: u8,
     /// Topology of the spatial slices
@@ -114,12 +115,12 @@ impl CdtMetadata {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
-    ///     assert_eq!(tri.metadata().time_slices(), 2);
+    ///     assert_eq!(tri.metadata().time_slices().get(), 2);
     ///     Ok(())
     /// }
     /// ```
     #[must_use]
-    pub const fn time_slices(&self) -> u32 {
+    pub const fn time_slices(&self) -> NonZeroU32 {
         self.time_slices
     }
 
@@ -358,7 +359,7 @@ impl Serialize for CdtTriangulation<DelaunayBackend2D> {
         SerializedCdtTriangulation {
             geometry: &self.geometry,
             metadata: SerializedCdtMetadata {
-                time_slices: self.metadata.time_slices,
+                time_slices: self.metadata.time_slices.get(),
                 dimension: self.metadata.dimension,
                 topology: self.metadata.topology,
                 modification_count: self.metadata.modification_count,
@@ -385,7 +386,11 @@ impl<'de> Deserialize<'de> for CdtTriangulation<DelaunayBackend2D> {
             instance_id: next_triangulation_instance_id(),
             geometry: serialized.geometry,
             metadata: CdtMetadata {
-                time_slices: serialized.metadata.time_slices,
+                time_slices: Self::parse_time_slices(
+                    serialized.metadata.topology,
+                    serialized.metadata.time_slices,
+                )
+                .map_err(DeError::custom)?,
                 dimension: serialized.metadata.dimension,
                 topology: serialized.metadata.topology,
                 creation_time: now,
@@ -418,6 +423,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
 impl<B> CdtTriangulation<B> {
     /// Encodes topology-specific time-slice metadata invariants in one reusable check.
     fn check_time_slices(topology: CdtTopology, time_slices: u32) -> CdtResult<()> {
+        Self::parse_time_slices(topology, time_slices).map(|_| ())
+    }
+
+    /// Parses raw time-slice metadata into a nonzero invariant-bearing count.
+    fn parse_time_slices(topology: CdtTopology, time_slices: u32) -> CdtResult<NonZeroU32> {
         if time_slices == 0 {
             return Err(CdtError::InvalidTriangulationMetadata {
                 field: TriangulationMetadataField::Timeslices,
@@ -436,7 +446,12 @@ impl<B> CdtTriangulation<B> {
             });
         }
 
-        Ok(())
+        NonZeroU32::new(time_slices).ok_or_else(|| CdtError::InvalidTriangulationMetadata {
+            field: TriangulationMetadataField::Timeslices,
+            topology,
+            provided_value: time_slices.to_string(),
+            expected: "≥ 1".to_string(),
+        })
     }
 
     /// Get immutable reference to underlying geometry.
@@ -468,12 +483,12 @@ impl<B> CdtTriangulation<B> {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
-    ///     assert_eq!(tri.time_slices(), 2);
+    ///     assert_eq!(tri.time_slices().get(), 2);
     ///     Ok(())
     /// }
     /// ```
     #[must_use]
-    pub const fn time_slices(&self) -> u32 {
+    pub const fn time_slices(&self) -> NonZeroU32 {
         self.metadata.time_slices
     }
 
@@ -506,7 +521,7 @@ impl<B> CdtTriangulation<B> {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
-    ///     assert_eq!(tri.metadata().time_slices(), 2);
+    ///     assert_eq!(tri.metadata().time_slices().get(), 2);
     ///     Ok(())
     /// }
     /// ```
@@ -523,7 +538,7 @@ impl<B> CdtTriangulation<B> {
 
     /// Writes time-slice metadata through the central invariant and foliation invalidation path.
     fn apply_time_slices(&mut self, time_slices: u32) -> CdtResult<()> {
-        Self::check_time_slices(self.metadata.topology, time_slices)?;
+        let time_slices = Self::parse_time_slices(self.metadata.topology, time_slices)?;
         self.metadata.time_slices = time_slices;
         if self
             .foliation
@@ -604,7 +619,7 @@ impl<B> CdtTriangulation<B> {
     /// # }
     /// ```
     pub fn set_time_slices(&mut self, time_slices: u32) -> CdtResult<()> {
-        if self.metadata.time_slices == time_slices {
+        if self.metadata.time_slices.get() == time_slices {
             return self.apply_time_slices(time_slices);
         }
 
@@ -665,7 +680,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// fn main() -> CdtResult<()> {
     ///     let backend = MockBackend::create_triangle();
     ///     let tri = CdtTriangulation::try_new(backend, 2, 2)?;
-    ///     assert_eq!(tri.time_slices(), 2);
+    ///     assert_eq!(tri.time_slices().get(), 2);
     ///     Ok(())
     /// }
     /// ```
@@ -675,7 +690,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             time_slices,
             dimension,
             CdtTopology::OpenBoundary,
-        );
+        )?;
         tri.validate_metadata()?;
         tri.validate_topology()?;
         Ok(tri)
@@ -721,7 +736,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///
     ///     let tri = CdtTriangulation::with_topology(backend, 2, 2, CdtTopology::OpenBoundary)?;
     ///     assert_matches!(tri.metadata().topology(), CdtTopology::OpenBoundary);
-    ///     assert_eq!(tri.time_slices(), 2);
+    ///     assert_eq!(tri.time_slices().get(), 2);
     ///     assert_eq!(tri.dimension(), 2);
     ///     Ok(())
     /// }
@@ -806,7 +821,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         topology: CdtTopology,
     ) -> CdtResult<Self> {
         let mut tri =
-            Self::from_parts_before_validation(geometry, time_slices, dimension, topology);
+            Self::from_parts_before_validation(geometry, time_slices, dimension, topology)?;
         tri.apply_time_slices(time_slices)?;
         tri.validate_metadata()?;
         tri.validate_topology()?;
@@ -819,18 +834,19 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         time_slices: u32,
         dimension: u8,
         topology: CdtTopology,
-    ) -> Self {
+    ) -> CdtResult<Self> {
+        let parsed_time_slices = Self::parse_time_slices(topology, time_slices)?;
         let vertex_count = geometry.vertex_count();
         let creation_event = SimulationEvent::Created {
             vertex_count,
             time_slices,
         };
 
-        Self {
+        Ok(Self {
             instance_id: next_triangulation_instance_id(),
             geometry,
             metadata: CdtMetadata {
-                time_slices,
+                time_slices: parsed_time_slices,
                 dimension,
                 topology,
                 creation_time: Instant::now(),
@@ -841,12 +857,12 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             cache: GeometryCache::default(),
             foliation: None,
             foliation_synced_at_modification: None,
-        }
+        })
     }
 
     /// Validates CDT metadata against backend and topology invariants.
     fn validate_metadata(&self) -> CdtResult<()> {
-        Self::check_time_slices(self.metadata.topology, self.metadata.time_slices)?;
+        Self::check_time_slices(self.metadata.topology, self.metadata.time_slices.get())?;
 
         let backend_dimension = self.geometry.dimension();
         if usize::from(self.metadata.dimension) != backend_dimension {
@@ -1058,7 +1074,7 @@ mod tests {
             instance_id: next_triangulation_instance_id(),
             geometry: MetadataOnlyBackend,
             metadata: CdtMetadata {
-                time_slices: 2,
+                time_slices: NonZeroU32::new(2).expect("test time-slice count should be nonzero"),
                 dimension: 2,
                 topology: CdtTopology::OpenBoundary,
                 creation_time: now,
@@ -1071,7 +1087,7 @@ mod tests {
             foliation_synced_at_modification: None,
         };
 
-        assert_eq!(triangulation.time_slices(), 2);
+        assert_eq!(triangulation.time_slices().get(), 2);
         assert_eq!(triangulation.dimension(), 2);
         assert_eq!(
             triangulation.metadata().topology(),
@@ -1080,7 +1096,7 @@ mod tests {
         triangulation
             .set_time_slices(3)
             .expect("open-boundary metadata update should validate");
-        assert_eq!(triangulation.time_slices(), 3);
+        assert_eq!(triangulation.time_slices().get(), 3);
         assert_eq!(triangulation.metadata().modification_count(), 1);
     }
 
@@ -1096,6 +1112,7 @@ mod tests {
             dimension,
             CdtTopology::OpenBoundary,
         )
+        .expect("unchecked test metadata should use nonzero time slices")
     }
 
     #[test]
@@ -1191,7 +1208,7 @@ mod tests {
 
         // Test basic property getters
         assert_eq!(triangulation.dimension(), 2);
-        assert_eq!(triangulation.time_slices(), 4);
+        assert_eq!(triangulation.time_slices().get(), 4);
         assert_eq!(triangulation.vertex_count(), 8);
 
         let edge_count = triangulation.edge_count();
@@ -1215,7 +1232,7 @@ mod tests {
 
         // Check that metadata is properly initialized
         assert_eq!(triangulation.dimension(), 2);
-        assert_eq!(triangulation.time_slices(), 3);
+        assert_eq!(triangulation.time_slices().get(), 3);
 
         // Metadata should be accessible through debug formatting
         let debug_output = format!("{triangulation:?}");
@@ -1531,7 +1548,7 @@ mod tests {
             .set_time_slices(2)
             .expect("unchanged time-slice count should be accepted");
 
-        assert_eq!(triangulation.time_slices(), 2);
+        assert_eq!(triangulation.time_slices().get(), 2);
         assert_eq!(
             triangulation.metadata().modification_count,
             initial_modification_count
@@ -1552,7 +1569,7 @@ mod tests {
         tri.set_time_slices(3)
             .expect("open-boundary time-slice metadata can be widened");
 
-        assert_eq!(tri.time_slices(), 3);
+        assert_eq!(tri.time_slices().get(), 3);
         assert_eq!(
             tri.metadata().modification_count,
             initial_modification_count + 1
@@ -1567,7 +1584,7 @@ mod tests {
         assert!(result.is_ok(), "Should allow large time slice count");
 
         let triangulation = result.unwrap();
-        assert_eq!(triangulation.time_slices(), 100);
+        assert_eq!(triangulation.time_slices().get(), 100);
     }
 
     #[test]
@@ -1790,7 +1807,7 @@ mod tests {
                 && provided_value == "2"
                 && expected == "≥ 3"
         );
-        assert_eq!(tri.time_slices(), 3);
+        assert_eq!(tri.time_slices().get(), 3);
         assert!(tri.validate_topology().is_ok());
     }
 
@@ -2093,7 +2110,7 @@ mod prop_tests {
             let mut triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
 
             // Initial metadata should be consistent
-            prop_assert_eq!(triangulation.time_slices(), timeslices, "Time slices should match input");
+            prop_assert_eq!(triangulation.time_slices().get(), timeslices, "Time slices should match input");
             prop_assert_eq!(triangulation.dimension(), 2, "Dimension should be 2");
             prop_assert_eq!(triangulation.metadata().modification_count, 0, "Initial modification count should be 0");
 
@@ -2233,7 +2250,7 @@ mod prop_tests {
                 let vertex_count_u32 =
                     u32::try_from(triangulation.vertex_count()).unwrap_or(u32::MAX);
                 prop_assert_eq!(vertex_count_u32, vertices, "Vertex count should match input");
-                prop_assert_eq!(triangulation.time_slices(), timeslices, "Time slices should match input");
+                prop_assert_eq!(triangulation.time_slices().get(), timeslices, "Time slices should match input");
                 prop_assert_eq!(triangulation.dimension(), 2, "Dimension should be 2");
             } else {
                 prop_assert!(

@@ -15,7 +15,8 @@ use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveStatistics, MoveType};
 use crate::cdt::results::{Measurement, SimulationResultsBackend};
 use crate::cdt::triangulation::SimulationEvent;
 use crate::errors::{
-    CdtError, CdtResult, CheckpointResumeFailure, MetropolisMoveApplicationFailure,
+    CdtError, CdtResult, CheckpointResumeFailure, ConfigurationSetting,
+    MetropolisMoveApplicationFailure,
 };
 use crate::geometry::CdtTriangulation2D;
 use rand::{Rng, RngExt, SeedableRng, rngs::Xoshiro256PlusPlus};
@@ -33,6 +34,7 @@ use super::helpers::{
     action_for, actions_match, measurement_for, measurement_is_due, validate_metropolis_schedule,
 };
 use super::telemetry::{MonteCarloStep, ProposalStatistics};
+use std::num::NonZeroU32;
 
 /// Validated configuration for the Metropolis-Hastings algorithm.
 ///
@@ -43,12 +45,12 @@ use super::telemetry::{MonteCarloStep, ProposalStatistics};
 pub struct MetropolisConfig {
     /// Temperature parameter (1/β)
     temperature: f64,
-    /// Number of Monte Carlo steps to perform
-    steps: u32,
+    /// Nonzero number of Monte Carlo steps to perform
+    steps: NonZeroU32,
     /// Number of thermalization steps before measurements
     thermalization_steps: u32,
-    /// Frequency of measurements (take measurement every N steps)
-    measurement_frequency: u32,
+    /// Nonzero frequency of measurements (take measurement every N steps)
+    measurement_frequency: NonZeroU32,
     /// Optional RNG seed for reproducible simulations (default: None = random)
     seed: Option<u64>,
 }
@@ -82,7 +84,13 @@ impl<'de> Deserialize<'de> for MetropolisConfig {
 impl Default for MetropolisConfig {
     /// Default Metropolis configuration for 2D CDT.
     fn default() -> Self {
-        Self::from_validated_parts(1.0, 1000, 100, 10, None)
+        Self::from_validated_parts(
+            1.0,
+            default_step_count(),
+            100,
+            default_measurement_frequency(),
+            None,
+        )
     }
 }
 
@@ -102,7 +110,7 @@ impl MetropolisConfig {
     /// use causal_triangulations::MetropolisConfig;
     ///
     /// let config = MetropolisConfig::new(2.0, 500, 50, 5)?;
-    /// assert_eq!(config.steps(), 500);
+    /// assert_eq!(config.steps().get(), 500);
     /// assert!(config.seed().is_none());
     /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
@@ -150,6 +158,20 @@ impl MetropolisConfig {
             thermalization_steps,
             measurement_frequency,
         )?;
+        let Some(steps) = NonZeroU32::new(steps) else {
+            return Err(CdtError::InvalidSimulationConfiguration {
+                setting: ConfigurationSetting::Steps,
+                provided_value: steps.to_string(),
+                expected: "≥ 1".to_string(),
+            });
+        };
+        let Some(measurement_frequency) = NonZeroU32::new(measurement_frequency) else {
+            return Err(CdtError::InvalidSimulationConfiguration {
+                setting: ConfigurationSetting::MeasurementFrequency,
+                provided_value: measurement_frequency.to_string(),
+                expected: "≥ 1".to_string(),
+            });
+        };
         Ok(Self::from_validated_parts(
             temperature,
             steps,
@@ -166,9 +188,9 @@ impl MetropolisConfig {
     /// second fallible branch.
     pub(crate) const fn from_validated_parts(
         temperature: f64,
-        steps: u32,
+        steps: NonZeroU32,
         thermalization_steps: u32,
-        measurement_frequency: u32,
+        measurement_frequency: NonZeroU32,
         seed: Option<u64>,
     ) -> Self {
         Self {
@@ -214,7 +236,7 @@ impl MetropolisConfig {
         self.temperature
     }
 
-    /// Returns the configured number of Monte Carlo steps.
+    /// Returns the nonzero configured number of Monte Carlo steps.
     ///
     /// # Examples
     ///
@@ -222,11 +244,11 @@ impl MetropolisConfig {
     /// use causal_triangulations::MetropolisConfig;
     ///
     /// let config = MetropolisConfig::new(2.0, 100, 10, 5)?;
-    /// assert_eq!(config.steps(), 100);
+    /// assert_eq!(config.steps().get(), 100);
     /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     #[must_use]
-    pub const fn steps(&self) -> u32 {
+    pub const fn steps(&self) -> NonZeroU32 {
         self.steps
     }
 
@@ -246,7 +268,7 @@ impl MetropolisConfig {
         self.thermalization_steps
     }
 
-    /// Returns the measurement cadence.
+    /// Returns the nonzero measurement cadence.
     ///
     /// # Examples
     ///
@@ -254,11 +276,11 @@ impl MetropolisConfig {
     /// use causal_triangulations::MetropolisConfig;
     ///
     /// let config = MetropolisConfig::new(2.0, 100, 10, 5)?;
-    /// assert_eq!(config.measurement_frequency(), 5);
+    /// assert_eq!(config.measurement_frequency().get(), 5);
     /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     #[must_use]
-    pub const fn measurement_frequency(&self) -> u32 {
+    pub const fn measurement_frequency(&self) -> NonZeroU32 {
         self.measurement_frequency
     }
 
@@ -312,9 +334,23 @@ impl MetropolisConfig {
     /// ```
     pub fn validate(&self) {
         debug_assert!(self.temperature.is_finite() && self.temperature > 0.0);
-        debug_assert_ne!(self.steps, 0);
-        debug_assert_ne!(self.measurement_frequency, 0);
-        debug_assert!(self.thermalization_steps <= self.steps);
+        debug_assert!(self.thermalization_steps <= self.steps.get());
+    }
+}
+
+/// Returns the built-in nonzero Metropolis step count.
+const fn default_step_count() -> NonZeroU32 {
+    match NonZeroU32::new(1000) {
+        Some(steps) => steps,
+        None => NonZeroU32::MIN,
+    }
+}
+
+/// Returns the built-in nonzero measurement cadence.
+const fn default_measurement_frequency() -> NonZeroU32 {
+    match NonZeroU32::new(10) {
+        Some(measurement_frequency) => measurement_frequency,
+        None => NonZeroU32::MIN,
     }
 }
 
@@ -547,7 +583,7 @@ impl MetropolisAlgorithm {
     ///     .resume_from_checkpoint(checkpoint)?;
     ///
     ///     assert_eq!(resumed.steps().len(), 4);
-    ///     assert_eq!(resumed.config().steps(), 4);
+    ///     assert_eq!(resumed.config().steps().get(), 4);
     ///     Ok(())
     /// }
     /// ```
@@ -599,7 +635,7 @@ impl MetropolisAlgorithm {
     ///     .resume_to_checkpoint(checkpoint)?;
     ///
     ///     assert_eq!(checkpoint.current_step(), 5);
-    ///     assert_eq!(checkpoint.config().steps(), 5);
+    ///     assert_eq!(checkpoint.config().steps().get(), 5);
     ///     Ok(())
     /// }
     /// ```
@@ -612,9 +648,11 @@ impl MetropolisAlgorithm {
         validate_resume_compatible(self, &checkpoint)?;
 
         let mut result_config = checkpoint.config.clone();
-        result_config.steps = checkpoint
+        let steps = checkpoint
             .current_step
-            .checked_add(self.config.steps)
+            .checked_add(self.config.steps.get())
+            .ok_or_else(|| checkpoint_resume_failed(CheckpointResumeFailure::StepCountOverflow))?;
+        result_config.steps = NonZeroU32::new(steps)
             .ok_or_else(|| checkpoint_resume_failed(CheckpointResumeFailure::StepCountOverflow))?;
 
         let mut state = MetropolisRunState::from_checkpoint(checkpoint)?;
@@ -653,9 +691,13 @@ impl MetropolisAlgorithm {
         }
     }
 
-    fn run_steps(&self, state: &mut MetropolisRunState, additional_steps: u32) -> CdtResult<()> {
+    fn run_steps(
+        &self,
+        state: &mut MetropolisRunState,
+        additional_steps: NonZeroU32,
+    ) -> CdtResult<()> {
         let start = Instant::now();
-        for _ in 0..additional_steps {
+        for _ in 0..additional_steps.get() {
             let step = state.current_step.checked_add(1).ok_or_else(|| {
                 checkpoint_resume_failed(CheckpointResumeFailure::StepCountOverflow)
             })?;
@@ -1242,7 +1284,7 @@ mod tests {
         let config = metropolis_config(2.0, 500, 50, 5);
         assert_relative_eq!(config.temperature(), 2.0);
         assert_relative_eq!(config.beta(), 0.5);
-        assert_eq!(config.steps(), 500);
+        assert_eq!(config.steps().get(), 500);
         assert!(config.seed().is_none());
 
         let seeded = config.with_seed(123);
@@ -1416,7 +1458,7 @@ mod tests {
         );
         assert_eq!(checkpoint.chain().total_steps(), current_step);
         assert_eq!(checkpoint.chain().accepted(), accepted_moves);
-        assert_eq!(checkpoint.config().steps(), checkpoint.current_step());
+        assert_eq!(checkpoint.config().steps().get(), checkpoint.current_step());
         assert_eq!(checkpoint.action_config(), &ActionConfig::default());
         assert!(checkpoint.current_action().is_finite());
         assert_eq!(
@@ -1458,7 +1500,7 @@ mod tests {
             .resume_from_checkpoint(alternate_checkpoint)
             .expect("resume should ignore fresh seed and use checkpoint RNG state");
 
-        assert_eq!(first_resumed.config().steps(), 7);
+        assert_eq!(first_resumed.config().steps().get(), 7);
         assert_eq!(first_resumed.steps().len(), 7);
         assert_eq!(first_resumed.steps()[1].step, 2);
         first_resumed
@@ -1532,7 +1574,7 @@ mod tests {
                 .expect("chunked checkpoint resume should complete");
         let chunked = chunked_checkpoint.into_results();
 
-        assert_eq!(chunked.config().steps(), 10);
+        assert_eq!(chunked.config().steps().get(), 10);
         assert_eq!(
             to_value(one_shot.steps()).expect("steps should serialize"),
             to_value(chunked.steps()).expect("steps should serialize")
@@ -2343,7 +2385,7 @@ mod tests {
 
         assert_eq!(
             proposal_stats.move_family_proposals(),
-            u64::from(config.steps())
+            u64::from(config.steps().get())
         );
         assert_eq!(
             proposal_stats.move_family_proposals(),

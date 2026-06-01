@@ -214,7 +214,7 @@ fn validate_result_telemetry(
         return Ok(());
     }
 
-    let expected_steps = usize::try_from(config.steps()).unwrap_or(usize::MAX);
+    let expected_steps = usize::try_from(config.steps().get()).unwrap_or(usize::MAX);
     if steps.len() != expected_steps {
         return Err(checkpoint_resume_failed(
             CheckpointResumeFailure::StepTelemetryLengthMismatch {
@@ -1175,7 +1175,7 @@ impl SimulationResultsBackend {
                 vertices: self.triangulation.vertex_count(),
                 edges: self.triangulation.edge_count(),
                 triangles: self.triangulation.face_count(),
-                time_slices: self.triangulation.time_slices(),
+                time_slices: self.triangulation.time_slices().get(),
                 topology: self.triangulation.metadata().topology(),
             },
             steps: &self.steps,

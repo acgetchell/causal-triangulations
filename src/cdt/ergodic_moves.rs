@@ -1441,8 +1441,8 @@ fn reject_backend(
 fn time_dist(triangulation: &CdtTriangulation2D, t0: u32, t1: u32) -> u32 {
     let raw = t0.abs_diff(t1);
     if matches!(triangulation.metadata().topology(), CdtTopology::Toroidal) {
-        let total = triangulation.time_slices();
-        if total > 0 && t0 < total && t1 < total {
+        let total = triangulation.time_slices().get();
+        if t0 < total && t1 < total {
             return raw.min(total - raw);
         }
     }
@@ -1569,7 +1569,7 @@ const fn toroidal_neighbor_labels(
     triangulation: &CdtTriangulation2D,
     label: u32,
 ) -> Option<(u32, u32)> {
-    let total = triangulation.time_slices();
+    let total = triangulation.time_slices().get();
     if total < 3 || label >= total {
         return None;
     }

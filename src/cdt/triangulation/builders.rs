@@ -460,7 +460,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_random_points(5, 2, 2)?;
-    ///     assert_eq!(tri.time_slices(), 2);
+    ///     assert_eq!(tri.time_slices().get(), 2);
     ///     assert!(!tri.has_foliation());
     ///     Ok(())
     /// }
@@ -1024,7 +1024,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_toroidal_cdt_profile(&[3, 4, 5, 4])?;
     ///     assert_eq!(tri.slice_sizes(), &[3, 4, 5, 4]);
-    ///     assert_eq!(tri.time_slices(), 4);
+    ///     assert_eq!(tri.time_slices().get(), 4);
     ///     Ok(())
     /// }
     /// ```
@@ -1175,7 +1175,7 @@ mod tests {
             CdtTriangulation::from_random_points(10, 3, 2).expect("Failed to create triangulation");
 
         assert_eq!(triangulation.dimension(), 2);
-        assert_eq!(triangulation.time_slices(), 3);
+        assert_eq!(triangulation.time_slices().get(), 3);
         assert!(triangulation.vertex_count() > 0);
         assert!(triangulation.edge_count() > 0);
         assert!(triangulation.face_count() > 0);
@@ -1200,7 +1200,7 @@ mod tests {
                 "Dimension should be 2 for {description}"
             );
             assert_eq!(
-                triangulation.time_slices(),
+                triangulation.time_slices().get(),
                 time_slices,
                 "Time slices should match for {description}"
             );
@@ -1226,7 +1226,7 @@ mod tests {
             .expect("Failed to create seeded triangulation");
 
         assert_eq!(triangulation.dimension(), 2);
-        assert_eq!(triangulation.time_slices(), 2);
+        assert_eq!(triangulation.time_slices().get(), 2);
         assert!(triangulation.vertex_count() > 0);
         assert!(triangulation.edge_count() > 0);
         assert!(triangulation.face_count() > 0);
@@ -1679,7 +1679,7 @@ mod tests {
         assert_eq!(tri.edge_count(), 36);
         assert_eq!(tri.geometry().euler_characteristic(), 0);
         assert_eq!(tri.dimension(), 2);
-        assert_eq!(tri.time_slices(), 3);
+        assert_eq!(tri.time_slices().get(), 3);
         assert_matches!(tri.metadata().topology, CdtTopology::Toroidal);
     }
 

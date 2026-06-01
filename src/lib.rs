@@ -351,7 +351,7 @@ pub mod prelude {
     /// };
     ///
     /// fn configured_steps(config: ValidatedCdtConfig) -> u32 {
-    ///     config.to_metropolis_config().steps()
+    ///     config.to_metropolis_config().steps().get()
     /// }
     ///
     /// fn main() -> CdtResult<()> {
@@ -966,7 +966,7 @@ mod tests {
         let results = run_simulation(&config).expect("simulation should run with real moves");
         assert_eq!(
             results.steps().len(),
-            usize::try_from(config.to_metropolis_config().steps()).unwrap()
+            usize::try_from(config.to_metropolis_config().steps().get()).unwrap()
         );
         assert!(results.triangulation().has_foliation());
         results
@@ -992,7 +992,7 @@ mod tests {
 
         let metropolis_config = config.to_metropolis_config();
         assert_relative_eq!(metropolis_config.temperature(), 1.0);
-        assert_eq!(metropolis_config.steps(), 10);
+        assert_eq!(metropolis_config.steps().get(), 10);
 
         let action_config = config.to_action_config();
         assert_relative_eq!(action_config.coupling_0(), 0.0);
@@ -1036,7 +1036,7 @@ mod tests {
             "Toroidal run_simulation must treat config.vertices as the TOTAL vertex count"
         );
         assert_eq!(
-            results.triangulation().time_slices(),
+            results.triangulation().time_slices().get(),
             3,
             "Toroidal run_simulation must preserve the configured timeslice count"
         );
