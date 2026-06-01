@@ -475,8 +475,11 @@ impl ProposalStatistics {
     /// Adds another proposal-telemetry snapshot into this accumulator.
     ///
     /// Chunked Metropolis continuation merges per-step telemetry from the
-    /// upstream planned-proposal sampler into CDT-owned counters. All additions saturate
-    /// so already-saturated checkpoint telemetry remains serializable.
+    /// upstream planned-proposal sampler into CDT-owned counters. All additions
+    /// saturate at `u64::MAX`, so already-saturated checkpoint telemetry remains
+    /// serializable. Once any counter saturates, the merged totals may no longer
+    /// preserve an exact one-to-one terminal-outcome partition; saturation can
+    /// coarsen the precise accepted, rejected, and hard-failure split.
     pub(crate) const fn extend(&mut self, other: &Self) {
         self.move_family_proposals = self
             .move_family_proposals
