@@ -119,7 +119,7 @@ proptest! {
         let tri = CdtTriangulation::from_seeded_points(vertices, time_slices, 2, seed)
             .expect("valid seeded construction should preserve metadata");
 
-        prop_assert_eq!(tri.time_slices(), time_slices);
+        prop_assert_eq!(tri.time_slices().get(), time_slices);
         prop_assert_eq!(tri.dimension(), 2);
     }
 

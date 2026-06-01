@@ -30,7 +30,7 @@ fn main() -> CdtResult<()> {
     );
     println!("Initial spectral-dimension estimate: {spectral}");
 
-    let metropolis_config = MetropolisConfig::new(1.0, 80, 20, 10).with_seed(7);
+    let metropolis_config = MetropolisConfig::new(1.0, 80, 20, 10)?.with_seed(7);
     let action_config = ActionConfig::default();
     let results = MetropolisAlgorithm::new(metropolis_config, action_config).run(triangulation)?;
 

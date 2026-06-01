@@ -48,22 +48,22 @@ impl ProposalOutcomeCounts {
     /// Captures cumulative proposal-kernel counters.
     const fn from_stats(stats: &ProposalStatistics) -> Self {
         let site_rejections = stats
-            .site_causality_rejections
-            .saturating_add(stats.site_geometric_rejections)
-            .saturating_add(stats.site_backend_rejections);
+            .site_causality_rejections()
+            .saturating_add(stats.site_geometric_rejections())
+            .saturating_add(stats.site_backend_rejections());
         let rejected = stats
-            .no_site_proposals
+            .no_site_proposals()
             .saturating_add(site_rejections)
-            .saturating_add(stats.metropolis_rejections)
-            .saturating_add(stats.hard_failures);
+            .saturating_add(stats.metropolis_rejections())
+            .saturating_add(stats.hard_failures());
         Self {
-            proposals: stats.move_family_proposals,
-            accepted: stats.accepted_transitions,
+            proposals: stats.move_family_proposals(),
+            accepted: stats.accepted_transitions(),
             rejected,
-            no_site: stats.no_site_proposals,
+            no_site: stats.no_site_proposals(),
             site_rejections,
-            metropolis_rejections: stats.metropolis_rejections,
-            hard_failures: stats.hard_failures,
+            metropolis_rejections: stats.metropolis_rejections(),
+            hard_failures: stats.hard_failures(),
         }
     }
 
@@ -192,14 +192,16 @@ fn assert_toroidal_invariants(triangulation: &CdtTriangulation2D) {
     triangulation
         .validate()
         .expect("large-scale toroidal CDT should validate after random sweeps");
-    assert_eq!(triangulation.metadata().topology, CdtTopology::Toroidal);
+    assert_eq!(triangulation.metadata().topology(), CdtTopology::Toroidal);
     assert_eq!(triangulation.geometry().euler_characteristic(), 0);
 }
 
 /// Builds a chunk configuration for one unfixed-volume Metropolis debug sweep.
 fn sweep_config(attempts: usize, seed: u64) -> MetropolisConfig {
     let steps = u32::try_from(attempts).expect("sweep attempt count should fit in u32");
-    MetropolisConfig::new(1.0, steps, 0, 1).with_seed(seed)
+    MetropolisConfig::new(1.0, steps, 0, 1)
+        .expect("sweep config should be valid")
+        .with_seed(seed)
 }
 
 /// Runs one Metropolis chunk and keeps resumable checkpoint state for the next sweep.
@@ -229,12 +231,7 @@ fn run_metropolis_sweep(
 
 /// Reads the accepted counter for one move type.
 const fn accepted_count(stats: &MoveStatistics, move_type: MoveType) -> u64 {
-    match move_type {
-        MoveType::Move22 => stats.moves_22_accepted,
-        MoveType::Move13Add => stats.moves_13_accepted,
-        MoveType::Move31Remove => stats.moves_31_accepted,
-        MoveType::EdgeFlip => stats.edge_flips_accepted,
-    }
+    stats.accepted(move_type)
 }
 
 #[cfg(feature = "slow-tests")]
@@ -369,7 +366,7 @@ fn debug_large_scale_1p1() {
     let triangulation = checkpoint.triangulation();
     assert_eq!(checkpoint.move_stats().total_attempted(), expected_attempts);
     assert_eq!(
-        checkpoint.proposal_stats().move_family_proposals,
+        checkpoint.proposal_stats().move_family_proposals(),
         expected_attempts
     );
     assert!(
@@ -377,11 +374,11 @@ fn debug_large_scale_1p1() {
         "large-scale Metropolis sweeps should accept at least one move"
     );
     assert!(
-        checkpoint.move_stats().moves_13_accepted > 0,
+        checkpoint.move_stats().accepted(MoveType::Move13Add) > 0,
         "large-scale Metropolis sweeps should exercise toroidal Move13Add"
     );
     assert!(
-        checkpoint.move_stats().moves_31_accepted > 0,
+        checkpoint.move_stats().accepted(MoveType::Move31Remove) > 0,
         "large-scale Metropolis sweeps should exercise toroidal Move31Remove"
     );
     assert_ne!(

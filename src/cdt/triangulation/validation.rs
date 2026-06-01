@@ -355,6 +355,7 @@ mod tests {
             dimension,
             CdtTopology::OpenBoundary,
         )
+        .expect("unchecked test metadata should use nonzero time slices")
     }
 
     /// Builds stable diagnostic text for seeded-triangulation comparisons.

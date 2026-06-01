@@ -16,7 +16,7 @@ use crate::geometry::backends::delaunay::{
 };
 use crate::geometry::traits::{EdgeAdjacentFaces, TriangulationMut, TriangulationQuery};
 use rand::{RngExt, SeedableRng, rngs::Xoshiro256PlusPlus};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::array;
 use std::fmt::Display;
 
@@ -59,36 +59,66 @@ pub enum MoveResult {
 /// those failures remain in the attempt denominator but are not counted as
 /// accepted moves. Individual counters and aggregate totals saturate at
 /// `u64::MAX` so long-running or restored simulations cannot wrap telemetry.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct MoveStatistics {
     /// Number of (2,2) moves attempted
-    pub moves_22_attempted: u64,
+    moves_22_attempted: u64,
     /// Number of (2,2) moves accepted
-    pub moves_22_accepted: u64,
+    moves_22_accepted: u64,
     /// Number of (2,2) moves that mutated state but failed post-mutation invariants.
     #[serde(default)]
-    pub moves_22_hard_failed: u64,
+    moves_22_hard_failed: u64,
     /// Number of (1,3) moves attempted
-    pub moves_13_attempted: u64,
+    moves_13_attempted: u64,
     /// Number of (1,3) moves accepted
-    pub moves_13_accepted: u64,
+    moves_13_accepted: u64,
     /// Number of (1,3) moves that mutated state but failed post-mutation invariants.
     #[serde(default)]
-    pub moves_13_hard_failed: u64,
+    moves_13_hard_failed: u64,
     /// Number of (3,1) moves attempted
-    pub moves_31_attempted: u64,
+    moves_31_attempted: u64,
     /// Number of (3,1) moves accepted
-    pub moves_31_accepted: u64,
+    moves_31_accepted: u64,
     /// Number of (3,1) moves that mutated state but failed post-mutation invariants.
     #[serde(default)]
-    pub moves_31_hard_failed: u64,
+    moves_31_hard_failed: u64,
     /// Number of edge flips attempted
-    pub edge_flips_attempted: u64,
+    edge_flips_attempted: u64,
     /// Number of edge flips accepted
-    pub edge_flips_accepted: u64,
+    edge_flips_accepted: u64,
     /// Number of edge flips that mutated state but failed post-mutation invariants.
     #[serde(default)]
-    pub edge_flips_hard_failed: u64,
+    edge_flips_hard_failed: u64,
+}
+
+#[derive(Deserialize)]
+struct MoveStatisticsWire {
+    moves_22_attempted: u64,
+    moves_22_accepted: u64,
+    #[serde(default)]
+    moves_22_hard_failed: u64,
+    moves_13_attempted: u64,
+    moves_13_accepted: u64,
+    #[serde(default)]
+    moves_13_hard_failed: u64,
+    moves_31_attempted: u64,
+    moves_31_accepted: u64,
+    #[serde(default)]
+    moves_31_hard_failed: u64,
+    edge_flips_attempted: u64,
+    edge_flips_accepted: u64,
+    #[serde(default)]
+    edge_flips_hard_failed: u64,
+}
+
+impl<'de> Deserialize<'de> for MoveStatistics {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = MoveStatisticsWire::deserialize(deserializer)?;
+        Self::from_wire(&wire).map_err(serde::de::Error::custom)
+    }
 }
 
 impl MoveStatistics {
@@ -97,14 +127,95 @@ impl MoveStatistics {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::moves::MoveStatistics;
+    /// use causal_triangulations::prelude::moves::{MoveStatistics, MoveType};
     ///
     /// let stats = MoveStatistics::new();
-    /// assert_eq!(stats.moves_22_attempted, 0);
+    /// assert_eq!(stats.attempted(MoveType::Move22), 0);
     /// ```
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(test)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "test and serde helpers need to preserve the flat move-statistics wire shape"
+    )]
+    pub(crate) const fn from_validated_parts(
+        moves_22_attempted: u64,
+        moves_22_accepted: u64,
+        moves_22_hard_failed: u64,
+        moves_13_attempted: u64,
+        moves_13_accepted: u64,
+        moves_13_hard_failed: u64,
+        moves_31_attempted: u64,
+        moves_31_accepted: u64,
+        moves_31_hard_failed: u64,
+        edge_flips_attempted: u64,
+        edge_flips_accepted: u64,
+        edge_flips_hard_failed: u64,
+    ) -> Self {
+        Self {
+            moves_22_attempted,
+            moves_22_accepted,
+            moves_22_hard_failed,
+            moves_13_attempted,
+            moves_13_accepted,
+            moves_13_hard_failed,
+            moves_31_attempted,
+            moves_31_accepted,
+            moves_31_hard_failed,
+            edge_flips_attempted,
+            edge_flips_accepted,
+            edge_flips_hard_failed,
+        }
+    }
+
+    /// Rebuilds move statistics from the serialized wire shape while preserving counter invariants.
+    ///
+    /// Deserialization rejects impossible counters such as accepted moves plus
+    /// hard failures exceeding attempts, so public accessors can treat stored
+    /// move-family counters as coherent telemetry.
+    fn from_wire(wire: &MoveStatisticsWire) -> Result<Self, String> {
+        validate_move_counter(
+            MoveType::Move22,
+            wire.moves_22_attempted,
+            wire.moves_22_accepted,
+            wire.moves_22_hard_failed,
+        )?;
+        validate_move_counter(
+            MoveType::Move13Add,
+            wire.moves_13_attempted,
+            wire.moves_13_accepted,
+            wire.moves_13_hard_failed,
+        )?;
+        validate_move_counter(
+            MoveType::Move31Remove,
+            wire.moves_31_attempted,
+            wire.moves_31_accepted,
+            wire.moves_31_hard_failed,
+        )?;
+        validate_move_counter(
+            MoveType::EdgeFlip,
+            wire.edge_flips_attempted,
+            wire.edge_flips_accepted,
+            wire.edge_flips_hard_failed,
+        )?;
+        Ok(Self {
+            moves_22_attempted: wire.moves_22_attempted,
+            moves_22_accepted: wire.moves_22_accepted,
+            moves_22_hard_failed: wire.moves_22_hard_failed,
+            moves_13_attempted: wire.moves_13_attempted,
+            moves_13_accepted: wire.moves_13_accepted,
+            moves_13_hard_failed: wire.moves_13_hard_failed,
+            moves_31_attempted: wire.moves_31_attempted,
+            moves_31_accepted: wire.moves_31_accepted,
+            moves_31_hard_failed: wire.moves_31_hard_failed,
+            edge_flips_attempted: wire.edge_flips_attempted,
+            edge_flips_accepted: wire.edge_flips_accepted,
+            edge_flips_hard_failed: wire.edge_flips_hard_failed,
+        })
     }
 
     /// Records an attempted move, saturating the matching counter at `u64::MAX`.
@@ -116,7 +227,7 @@ impl MoveStatistics {
     ///
     /// let mut stats = MoveStatistics::new();
     /// stats.record_attempt(MoveType::Move22);
-    /// assert_eq!(stats.moves_22_attempted, 1);
+    /// assert_eq!(stats.attempted(MoveType::Move22), 1);
     /// ```
     pub const fn record_attempt(&mut self, move_type: MoveType) {
         match move_type {
@@ -146,20 +257,48 @@ impl MoveStatistics {
     ///
     /// let mut stats = MoveStatistics::new();
     /// stats.record_success(MoveType::EdgeFlip);
-    /// assert_eq!(stats.edge_flips_accepted, 1);
+    /// assert_eq!(stats.accepted(MoveType::EdgeFlip), 1);
     /// ```
     pub const fn record_success(&mut self, move_type: MoveType) {
         match move_type {
             MoveType::Move22 => {
+                if self
+                    .moves_22_accepted
+                    .saturating_add(self.moves_22_hard_failed)
+                    >= self.moves_22_attempted
+                {
+                    self.moves_22_attempted = self.moves_22_attempted.saturating_add(1);
+                }
                 self.moves_22_accepted = self.moves_22_accepted.saturating_add(1);
             }
             MoveType::Move13Add => {
+                if self
+                    .moves_13_accepted
+                    .saturating_add(self.moves_13_hard_failed)
+                    >= self.moves_13_attempted
+                {
+                    self.moves_13_attempted = self.moves_13_attempted.saturating_add(1);
+                }
                 self.moves_13_accepted = self.moves_13_accepted.saturating_add(1);
             }
             MoveType::Move31Remove => {
+                if self
+                    .moves_31_accepted
+                    .saturating_add(self.moves_31_hard_failed)
+                    >= self.moves_31_attempted
+                {
+                    self.moves_31_attempted = self.moves_31_attempted.saturating_add(1);
+                }
                 self.moves_31_accepted = self.moves_31_accepted.saturating_add(1);
             }
             MoveType::EdgeFlip => {
+                if self
+                    .edge_flips_accepted
+                    .saturating_add(self.edge_flips_hard_failed)
+                    >= self.edge_flips_attempted
+                {
+                    self.edge_flips_attempted = self.edge_flips_attempted.saturating_add(1);
+                }
                 self.edge_flips_accepted = self.edge_flips_accepted.saturating_add(1);
             }
         }
@@ -181,21 +320,49 @@ impl MoveStatistics {
     /// let mut stats = MoveStatistics::new();
     /// stats.record_attempt(MoveType::Move31Remove);
     /// stats.record_hard_failure(MoveType::Move31Remove);
-    /// assert_eq!(stats.moves_31_accepted, 0);
-    /// assert_eq!(stats.moves_31_hard_failed, 1);
+    /// assert_eq!(stats.accepted(MoveType::Move31Remove), 0);
+    /// assert_eq!(stats.hard_failed(MoveType::Move31Remove), 1);
     /// ```
     pub const fn record_hard_failure(&mut self, move_type: MoveType) {
         match move_type {
             MoveType::Move22 => {
+                if self
+                    .moves_22_accepted
+                    .saturating_add(self.moves_22_hard_failed)
+                    >= self.moves_22_attempted
+                {
+                    self.moves_22_attempted = self.moves_22_attempted.saturating_add(1);
+                }
                 self.moves_22_hard_failed = self.moves_22_hard_failed.saturating_add(1);
             }
             MoveType::Move13Add => {
+                if self
+                    .moves_13_accepted
+                    .saturating_add(self.moves_13_hard_failed)
+                    >= self.moves_13_attempted
+                {
+                    self.moves_13_attempted = self.moves_13_attempted.saturating_add(1);
+                }
                 self.moves_13_hard_failed = self.moves_13_hard_failed.saturating_add(1);
             }
             MoveType::Move31Remove => {
+                if self
+                    .moves_31_accepted
+                    .saturating_add(self.moves_31_hard_failed)
+                    >= self.moves_31_attempted
+                {
+                    self.moves_31_attempted = self.moves_31_attempted.saturating_add(1);
+                }
                 self.moves_31_hard_failed = self.moves_31_hard_failed.saturating_add(1);
             }
             MoveType::EdgeFlip => {
+                if self
+                    .edge_flips_accepted
+                    .saturating_add(self.edge_flips_hard_failed)
+                    >= self.edge_flips_attempted
+                {
+                    self.edge_flips_attempted = self.edge_flips_attempted.saturating_add(1);
+                }
                 self.edge_flips_hard_failed = self.edge_flips_hard_failed.saturating_add(1);
             }
         }
@@ -340,6 +507,88 @@ impl MoveStatistics {
             .saturating_add(self.moves_31_hard_failed)
             .saturating_add(self.edge_flips_hard_failed)
     }
+
+    /// Returns the attempted counter for one move family.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::{MoveStatistics, MoveType};
+    ///
+    /// let mut stats = MoveStatistics::new();
+    /// stats.record_attempt(MoveType::Move22);
+    /// assert_eq!(stats.attempted(MoveType::Move22), 1);
+    /// ```
+    #[must_use]
+    pub const fn attempted(&self, move_type: MoveType) -> u64 {
+        match move_type {
+            MoveType::Move22 => self.moves_22_attempted,
+            MoveType::Move13Add => self.moves_13_attempted,
+            MoveType::Move31Remove => self.moves_31_attempted,
+            MoveType::EdgeFlip => self.edge_flips_attempted,
+        }
+    }
+
+    /// Returns the accepted counter for one move family.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::{MoveStatistics, MoveType};
+    ///
+    /// let mut stats = MoveStatistics::new();
+    /// stats.record_success(MoveType::Move13Add);
+    /// assert_eq!(stats.accepted(MoveType::Move13Add), 1);
+    /// ```
+    #[must_use]
+    pub const fn accepted(&self, move_type: MoveType) -> u64 {
+        match move_type {
+            MoveType::Move22 => self.moves_22_accepted,
+            MoveType::Move13Add => self.moves_13_accepted,
+            MoveType::Move31Remove => self.moves_31_accepted,
+            MoveType::EdgeFlip => self.edge_flips_accepted,
+        }
+    }
+
+    /// Returns the hard-failure counter for one move family.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::{MoveStatistics, MoveType};
+    ///
+    /// let mut stats = MoveStatistics::new();
+    /// stats.record_hard_failure(MoveType::EdgeFlip);
+    /// assert_eq!(stats.hard_failed(MoveType::EdgeFlip), 1);
+    /// ```
+    #[must_use]
+    pub const fn hard_failed(&self, move_type: MoveType) -> u64 {
+        match move_type {
+            MoveType::Move22 => self.moves_22_hard_failed,
+            MoveType::Move13Add => self.moves_13_hard_failed,
+            MoveType::Move31Remove => self.moves_31_hard_failed,
+            MoveType::EdgeFlip => self.edge_flips_hard_failed,
+        }
+    }
+}
+
+/// Checks one move family's serialized counters before they become invariant-bearing telemetry.
+fn validate_move_counter(
+    move_type: MoveType,
+    attempted: u64,
+    accepted: u64,
+    hard_failed: u64,
+) -> Result<(), String> {
+    let terminal = accepted.checked_add(hard_failed).ok_or_else(|| {
+        format!("{move_type:?} accepted plus hard-failure counters exceed u64::MAX")
+    })?;
+    if terminal > attempted {
+        Err(format!(
+            "{move_type:?} accepted plus hard-failure counters ({terminal}) exceed attempted counter ({attempted})"
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 /// Converts an accumulated move counter to a finite value for rate reporting.
@@ -355,7 +604,7 @@ const fn count_to_f64(count: u64) -> f64 {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ErgodicsSystem {
     /// Move statistics
-    pub stats: MoveStatistics,
+    stats: MoveStatistics,
     /// Random number generator
     rng: Xoshiro256PlusPlus,
     /// Authoritative cached local-site universes for proposal sampling.
@@ -389,7 +638,7 @@ impl MoveSiteCache {
     /// Rebuilds the selected move-family cache for a new triangulation version.
     fn ensure_current(&mut self, triangulation: &CdtTriangulation2D, move_type: MoveType) {
         let instance_id = triangulation.instance_id();
-        let modification_count = triangulation.metadata().modification_count;
+        let modification_count = triangulation.metadata().modification_count();
         let family = self.family(move_type);
         if family.instance_id == Some(instance_id)
             && family.modification_count == Some(modification_count)
@@ -513,10 +762,10 @@ impl ErgodicsSystem {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::moves::ErgodicsSystem;
+    /// use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveType};
     ///
     /// let system = ErgodicsSystem::new();
-    /// assert_eq!(system.stats.moves_22_attempted, 0);
+    /// assert_eq!(system.stats().attempted(MoveType::Move22), 0);
     /// ```
     #[must_use]
     pub fn new() -> Self {
@@ -545,6 +794,30 @@ impl ErgodicsSystem {
             rng: Xoshiro256PlusPlus::seed_from_u64(seed),
             site_cache: MoveSiteCache::default(),
         }
+    }
+
+    /// Returns accumulated move statistics.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveType};
+    ///
+    /// let system = ErgodicsSystem::new();
+    /// assert_eq!(system.stats().attempted(MoveType::Move22), 0);
+    /// ```
+    #[must_use]
+    pub const fn stats(&self) -> &MoveStatistics {
+        &self.stats
+    }
+
+    /// Replaces move statistics after an internal speculative operation.
+    ///
+    /// This keeps public callers from mutating sampler accounting independently
+    /// of actual move execution while allowing proposal planning to roll back
+    /// temporary counters after applying a candidate to a cloned state.
+    pub(crate) const fn replace_stats(&mut self, stats: MoveStatistics) -> MoveStatistics {
+        std::mem::replace(&mut self.stats, stats)
     }
 
     /// Selects a random move type.
@@ -681,7 +954,7 @@ impl ErgodicsSystem {
     ///         result,
     ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
     ///     );
-    ///     assert_eq!(system.stats.moves_22_attempted, 1);
+    ///     assert_eq!(system.stats().attempted(MoveType::Move22), 1);
     ///     Ok(())
     /// }
     /// ```
@@ -729,7 +1002,7 @@ impl ErgodicsSystem {
     ///     let mut system = ErgodicsSystem::new();
     ///     let result = system.attempt_13_move(&mut triangulation);
     ///     assert_matches!(result, MoveResult::Success | MoveResult::GeometricViolation);
-    ///     assert_eq!(system.stats.moves_13_attempted, 1);
+    ///     assert_eq!(system.stats().attempted(MoveType::Move13Add), 1);
     ///     Ok(())
     /// }
     /// ```
@@ -795,7 +1068,7 @@ impl ErgodicsSystem {
     ///         result,
     ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
     ///     );
-    ///     assert_eq!(system.stats.moves_31_attempted, 1);
+    ///     assert_eq!(system.stats().attempted(MoveType::Move31Remove), 1);
     ///     Ok(())
     /// }
     /// ```
@@ -852,7 +1125,7 @@ impl ErgodicsSystem {
     ///         result,
     ///         MoveResult::Success | MoveResult::CausalityViolation | MoveResult::GeometricViolation
     ///     );
-    ///     assert_eq!(system.stats.edge_flips_attempted, 1);
+    ///     assert_eq!(system.stats().attempted(MoveType::EdgeFlip), 1);
     ///     Ok(())
     /// }
     /// ```
@@ -1167,9 +1440,9 @@ fn reject_backend(
 /// difference.
 fn time_dist(triangulation: &CdtTriangulation2D, t0: u32, t1: u32) -> u32 {
     let raw = t0.abs_diff(t1);
-    if matches!(triangulation.metadata().topology, CdtTopology::Toroidal) {
-        let total = triangulation.time_slices();
-        if total > 0 && t0 < total && t1 < total {
+    if matches!(triangulation.metadata().topology(), CdtTopology::Toroidal) {
+        let total = triangulation.time_slices().get();
+        if t0 < total && t1 < total {
             return raw.min(total - raw);
         }
     }
@@ -1296,7 +1569,7 @@ const fn toroidal_neighbor_labels(
     triangulation: &CdtTriangulation2D,
     label: u32,
 ) -> Option<(u32, u32)> {
-    let total = triangulation.time_slices();
+    let total = triangulation.time_slices().get();
     if total < 3 || label >= total {
         return None;
     }
@@ -1435,7 +1708,7 @@ fn centroid(triangulation: &CdtTriangulation2D, face: &DelaunayFaceHandle) -> Op
         vertex_point_2d(triangulation, v2)?,
     ];
 
-    if matches!(triangulation.metadata().topology, CdtTopology::Toroidal) {
+    if matches!(triangulation.metadata().topology(), CdtTopology::Toroidal) {
         return toroidal_centroid(&coords, triangulation.geometry().periodic_domain()?);
     }
 
@@ -1844,7 +2117,7 @@ fn removal_sites(triangulation: &CdtTriangulation2D, visit: &mut impl FnMut(Prop
 
 /// Checks whether toroidal move kernels must preserve periodic foliation structure.
 fn is_toroidal_foliated(triangulation: &CdtTriangulation2D) -> bool {
-    matches!(triangulation.metadata().topology, CdtTopology::Toroidal)
+    matches!(triangulation.metadata().topology(), CdtTopology::Toroidal)
         && triangulation.has_foliation()
 }
 
@@ -2070,6 +2343,31 @@ mod tests {
     }
 
     #[test]
+    fn move_statistics_deserialization_rejects_impossible_counters() {
+        let error = serde_json::from_str::<MoveStatistics>(
+            r#"{
+                "moves_22_attempted": 1,
+                "moves_22_accepted": 1,
+                "moves_22_hard_failed": 1,
+                "moves_13_attempted": 0,
+                "moves_13_accepted": 0,
+                "moves_31_attempted": 0,
+                "moves_31_accepted": 0,
+                "edge_flips_attempted": 0,
+                "edge_flips_accepted": 0
+            }"#,
+        )
+        .expect_err("accepted plus hard failures above attempts should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("accepted plus hard-failure counters"),
+            "serde error should explain move-counter invariant, got {error}"
+        );
+    }
+
+    #[test]
     fn move_22_uses_real_tri() {
         let mut system = ErgodicsSystem::new();
         let mut triangulation = square_two_triangles();
@@ -2146,7 +2444,7 @@ mod tests {
             triangulation.vertex_count(),
             triangulation.edge_count(),
             triangulation.face_count(),
-            triangulation.metadata().modification_count,
+            triangulation.metadata().modification_count(),
         );
 
         let face = triangulation
@@ -2177,7 +2475,7 @@ mod tests {
                 triangulation.vertex_count(),
                 triangulation.edge_count(),
                 triangulation.face_count(),
-                triangulation.metadata().modification_count,
+                triangulation.metadata().modification_count(),
             ),
             counts_before
         );
@@ -2298,7 +2596,7 @@ mod tests {
             triangulation.vertex_count(),
             triangulation.edge_count(),
             triangulation.face_count(),
-            triangulation.metadata().modification_count,
+            triangulation.metadata().modification_count(),
         );
 
         let empty_selection = system.select_proposal_site(&triangulation, MoveType::Move31Remove);
@@ -2308,7 +2606,7 @@ mod tests {
         assert_eq!(cached_family.instance_id, Some(triangulation.instance_id()));
         assert_eq!(
             cached_family.modification_count,
-            Some(triangulation.metadata().modification_count)
+            Some(triangulation.metadata().modification_count())
         );
 
         let retry_selection = system.select_proposal_site(&triangulation, MoveType::Move31Remove);
@@ -2319,7 +2617,7 @@ mod tests {
                 triangulation.vertex_count(),
                 triangulation.edge_count(),
                 triangulation.face_count(),
-                triangulation.metadata().modification_count,
+                triangulation.metadata().modification_count(),
             ),
             counts_before
         );
@@ -2336,7 +2634,7 @@ mod tests {
     fn proposal_site_cache_refreshes_after_accepted_mutation() {
         let mut system = ErgodicsSystem::with_seed(11);
         let mut triangulation = single_triangle();
-        let initial_modification_count = triangulation.metadata().modification_count;
+        let initial_modification_count = triangulation.metadata().modification_count();
 
         let insertion_selection = system.select_proposal_site(&triangulation, MoveType::Move13Add);
         assert_eq!(
@@ -2354,7 +2652,7 @@ mod tests {
         let result =
             system.apply_proposal_site(&mut triangulation, MoveType::Move13Add, insertion_site);
         assert_eq!(result, MoveResult::Success);
-        let mutated_modification_count = triangulation.metadata().modification_count;
+        let mutated_modification_count = triangulation.metadata().modification_count();
         assert!(mutated_modification_count > initial_modification_count);
         assert_eq!(
             system
@@ -2388,7 +2686,7 @@ mod tests {
             triangulation.vertex_count(),
             triangulation.edge_count(),
             triangulation.face_count(),
-            triangulation.metadata().modification_count,
+            triangulation.metadata().modification_count(),
         );
 
         let insertion_selection = system.select_proposal_site(&triangulation, MoveType::Move13Add);
@@ -2408,7 +2706,7 @@ mod tests {
                 triangulation.vertex_count(),
                 triangulation.edge_count(),
                 triangulation.face_count(),
-                triangulation.metadata().modification_count,
+                triangulation.metadata().modification_count(),
             ),
             counts_before
         );
@@ -2436,7 +2734,7 @@ mod tests {
                 .site_cache
                 .family(MoveType::Move13Add)
                 .modification_count,
-            Some(original.metadata().modification_count)
+            Some(original.metadata().modification_count())
         );
         let Some(insertion_site) = insertion_selection.site else {
             panic!("single triangle should expose one insertion site");
@@ -2447,8 +2745,8 @@ mod tests {
             system.apply_proposal_site(&mut proposed_state, MoveType::Move13Add, insertion_site);
         assert_eq!(result, MoveResult::Success);
         assert_ne!(
-            proposed_state.metadata().modification_count,
-            original.metadata().modification_count
+            proposed_state.metadata().modification_count(),
+            original.metadata().modification_count()
         );
 
         let proposed_selection =
@@ -2458,7 +2756,7 @@ mod tests {
                 .site_cache
                 .family(MoveType::Move31Remove)
                 .modification_count,
-            Some(proposed_state.metadata().modification_count)
+            Some(proposed_state.metadata().modification_count())
         );
         assert!(proposed_selection.site.is_some());
 
@@ -2468,7 +2766,7 @@ mod tests {
                 .site_cache
                 .family(MoveType::Move13Add)
                 .modification_count,
-            Some(original.metadata().modification_count)
+            Some(original.metadata().modification_count())
         );
         assert_eq!(
             original_selection.site_count,
@@ -2482,8 +2780,8 @@ mod tests {
         let first = single_triangle();
         let second = single_triangle();
         assert_eq!(
-            first.metadata().modification_count,
-            second.metadata().modification_count
+            first.metadata().modification_count(),
+            second.metadata().modification_count()
         );
 
         let first_selection = system.select_proposal_site(&first, MoveType::Move13Add);
@@ -2516,8 +2814,8 @@ mod tests {
         let original = single_triangle();
         let cloned = original.clone();
         assert_eq!(
-            original.metadata().modification_count,
-            cloned.metadata().modification_count
+            original.metadata().modification_count(),
+            cloned.metadata().modification_count()
         );
         assert_ne!(original.instance_id(), cloned.instance_id());
 
@@ -2544,7 +2842,7 @@ mod tests {
             triangulation.vertex_count(),
             triangulation.edge_count(),
             triangulation.face_count(),
-            triangulation.metadata().modification_count,
+            triangulation.metadata().modification_count(),
         );
 
         let insertion_selection = system.select_proposal_site(&triangulation, MoveType::Move13Add);
@@ -2561,7 +2859,7 @@ mod tests {
                 triangulation.vertex_count(),
                 triangulation.edge_count(),
                 triangulation.face_count(),
-                triangulation.metadata().modification_count,
+                triangulation.metadata().modification_count(),
             ),
             counts_before
         );

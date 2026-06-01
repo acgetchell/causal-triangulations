@@ -503,6 +503,32 @@ impl fmt::Display for CheckpointMoveCounter {
     }
 }
 
+/// Proposal-statistics counter category used in result telemetry diagnostics.
+///
+/// Use this with [`CheckpointResumeFailure::ProposalCounterOverflow`] to
+/// distinguish which proposal telemetry counter could not be represented
+/// without parsing display text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ProposalTelemetryCounter {
+    /// Selected move-family proposal counter.
+    MoveFamilyProposals,
+    /// Accepted proposal transition counter.
+    AcceptedTransitions,
+    /// Rejected proposal transition counter.
+    RejectedTransitions,
+}
+
+impl fmt::Display for ProposalTelemetryCounter {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MoveFamilyProposals => formatter.write_str("move-family proposals"),
+            Self::AcceptedTransitions => formatter.write_str("accepted transitions"),
+            Self::RejectedTransitions => formatter.write_str("rejected transitions"),
+        }
+    }
+}
+
 /// Structured reason a CDT checkpoint could not be resumed.
 ///
 /// [`CdtError::CheckpointResumeFailed`] wraps this enum for CDT-owned resume
@@ -703,6 +729,42 @@ pub enum CheckpointResumeFailure {
     CounterConversionOverflow {
         /// Counter category that could not fit in upstream chain counters.
         counter: CheckpointMoveCounter,
+    },
+    /// A proposal-statistics counter conversion overflowed.
+    #[error("{counter} proposal telemetry count exceeds u64::MAX")]
+    ProposalCounterOverflow {
+        /// Proposal telemetry counter that could not fit in the target type.
+        counter: ProposalTelemetryCounter,
+    },
+    /// Resume-validated proposal telemetry cannot contain hard failures.
+    #[error("proposal telemetry has {actual} hard failures; expected 0")]
+    ProposalHardFailures {
+        /// Number of hard proposal failures recorded in proposal telemetry.
+        actual: u64,
+    },
+    /// Proposal move-family count disagrees with the number of sampler steps.
+    #[error("proposal move-family count mismatch: got {actual}, expected {expected}")]
+    ProposalMoveFamilyCountMismatch {
+        /// Number of move-family proposals recorded in proposal telemetry.
+        actual: u64,
+        /// Expected proposal count from step telemetry.
+        expected: u64,
+    },
+    /// Proposal accepted-transition count disagrees with step telemetry.
+    #[error("proposal accepted-transition count mismatch: got {actual}, expected {expected}")]
+    ProposalAcceptedCountMismatch {
+        /// Number of accepted transitions recorded in proposal telemetry.
+        actual: u64,
+        /// Expected accepted count from step telemetry.
+        expected: u64,
+    },
+    /// Proposal rejected-transition count disagrees with step telemetry.
+    #[error("proposal rejected-transition count mismatch: got {actual}, expected {expected}")]
+    ProposalRejectedCountMismatch {
+        /// Number of rejected transitions reconstructed from proposal telemetry.
+        actual: u64,
+        /// Expected rejected count from step telemetry.
+        expected: u64,
     },
 }
 
@@ -1414,6 +1476,28 @@ mod tests {
     }
 
     #[test]
+    fn proposal_telemetry_counter_display_covers_all_categories() {
+        let cases = [
+            (
+                ProposalTelemetryCounter::MoveFamilyProposals,
+                "move-family proposals",
+            ),
+            (
+                ProposalTelemetryCounter::AcceptedTransitions,
+                "accepted transitions",
+            ),
+            (
+                ProposalTelemetryCounter::RejectedTransitions,
+                "rejected transitions",
+            ),
+        ];
+
+        for (counter, expected) in cases {
+            assert_eq!(counter.to_string(), expected);
+        }
+    }
+
+    #[test]
     fn checkpoint_resume_failure_display_includes_structured_context() {
         let failure = CheckpointResumeFailure::ChainCounterMismatch {
             chain_accepted: 1,
@@ -1425,6 +1509,23 @@ mod tests {
         assert_eq!(
             failure.to_string(),
             "chain counters do not match move statistics: chain accepted=1, rejected=2; move accepted=3, rejected=4"
+        );
+    }
+
+    #[test]
+    fn proposal_resume_failures_display_structured_context() {
+        let overflow = CheckpointResumeFailure::ProposalCounterOverflow {
+            counter: ProposalTelemetryCounter::AcceptedTransitions,
+        };
+        assert_eq!(
+            overflow.to_string(),
+            "accepted transitions proposal telemetry count exceeds u64::MAX"
+        );
+
+        let hard_failures = CheckpointResumeFailure::ProposalHardFailures { actual: 3 };
+        assert_eq!(
+            hard_failures.to_string(),
+            "proposal telemetry has 3 hard failures; expected 0"
         );
     }
 

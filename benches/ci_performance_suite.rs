@@ -219,7 +219,11 @@ fn prepare_fixture(fixture: CdtFixture) -> PreparedFixture {
 
 /// Runs one Metropolis proposal step through the public simulation driver.
 fn run_single_metropolis_proposal(triangulation: CdtTriangulation2D) {
-    let config = MetropolisConfig::new(1.0, 1, 0, 1).with_seed(BENCH_SEED);
+    let config = require_result(
+        MetropolisConfig::new(1.0, 1, 0, 1),
+        SetupOperation::RunSingleMetropolisProposal,
+    )
+    .with_seed(BENCH_SEED);
     let results = require_result(
         MetropolisAlgorithm::new(config, ActionConfig::default()).run(triangulation),
         SetupOperation::RunSingleMetropolisProposal,
@@ -269,13 +273,17 @@ fn run_random_move_sweeps(mut triangulation: CdtTriangulation2D, seed: u64) -> M
         SetupOperation::ValidateRandomSweepWorkload,
     );
     black_box(triangulation.face_count());
-    ergodics.stats
+    ergodics.stats().clone()
 }
 
 /// Runs a short Metropolis simulation sized to match the ten-sweep workload.
 fn run_metropolis_ten_sweeps(triangulation: CdtTriangulation2D, simplices: usize) -> usize {
     let steps = ten_sweep_step_count(simplices);
-    let config = MetropolisConfig::new(1.0, steps, 0, steps).with_seed(BENCH_SEED);
+    let config = require_result(
+        MetropolisConfig::new(1.0, steps, 0, steps),
+        SetupOperation::RunTenSweepMetropolis,
+    )
+    .with_seed(BENCH_SEED);
     let results = require_result(
         MetropolisAlgorithm::new(config, ActionConfig::default()).run(triangulation),
         SetupOperation::RunTenSweepMetropolis,

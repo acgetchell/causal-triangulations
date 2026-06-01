@@ -11,6 +11,7 @@ use crate::geometry::traits::{
 };
 use std::collections::HashMap;
 use std::fmt;
+use std::num::NonZeroUsize;
 
 /// Mock backend for testing
 #[derive(Debug, Clone)]
@@ -182,7 +183,37 @@ pub enum MockError {
 }
 
 impl MockBackend {
-    /// Create a new mock backend
+    /// Create a new mock backend with a nonzero coordinate dimension.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::geometry::backends::mock::MockBackend;
+    /// use causal_triangulations::geometry::traits::TriangulationQuery;
+    /// use std::num::NonZeroUsize;
+    ///
+    /// let n = 2;
+    /// let Some(dimension) = NonZeroUsize::new(n) else {
+    ///     return;
+    /// };
+    /// let backend = MockBackend::new(dimension);
+    /// assert_eq!(backend.dimension(), 2);
+    /// assert_eq!(backend.vertex_count(), 0);
+    /// ```
+    #[must_use]
+    pub fn new(dimension: NonZeroUsize) -> Self {
+        Self {
+            vertices: HashMap::new(),
+            edges: HashMap::new(),
+            faces: HashMap::new(),
+            dimension: dimension.get(),
+            next_vertex_id: 0,
+            next_edge_id: 0,
+            next_face_id: 0,
+        }
+    }
+
+    /// Create an empty two-dimensional mock backend.
     ///
     /// # Examples
     ///
@@ -190,17 +221,16 @@ impl MockBackend {
     /// use causal_triangulations::geometry::backends::mock::MockBackend;
     /// use causal_triangulations::geometry::traits::TriangulationQuery;
     ///
-    /// let backend = MockBackend::new(2);
+    /// let backend = MockBackend::new_2d();
     /// assert_eq!(backend.dimension(), 2);
-    /// assert_eq!(backend.vertex_count(), 0);
     /// ```
     #[must_use]
-    pub fn new(dimension: usize) -> Self {
+    pub fn new_2d() -> Self {
         Self {
             vertices: HashMap::new(),
             edges: HashMap::new(),
             faces: HashMap::new(),
-            dimension,
+            dimension: 2,
             next_vertex_id: 0,
             next_edge_id: 0,
             next_face_id: 0,
@@ -222,7 +252,7 @@ impl MockBackend {
     /// ```
     #[must_use]
     pub fn create_triangle() -> Self {
-        let mut backend = Self::new(2);
+        let mut backend = Self::new_2d();
 
         // Add three vertices
         backend.vertices.insert(0, vec![0.0, 0.0]);
@@ -727,7 +757,7 @@ mod tests {
 
     #[test]
     fn test_mock_backend_creation() {
-        let backend = MockBackend::new(2);
+        let backend = MockBackend::new_2d();
         assert_eq!(backend.backend_name(), "mock");
         assert_eq!(backend.dimension(), 2);
         assert_eq!(backend.vertex_count(), 0);
@@ -948,7 +978,7 @@ mod tests {
 
     #[test]
     fn test_mock_backend_flips_interior_edge() {
-        let mut backend = MockBackend::new(2);
+        let mut backend = MockBackend::new_2d();
         backend.vertices.insert(0, vec![0.0, 0.0]);
         backend.vertices.insert(1, vec![1.0, 0.0]);
         backend.vertices.insert(2, vec![1.0, 1.0]);
@@ -1001,7 +1031,7 @@ mod tests {
 
     #[test]
     fn test_mock_backend_face_neighbors_return_shared_edge_faces() {
-        let mut backend = MockBackend::new(2);
+        let mut backend = MockBackend::new_2d();
         backend.vertices.insert(0, vec![0.0, 0.0]);
         backend.vertices.insert(1, vec![1.0, 0.0]);
         backend.vertices.insert(2, vec![1.0, 1.0]);
@@ -1027,7 +1057,7 @@ mod tests {
 
     #[test]
     fn test_mock_backend_rejects_malformed_edge_flips() {
-        let mut backend = MockBackend::new(2);
+        let mut backend = MockBackend::new_2d();
         backend.vertices.insert(0, vec![0.0, 0.0]);
         backend.vertices.insert(1, vec![1.0, 0.0]);
         backend.vertices.insert(2, vec![1.0, 1.0]);
@@ -1071,7 +1101,7 @@ mod tests {
 
     #[test]
     fn test_mock_backend_rejects_non_triangular_subdivision() {
-        let mut backend = MockBackend::new(2);
+        let mut backend = MockBackend::new_2d();
         backend.vertices.insert(0, vec![0.0, 0.0]);
         backend.vertices.insert(1, vec![1.0, 0.0]);
         backend.vertices.insert(2, vec![1.0, 1.0]);

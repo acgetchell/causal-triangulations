@@ -23,7 +23,8 @@ proptest! {
         temperature in 0.01f64..100.0,
     ) {
         let tri = test_triangulation();
-        let action_config = ActionConfig::new(coupling_0, coupling_2, cosmological_constant);
+        let action_config = ActionConfig::new(coupling_0, coupling_2, cosmological_constant)
+            .expect("generated couplings are finite");
 
         let target = CdtTarget::new(action_config.clone(), temperature)
             .expect("generated action config and temperature are valid");

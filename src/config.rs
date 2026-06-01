@@ -157,6 +157,7 @@ pub struct CdtConfig {
 #[derive(Debug, Clone)]
 pub struct ValidatedCdtConfig {
     config: CdtConfig,
+    metropolis_config: MetropolisConfig,
 }
 
 /// Validated initial spatial-volume input for CDT construction.
@@ -217,7 +218,17 @@ impl ValidatedCdtConfig {
     /// ```
     pub fn new(config: CdtConfig) -> CdtResult<Self> {
         config.ensure_valid()?;
-        Ok(Self { config })
+        let metropolis_config = MetropolisConfig::new_with_seed(
+            config.temperature,
+            config.steps,
+            config.thermalization_steps,
+            config.measurement_frequency,
+            config.seed,
+        )?;
+        Ok(Self {
+            config,
+            metropolis_config,
+        })
     }
 
     /// Returns the validated configuration for serialization/reporting APIs.
@@ -516,13 +527,13 @@ impl ValidatedCdtConfig {
     ///     }
     ///     .into_validated()?;
     ///     let metropolis = config.to_metropolis_config();
-    ///     assert_eq!(metropolis.seed, Some(42));
+    ///     assert_eq!(metropolis.seed(), Some(42));
     ///     Ok(())
     /// }
     /// ```
     #[must_use]
-    pub const fn to_metropolis_config(&self) -> MetropolisConfig {
-        to_metropolis_config(&self.config)
+    pub fn to_metropolis_config(&self) -> MetropolisConfig {
+        self.metropolis_config.clone()
     }
 
     /// Creates a validated [`ActionConfig`].
@@ -538,7 +549,7 @@ impl ValidatedCdtConfig {
     ///     let action = CdtConfig::new(16, 4)
     ///         .into_validated()?
     ///         .to_action_config();
-    ///     assert_relative_eq!(action.coupling_0, 0.0);
+    ///     assert_relative_eq!(action.coupling_0(), 0.0);
     ///     Ok(())
     /// }
     /// ```
@@ -861,11 +872,11 @@ impl CdtConfig {
         ValidatedCdtConfig::new(self)
     }
 
-    /// Merges this configuration with a set of override values, returning a new configuration.
+    /// Merges this configuration with a set of override values and validates the result.
     ///
     /// Override fields that are `None` are ignored, leaving the original configuration values
     /// unchanged. When an override value is provided, it replaces the corresponding field in
-    /// the returned configuration.
+    /// the returned validated configuration.
     ///
     /// A provided volume profile is an atomic override for its derived counts:
     /// the returned configuration recomputes `vertices` from the profile sum and
@@ -881,26 +892,30 @@ impl CdtConfig {
     /// };
     ///
     /// fn main() -> CdtResult<()> {
-    /// let base = CdtConfig::new(10, 2);
-    /// let overrides = CdtConfigOverrides {
-    ///     dimension: Some(DimensionOverride::Clear),
-    ///     vertices: Some(24),
-    ///     ..CdtConfigOverrides::default()
-    /// };
+    ///     let base = CdtConfig::new(10, 2);
+    ///     let overrides = CdtConfigOverrides {
+    ///         dimension: Some(DimensionOverride::Clear),
+    ///         vertices: Some(24),
+    ///         ..CdtConfigOverrides::default()
+    ///     };
     ///
-    /// let merged = base.merge_with_override(&overrides)?;
-    /// assert_eq!(merged.dimension, None);
-    /// assert_eq!(merged.vertices, 24);
-    /// assert_eq!(merged.timeslices, 2);
-    /// # Ok(())
+    ///     let merged = base.merge_with_override(&overrides)?;
+    ///     assert_eq!(merged.config().dimension, None);
+    ///     assert_eq!(merged.vertices(), 24);
+    ///     assert_eq!(merged.timeslices(), 2);
+    ///     Ok(())
     /// }
     /// ```
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::InvalidConfiguration`] if an override volume profile cannot
-    /// be represented by the `u32` vertex or time-slice counts stored in [`CdtConfig`].
-    pub fn merge_with_override(&self, overrides: &CdtConfigOverrides) -> CdtResult<Self> {
+    /// Returns [`CdtError::InvalidConfiguration`] or
+    /// [`CdtError::InvalidSimulationConfiguration`] if the merged configuration
+    /// violates any geometry, topology, action, or schedule invariant.
+    pub fn merge_with_override(
+        &self,
+        overrides: &CdtConfigOverrides,
+    ) -> CdtResult<ValidatedCdtConfig> {
         let mut merged = self.clone();
 
         if let Some(dimension_override) = overrides.dimension {
@@ -999,7 +1014,7 @@ impl CdtConfig {
             merged.output_json.clone_from(output_json);
         }
 
-        Ok(merged)
+        ValidatedCdtConfig::new(merged)
     }
 
     /// Resolves a candidate path against a base directory, expanding user home references
@@ -1240,23 +1255,9 @@ pub(crate) fn validate_schedule(
     Ok(())
 }
 
-/// Builds the MCMC runtime configuration from an already validated raw config.
-const fn to_metropolis_config(config: &CdtConfig) -> MetropolisConfig {
-    let metropolis = MetropolisConfig::new(
-        config.temperature,
-        config.steps,
-        config.thermalization_steps,
-        config.measurement_frequency,
-    );
-    MetropolisConfig {
-        seed: config.seed,
-        ..metropolis
-    }
-}
-
 /// Builds the action runtime configuration from an already validated raw config.
 const fn to_action_config(config: &CdtConfig) -> ActionConfig {
-    ActionConfig::new(
+    ActionConfig::from_validated_parts(
         config.coupling_0,
         config.coupling_2,
         config.cosmological_constant,
@@ -1782,14 +1783,14 @@ mod tests {
             .expect("test config should validate");
 
         let metropolis_config = config.to_metropolis_config();
-        assert_relative_eq!(metropolis_config.temperature, 1.0);
-        assert_eq!(metropolis_config.steps, 1000);
+        assert_relative_eq!(metropolis_config.temperature(), 1.0);
+        assert_eq!(metropolis_config.steps().get(), 1000);
 
         let action_config = config.to_action_config();
-        assert_relative_eq!(action_config.coupling_0, 0.0);
-        assert_relative_eq!(action_config.coupling_2, 0.0);
+        assert_relative_eq!(action_config.coupling_0(), 0.0);
+        assert_relative_eq!(action_config.coupling_2(), 0.0);
         assert_relative_eq!(
-            action_config.cosmological_constant,
+            action_config.cosmological_constant(),
             DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT
         );
     }
@@ -2390,6 +2391,7 @@ mod tests {
         let merged = base
             .merge_with_override(&overrides)
             .expect("override merge should succeed");
+        let merged = merged.config();
 
         assert_eq!(merged.dimension, None);
         assert_eq!(merged.dimension(), 2);
@@ -2424,6 +2426,7 @@ mod tests {
         let merged = base
             .merge_with_override(&overrides)
             .expect("override merge should succeed");
+        let merged = merged.config();
 
         assert_eq!(merged.vertices, 15);
         assert_eq!(merged.timeslices, 3);
@@ -2454,6 +2457,7 @@ mod tests {
         let merged = base
             .merge_with_override(&overrides)
             .expect("override merge should succeed");
+        let merged = merged.config();
 
         assert_eq!(merged.seed, None);
     }
@@ -2474,6 +2478,7 @@ mod tests {
         let merged = base
             .merge_with_override(&overrides)
             .expect("override merge should succeed");
+        let merged = merged.config();
 
         assert_eq!(merged.volume_profile, None);
         assert_eq!(merged.vertices, 15);
@@ -2491,6 +2496,7 @@ mod tests {
         let merged = base
             .merge_with_override(&overrides)
             .expect("override merge should succeed");
+        let merged = merged.config();
         assert_eq!(merged.dimension, None);
         assert_eq!(merged.dimension(), 2); // dimension() defaults to 2 when None
     }
@@ -2513,6 +2519,45 @@ mod tests {
                 ref expected,
             }) if provided_value == "[4294967295, 1]"
                 && expected == "volume profile sum <= u32::MAX"
+        );
+    }
+
+    #[test]
+    fn test_merge_with_override_rejects_invalid_schedule() {
+        let base = CdtConfig::new(10, 2);
+        let overrides = CdtConfigOverrides {
+            measurement_frequency: Some(0),
+            ..CdtConfigOverrides::default()
+        };
+
+        let result = base.merge_with_override(&overrides);
+
+        assert_matches!(
+            result,
+            Err(CdtError::InvalidSimulationConfiguration {
+                setting: ConfigurationSetting::MeasurementFrequency,
+                ref provided_value,
+                ref expected,
+            }) if provided_value == "0" && expected == "≥ 1"
+        );
+    }
+
+    #[test]
+    fn test_merge_with_override_rejects_invalid_base_without_overrides() {
+        let base = CdtConfig {
+            measurement_frequency: 0,
+            ..CdtConfig::new(10, 2)
+        };
+
+        let result = base.merge_with_override(&CdtConfigOverrides::default());
+
+        assert_matches!(
+            result,
+            Err(CdtError::InvalidSimulationConfiguration {
+                setting: ConfigurationSetting::MeasurementFrequency,
+                ref provided_value,
+                ref expected,
+            }) if provided_value == "0" && expected == "≥ 1"
         );
     }
 

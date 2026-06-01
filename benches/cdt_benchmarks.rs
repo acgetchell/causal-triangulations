@@ -10,16 +10,12 @@
 //! - Ergodic move operations
 
 use causal_triangulations::prelude::action::ActionConfig;
-use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveStatistics, MoveType};
-use causal_triangulations::prelude::simulation::{
-    Measurement, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep, ProposalStatistics,
-    SimulationResultsBackend,
-};
+use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveType};
+use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
 use causal_triangulations::prelude::triangulation::{CdtTriangulation2D, TriangulationQuery};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::hint::black_box;
-use std::time::Duration;
 
 #[derive(Clone, Copy)]
 enum SetupOperation {
@@ -305,7 +301,11 @@ fn bench_metropolis_simulation(c: &mut Criterion) {
                         SetupOperation::CreateCdtStrip,
                     );
 
-                    let config = MetropolisConfig::new(1.0, steps, 5, 5).with_seed(42);
+                    let config = require_result(
+                        MetropolisConfig::new(1.0, steps, 5, 5),
+                        SetupOperation::RunSimulation,
+                    )
+                    .with_seed(42);
                     let action_config = ActionConfig::default();
                     let algorithm = MetropolisAlgorithm::new(config, action_config);
 
@@ -332,48 +332,15 @@ fn bench_simulation_analysis(c: &mut Criterion) {
         SetupOperation::CreateCdtStrip,
     );
 
-    let config = MetropolisConfig::new(1.0, 100, 10, 5);
-    let action_config = ActionConfig::default();
-    let results = SimulationResultsBackend::new(
-        config,
-        action_config,
-        MoveStatistics::new(),
-        ProposalStatistics::new(),
-        vec![
-            MonteCarloStep {
-                step: 1,
-                move_type: MoveType::Move22,
-                accepted: true,
-                action_before: 12.5,
-                action_after: Some(11.8),
-                delta_action: Some(-0.7),
-            },
-            MonteCarloStep {
-                step: 2,
-                move_type: MoveType::Move13Add,
-                accepted: false,
-                action_before: 11.8,
-                action_after: None,
-                delta_action: Some(1.4),
-            },
-            MonteCarloStep {
-                step: 3,
-                move_type: MoveType::Move31Remove,
-                accepted: true,
-                action_before: 11.8,
-                action_after: Some(12.1),
-                delta_action: Some(0.3),
-            },
-        ],
-        vec![
-            Measurement::new(0, 12.5, 15, 32, 18).with_volume_profile(vec![9, 9, 0]),
-            Measurement::new(10, 11.8, 16, 34, 19).with_volume_profile(vec![9, 10, 0]),
-            Measurement::new(20, 12.1, 15, 31, 17).with_volume_profile(vec![8, 9, 0]),
-        ],
-        Duration::from_millis(37),
-        triangulation,
+    let config = require_result(
+        MetropolisConfig::new(1.0, 100, 10, 5),
+        SetupOperation::BuildSimulationResults,
+    )
+    .with_seed(42);
+    let results = require_result(
+        MetropolisAlgorithm::new(config, ActionConfig::default()).run(triangulation),
+        SetupOperation::BuildSimulationResults,
     );
-    let results = require_result(results, SetupOperation::BuildSimulationResults);
 
     group.bench_function("acceptance_rate", |b| {
         b.iter(|| {

@@ -14,6 +14,7 @@
 
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize};
+use std::num::NonZeroU32;
 use std::{error::Error, fmt};
 
 /// Classification of an edge
@@ -361,8 +362,8 @@ impl Error for FoliationError {}
 pub struct Foliation {
     /// Number of vertices per time slice (`slice_sizes[t]`).
     slice_sizes: Vec<usize>,
-    /// Total number of time slices.
-    num_slices: u32,
+    /// Nonzero total number of time slices.
+    num_slices: NonZeroU32,
 }
 
 #[derive(Deserialize)]
@@ -397,7 +398,7 @@ impl Foliation {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let foliation = Foliation::from_slice_sizes(vec![3, 4], 2)?;
-    ///     assert_eq!(foliation.num_slices(), 2);
+    ///     assert_eq!(foliation.num_slices().get(), 2);
     ///     assert_eq!(foliation.labeled_vertex_count(), 7);
     ///
     ///     let err = Foliation::from_slice_sizes(vec![], 0).expect_err("zero slices are invalid");
@@ -418,6 +419,9 @@ impl Foliation {
                 num_slices,
             });
         }
+        let Some(num_slices) = NonZeroU32::new(num_slices) else {
+            return Err(FoliationError::EmptyFoliation);
+        };
         if let Some(slice) = slice_sizes.iter().position(|&slice_size| slice_size == 0) {
             return Err(FoliationError::EmptySlice { slice });
         }
@@ -454,12 +458,12 @@ impl Foliation {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let foliation = Foliation::from_slice_sizes(vec![3, 4], 2)?;
-    ///     assert_eq!(foliation.num_slices(), 2);
+    ///     assert_eq!(foliation.num_slices().get(), 2);
     ///     Ok(())
     /// }
     /// ```
     #[must_use]
-    pub const fn num_slices(&self) -> u32 {
+    pub const fn num_slices(&self) -> NonZeroU32 {
         self.num_slices
     }
 
@@ -511,7 +515,7 @@ mod tests {
     #[test]
     fn test_foliation_populated() {
         let fol = Foliation::from_slice_sizes(vec![3, 3], 2).expect("valid foliation");
-        assert_eq!(fol.num_slices(), 2);
+        assert_eq!(fol.num_slices().get(), 2);
         assert_eq!(fol.labeled_vertex_count(), 6);
         assert_eq!(fol.slice_sizes()[0], 3);
         assert_eq!(fol.slice_sizes()[1], 3);
