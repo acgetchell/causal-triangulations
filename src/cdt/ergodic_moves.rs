@@ -9,7 +9,7 @@
 //! - edge flips: retained as an API-compatible alias for the 2D (2,2) move
 
 use crate::config::CdtTopology;
-use crate::errors::{BackendMutationOperation, CdtError};
+use crate::errors::{BackendMutationOperation, CdtError, CdtResult, CheckpointResumeFailure};
 use crate::geometry::CdtTriangulation2D;
 use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
@@ -177,7 +177,7 @@ impl MoveStatistics {
     /// Deserialization rejects impossible counters such as accepted moves plus
     /// hard failures exceeding attempts, so public accessors can treat stored
     /// move-family counters as coherent telemetry.
-    fn from_wire(wire: &MoveStatisticsWire) -> Result<Self, String> {
+    fn from_wire(wire: &MoveStatisticsWire) -> CdtResult<Self> {
         validate_move_counter(
             MoveType::Move22,
             wire.moves_22_attempted,
@@ -578,14 +578,20 @@ fn validate_move_counter(
     attempted: u64,
     accepted: u64,
     hard_failed: u64,
-) -> Result<(), String> {
-    let terminal = accepted.checked_add(hard_failed).ok_or_else(|| {
-        format!("{move_type:?} accepted plus hard-failure counters exceed u64::MAX")
-    })?;
+) -> CdtResult<()> {
+    let terminal = accepted
+        .checked_add(hard_failed)
+        .ok_or(CdtError::CheckpointResumeFailed {
+            failure: CheckpointResumeFailure::MoveTerminalCounterOverflow { move_type },
+        })?;
     if terminal > attempted {
-        Err(format!(
-            "{move_type:?} accepted plus hard-failure counters ({terminal}) exceed attempted counter ({attempted})"
-        ))
+        Err(CdtError::CheckpointResumeFailed {
+            failure: CheckpointResumeFailure::MoveTerminalOutcomesExceedAttempted {
+                move_type,
+                terminal,
+                attempted,
+            },
+        })
     } else {
         Ok(())
     }
@@ -2089,15 +2095,17 @@ fn toroidal_insertion_sites(
 /// and unfoliated states use direct degree-3 vertex collapses.
 fn removal_sites(triangulation: &CdtTriangulation2D, visit: &mut impl FnMut(ProposalSite)) -> bool {
     if is_toroidal_foliated(triangulation) {
+        let mut geometric_candidate_seen = false;
         for vertex in triangulation.geometry().vertices() {
             let Some(remove) = toroidal_removal_candidate(triangulation, vertex) else {
                 continue;
             };
+            geometric_candidate_seen = true;
             if toroidal_removal_candidate_is_sampleable(triangulation, &remove) {
                 visit(ProposalSite::ToroidalRemoval(remove));
             }
         }
-        return true;
+        return geometric_candidate_seen;
     }
 
     let mut geometric_candidate_seen = false;
@@ -2343,27 +2351,64 @@ mod tests {
     }
 
     #[test]
-    fn move_statistics_deserialization_rejects_impossible_counters() {
-        let error = serde_json::from_str::<MoveStatistics>(
-            r#"{
-                "moves_22_attempted": 1,
-                "moves_22_accepted": 1,
-                "moves_22_hard_failed": 1,
-                "moves_13_attempted": 0,
-                "moves_13_accepted": 0,
-                "moves_31_attempted": 0,
-                "moves_31_accepted": 0,
-                "edge_flips_attempted": 0,
-                "edge_flips_accepted": 0
-            }"#,
-        )
-        .expect_err("accepted plus hard failures above attempts should be rejected");
+    fn move_statistics_from_wire_rejects_terminal_outcomes_above_attempts() {
+        let wire = MoveStatisticsWire {
+            moves_22_attempted: 1,
+            moves_22_accepted: 1,
+            moves_22_hard_failed: 1,
+            moves_13_attempted: 0,
+            moves_13_accepted: 0,
+            moves_13_hard_failed: 0,
+            moves_31_attempted: 0,
+            moves_31_accepted: 0,
+            moves_31_hard_failed: 0,
+            edge_flips_attempted: 0,
+            edge_flips_accepted: 0,
+            edge_flips_hard_failed: 0,
+        };
 
-        assert!(
-            error
-                .to_string()
-                .contains("accepted plus hard-failure counters"),
-            "serde error should explain move-counter invariant, got {error}"
+        let error = MoveStatistics::from_wire(&wire)
+            .expect_err("accepted plus hard failures above attempts should be rejected");
+
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::MoveTerminalOutcomesExceedAttempted {
+                    move_type: MoveType::Move22,
+                    terminal: 2,
+                    attempted: 1,
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn move_statistics_from_wire_rejects_terminal_counter_overflow() {
+        let wire = MoveStatisticsWire {
+            moves_22_attempted: u64::MAX,
+            moves_22_accepted: u64::MAX,
+            moves_22_hard_failed: 1,
+            moves_13_attempted: 0,
+            moves_13_accepted: 0,
+            moves_13_hard_failed: 0,
+            moves_31_attempted: 0,
+            moves_31_accepted: 0,
+            moves_31_hard_failed: 0,
+            edge_flips_attempted: 0,
+            edge_flips_accepted: 0,
+            edge_flips_hard_failed: 0,
+        };
+
+        let error = MoveStatistics::from_wire(&wire)
+            .expect_err("overflowed accepted plus hard-failure counters should be rejected");
+
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::MoveTerminalCounterOverflow {
+                    move_type: MoveType::Move22
+                }
+            }
         );
     }
 
@@ -3052,6 +3097,7 @@ mod tests {
         assert!(
             triangulation
                 .volume_profile()
+                .expect("accepted toroidal removal profile should be valid")
                 .iter()
                 .all(|&count| count >= 3),
             "accepted periodic toroidal removal must preserve nonempty closed spatial slices"
@@ -3115,7 +3161,7 @@ mod tests {
     }
 
     #[test]
-    fn periodic_toroidal_move_31_rejects_minimal_slice_removal() {
+    fn periodic_toroidal_move_31_rejects_minimal_slice_without_inverse_site() {
         let mut system = ErgodicsSystem::with_seed(7);
         let mut triangulation =
             CdtTriangulation2D::from_toroidal_cdt(3, 3).expect("build minimal toroidal CDT");
@@ -3124,14 +3170,16 @@ mod tests {
             triangulation.edge_count(),
             triangulation.face_count(),
         );
-        let profile_before = triangulation.volume_profile();
+        let profile_before = triangulation
+            .volume_profile()
+            .expect("initial minimal toroidal profile should be valid");
 
         let result = system.attempt_31_move(&mut triangulation);
 
         assert_matches!(
             result,
-            MoveResult::CausalityViolation,
-            "minimal periodic toroidal slices should reject volume removal causally"
+            MoveResult::GeometricViolation,
+            "minimal periodic toroidal slices should reject volume removal without an inverse site"
         );
         assert_eq!(system.stats.moves_31_attempted, 1);
         assert_eq!(system.stats.moves_31_accepted, 0);
@@ -3145,7 +3193,9 @@ mod tests {
             "rejected minimal toroidal removal must preserve simplex counts"
         );
         assert_eq!(
-            triangulation.volume_profile(),
+            triangulation
+                .volume_profile()
+                .expect("rejected minimal toroidal profile should be valid"),
             profile_before,
             "rejected minimal toroidal removal must preserve closed spatial slices"
         );

@@ -43,11 +43,17 @@ fn toroidal_observables_run_accepts_periodic_moves_after_offset_support() {
         .validate()
         .expect("accepted periodic moves should preserve evolved toroidal CDT invariants");
     assert!(
-        results.hausdorff_dimension_estimate().is_some(),
+        results
+            .hausdorff_dimension_estimate()
+            .expect("final triangulation adjacency should be readable")
+            .is_some(),
         "observables workflow should still report a Hausdorff estimate"
     );
     assert!(
-        results.spectral_dimension_estimate().is_some(),
+        results
+            .spectral_dimension_estimate()
+            .expect("final triangulation adjacency should be readable")
+            .is_some(),
         "observables workflow should still report a spectral estimate"
     );
 }

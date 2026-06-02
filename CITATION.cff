@@ -3,6 +3,7 @@ message: "If you use this software, please cite it as below."
 type: software
 title: "causal-triangulations: A Causal Dynamical Triangulation library for quantum gravity research"
 version: 0.1.0
+doi: 10.5281/zenodo.20513228
 url: "https://github.com/acgetchell/causal-triangulations"
 repository-code: "https://github.com/acgetchell/causal-triangulations"
 authors:

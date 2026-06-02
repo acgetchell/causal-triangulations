@@ -614,10 +614,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::backends::delaunay::{DelaunayBackend, DelaunayError};
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
-    /// use causal_triangulations::geometry::traits::TriangulationQuery;
-    /// use causal_triangulations::DelaunayValidationLevel;
+    /// use causal_triangulations::prelude::geometry::*;
     ///
     /// fn main() -> Result<(), DelaunayError> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -652,10 +649,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::backends::delaunay::DelaunayError;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
-    /// use causal_triangulations::DelaunayValidationLevel;
+    /// use causal_triangulations::prelude::geometry::*;
     ///
     /// fn main() -> Result<(), DelaunayError> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -688,10 +682,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::backends::delaunay::DelaunayError;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
-    /// use causal_triangulations::DelaunayValidationLevel;
+    /// use causal_triangulations::prelude::geometry::*;
     ///
     /// fn main() -> Result<(), DelaunayError> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -728,10 +719,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::backends::delaunay::DelaunayError;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
-    /// use causal_triangulations::DelaunayValidationLevel;
+    /// use causal_triangulations::prelude::geometry::*;
     ///
     /// fn main() -> Result<(), DelaunayError> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -776,9 +764,8 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::{CdtError, CdtResult};
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -817,9 +804,8 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::{CdtError, CdtResult};
     /// use std::num::NonZeroUsize;
     ///
     /// fn main() -> CdtResult<()> {
@@ -865,9 +851,8 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::{CdtError, CdtResult};
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -919,11 +904,8 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{
-    ///     CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, DelaunayValidationLevel,
-    /// };
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::{CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure};
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -962,11 +944,8 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{
-    ///     CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, DelaunayValidationLevel,
-    /// };
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::{CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure};
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -1011,12 +990,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::{
-    ///     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck,
-    ///     CdtValidationFailure, DelaunayValidationLevel,
+    ///     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
     /// };
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -1074,12 +1051,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::{
-    ///     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck,
-    ///     CdtValidationFailure, DelaunayValidationLevel,
+    ///     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
     /// };
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[

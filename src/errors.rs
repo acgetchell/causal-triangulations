@@ -916,6 +916,24 @@ pub enum CheckpointResumeFailure {
         /// Counter category that overflowed.
         counter: CheckpointMoveCounter,
     },
+    /// Serialized terminal move counters overflowed before they could be compared to attempts.
+    #[error("{move_type:?} accepted plus hard-failure counters exceed u64::MAX")]
+    MoveTerminalCounterOverflow {
+        /// Move type with overflowing terminal outcome telemetry.
+        move_type: MoveType,
+    },
+    /// Serialized accepted plus hard-failure move counters exceed attempted moves.
+    #[error(
+        "{move_type:?} accepted plus hard-failure counters ({terminal}) exceed attempted counter ({attempted})"
+    )]
+    MoveTerminalOutcomesExceedAttempted {
+        /// Move type with impossible terminal outcome telemetry.
+        move_type: MoveType,
+        /// Sum of accepted and hard-failure counters.
+        terminal: u64,
+        /// Attempted move counter.
+        attempted: u64,
+    },
     /// Resumable checkpoints cannot contain hard-failure move counters.
     #[error("{move_type:?} hard-failure move count must be zero in resumable checkpoints")]
     MoveHardFailures {
@@ -942,6 +960,27 @@ pub enum CheckpointResumeFailure {
     ProposalCounterOverflow {
         /// Proposal telemetry counter that could not fit in the target type.
         counter: ProposalTelemetryCounter,
+    },
+    /// Serialized terminal proposal outcome counters overflowed before validation.
+    #[error("proposal terminal outcome counters exceed u64::MAX")]
+    ProposalTerminalCounterOverflow,
+    /// Serialized proposal terminal outcomes do not partition selected move families.
+    #[error(
+        "proposal terminal outcomes ({terminal_outcomes}) do not match move-family proposals ({move_family_proposals})"
+    )]
+    ProposalTerminalOutcomeCountMismatch {
+        /// Sum of terminal proposal outcomes.
+        terminal_outcomes: u64,
+        /// Number of selected move-family proposals.
+        move_family_proposals: u64,
+    },
+    /// Serialized forward-site observations exist without any proposed move family.
+    #[error(
+        "observed forward-site count must be zero when no move families were proposed: got {observed_forward_sites}"
+    )]
+    ProposalForwardSitesWithoutMoveFamily {
+        /// Forward-site observations recorded in proposal telemetry.
+        observed_forward_sites: u64,
     },
     /// Resume-validated proposal telemetry cannot contain hard failures.
     #[error("proposal telemetry has {actual} hard failures; expected 0")]
@@ -972,6 +1011,12 @@ pub enum CheckpointResumeFailure {
         actual: u64,
         /// Expected rejected count from step telemetry.
         expected: u64,
+    },
+    /// Deserialized checkpoint step was zero before it could become a resumable position.
+    #[error("checkpoint current_step must be nonzero: got {actual}")]
+    CheckpointCurrentStepZero {
+        /// Raw checkpoint step value.
+        actual: u32,
     },
 }
 

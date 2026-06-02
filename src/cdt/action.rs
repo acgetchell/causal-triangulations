@@ -8,13 +8,14 @@
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
 use num_traits::cast::NumCast;
 use serde::{Deserialize, Deserializer, Serialize};
+use std::f64::consts::LN_2;
 
 /// Critical cosmological coupling for pure 1+1 CDT in the triangle-volume convention.
 ///
 /// The exactly solved 2D CDT transfer matrix has critical point `λ_c = ln 2`
 /// when triangulations are weighted by `exp(-λ N2)`, where `N2` is the number
 /// of triangles.
-pub const CDT_1P1_CRITICAL_TRIANGLE_COSMOLOGICAL_CONSTANT: f64 = std::f64::consts::LN_2;
+pub const CDT_1P1_CRITICAL_TRIANGLE_COSMOLOGICAL_CONSTANT: f64 = LN_2;
 
 /// Default edge-count cosmological coupling for toroidal 1+1 CDT runs.
 ///

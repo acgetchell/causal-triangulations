@@ -862,52 +862,39 @@ mod tests {
     #[test]
     fn test_generate_delaunay2_insufficient_vertices() {
         let result = generate_delaunay2(2, (0.0, 10.0), None);
-        assert!(result.is_err(), "Should fail with insufficient vertices");
-
-        match result.unwrap_err() {
-            CdtError::InvalidGenerationParameters {
-                issue,
-                provided_value,
-                expected_range,
-            } => {
-                assert_eq!(issue, GenerationParameterIssue::InsufficientVertexCount);
-                assert_eq!(provided_value, "2");
-                assert_eq!(expected_range, "≥ 3");
-            }
-            _ => panic!("Expected InvalidGenerationParameters error"),
-        }
+        assert_matches!(
+            result,
+            Err(CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::InsufficientVertexCount,
+                ref provided_value,
+                ref expected_range,
+            }) if provided_value == "2" && expected_range == "≥ 3"
+        );
     }
 
     #[test]
     fn test_generate_delaunay2_invalid_range() {
         let result = generate_delaunay2(4, (10.0, 5.0), None);
-        assert!(result.is_err(), "Should fail with invalid coordinate range");
-
-        match result.unwrap_err() {
-            CdtError::InvalidGenerationParameters {
-                issue,
-                provided_value,
-                expected_range,
-            } => {
-                assert_eq!(issue, GenerationParameterIssue::InvalidCoordinateRange);
-                assert_eq!(provided_value, "[10, 5]");
-                assert_eq!(expected_range, "finite min < max");
-            }
-            _ => panic!("Expected InvalidGenerationParameters error"),
-        }
+        assert_matches!(
+            result,
+            Err(CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::InvalidCoordinateRange,
+                ref provided_value,
+                ref expected_range,
+            }) if provided_value == "[10, 5]" && expected_range == "finite min < max"
+        );
     }
 
     #[test]
     fn test_generate_delaunay2_equal_range() {
         let result = generate_delaunay2(4, (5.0, 5.0), None);
-        assert!(result.is_err(), "Should fail with equal coordinate range");
-
-        match result.unwrap_err() {
-            CdtError::InvalidGenerationParameters { issue, .. } => {
-                assert_eq!(issue, GenerationParameterIssue::InvalidCoordinateRange);
-            }
-            _ => panic!("Expected InvalidGenerationParameters error"),
-        }
+        assert_matches!(
+            result,
+            Err(CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::InvalidCoordinateRange,
+                ..
+            })
+        );
     }
 
     #[test]

@@ -118,7 +118,9 @@ pub mod geometry {
     /// Convenient alias for CDT triangulations using the default backend
     pub type CdtTriangulation2D = crate::cdt::triangulation::CdtTriangulation<DefaultBackend>;
 
-    pub use generators::{GlobalTopology, TopologyGuarantee, ToroidalConstructionMode};
+    pub use generators::{
+        DelaunayTriangulation2D, GlobalTopology, TopologyGuarantee, ToroidalConstructionMode,
+    };
 }
 
 /// Causal Dynamical Triangulations implementation modules.
@@ -181,7 +183,9 @@ pub use cdt::action::{
     DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT, compute_regge_action,
 };
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
-pub use cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType};
+pub use cdt::foliation::{
+    EdgeType, Foliation, FoliationError, SimplexType, classify_edge, classify_simplex,
+};
 pub use cdt::metropolis::{
     AcceptedStepTelemetry, CdtMcmcCheckpoint, CdtProposal, CdtProposalError, CdtProposalInfo,
     CdtProposalPlan, CdtTarget, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
@@ -189,7 +193,7 @@ pub use cdt::metropolis::{
 };
 pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
 pub use cdt::results::{Measurement, SimulationResultsBackend};
-pub use cdt::triangulation::{CdtSimplexCounts, CdtTriangulation, SimulationEvent};
+pub use cdt::triangulation::{CdtMetadata, CdtSimplexCounts, CdtTriangulation, SimulationEvent};
 pub use config::{
     CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, TestConfig, ValidatedCdtConfig,
     ValidatedInitialVolume,
@@ -205,7 +209,10 @@ pub use geometry::traits::TriangulationQuery;
 
 use crate::cdt::results::SimulationResultsParts;
 use std::env;
-use std::path::PathBuf;
+use std::fmt::Display;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process;
 use std::time::Duration;
 
 /// Prelude module for convenient imports.
@@ -230,7 +237,7 @@ pub mod prelude {
     // Core CDT types
     pub use crate::geometry::CdtTriangulation2D;
     pub use crate::geometry::traits::TriangulationQuery;
-    pub use crate::{CdtSimplexCounts, CdtTriangulation};
+    pub use crate::{CdtMetadata, CdtSimplexCounts, CdtTriangulation};
 
     // Action and simulation setup
     pub use crate::cdt::action::ActionConfig;
@@ -298,7 +305,7 @@ pub mod prelude {
         };
     }
 
-    /// Focused exports for CDT triangulation construction, queries, and history events.
+    /// Focused exports for CDT triangulation construction, queries, classification, and history events.
     ///
     /// Lighter than `prelude::*` — just the types needed for building and
     /// inspecting triangulations (the most common doctest pattern).
@@ -313,12 +320,14 @@ pub mod prelude {
     /// }
     /// ```
     pub mod triangulation {
-        pub use crate::cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType};
+        pub use crate::cdt::foliation::{
+            EdgeType, Foliation, FoliationError, SimplexType, classify_edge, classify_simplex,
+        };
         pub use crate::config::CdtTopology;
         pub use crate::errors::{CdtError, CdtResult};
         pub use crate::geometry::CdtTriangulation2D;
         pub use crate::geometry::traits::TriangulationQuery;
-        pub use crate::{CdtSimplexCounts, CdtTriangulation, SimulationEvent};
+        pub use crate::{CdtMetadata, CdtSimplexCounts, CdtTriangulation, SimulationEvent};
     }
 
     /// Focused exports for local CDT move kernels and move statistics.
@@ -413,11 +422,11 @@ pub mod prelude {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    ///     let profile = tri.volume_profile();
+    ///     let profile = tri.volume_profile()?;
     ///
     ///     assert_eq!(profile.len(), 3);
-    ///     assert!(estimate_hausdorff_dimension(&tri).is_some_and(f64::is_finite));
-    ///     assert!(estimate_spectral_dimension(&tri).is_some_and(f64::is_finite));
+    ///     assert!(estimate_hausdorff_dimension(&tri)?.is_some_and(f64::is_finite));
+    ///     assert!(estimate_spectral_dimension(&tri)?.is_some_and(f64::is_finite));
     ///     Ok(())
     /// }
     /// ```
@@ -436,8 +445,8 @@ pub mod prelude {
     /// queries), without pulling in simulation-specific symbols.
     ///
     /// ```
-    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::{CdtError, CdtResult};
     /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
@@ -467,7 +476,7 @@ pub mod prelude {
     /// }
     /// ```
     pub mod geometry {
-        pub use crate::geometry::DelaunayBackend2D;
+        pub use crate::errors::DelaunayValidationLevel;
         pub use crate::geometry::backends::delaunay::{
             DelaunayBackend, DelaunayError, DelaunayOperation, NonFlippableEdgeReason,
         };
@@ -482,6 +491,7 @@ pub mod prelude {
             EdgeAdjacentFaces, EdgeAdjacentFacesResult, FlipResult, GeometryBackend,
             SubdivisionResult, TriangulationMut, TriangulationQuery,
         };
+        pub use crate::geometry::{DelaunayBackend2D, DelaunayTriangulation2D};
     }
 
     /// Focused exports for tests and documentation fixtures.
@@ -628,19 +638,19 @@ pub fn run_simulation(config: &ValidatedCdtConfig) -> CdtResult<SimulationResult
         );
 
         let measurement = Measurement::try_from_simplex_counts(0, initial_action, counts)?
-            .try_with_volume_profile(triangulation.volume_profile())?;
+            .try_with_volume_profile(triangulation.volume_profile()?)?;
 
-        SimulationResultsBackend::from_parts(SimulationResultsParts {
-            config: config.to_metropolis_config(),
+        SimulationResultsBackend::from_parts(SimulationResultsParts::new(
+            config.to_metropolis_config(),
             action_config,
-            move_stats: MoveStatistics::new(),
-            proposal_stats: ProposalStatistics::new(),
-            steps: vec![],
-            measurements: vec![measurement],
-            scalar_trace_rows: vec![],
-            elapsed_time: Duration::from_millis(0),
+            MoveStatistics::new(),
+            ProposalStatistics::new(),
+            vec![],
+            vec![measurement],
+            vec![],
+            Duration::from_millis(0),
             triangulation,
-        })
+        )?)
     };
 
     write_configured_outputs(config, &results, &output_paths)?;
@@ -696,17 +706,162 @@ fn write_configured_outputs(
     results: &SimulationResultsBackend,
     output_paths: &ResolvedOutputPaths,
 ) -> CdtResult<()> {
+    let staged_outputs = StagedOutputs::new(output_paths);
+    staged_outputs.write_trace_csv(results)?;
+    staged_outputs.write_summary_json(validated_config, results)?;
+    staged_outputs.commit()?;
+
     if let Some(resolved) = &output_paths.csv {
-        results.write_trace_csv(resolved)?;
         log::info!("Wrote trace CSV to {}", resolved.display());
     }
 
     if let Some(resolved) = &output_paths.json {
-        results.write_summary_json(validated_config, resolved)?;
         log::info!("Wrote simulation JSON summary to {}", resolved.display());
     }
 
     Ok(())
+}
+
+/// Owns staged simulation outputs until they are committed or cleaned up.
+struct StagedOutputs<'a> {
+    csv: Option<StagedOutput<'a>>,
+    json: Option<StagedOutput<'a>>,
+}
+
+impl<'a> StagedOutputs<'a> {
+    /// Builds staged output paths next to their configured final destinations.
+    fn new(output_paths: &'a ResolvedOutputPaths) -> Self {
+        Self {
+            csv: output_paths
+                .csv
+                .as_deref()
+                .map(|path| StagedOutput::new(path, OutputFormat::Csv)),
+            json: output_paths
+                .json
+                .as_deref()
+                .map(|path| StagedOutput::new(path, OutputFormat::Json)),
+        }
+    }
+
+    /// Writes the CSV output to its staged file when configured.
+    fn write_trace_csv(&self, results: &SimulationResultsBackend) -> CdtResult<()> {
+        if let Some(output) = &self.csv {
+            results
+                .write_trace_csv(&output.temp_path)
+                .map_err(|err| output.remap_error(err))?;
+        }
+        Ok(())
+    }
+
+    /// Writes the JSON output to its staged file when configured.
+    fn write_summary_json(
+        &self,
+        validated_config: &ValidatedCdtConfig,
+        results: &SimulationResultsBackend,
+    ) -> CdtResult<()> {
+        if let Some(output) = &self.json {
+            results
+                .write_summary_json(validated_config, &output.temp_path)
+                .map_err(|err| output.remap_error(err))?;
+        }
+        Ok(())
+    }
+
+    /// Publishes every staged output, rolling back an earlier CSV publish on JSON failure.
+    fn commit(mut self) -> CdtResult<()> {
+        let published_csv = if let Some(output) = &self.csv {
+            output.persist()?;
+            let final_path = output.final_path.to_path_buf();
+            self.csv = None;
+            Some(final_path)
+        } else {
+            None
+        };
+
+        if let Some(output) = &self.json
+            && let Err(err) = output.persist()
+        {
+            if let Some(path) = &published_csv {
+                let _ignored = fs::remove_file(path);
+            }
+            return Err(err);
+        }
+        self.json = None;
+        Ok(())
+    }
+}
+
+impl Drop for StagedOutputs<'_> {
+    fn drop(&mut self) {
+        if let Some(output) = &self.csv {
+            output.cleanup();
+        }
+        if let Some(output) = &self.json {
+            output.cleanup();
+        }
+    }
+}
+
+/// One configured output file staged through a sibling temporary path.
+struct StagedOutput<'a> {
+    final_path: &'a Path,
+    temp_path: PathBuf,
+    format: OutputFormat,
+}
+
+impl<'a> StagedOutput<'a> {
+    /// Builds one same-directory temporary output path.
+    fn new(final_path: &'a Path, format: OutputFormat) -> Self {
+        Self {
+            final_path,
+            temp_path: sibling_temp_output_path(final_path, format),
+            format,
+        }
+    }
+
+    /// Renames the staged output into its final path.
+    fn persist(&self) -> CdtResult<()> {
+        fs::rename(&self.temp_path, self.final_path)
+            .map_err(|err| output_write_failed(self.final_path, self.format, err))
+    }
+
+    /// Removes the staged temporary file if it still exists.
+    fn cleanup(&self) {
+        let _ignored = fs::remove_file(&self.temp_path);
+    }
+
+    /// Reports a staged write failure against the configured final path.
+    fn remap_error(&self, error: CdtError) -> CdtError {
+        match error {
+            CdtError::OutputWriteFailed { detail, .. } => CdtError::OutputWriteFailed {
+                path: self.final_path.display().to_string(),
+                format: self.format,
+                detail,
+            },
+            error => error,
+        }
+    }
+}
+
+/// Builds a same-directory temporary output path for later atomic rename.
+fn sibling_temp_output_path(path: &Path, format: OutputFormat) -> PathBuf {
+    let suffix = match format {
+        OutputFormat::Csv => "csv",
+        OutputFormat::Json => "json",
+    };
+    let file_name = path
+        .file_name()
+        .map_or_else(|| "output".into(), |name| name.to_string_lossy());
+    path.with_file_name(format!(".{file_name}.{}.{}.tmp", process::id(), suffix))
+}
+
+/// Builds a typed output write error for crate-root persistence helpers.
+fn output_write_failed(path: &Path, format: OutputFormat, err: impl Display) -> CdtError {
+    CdtError::OutputWriteFailed {
+        path: path.display().to_string(),
+        format,
+        detail: err.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -781,7 +936,13 @@ mod tests {
         assert!(results.triangulation().face_count() > 0);
         assert!(results.triangulation().has_foliation());
         assert_eq!(results.triangulation().slice_sizes(), &[12, 12, 12]);
-        assert!(!results.triangulation().volume_profile().is_empty());
+        assert!(
+            !results
+                .triangulation()
+                .volume_profile()
+                .expect("run triangulation should have a valid volume profile")
+                .is_empty()
+        );
         results
             .triangulation()
             .validate_foliation()
@@ -852,6 +1013,79 @@ mod tests {
             parsed["final_triangulation"]["time_slices"],
             config.timeslices().get()
         );
+    }
+
+    #[test]
+    fn run_simulation_cleans_staged_csv_when_json_write_fails() {
+        let csv_path = temp_output_path("atomic-trace.csv");
+        let blocked_parent = temp_output_path("blocked-output-parent");
+        fs::write(&blocked_parent, "not a directory").expect("blocked parent fixture should write");
+        let json_path = blocked_parent.join("summary.json");
+        let csv_temp = sibling_temp_output_path(&csv_path, OutputFormat::Csv);
+        let json_temp = sibling_temp_output_path(&json_path, OutputFormat::Json);
+        let mut config = create_test_config();
+        config.output_csv = Some(csv_path.clone());
+        config.output_json = Some(json_path.clone());
+        let config = validated(config);
+
+        let error =
+            run_simulation(&config).expect_err("JSON output with a missing parent should fail");
+
+        assert_matches!(
+            error,
+            CdtError::OutputWriteFailed {
+                format: OutputFormat::Json,
+                ..
+            }
+        );
+        assert!(
+            !csv_path.exists(),
+            "CSV final output should not be published"
+        );
+        assert!(
+            !json_path.exists(),
+            "JSON final output should not be published"
+        );
+        assert!(!csv_temp.exists(), "staged CSV output should be cleaned");
+        assert!(!json_temp.exists(), "staged JSON output should be absent");
+        fs::remove_file(&blocked_parent).expect("blocked parent fixture should be removable");
+    }
+
+    #[test]
+    fn staged_outputs_roll_back_published_csv_when_json_persist_fails() {
+        let csv_path = temp_output_path("rollback-trace.csv");
+        let json_path = temp_output_path("rollback-summary.json");
+        let csv_temp = sibling_temp_output_path(&csv_path, OutputFormat::Csv);
+        let json_temp = sibling_temp_output_path(&json_path, OutputFormat::Json);
+        fs::write(&csv_temp, "trace").expect("staged CSV fixture should write");
+        fs::write(&json_temp, "{}").expect("staged JSON fixture should write");
+        fs::create_dir(&json_path).expect("JSON final path directory should block rename");
+        let output_paths = ResolvedOutputPaths {
+            csv: Some(csv_path.clone()),
+            json: Some(json_path.clone()),
+        };
+
+        let error = StagedOutputs::new(&output_paths)
+            .commit()
+            .expect_err("JSON persist failure should roll back already-published CSV");
+
+        assert_matches!(
+            error,
+            CdtError::OutputWriteFailed {
+                format: OutputFormat::Json,
+                ..
+            }
+        );
+        assert!(
+            !csv_path.exists(),
+            "CSV final output should be removed after JSON publish failure"
+        );
+        assert!(!csv_temp.exists(), "staged CSV should have been renamed");
+        assert!(
+            !json_temp.exists(),
+            "staged JSON should be cleaned when commit fails"
+        );
+        fs::remove_dir(&json_path).expect("blocking JSON directory should be removable");
     }
 
     #[test]

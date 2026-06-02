@@ -2,6 +2,11 @@
 
 //! Checkpoint and resume validation for CDT Metropolis sampling.
 
+use super::helpers::{
+    action_for, actions_match, expected_measurement_count, expected_measurement_step,
+};
+use super::runner::{MetropolisAlgorithm, MetropolisConfig};
+use super::telemetry::{MonteCarloStep, ProposalStatistics};
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveStatistics, MoveType};
 use crate::cdt::results::{
@@ -18,12 +23,6 @@ use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::num::NonZeroU32;
 use std::time::Duration;
-
-use super::helpers::{
-    action_for, actions_match, expected_measurement_count, expected_measurement_step,
-};
-use super::runner::{MetropolisAlgorithm, MetropolisConfig};
-use super::telemetry::{MonteCarloStep, ProposalStatistics};
 
 pub(crate) struct CdtMcmcCheckpointParts {
     pub(crate) triangulation: CdtTriangulation2D,
@@ -142,8 +141,7 @@ impl<'de> Deserialize<'de> for CdtMcmcCheckpoint {
         D: Deserializer<'de>,
     {
         let wire = CdtMcmcCheckpointWire::deserialize(deserializer)?;
-        let current_step = NonZeroU32::new(wire.current_step)
-            .ok_or_else(|| DeError::custom("checkpoint current_step must be nonzero"))?;
+        let current_step = checkpoint_current_step(wire.current_step).map_err(DeError::custom)?;
         let current_action = CheckpointAction::new(wire.current_action).map_err(DeError::custom)?;
         let checkpoint = Self {
             chain: wire.chain,
@@ -470,6 +468,12 @@ impl CdtMcmcCheckpoint {
     /// measurements, move statistics, proposal statistics, elapsed time, and the
     /// checkpointed triangulation in the returned [`SimulationResultsBackend`].
     ///
+    /// # Panics
+    ///
+    /// Panics if this validated checkpoint's private telemetry invariants no
+    /// longer satisfy the result-snapshot invariants. Constructors and
+    /// deserialization validate those invariants before a checkpoint can exist.
+    ///
     /// # Examples
     ///
     /// ```
@@ -492,23 +496,35 @@ impl CdtMcmcCheckpoint {
     #[must_use]
     pub fn into_results(self) -> SimulationResultsBackend {
         let (triangulation, _, _) = self.chain.into_parts();
-        SimulationResultsBackend::from_parts(SimulationResultsParts {
-            config: self.config,
-            action_config: self.action_config,
-            move_stats: self.move_stats,
-            proposal_stats: self.proposal_stats,
-            steps: self.steps,
-            measurements: self.measurements,
-            scalar_trace_rows: self.scalar_trace_rows,
-            elapsed_time: self.elapsed_time,
+        let parts = SimulationResultsParts::new(
+            self.config,
+            self.action_config,
+            self.move_stats,
+            self.proposal_stats,
+            self.steps,
+            self.measurements,
+            self.scalar_trace_rows,
+            self.elapsed_time,
             triangulation,
-        })
+        )
+        .expect("validated CDT checkpoint components should remain valid result components");
+        SimulationResultsBackend::from_parts(parts)
     }
 }
 
 /// Builds the public checkpoint-resume error wrapper for CDT-owned resume invariants.
 pub(crate) const fn checkpoint_resume_failed(failure: CheckpointResumeFailure) -> CdtError {
     CdtError::CheckpointResumeFailed { failure }
+}
+
+/// Parses a raw checkpoint step into the nonzero resumable-step invariant.
+const fn checkpoint_current_step(step: u32) -> CdtResult<NonZeroU32> {
+    match NonZeroU32::new(step) {
+        Some(step) => Ok(step),
+        None => Err(checkpoint_resume_failed(
+            CheckpointResumeFailure::CheckpointCurrentStepZero { actual: step },
+        )),
+    }
 }
 
 /// Verifies that a checkpoint can be resumed by the requested algorithm.
@@ -526,11 +542,7 @@ pub(crate) fn validate_resume_compatible(
     algorithm: &MetropolisAlgorithm,
     checkpoint: &CdtMcmcCheckpoint,
 ) -> CdtResult<()> {
-    if !action_configs_match(algorithm.action_config(), &checkpoint.action_config) {
-        return Err(checkpoint_resume_failed(
-            CheckpointResumeFailure::IncompatibleActionConfiguration,
-        ));
-    }
+    ResumeCompatibleActionConfig::new(algorithm.action_config(), &checkpoint.action_config)?;
     if algorithm.config().temperature().to_bits() != checkpoint.config.temperature().to_bits() {
         return Err(checkpoint_resume_failed(
             CheckpointResumeFailure::IncompatibleTemperature,
@@ -549,11 +561,45 @@ pub(crate) fn validate_resume_compatible(
     validate_checkpoint_counters(checkpoint)
 }
 
-/// Compares action couplings with the same tolerance used for persisted action values.
-fn action_configs_match(left: &ActionConfig, right: &ActionConfig) -> bool {
-    actions_match(left.coupling_0(), right.coupling_0())
-        && actions_match(left.coupling_2(), right.coupling_2())
-        && actions_match(left.cosmological_constant(), right.cosmological_constant())
+/// Proof that requested and checkpointed action couplings describe the same resume target.
+struct ResumeCompatibleActionConfig;
+
+impl ResumeCompatibleActionConfig {
+    /// Parses two action configurations into resume-compatible physics evidence.
+    const fn new(requested: &ActionConfig, checkpointed: &ActionConfig) -> CdtResult<Self> {
+        if action_configs_match(requested, checkpointed) {
+            Ok(Self)
+        } else {
+            Err(checkpoint_resume_failed(
+                CheckpointResumeFailure::IncompatibleActionConfiguration,
+            ))
+        }
+    }
+}
+
+/// Compares action couplings by exact value or one-ULP serde JSON round-trip drift.
+const fn action_configs_match(left: &ActionConfig, right: &ActionConfig) -> bool {
+    resume_couplings_match(left.coupling_0(), right.coupling_0())
+        && resume_couplings_match(left.coupling_2(), right.coupling_2())
+        && resume_couplings_match(left.cosmological_constant(), right.cosmological_constant())
+}
+
+/// Accepts exact couplings plus adjacent finite values introduced by JSON round trips.
+const fn resume_couplings_match(left: f64, right: f64) -> bool {
+    left.is_finite()
+        && right.is_finite()
+        && ordered_f64_bits(left).abs_diff(ordered_f64_bits(right)) <= 1
+}
+
+/// Maps finite `f64` values into a monotonic bit ordering for ULP distance checks.
+const fn ordered_f64_bits(value: f64) -> u64 {
+    const SIGN_MASK: u64 = 1 << 63;
+    let bits = value.to_bits();
+    if bits & SIGN_MASK == 0 {
+        bits | SIGN_MASK
+    } else {
+        !bits
+    }
 }
 
 /// Checks that serialized chain counters and CDT telemetry agree.
@@ -864,4 +910,23 @@ pub(crate) fn chain_counters(move_stats: &MoveStatistics) -> CdtResult<(usize, u
             })
         })?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::assert_matches;
+
+    #[test]
+    fn checkpoint_current_step_rejects_zero_with_typed_failure() {
+        let error = checkpoint_current_step(0)
+            .expect_err("zero checkpoint step should not become a resumable position");
+
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::CheckpointCurrentStepZero { actual: 0 }
+            }
+        );
+    }
 }

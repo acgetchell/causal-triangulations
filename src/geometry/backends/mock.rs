@@ -188,8 +188,7 @@ impl MockBackend {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::backends::mock::MockBackend;
-    /// use causal_triangulations::geometry::traits::TriangulationQuery;
+    /// use causal_triangulations::prelude::testing::*;
     /// use std::num::NonZeroUsize;
     ///
     /// let n = 2;
@@ -218,8 +217,7 @@ impl MockBackend {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::backends::mock::MockBackend;
-    /// use causal_triangulations::geometry::traits::TriangulationQuery;
+    /// use causal_triangulations::prelude::testing::*;
     ///
     /// let backend = MockBackend::new_2d();
     /// assert_eq!(backend.dimension(), 2);
@@ -242,8 +240,7 @@ impl MockBackend {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::backends::mock::MockBackend;
-    /// use causal_triangulations::geometry::traits::TriangulationQuery;
+    /// use causal_triangulations::prelude::testing::*;
     ///
     /// let backend = MockBackend::create_triangle();
     /// assert_eq!(backend.vertex_count(), 3);

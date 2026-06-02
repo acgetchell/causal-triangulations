@@ -2,6 +2,7 @@
 
 //! Proposal and step telemetry for CDT Metropolis sampling.
 
+use super::helpers::actions_match;
 use crate::cdt::ergodic_moves::MoveType;
 use crate::errors::{CdtError, CdtResult, CheckpointResumeFailure};
 use serde::de::Error as DeError;
@@ -9,8 +10,6 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::error::Error;
 use std::fmt;
 use std::num::NonZeroU32;
-
-use super::helpers::actions_match;
 
 /// Telemetry for one completed Monte Carlo step.
 ///
@@ -985,7 +984,7 @@ impl ProposalStatistics {
     /// forward-site observations exist without any selected move family. That
     /// keeps deserialized result and checkpoint telemetry coherent before public
     /// accessors expose the counters.
-    fn from_wire(wire: &ProposalStatisticsWire) -> Result<Self, String> {
+    fn from_wire(wire: &ProposalStatisticsWire) -> CdtResult<Self> {
         let terminal_outcomes = [
             wire.no_site_proposals,
             wire.site_causality_rejections,
@@ -997,21 +996,24 @@ impl ProposalStatistics {
         ]
         .into_iter()
         .try_fold(0_u64, |total, count| {
-            total
-                .checked_add(count)
-                .ok_or_else(|| "proposal terminal outcome counters exceed u64::MAX".to_string())
+            total.checked_add(count).ok_or_else(|| {
+                checkpoint_resume_failed(CheckpointResumeFailure::ProposalTerminalCounterOverflow)
+            })
         })?;
         if terminal_outcomes != wire.move_family_proposals {
-            return Err(format!(
-                "proposal terminal outcomes ({terminal_outcomes}) do not match move-family proposals ({})",
-                wire.move_family_proposals
+            return Err(checkpoint_resume_failed(
+                CheckpointResumeFailure::ProposalTerminalOutcomeCountMismatch {
+                    terminal_outcomes,
+                    move_family_proposals: wire.move_family_proposals,
+                },
             ));
         }
         if wire.move_family_proposals == 0 && wire.observed_forward_sites != 0 {
-            return Err(
-                "observed forward-site count must be zero when no move families were proposed"
-                    .to_string(),
-            );
+            return Err(checkpoint_resume_failed(
+                CheckpointResumeFailure::ProposalForwardSitesWithoutMoveFamily {
+                    observed_forward_sites: wire.observed_forward_sites,
+                },
+            ));
         }
         Ok(Self {
             move_family_proposals: wire.move_family_proposals,
@@ -1399,103 +1401,110 @@ mod tests {
     }
 
     #[test]
-    fn proposal_statistics_deserialization_rejects_terminal_outcomes_above_proposals() {
-        let payload = r#"{
-            "move_family_proposals": 1,
-            "observed_forward_sites": 1,
-            "no_site_proposals": 1,
-            "site_causality_rejections": 0,
-            "site_geometric_rejections": 0,
-            "site_backend_rejections": 0,
-            "metropolis_rejections": 0,
-            "accepted_transitions": 1,
-            "hard_failures": 0
-        }"#;
+    fn proposal_statistics_from_wire_rejects_terminal_outcomes_above_proposals() {
+        let wire = ProposalStatisticsWire {
+            move_family_proposals: 1,
+            observed_forward_sites: 1,
+            no_site_proposals: 1,
+            site_causality_rejections: 0,
+            site_geometric_rejections: 0,
+            site_backend_rejections: 0,
+            metropolis_rejections: 0,
+            accepted_transitions: 1,
+            hard_failures: 0,
+        };
 
-        let error = serde_json::from_str::<ProposalStatistics>(payload)
+        let error = ProposalStatistics::from_wire(&wire)
             .expect_err("terminal outcomes above move-family proposals should be rejected");
 
-        assert!(
-            error.to_string().contains("terminal outcomes"),
-            "serde error should explain proposal telemetry invariant, got {error}"
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::ProposalTerminalOutcomeCountMismatch {
+                    terminal_outcomes: 2,
+                    move_family_proposals: 1,
+                }
+            }
         );
     }
 
     #[test]
-    fn proposal_statistics_deserialization_rejects_under_classified_proposals() {
-        let payload = r#"{
-            "move_family_proposals": 2,
-            "observed_forward_sites": 1,
-            "no_site_proposals": 1,
-            "site_causality_rejections": 0,
-            "site_geometric_rejections": 0,
-            "site_backend_rejections": 0,
-            "metropolis_rejections": 0,
-            "accepted_transitions": 0,
-            "hard_failures": 0
-        }"#;
+    fn proposal_statistics_from_wire_rejects_under_classified_proposals() {
+        let wire = ProposalStatisticsWire {
+            move_family_proposals: 2,
+            observed_forward_sites: 1,
+            no_site_proposals: 1,
+            site_causality_rejections: 0,
+            site_geometric_rejections: 0,
+            site_backend_rejections: 0,
+            metropolis_rejections: 0,
+            accepted_transitions: 0,
+            hard_failures: 0,
+        };
 
-        let error = serde_json::from_str::<ProposalStatistics>(payload)
+        let error = ProposalStatistics::from_wire(&wire)
             .expect_err("under-classified move-family proposals should be rejected");
 
-        assert!(
-            error.to_string().contains("do not match"),
-            "serde error should explain exact proposal telemetry invariant, got {error}"
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::ProposalTerminalOutcomeCountMismatch {
+                    terminal_outcomes: 1,
+                    move_family_proposals: 2,
+                }
+            }
         );
     }
 
     #[test]
-    fn proposal_statistics_deserialization_rejects_forward_sites_without_proposals() {
-        let payload = r#"{
-            "move_family_proposals": 0,
-            "observed_forward_sites": 1,
-            "no_site_proposals": 0,
-            "site_causality_rejections": 0,
-            "site_geometric_rejections": 0,
-            "site_backend_rejections": 0,
-            "metropolis_rejections": 0,
-            "accepted_transitions": 0,
-            "hard_failures": 0
-        }"#;
+    fn proposal_statistics_from_wire_rejects_forward_sites_without_proposals() {
+        let wire = ProposalStatisticsWire {
+            move_family_proposals: 0,
+            observed_forward_sites: 1,
+            no_site_proposals: 0,
+            site_causality_rejections: 0,
+            site_geometric_rejections: 0,
+            site_backend_rejections: 0,
+            metropolis_rejections: 0,
+            accepted_transitions: 0,
+            hard_failures: 0,
+        };
 
-        let error = serde_json::from_str::<ProposalStatistics>(payload)
+        let error = ProposalStatistics::from_wire(&wire)
             .expect_err("forward sites without proposals should be rejected");
 
-        assert!(
-            error.to_string().contains("forward-site"),
-            "serde error should explain forward-site invariant, got {error}"
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::ProposalForwardSitesWithoutMoveFamily {
+                    observed_forward_sites: 1
+                }
+            }
         );
     }
 
     #[test]
-    fn proposal_statistics_deserialization_rejects_terminal_outcome_counter_overflow() {
-        let mut stats = ProposalStatistics::from_validated_parts(
-            u64::MAX,
-            u64::MAX,
-            u64::MAX,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-        );
-        let other = ProposalStatistics::from_validated_parts(1, 1, 0, 0, 0, 0, 0, 1, 0);
+    fn proposal_statistics_from_wire_rejects_terminal_outcome_counter_overflow() {
+        let wire = ProposalStatisticsWire {
+            move_family_proposals: u64::MAX,
+            observed_forward_sites: u64::MAX,
+            no_site_proposals: u64::MAX,
+            site_causality_rejections: 1,
+            site_geometric_rejections: 0,
+            site_backend_rejections: 0,
+            metropolis_rejections: 0,
+            accepted_transitions: 0,
+            hard_failures: 0,
+        };
 
-        stats.extend(&other);
-
-        assert_eq!(stats.move_family_proposals(), u64::MAX);
-        assert_eq!(stats.no_site_proposals(), u64::MAX);
-        assert_eq!(stats.accepted_transitions(), 1);
-
-        let serialized =
-            serde_json::to_string(&stats).expect("saturated telemetry should serialize");
-        let error = serde_json::from_str::<ProposalStatistics>(&serialized)
+        let error = ProposalStatistics::from_wire(&wire)
             .expect_err("overflowed terminal outcome partition should be rejected");
 
-        assert!(
-            error.to_string().contains("exceed u64::MAX"),
-            "serde error should explain terminal outcome counter overflow, got {error}"
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::ProposalTerminalCounterOverflow
+            }
         );
     }
 }
