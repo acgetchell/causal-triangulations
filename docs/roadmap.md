@@ -61,6 +61,12 @@ polish that are useful but not required for the first DOI-backed foundation rele
 - Add λ scan utilities for unfixed-volume 1+1 CDT runs
   ([#143](https://github.com/acgetchell/causal-triangulations/issues/143)). These should help users tune the cosmological constant, which is conjugate to the
   lattice volume term and controls volume growth or shrinkage in unfixed-volume runs.
+- Add a Polars notebook workflow for CDT analysis caches
+  ([#176](https://github.com/acgetchell/causal-triangulations/issues/176)). This should show how to load the v0.1.0 CSV/JSON outputs, reshape volume-profile
+  data for exploratory analysis, and cache local Parquet files without adding plotting or Parquet dependencies to the Rust crate.
+- Ship prebuilt `cdt` release binaries
+  ([#169](https://github.com/acgetchell/causal-triangulations/issues/169)). This should make the command-line tool easier to try after the first source and
+  crates.io release, while keeping `cargo install` and local release builds supported.
 - Adopt the upstream lift-aware simplex barycenter helper once `delaunay#420` ships
   ([#147](https://github.com/acgetchell/causal-triangulations/issues/147)). This should replace the local `(1,3)` insertion-point policy while preserving the
   existing k=1 flip delegation, and is dependency-gated cleanup for move-kernel geometry ownership rather than a new CDT ensemble.

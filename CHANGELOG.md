@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-06-02
 
 ### ⚠️ Breaking Changes
 
@@ -262,6 +262,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Plan Metropolis proposals through sampled local move sites and apply the Hastings correction from forward and reverse site counts.
   - Add proposal-kernel telemetry with saturating counters for no-site outcomes, site rejections, Metropolis rejections, accepted transitions, and hard
     failures.
+
   - Replace stringly validation and history fields with typed error categories and move enums.
   - Document detailed-balance semantics and add proposal-site benchmark coverage.
 - Add chunked Metropolis checkpoint sweeps [#152](https://github.com/acgetchell/causal-triangulations/pull/152)
@@ -283,9 +284,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - Add `ValidatedCdtConfig` and `ValidatedInitialVolume` so runtime construction consumes topology, volume, schedule, dimensionality, and coupling invariants
     after validation.
+
   - Move Metropolis/action runtime conversion behind validated configs and route `run_simulation` and examples through the proof-bearing API.
   - Report invalid Metropolis schedules and temperatures with `InvalidSimulationConfiguration` while keeping geometry, topology, and action failures on
     `InvalidConfiguration` .
+
   - Bump the Rust baseline to 1.96.0, update the MCMC backend to 0.4.0, and align docs.rs metadata, API docs, and test assertions with the new baseline.
 
 ### Changed
@@ -516,6 +519,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Require action, Metropolis, and top-level simulation configuration to enter runtime code through validated private-field types.
   - Validate result, checkpoint, move, and proposal telemetry before storage or deserialization so impossible counters and incoherent step records cannot be
     represented.
+
   - Move CDT triangulation state into the triangulation module tree and expose metadata, statistics, and constants through focused accessors and preludes.
 
 - [**breaking**] Enforce simulation state invariants [#174](https://github.com/acgetchell/causal-triangulations/pull/174)
@@ -537,6 +541,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - Drive chunked Metropolis runs and checkpoint resume through the upstream sampler planned-step handoff while preserving CDT measurements, telemetry, and move
     history.
+
   - Carry validated config, volume, and foliation counts as NonZeroU32 so downstream construction can rely on nonzero invariants.
   - Add Semgrep guardrails around planned-step telemetry and sampler-state synchronization.
 
@@ -559,46 +564,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Dependencies
 
 - Bump actions/cache from 5.0.1 to 5.0.4 [`063c3fc`](https://github.com/acgetchell/causal-triangulations/commit/063c3fc7601935b9399be2105e5359e1a39fade9)
+
 - Bump the dependencies group with 2 updates [`e19510f`](https://github.com/acgetchell/causal-triangulations/commit/e19510f251915ecb2eb02d44619cd6f0c56853bc)
+
 - Bump taiki-e/install-action from 2.68.35 to 2.69.8
   [`3cc7c55`](https://github.com/acgetchell/causal-triangulations/commit/3cc7c556f6aaac7f959dd9df2e6130a118b49387)
+
 - Bump codecov/codecov-action from 5.5.2 to 5.5.3
   [`69e2fca`](https://github.com/acgetchell/causal-triangulations/commit/69e2fca31bc9b6298a8dad8b9f48c84eba1c89ff)
+
 - Bump codecov/codecov-action from 5.5.3 to 6.0.0
   [`57464a4`](https://github.com/acgetchell/causal-triangulations/commit/57464a4352252aea462850b5eab94ee7e9820386)
+
 - Bump astral-sh/setup-uv from 7.6.0 to 8.0.0 [`c7e4472`](https://github.com/acgetchell/causal-triangulations/commit/c7e4472c72f73c7717b7639aae6f820a0c5cc266)
+
 - Bump pygments from 2.19.2 to 2.20.0 [`5cc07e9`](https://github.com/acgetchell/causal-triangulations/commit/5cc07e9306ba51f990c01e4e5db4f5192b0379af)
+
 - Bump taiki-e/install-action from 2.69.8 to 2.70.3
   [`387e96d`](https://github.com/acgetchell/causal-triangulations/commit/387e96dcbba58cac8bfdaaefcbb9d8367c965a90)
+
 - Bump taiki-e/install-action from 2.70.3 to 2.75.0
   [`e3f4018`](https://github.com/acgetchell/causal-triangulations/commit/e3f40183c6778f252d46523234fcc1da58d932c4)
+
 - Bump the dependencies group across 1 directory with 2 updates
   [`d843b90`](https://github.com/acgetchell/causal-triangulations/commit/d843b900b0940d4f79d101279164ab42d2549463)
+
 - Bump astral-sh/setup-uv from 8.0.0 to 8.1.0 [`ba66738`](https://github.com/acgetchell/causal-triangulations/commit/ba66738ba2537cc3b1bb10bb9a0e93b4174d023b)
+
 - Bump actions-rust-lang/setup-rust-toolchain [`e618486`](https://github.com/acgetchell/causal-triangulations/commit/e6184861c9b56396961a53846e5a26ac2f54f995)
+
 - Bump taiki-e/install-action from 2.75.0 to 2.75.24
   [`b7e2413`](https://github.com/acgetchell/causal-triangulations/commit/b7e241317a2e9c1d0741bf80f3285503924daf28)
+
 - Bump actions/github-script from 8.0.0 to 9.0.0
   [`2923849`](https://github.com/acgetchell/causal-triangulations/commit/292384985e8d336807b1c65a8a5a7d72306f3810)
+
 - Bump actions/upload-artifact from 7.0.0 to 7.0.1
   [`c0ec7f6`](https://github.com/acgetchell/causal-triangulations/commit/c0ec7f66bebffed177731f16a1362980a98e15f0)
+
 - Bump actions/cache from 5.0.4 to 5.0.5 [`74ff03a`](https://github.com/acgetchell/causal-triangulations/commit/74ff03a02a5d8d10a68846c92d1a2936512b8796)
+
 - Bump taiki-e/install-action from 2.75.24 to 2.77.1
   [`8c5b755`](https://github.com/acgetchell/causal-triangulations/commit/8c5b7556dc41a49c5278abfb6fc5060d8da5a5b2)
+
 - Bump taiki-e/install-action from 2.77.1 to 2.77.6
   [`718681b`](https://github.com/acgetchell/causal-triangulations/commit/718681b74f8da79895e8bad94cb0f5cad7707d50)
+
 - Bump actions-rust-lang/setup-rust-toolchain [`effbbd4`](https://github.com/acgetchell/causal-triangulations/commit/effbbd42c174396063c3ec5f72a8565d22f7cf62)
+
 - Bump assert_cmd in the dependencies group [`035bfcc`](https://github.com/acgetchell/causal-triangulations/commit/035bfcc63d3375ee09ed33185ec285e7f0f0dae5)
+
 - Bump urllib3 in the uv group across 1 directory
   [`6d436aa`](https://github.com/acgetchell/causal-triangulations/commit/6d436aa50d86d7fe74caa0898765204aea45570f)
+
 - Bump idna in the uv group across 1 directory [`df3480f`](https://github.com/acgetchell/causal-triangulations/commit/df3480f961e06c566dade7a3850e88b8d26c73bd)
+
 - Bump taiki-e/install-action from 2.77.6 to 2.79.2
   [`6f611ff`](https://github.com/acgetchell/causal-triangulations/commit/6f611ff1fd8fcc00ffe9a8bf1835da777893aa28)
+
 - Bump codecov/codecov-action from 6.0.0 to 6.0.1
   [`3847062`](https://github.com/acgetchell/causal-triangulations/commit/38470624f992c3fca087228d663fd6dcf8af864d)
+
 - Bump serde_json [`1780261`](https://github.com/acgetchell/causal-triangulations/commit/1780261e6f13fc4f222f02ae220145cb0ca8c6a4)
+
 - Bump log from 0.4.29 to 0.4.30 in the dependencies group
   [`ac3237f`](https://github.com/acgetchell/causal-triangulations/commit/ac3237fff81a4d1c0233cfc9125a87d7cbca56ed)
+
 - Bump taiki-e/install-action from 2.79.2 to 2.79.9
   [`788eea8`](https://github.com/acgetchell/causal-triangulations/commit/788eea8b1cc1b9b91773c53d5c6a1cc172d1c369)
 
@@ -811,6 +842,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - Count only move sites that can commit through the deterministic backend mutation path, and carry the forward site count into Metropolis-Hastings
     proposal-ratio scoring.
+
   - Reject resumable checkpoints with nonzero hard-failure counters and preserve structured Metropolis move failure sources across error conversions.
   - Document clone-plan-commit move ordering, unfixed-volume sampling, proposal-ratio correction, citation metadata, references, AI tooling, and release
     validation recipes.
@@ -963,6 +995,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Add repository Semgrep rules that reject CDT-local Metropolis-Hastings acceptance draws and manual accepted/rejected sampler counters.
   - Cover the new guardrails with positive and negative Semgrep fixtures.
   - Document that CDT owns proposal planning and telemetry while markov-chain-monte-carlo owns reusable sampler mechanics
+- Finalize v0.1.0 validation [`31a4cff`](https://github.com/acgetchell/causal-triangulations/commit/31a4cff63adf5598b517530d69dc7568db5dad50)
+
+  - Store resumable checkpoint actions behind a finite-action boundary before exposing checkpoint state.
+  - Reject non-finite and mismatched checkpoint actions during checkpoint construction and deserialization.
+  - Run slow release validation through the perf profile with a bounded large-scale debug harness.
+  - Align v0.1.0 release-readiness docs with upstream-backed Metropolis continuation and completed validation gates.
 
 ### Performance
 
@@ -981,831 +1019,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - Cache sampleable local sites per move family and triangulation instance so Metropolis sampling and proposal denominators share the same candidate set
     without repeatedly re-enumerating sites.
+
   - Give cloned and deserialized triangulations fresh transient identities so cached backend handles cannot leak across distinct states with matching
     modification counts.
+
   - Store reverse proposal-site counts on concrete CDT proposal plans to keep Hastings ratios tied to the proposed state that was actually planned.
   - Document cached proposal-site semantics and the v0.1.x roadmap split for chunked Metropolis sweeps.
   - Harden changelog formatting when no archived changelog files are present.
 
-## [0.0.1] - 2026-03-23
+## Archives
 
-### Added
+Older releases are archived by minor series:
 
-- Add CODEOWNERS file and security audit workflow
-  [`ead82d2`](https://github.com/acgetchell/causal-triangulations/commit/ead82d255ddcb4987d5e4a038e49a11d09b8abc3)
+- [0.0.x](docs/archive/changelog/0.0.md)
 
-  - Added a new CODEOWNERS file to specify default owners for the repository.
-  - Created a new security audit workflow that runs on push events for Cargo.toml and Cargo.lock files.
-  - Updated the CI workflow to include macOS and Windows platforms in addition to Ubuntu.
-  - Added a Kani CI workflow that runs on pull requests and pushes.
-  - Updated cspell.json with additional words, including "acgetchell".
-
-- Add test kani formal verification [`84edb8c`](https://github.com/acgetchell/causal-triangulations/commit/84edb8c62a17eed6aa725dca26cf43b17b7d6408)
-
-- Add GitHub workflows for code coverage and Kani Rust Verifier
-  [`eb07352`](https://github.com/acgetchell/causal-triangulations/commit/eb07352ade62f0a9212c6a307242958fbb472fba)
-
-- Add Codecov badge to README.md [`d7adf30`](https://github.com/acgetchell/causal-triangulations/commit/d7adf306080f0fac4a1ecabcd2e7cc78bf503df6)
-
-- Add verification module for Kani configuration
-  [`39646c0`](https://github.com/acgetchell/causal-triangulations/commit/39646c09a8be071968cc32a89d88451efedc8090)
-
-- Add command line argument for number of vertices
-  [`0b89a88`](https://github.com/acgetchell/causal-triangulations/commit/0b89a88dec5218f2c3ffb082dc2df7b6a8e65f32)
-
-  This commit adds a new command line argument `number_of_vertices` to the CLI. The user can now specify the number of vertices for the triangulation. The
-  minimum value allowed is 3.
-
-- Added useful and passing Kani verification [`a78c792`](https://github.com/acgetchell/causal-triangulations/commit/a78c79240114c3cb5f7dd5babf4295a30d7ae11c)
-
-- Add support for timeslices in CLI [`a5c704d`](https://github.com/acgetchell/causal-triangulations/commit/a5c704d248010194851cb6ba7ca2a8a16d541e8e)
-
-  This commit adds support for specifying the number of timeslices in the command-line interface (CLI). The `Config` struct now includes a `timeslices` field,
-  and the `run` function accepts a `Config` object as an argument. The CLI tests have been updated to include the `-t/--timeslices` option.
-
-- Add rand crate as a dependency [`fa4df1b`](https://github.com/acgetchell/causal-triangulations/commit/fa4df1bec0ff0c2ae7adf144c0cbccdcb8cd44c9)
-
-  This commit adds the `rand` crate as a dependency in the `Cargo.toml` file. The version added is 0.8.5.
-
-  The `rand` crate is used for generating random triangles for the triangulation.
-
-- Add print statement to display the number of triangles
-  [`de1ce9d`](https://github.com/acgetchell/causal-triangulations/commit/de1ce9db574e0308fc9aa7c23b74787af83d796f)
-
-- Add clippy and kani CI badges to README.md [`78246de`](https://github.com/acgetchell/causal-triangulations/commit/78246def33d843ebd036426873e944f9312a46ef)
-
-- Add generate_random_delaunay2 function [`c79e2b0`](https://github.com/acgetchell/causal-triangulations/commit/c79e2b0d5d0ba43638cb3dfac890ef4030cb5522)
-
-  This commit adds the `generate_random_delaunay2` function to the codebase. This function generates a random Delaunay triangulation with a specified number of
-  vertices. The function uses the `spade` library to perform the triangulation.
-
-  The `generate_random_delaunay2` function takes in the number of vertices as an argument and returns a result containing the generated triangulation or an
-  insertion error if there was a problem inserting points into the triangulation.
-
-  The implementation of this function includes changes to multiple files, including `src/lib.rs` and `src/triangulation.rs`.
-
-- Add triangulation2 [`628aff1`](https://github.com/acgetchell/causal-triangulations/commit/628aff1121305e5bea34b044c0ea58dfb5047baa)
-
-- Add Security audit badge [`0cc6efd`](https://github.com/acgetchell/causal-triangulations/commit/0cc6efd41d83a8e3affc817bdc20e57f90b8f26f)
-
-- Add .codecov.yml and update dependencies in Cargo.lock
-  [`a2aa78a`](https://github.com/acgetchell/causal-triangulations/commit/a2aa78af4416890f1058ada9e22aadcff6ca9cab)
-
-- Configures Dependabot for GitHub Actions and Cargo
-  [`f072a82`](https://github.com/acgetchell/causal-triangulations/commit/f072a8283cc57039fa0afcfb1f0394a398fb9d94)
-
-  Configures Dependabot to automatically create pull requests
-  for outdated GitHub Actions and Cargo (Rust) dependencies,
-  improving dependency management and security.
-
-  Also, adds CI workflow and code coverage workflows. Sets up
-  linting checks for Rust, Python, Shell, Markdown, and YAML
-  files. Improves code quality and ensures consistency.
-
-- Implements CDT core logic and simulation framework
-  [`6a7c4be`](https://github.com/acgetchell/causal-triangulations/commit/6a7c4be28dd240f181a79892ea40c961c6d9c441)
-
-  This commit introduces the core logic for Causal Dynamical
-  Triangulations (CDT) including action calculation, ergodic moves,
-  and a Metropolis-Hastings simulation framework.
-
-  It adds modules for:
-
-  - Calculating the 2D Regge Action (`cdt/action.rs`).
-  - Implementing ergodic moves like (2,2), (1,3), and edge flips
-    (`cdt/ergodic_moves.rs`).
-
-  - Metropolis-Hastings algorithm for Monte Carlo sampling
-    (`cdt/metropolis.rs`).
-
-  - Causal triangulation data structures (`triangulations/causal.rs`)
-  - Basic command line argument handling via `clap`.
-
-  Also includes basic utility functions and integrates `approx` for
-  testing. The `justfile` is updated to run toml validation from the
-  `scripts` directory, and a python version constraint is set.
-
-- Configures logging and error handling [`45df1b3`](https://github.com/acgetchell/causal-triangulations/commit/45df1b341a1becde7c0dd2226389ea2f4c3f94c5)
-
-  Introduces `env_logger` for logging and a custom `CdtError` enum
-  for structured error handling throughout the CDT library.
-
-  This change enhances debuggability and provides a consistent way
-  to manage and propagate errors. It also prepares the groundwork
-  for more robust error reporting and handling in the future.
-
-- Initial CDT property validation framework [`fb5da74`](https://github.com/acgetchell/causal-triangulations/commit/fb5da74a2fe9907bcb6d0f6d3fbca971676fb99f)
-
-  Adds functions to validate CDT topology, causality, and
-  foliation constraints. Placeholder implementations are used
-  initially, with TODOs for full implementation. Also adds
-  parameter validation to the Delaunay backend.
-
-- Initial project files and structure [`2e40c54`](https://github.com/acgetchell/causal-triangulations/commit/2e40c545f1ebd53d21b979d7a8149eac376b8f68)
-
-  Adds the initial files for the causal-dynamical-triangulations
-  project, including code of conduct, contributing guidelines,
-  project structure, and essential tooling setup with Just.
-  This provides a foundation for community contribution
-  and project maintainability.
-
-- Performance analysis scripts and workflow [`e1cf749`](https://github.com/acgetchell/causal-triangulations/commit/e1cf7491e860fa98f94de2ed8782dcebf6897f18)
-
-  Adds Python scripts and Justfile recipes for performance
-  analysis, baselining, and reporting. Includes CI integration
-  for performance monitoring and regression detection.
-  Also adds property-based tests for core algorithms using proptest.
-
-- Performance analysis scripts and workflow [`d6994db`](https://github.com/acgetchell/causal-triangulations/commit/d6994dbd92ab9ab08d4c10481ee1f2f825adfa2b)
-
-  Adds performance analysis workflow using Criterion.rs benchmarks and a
-  Python analysis script.
-
-  The workflow:
-
-  - Runs benchmarks on PRs and the main branch
-  - Detects regressions with configurable thresholds
-  - Generates reports and posts comments to PRs
-  - Saves baselines for tracking performance over time
-
-  Also includes changes to clippy workflow to install clippy-sarif
-  tools with the toolchain and adds a script to find good seeds.
-
-- Kani CI workflow and Python linting to justfile
-  [`5fce5ee`](https://github.com/acgetchell/causal-triangulations/commit/5fce5ee6217288b5fe8312d40b47ea5afb92bd3e)
-
-  Adds a Kani CI workflow for formal verification, including fast and
-  full verification jobs. Also, introduces Python linting with Ruff to
-  the justfile for code quality checks.
-
-  Updates the setup process to include Python linting tools and
-  configures the pyproject.toml file with Ruff dependencies. Enhances
-  the README with Kani workflow behavior details.
-
-- Convex hull and boundary edge computation. [`0c6c328`](https://github.com/acgetchell/causal-triangulations/commit/0c6c328b6cd6afdca200fe920e1c834910fddf85)
-
-  Adds triangulation operations for computing the convex hull
-  and boundary edges of a triangulation.
-
-  Improves `delaunay` backend validation to avoid flakiness due
-  to strict neighbor pointer checks. Now uses basic structural
-  validation.
-
-  Updates `delaunay` dependency to v0.6.2 and `arc-swap` to v1.8.0.
-
-### Changed
-
-- First commit [`9931dd3`](https://github.com/acgetchell/causal-triangulations/commit/9931dd3ee25483d7872dd79a0899fae3ddc20633)
-- Create README.md [`9797804`](https://github.com/acgetchell/causal-triangulations/commit/9797804f4ea9328baeb079117e4771d75965a4d3)
-- Create ci.yml [`238b474`](https://github.com/acgetchell/causal-triangulations/commit/238b474a553ae6e137e0799a344c0d1289d96672)
-- Refactor Triangle struct and variable names [`9ae71ce`](https://github.com/acgetchell/causal-triangulations/commit/9ae71cef1c7ac2dd1284fdc0a94bb40a769fadf1)
-- Create rust-clippy.yml [`7073fc0`](https://github.com/acgetchell/causal-triangulations/commit/7073fc063b8d61ea931424f1df058a36a2524227)
-- Update codeql-action version and add CI badge to README
-  [`64e4f1b`](https://github.com/acgetchell/causal-triangulations/commit/64e4f1bf1dc72aac588de335de765915d2f05c5a)
-- Update Rust toolchain version and fix formatting in Triangle struct
-  [`6e46ced`](https://github.com/acgetchell/causal-triangulations/commit/6e46cedc17b8b1fa568b232673462747486586c3)
-- Update README.md [`296b984`](https://github.com/acgetchell/causal-triangulations/commit/296b984e6dae4d866d88d54f0d0a0d18f89aeca8)
-- Separate libs from cli and add tests [`dd049b3`](https://github.com/acgetchell/causal-triangulations/commit/dd049b36e52c2a03062841a500d5b139fdb4a4e9)
-- Refactor package and test names to use kebab-case
-  [`4447215`](https://github.com/acgetchell/causal-triangulations/commit/4447215bc82e9b527ad3127298a0e7474625b93c)
-- Refactor code and add proof for triangle center in circumcircle
-  [`b12731d`](https://github.com/acgetchell/causal-triangulations/commit/b12731d077489b87a6d74286ed5670bcf7140e3a)
-- Refactor codecov.yml and lib.rs [`b5464e3`](https://github.com/acgetchell/causal-triangulations/commit/b5464e3f7b1651e8ab2def6727309c21de4e19e0)
-- Refactor GitHub workflow files for improved code coverage and caching
-  [`6a23ed8`](https://github.com/acgetchell/causal-triangulations/commit/6a23ed8201e975bdaeaf88021777e7cb13db5810)
-- Update Codecov workflow to upload coverage reports and archive code coverage results
-  [`0f7c9bf`](https://github.com/acgetchell/causal-triangulations/commit/0f7c9bfe910e518f79a7eceea0b3cebf4dd9683b)
-- Create LICENSE [`edffe14`](https://github.com/acgetchell/causal-triangulations/commit/edffe14a54601b46ea60d2c301827245ae946090)
-- Refactor Delaunay triangulation code [`0564e2d`](https://github.com/acgetchell/causal-triangulations/commit/0564e2df714de4ea980067480e43d52a6bb113d4)
-- Update syn version to 2.0.35, cspell.json with new words, and add a test for run function.
-  [`76281a6`](https://github.com/acgetchell/causal-triangulations/commit/76281a6d5c3af80446056ca560dcecfad2dca5ed)
-- Refactor Codecov workflow and remove unnecessary code
-  [`2a6616a`](https://github.com/acgetchell/causal-triangulations/commit/2a6616a1756f1ba0f66a722f4c12787a6f3abbfb)
-- Trying out using Spade [`8542cf4`](https://github.com/acgetchell/causal-triangulations/commit/8542cf4dd1736181fefe63fc8d7e1f4640a7eff2)
-- Kani and spade don't get along [`3d084ea`](https://github.com/acgetchell/causal-triangulations/commit/3d084ea5096e71e5e658e7f14fd1e6241c2e1db5)
-- Update README [`bae27db`](https://github.com/acgetchell/causal-triangulations/commit/bae27db4e42e4d2ccddb6de5a52454024d03dad5)
-- Update Kani CI workflow and dependencies, print vertex positions and triangle positions.
-  [`fa01d09`](https://github.com/acgetchell/causal-triangulations/commit/fa01d0913ef4ff6a53b9ad09e9e5b35946c7dac9)
-- Update cargo [`28ef382`](https://github.com/acgetchell/causal-triangulations/commit/28ef38207129b36982fbf5d6270449308468dc90)
-- Merge remote-tracking branch 'origin/main' into main
-  [`3be06b4`](https://github.com/acgetchell/causal-triangulations/commit/3be06b48e4f6aaa3c61b299eaba7ff55da839dab)
-- Update dependencies versions in Cargo.lock and add random point generation to triangulation.rs
-  [`f534a5e`](https://github.com/acgetchell/causal-triangulations/commit/f534a5e153017c76471fd10a1f8a5fa18cf013d1)
-- Refactor code to use external crates for command line arguments and 2D Delaunay triangulation
-  [`dbd144c`](https://github.com/acgetchell/causal-triangulations/commit/dbd144c0416ae3178133e81c9adf0f064640d093)
-- Update some dependencies [`9001a8d`](https://github.com/acgetchell/causal-triangulations/commit/9001a8d0e6c0dbdf7e32dafe0f1b859dd13ad539)
-- Spade fixed. [`58a78a6`](https://github.com/acgetchell/causal-triangulations/commit/58a78a6dcfbdcaf849b7a5b7b62077390547d226)
-- First pass at DCEL [`8d20c3b`](https://github.com/acgetchell/causal-triangulations/commit/8d20c3b9a2caccc5a1b93c9addceba7845f27246)
-- Update dependencies in Cargo.toml and Cargo.lock
-  [`a19ff71`](https://github.com/acgetchell/causal-triangulations/commit/a19ff715dad0bb9eab6a44f57b109fce044ade9f)
-- Update package versions in Cargo.lock: [`22745d3`](https://github.com/acgetchell/causal-triangulations/commit/22745d37c77cc386c7b60d6a4e7dadacb2e53cdd)
-- Update dependencies [`af94c11`](https://github.com/acgetchell/causal-triangulations/commit/af94c11f843592118a0a4713344db64fc304a69c)
-- Refactors triangulation and setup process (internal)
-  [`642e824`](https://github.com/acgetchell/causal-triangulations/commit/642e824666bc30c968e11a12786ca8f36f2de849)
-
-  Refactors the project structure to use the `delaunay` crate for 2D
-  triangulation, replacing `spade`. This change includes updates to
-  Cargo.toml, removal of the old triangulation module, and
-  implementation of a basic triangle generation function. Also adds a
-  `.justfile` for development workflows and a `rust-toolchain.toml` for
-  consistent Rust versions. This is an internal change to improve
-  maintainability and prepare for more advanced triangulation
-  features.
-- Refactors triangulation and updates dependencies
-  [`0601450`](https://github.com/acgetchell/causal-triangulations/commit/0601450132252508ddf3c6a4d3b698903eb5bdd9)
-
-  Refactors the triangulation module to use the `delaunay` crate for
-  Delaunay triangulation, providing a more robust and efficient
-  implementation.
-
-  Also, updates dependencies and fixes markdownlint settings.
-  Adds words to the spell check dictionary.
-  Removes the old triangulation files.
-- Refactors Kani workflow and updates dependencies
-  [`aab33e2`](https://github.com/acgetchell/causal-triangulations/commit/aab33e259e60cd4cf219575c2c4343f0ac75a270)
-
-  Refactors the Kani verification workflow to use actions-rust-lang/setup-rust-toolchain.
-
-  Updates Kani action to v1.1.
-
-  Disables shell script linting in CI.
-  This is an internal change to improve workflow maintainability.
-
-  Adds a TODO document to track improvements and technical debt.
-- Refactors triangulation and simulation architecture
-  [`4d56e07`](https://github.com/acgetchell/causal-triangulations/commit/4d56e0734122c3dac90eb8f65637c386af116bbf)
-
-  This commit significantly refactors the crate by separating
-  geometric operations from physics constraints for improved
-  layering and reusability. It introduces a smart wrapper for
-  mutable TDS access with precise cache invalidation and enhances
-  error context for triangulation generation. It also addresses
-  an incomplete ergodic moves implementation, paving the way
-  for a well-architected simulation. The changes include a new
-  `moves.md` document detailing the new approach as well as
-  integration tests.
-- Refactors triangulation backend with trait-based geometry
-  [`c05f637`](https://github.com/acgetchell/causal-triangulations/commit/c05f6378f63176003a4644c50d27ac825b5e4be8)
-
-  Migrates triangulation to a trait-based geometry backend, providing
-  better abstraction and testability by decoupling CDT algorithms
-  from specific geometry implementations.
-
-  This change includes:
-
-  - Introduction of the `geometry` module with traits and backend implementations.
-  - Restructuring of the `cdt` module to use the new trait-based backend.
-  - Addition of Delaunay and Mock backend implementations.
-  - Deprecation of the old `triangulations` module.
-
-  No functional changes. Migration from legacy `CausalTriangulation`
-  to new `CdtTriangulation` is recommended.
-- Improves test coverage and adds Kani proofs [`16aae91`](https://github.com/acgetchell/causal-triangulations/commit/16aae91b8c09630f7c3670c6b7d9e898c981517f)
-
-  Enhances the testing framework by adding a new testing guide,
-  increasing test coverage, and introducing Kani proofs for action
-  calculation properties. This ensures more robust and reliable
-  code, especially in critical areas like the Regge action
-  calculation. Also updates `.gitignore` and cspell to accommodate
-  new test-related files and terms. (Internal change)
-- 🔧 Build System: Integrates criterion for benchmarking
-  [`9891b8b`](https://github.com/acgetchell/causal-triangulations/commit/9891b8bb423f4bafb25e3a65e076dabdda9e4266)
-- Refactors triangulation creation and simulation runs
-  [`ffa6e35`](https://github.com/acgetchell/causal-triangulations/commit/ffa6e3597375580abd37c0bf52c225c3dcaeb618)
-
-  Refactors the triangulation creation process to use
-  `from_random_points` for more clarity and consistency.
-
-  Updates simulation runs to use the `run` method, streamlining
-  the simulation execution and reducing redundancy.
-  These changes enhance the overall structure and maintainability
-  of the CDT simulation framework.
-- Enhances testing and performance infrastructure
-  [`fc513ac`](https://github.com/acgetchell/causal-triangulations/commit/fc513aca4bf90ca1f0c5d65a3d94141ee8604019)
-
-  Improves performance analysis workflow with more robust
-  benchmarking and reporting. Includes workflow updates
-  with better compilation validation and error handling,
-  adds coverage reporting, and includes new CI checks.
-  Includes updates to `.gitignore` and `justfile`
-  to support new tooling. (Internal change)
-- Improves clippy-sarif tooling installation and cache
-  [`4c455c9`](https://github.com/acgetchell/causal-triangulations/commit/4c455c93980883fc24ad33301268673417462c36)
-
-  Refactors the clippy-sarif tooling installation process in the
-  GitHub workflow to use a dedicated directory under $HOME and
-  updates the PATH. This ensures tools are correctly cached and
-  accessible. Also updates the spell-check recipe.
-
-  This change also updates dependencies in `Cargo.lock` and uses `dirs`
-  crate instead of env vars for resolving paths, which is more reliable.
-- Pre-merge fixes [`0f6ec5a`](https://github.com/acgetchell/causal-triangulations/commit/0f6ec5ab36bd5b32b07eb37d35325f09eaddb59e)
-- Improves changelog generation and performance analysis
-  [`8e04d89`](https://github.com/acgetchell/causal-triangulations/commit/8e04d89260bf9c26172423ad9c53e9fa016a2412)
-
-  Updates changelog generation to correctly identify PRs and adjusts
-  the automatic changelog configuration to ignore test commits. Improves
-  performance analysis reporting, including handling edge cases such as
-  infinite ratios and refining trend analysis, and adds project root argument.
-  These changes enhance the robustness and clarity of both changelog
-  creation and performance assessment processes.
-- Update tooling and backend compatibility [`5aa1ee8`](https://github.com/acgetchell/causal-triangulations/commit/5aa1ee82eebf822753a0668878f11c732407e77a)
-
-  - Refactor delaunay backend for v0.5.1 API compatibility
-    - Update vertex/cell access to use key-based lookups
-    - Migrate from direct field access to method calls
-    - Handle Phase 3A VertexKey and CellKey changes
-
-  - Rename binary from cdt-rs to cdt for cleaner CLI
-    - Update Cargo.toml, tests, docs, and examples
-    - Simplify all command invocations
-
-  - Improve justfile with robust patterns from delaunay
-    - Add file existence checks for all lint operations
-    - Reorganize into logical sections with comments
-    - Add lint-code, lint-docs, lint-config groupings
-    - Enhance spell-check to handle renamed files
-    - Add run-simulation recipe for example script
-    - Update help-workflows with better organization
-
-  - Update development scripts
-    - Copy improved enhance_commits.py from delaunay
-    - Better commit categorization with explicit prefixes
-
-  - Add sweep_results/ to gitignore
-- Merge remote-tracking branch 'origin/main' [`c36740a`](https://github.com/acgetchell/causal-triangulations/commit/c36740ae85b5a1ded6556d8a4ecdc6cfa1401552)
-- Update use of delaunay crate [`c4eef3c`](https://github.com/acgetchell/causal-triangulations/commit/c4eef3cb55537a4900fa56428ea456dbc276b895)
-
-## Added
-
-- Taplo-based TOML formatting/linting (`just toml-fmt`, `just toml-fmt-check`, `just toml-lint`) and wired into `lint-config`.
-- Synced `scripts/` tooling and a full `scripts/tests/` suite (benchmarking, changelog utilities, hardware utils, etc.).
-
-## Changed
-
-- GitHub Actions `.github/workflows/ci.yml` now installs required tools and runs `just ci` on Linux/macOS (Windows keeps cargo build/test).
-- `just ci` now includes JSON validation and taplo TOML checks to keep CI coverage up to date.
-- Updated docs/config (README/CONTRIBUTING/cspell/pyproject/toolchain) to reflect the current workflows and tooling.
-
-## Fixed
-
-- Resolved delaunay backend and util.rs mismatches and updated to current version of delaunay crate
-
-- Resolved Ruff/test issues in synced Python tooling; improved shell/yaml CI robustness.
-
-- Improve triangulation backend and tooling [`ee00f97`](https://github.com/acgetchell/causal-triangulations/commit/ee00f970642157f57c517be745a06e16115a6f1c)
-
-  Refactors the triangulation backend for better
-  performance and maintainability, including adding a toolchain
-  file for consistent Rust versions.
-
-  Changes include:
-
-  - Adding a taplo config to mirror Cargo TOML philosophy
-  - Adding mypy to the python tooling
-  - Adding more complete CI with fix and check commands
-
-- Improve changelog tooling and cache invalidation
-  [`6563a84`](https://github.com/acgetchell/causal-triangulations/commit/6563a8444880a780a3e8cd6961f1276f648b0f9f)
-
-  - Refactor scripts/changelog_utils.py release-notes parsing/normalization and helpers
-  - Add 125KB tag-message boundary coverage for changelog truncation
-  - Add Delaunay edge-cache invalidation helper and clarify mutation/caching expectations
-  - Tighten tooling/config (action-lint prep, remove ruff F841 ignore) and small script/test cleanups
-
-- Install actionlint and harden scripts [`aed2f48`](https://github.com/acgetchell/causal-triangulations/commit/aed2f48de0247f02da22385a154d8d772eb4238f)
-
-- CI: install actionlint (v1.7.9) on Linux/macOS runners
-
-- changelog-utils: centralize tag-annotation size limit and add repo URL fallback for CHANGELOG links
-
-- changelog-utils: allow overriding breaking-change API tokens via env
-
-- hardware-utils: refactor hardware comparison to satisfy Ruff complexity rules
-
-- performance-analysis: use explicit UTF-8 for file I/O
-
-- mypy: relax overrides for test modules; update affected tests/docs
-
-- Refactors performance analysis and adds type checking
-  [`47a6f4d`](https://github.com/acgetchell/causal-triangulations/commit/47a6f4d6fcdb9a34fc82862381c1f2009bc91efe)
-
-  Refactors performance analysis scripts to validate baseline data
-  and improve robustness.
-
-  Adds `ty` for type checking Python scripts, enhancing code
-  quality and maintainability. Integrates `ty` into the `justfile`
-  and CI workflow.
-
-  Updates hardware info gathering on windows to be more robust.
-
-  These changes improve the reliability and maintainability of
-  the project's performance analysis and tooling.
-
-- Pin shfmt version for CI consistency [`01d37fe`](https://github.com/acgetchell/causal-triangulations/commit/01d37fe1a1ed7e60aa728dc3f3976176a600c2ef)
-
-  Pins the `shfmt` version in CI workflows to ensure consistent
-  formatting checks across different operating systems (Linux and
-  macOS). This change introduces an environment variable
-  `SHFMT_VERSION` to define the pinned version and updates the
-  installation scripts for both Linux and macOS to use this variable.
-  Also refactors `hardware_utils.py` to consistently capture output.
-  Refs: refactor/update-delaunay
-
-- Updates actionlint version and installation process
-  [`5341b14`](https://github.com/acgetchell/causal-triangulations/commit/5341b1494986b413049ff13aa161e8017616d529)
-
-  Updates actionlint to version 1.7.10 and changes the installation
-  process to directly download prebuilt binaries from the GitHub
-  releases page to avoid potential cargo-binstall fallback failures.
-
-  Also adds exception handling for several possible exceptions when
-  retrieving memory information from the operating system.
-
-- Improves CI workflow with version pinning and checksums
-  [`e5c391e`](https://github.com/acgetchell/causal-triangulations/commit/e5c391e08246ff78e2e49f7c111e0feb5560d5d1)
-
-  Updates the CI workflow to pin versions of `markdownlint-cli` and
-  `cspell`.
-
-  Adds checksum verification for `actionlint` and `shfmt` installations
-  to enhance supply-chain security. This includes fetching checksum
-  files and verifying the downloaded binaries against them.
-
-  Refactors hardware utils to handle more exceptions.
-  Addresses edge case where `baseline_mem_num` is 0 or negative.
-
-- Updates CI workflow tool versions [`2aa55b2`](https://github.com/acgetchell/causal-triangulations/commit/2aa55b27d0c2b653ff2d8da95285524824140285)
-
-  Updates the versions of markdownlint and cspell in the CI workflow
-  to the latest versions.
-
-  Also, adds a step to print the shfmt version in the CI workflow
-  for both Linux and macOS to verify the installation.
-
-- Updates tooling and CI configurations [`513847d`](https://github.com/acgetchell/causal-triangulations/commit/513847d38efb79fefaa3f0d33f73f684fb1d3fd6)
-
-  Updates tooling configurations for linters,
-  formatters, and CI workflows, improving code
-  quality and maintainability (internal).
-
-- Refactors CI workflow for improved tooling and audit
-  [`995530d`](https://github.com/acgetchell/causal-triangulations/commit/995530d87cfa414ea848f38bea55a0ce2f7d2c69)
-
-  - Updates CI configuration for enhanced tooling consistency.
-  - Replaces cargo-audit action with direct cargo-audit execution for
-    better control and reporting.
-
-  - Removes cspell and adds typos-cli for unified spell checking.
-  - Improves dependency auditing, Markdown/JSON formatting, and shell
-    script validation.
-
-  - Simplifies and consolidates installation of necessary tools.
-
-- Improves CI/audit workflows and scripts [`7f7b32c`](https://github.com/acgetchell/causal-triangulations/commit/7f7b32cc77e01214bc421a5533511aba24bbe498)
-
-  Updates CI and audit workflows for better reliability and tooling.
-
-  Changes include:
-
-  - Pinning actions to specific commit SHAs for reproducibility.
-  - Updating `typos` version in CI.
-  - Relaxing cargo audit failure to allow json output.
-  - Adding `git-cliff` to the `setup` script
-  - Moving static methods in changelog_utils
-  - Fixing error message and raising RuntimeError
-
-  These changes improve the reliability and maintainability of
-  the CI and audit processes.
-
-- Improves CI and audit workflows [`ab69abf`](https://github.com/acgetchell/causal-triangulations/commit/ab69abf97ec44b462e74af7530920d4f975b43ab)
-
-  Updates the CI workflow to use a specific version of dprint and the
-  audit workflow to use a specific version of cargo-audit, improving
-  reproducibility. Modifies cargo audit to reuse cached advisory DB.
-  Adds installation instructions for yamllint for macOS, pip, and uv.
-
-  Updates benchmark comparison to allow configuration of the regression
-  threshold. Adds CLI option for gh timeout.
-
-  Updates docs to clarify the sampling method used by
-  `select_random_move`.
-  Updates `typos` spell-check script.
-  Refs: feat/convex-hulls
-
-- Improves performance baseline comparisons [`dcf64ec`](https://github.com/acgetchell/causal-triangulations/commit/dcf64ec660f469956e874e33f6b477c56629d963)
-
-  Refactors the performance baseline comparison script to improve
-  reliability and clarity.
-
-  This commit includes changes to handle potential timeout errors
-  during baseline fetching and makes the project root optional for
-  more flexible usage. It also adjusts the sleep duration in the
-  GitHub baseline fetcher to prevent exceeding deadlines.
-  Additionally, it modifies the changelog script to better detect
-  function declarations.
-
-- Improves benchmark checks in CI workflow [`d86f9f0`](https://github.com/acgetchell/causal-triangulations/commit/d86f9f0c5206aa32c0554757298e186db3d3c32f)
-
-  Updates the benchmark checks in the performance CI workflow to
-  ensure both the `[[bench]]` configuration exists in `Cargo.toml`
-  and that benchmark files are present in the `benches/` directory.
-  This change provides more accurate warnings and prevents errors
-  when benchmarks are not properly configured. Internal.
-
-- Rename crate to causal-triangulations and upgrade to delaunay v0.7.2
-  [`cbc5935`](https://github.com/acgetchell/causal-triangulations/commit/cbc59350f028a50a2e48b271271b3575404a1b8a)
-
-- Remove Kani and update dev documentation [`a48c38a`](https://github.com/acgetchell/causal-triangulations/commit/a48c38afae9499bae184d0bee68b4a28075d5e8d)
-
-  Remove Kani formal verification
-
-  - Remove all `#[cfg(kani)]` proof modules from action.rs,
-    ergodic_moves.rs, and config.rs
-
-  - Delete `.github/workflows/kani.yml` CI workflow
-  - Remove `kani` and `kani-fast` just recipes; drop from
-    `commit-check` and `setup`
-
-  - Remove `cfg(kani)` from Cargo.toml check-cfg
-  - Clean Kani references from README, CONTRIBUTING, AGENTS,
-    docs/RELEASING, and docs/dev/testing
-
-  Kani's bundled nightly (rustc 1.93.0) is incompatible with the
-  MSRV (1.94.0), and the proofs only covered pure arithmetic that
-  proptest already handles. With `#![forbid(unsafe_code)]`, model
-  checking adds maintenance cost without proportional benefit.
-
-  Add developer documentation
-
-  - Add docs/dev/commands.md, docs/dev/rust.md, docs/dev/testing.md
-  - Expand AGENTS.md with detailed agent guidelines
-
-  Improve scripts and tests
-
-  - changelog_utils.py: raise ChangelogError with descriptive
-    messages instead of calling sys.exit
-
-  - hardware_utils.py: update TYPE_CHECKING imports
-  - Add type hints to Python test functions
-  - Adjust cross-platform skip logic in subprocess tests
-
-  Fix geometry and test parameters
-
-  - Use dt.validate() instead of dt.is_valid() in delaunay backend
-  - Reduce proptest ranges in triangulation.rs to avoid Tarpaulin
-    timeouts (vertices 3..30, timeslices 0..6)
-
-- Improve error types, simplify trait bounds, and re-enable determinism test
-  [`2fe2953`](https://github.com/acgetchell/causal-triangulations/commit/2fe29539004b9cd915b1bb534c16796b59284142)
-
-  - Add ValidationFailed error variant with structured check/detail fields
-    and diagnostic context (V/E/F counts) for geometry, topology, and
-    Delaunay validation failures
-
-  - Replace InvalidParameters with ValidationFailed in validate() and
-    validate_topology() to distinguish runtime validation from bad input
-
-  - Use InvalidGenerationParameters in factory functions (from_random_points,
-    from_seeded_points) for consistency with generate_delaunay2_with_context
-
-  - Remove unnecessary + 'static bounds from all DataType where clauses
-    in DelaunayBackend (upstream DataType already implies owned data)
-
-  - Merge two inherent impl blocks for DelaunayBackend into one by
-    dropping the redundant serde bound on is_delaunay() and topology_kind()
-
-  - Move function-scoped imports to module level in metropolis tests
-  - Re-enable seeded_determinism_property proptest (RobustKernel +
-    DelaunayTriangulationBuilder resolved the FastKernel non-determinism)
-
-  - Update Cargo.lock from cargo update (51 packages)
-  - Update justfile, Python scripts, and dev docs
-
-- Separate is_valid from is_delaunay, add test coverage, harden test guards
-  [`c0c8236`](https://github.com/acgetchell/causal-triangulations/commit/c0c82364cf202792033d6e545148037c9ae8d0a3)
-
-  - Separate is_valid() (Levels 1-3 structural/topological via
-    as_triangulation().validate()) from is_delaunay() (Levels 1-4
-    including Delaunay property) so the two checks are distinct
-
-  - Rename test_is_valid_checks_coherent_orientation to
-    test_is_valid_runs_structural_validation with accurate comment
-
-  - Add @pytest.mark.skipif guard on TestRunGitCommand for environments
-    without git (consistent with existing TestRunCargoCommand pattern)
-
-  - Add check_git_repo() guard in test_get_git_remote_url_returns_url
-    before calling run_git_command(["remote"])
-
-  - Port test_benchmark_models.py from delaunay repo (22 tests for
-    benchmark data models, parsing, and formatting)
-
-  - Port test_changelog_tag_size_limit.py from delaunay repo (7 tests
-    for 125KB GitHub tag annotation limit handling, adapted to use
-    synthetic content since CDT has no released versions yet)
-
-- Harden and reorganize Python test suite [`2bbe623`](https://github.com/acgetchell/causal-triangulations/commit/2bbe623bc61aaff608f0e9c8a6a2c510bf7a6f47)
-
-  Improve test isolation by mocking filesystem lookups and adding
-  environment guards for git-dependent utilities. Reorganize benchmark
-  model tests into appropriate classes and update mock call inspection
-  logic in changelog tests for better maintainability.
-
-- Update changelog for crate rename and delaunay v0.7.2 upgrade
-  [`95998e0`](https://github.com/acgetchell/causal-triangulations/commit/95998e082bf4e3b997350b511d45982a817c9f5a)
-
-  Synchronize CHANGELOG.md with recent milestones, including the crate
-  rename to causal-triangulations, the upgrade to delaunay v0.7.2, and
-  the removal of Kani verification. This internal update also modernizes
-  Python test code to use parenthesized context managers.
-
-### Dependencies
-
-- Bump actions/cache from 4.2.4 to 4.3.0 [`7d3a7f2`](https://github.com/acgetchell/causal-triangulations/commit/7d3a7f26ecb64fe4a0596bd7b68dd9b1d31b191b)
-- Bump actions/checkout from 4 to 5 [`ee667c9`](https://github.com/acgetchell/causal-triangulations/commit/ee667c91fae756ce6a29fd673211bb4f8e820c1e)
-- Bump astral-sh/setup-uv from 6.7.0 to 6.8.0 [`db2daee`](https://github.com/acgetchell/causal-triangulations/commit/db2daee6eef0b670246a9bf68351b78f28890556)
-- Bump actions/github-script from 7.0.1 to 8.0.0
-  [`fbbd871`](https://github.com/acgetchell/causal-triangulations/commit/fbbd871a85670716736581836f3bca423463a91c)
-- Bump astral-sh/setup-uv from 6.8.0 to 7.1.0 [`67bb4dc`](https://github.com/acgetchell/causal-triangulations/commit/67bb4dc19fe93aae5dab0980bac499bfde61c6bc)
-- Bump actions-rust-lang/setup-rust-toolchain from 1.15.0 to 1.15.2
-  [`76b881a`](https://github.com/acgetchell/causal-triangulations/commit/76b881aa421f250444a45e257bd97f41b03cc2cb)
-- Bump astral-sh/setup-uv from 7.1.0 to 7.1.1 [`afceea3`](https://github.com/acgetchell/causal-triangulations/commit/afceea3dd8e181c2b4f6d6132eaf80ebd444b3b7)
-- Bump clap from 4.5.49 to 4.5.50 in the dependencies group
-  [`b6e1d89`](https://github.com/acgetchell/causal-triangulations/commit/b6e1d89d97b6ce4f377b22275c066183e0d2bfcb)
-- Bump actions/setup-python from 6.0.0 to 6.1.0 [`31ba11c`](https://github.com/acgetchell/causal-triangulations/commit/31ba11c8d65b673d5b039079cb6ac61ed7921e4e)
-- Bump actions/upload-artifact from 4.6.2 to 6.0.0
-  [`5f5de78`](https://github.com/acgetchell/causal-triangulations/commit/5f5de78298d57a11d51386a4b53349f6f7bde413)
-- Bump the dependencies group across 1 directory with 7 updates
-  [`dc79541`](https://github.com/acgetchell/causal-triangulations/commit/dc795410c493878b1e9c86fa6934729251ae948a)
-- Bump codecov/codecov-action from 5.5.1 to 5.5.2
-  [`2cbe0aa`](https://github.com/acgetchell/causal-triangulations/commit/2cbe0aad5418ad5b04c304247d400d93d5af7264)
-- Bump astral-sh/setup-uv from 7.1.1 to 7.1.6 [`fd22207`](https://github.com/acgetchell/causal-triangulations/commit/fd22207d48aed48e87eb6a608f836c2f9da2d2c8)
-- Bump actions/cache from 4 to 5 [`08957fc`](https://github.com/acgetchell/causal-triangulations/commit/08957fcc7156ff56f08ec8898840cd86b4e5f1d6)
-- Bump actions/checkout from 5.0.0 to 6.0.1 [`a58bb11`](https://github.com/acgetchell/causal-triangulations/commit/a58bb113b2bbaae002ef0e765be62ffa46d16013)
-- Bump actions/setup-python from 6.1.0 to 6.2.0 [`3fa4378`](https://github.com/acgetchell/causal-triangulations/commit/3fa437896eac9f1b913efe8f28e2dab55a931084)
-- Bump actions/checkout from 5.0.1 to 6.0.2 [`50a3a48`](https://github.com/acgetchell/causal-triangulations/commit/50a3a48ae5018e713ed62df96400fa73c219e033)
-- Bump astral-sh/setup-uv from 7.1.6 to 7.3.0 [`d8b0667`](https://github.com/acgetchell/causal-triangulations/commit/d8b06675ffbfbfa73b102fdee6a7b39176532390)
-- Bump taiki-e/install-action from 2.65.1 to 2.68.6
-  [`025e514`](https://github.com/acgetchell/causal-triangulations/commit/025e514a58a355f3b1c60d45d43cd0ded41a3b52)
-- Bump actions/upload-artifact from 6.0.0 to 7.0.0
-  [`bd961ba`](https://github.com/acgetchell/causal-triangulations/commit/bd961ba1166b0bde1bebf9f0f517cdb29404d56c)
-- Bump taiki-e/install-action from 2.68.6 to 2.68.35
-  [`95bf128`](https://github.com/acgetchell/causal-triangulations/commit/95bf1287b125981b2976e6ff9d6bf04fd51c054a)
-- Bump astral-sh/setup-uv from 7.3.0 to 7.6.0 [`c99861a`](https://github.com/acgetchell/causal-triangulations/commit/c99861ab3b2bdf608ad21721c09b6e3eb5577dcb)
-- Bump actions-rust-lang/setup-rust-toolchain from 1.15.2 to 1.15.4
-  [`902a210`](https://github.com/acgetchell/causal-triangulations/commit/902a21076017a223f53ec1f7a4c078fba7a27468)
-
-### Documentation
-
-- Update status badges [`000cba5`](https://github.com/acgetchell/causal-triangulations/commit/000cba5d81fc776a17b0098c5abda36ce8586bce)
-
-### Fixed
-
-- Fix Kani [`b36e6ae`](https://github.com/acgetchell/causal-triangulations/commit/b36e6ae7d43b48b82671003af384ef12d6f22467)
-- Fix modules [`3d11b0c`](https://github.com/acgetchell/causal-triangulations/commit/3d11b0cb90c911f8d2a86b0bc5f3663506757c9d)
-- Fix spade to version 2.2.1 [`cfb0cae`](https://github.com/acgetchell/causal-triangulations/commit/cfb0cae055c21087b402a6701daee9b4b8fcbbf7)
-- Validates Delaunay property in CDT triangulation
-  [`ebff8ac`](https://github.com/acgetchell/causal-triangulations/commit/ebff8ac6d9bb0c0af8f0219fe85965ba893eaa68)
-
-  Validates the Delaunay property within the Constrained Delaunay
-  Triangulation (CDT) implementation by leveraging the `is_delaunay`
-  method in the Delaunay backend. This ensures that triangulations
-  conform to the Delaunay criteria, improving the robustness and
-  correctness of the triangulation process. Adds tests for Delaunay
-  validation.
-- Action linearity check overflow and Tds deprecation
-  [`803ab24`](https://github.com/acgetchell/causal-triangulations/commit/803ab248babed019b6aa583100b20ca576a22774)
-
-  Addresses potential integer overflows in the action linearity
-  check by adding a pre-check. Now the linearity assertion is only
-  performed if simplex counts are within safe bounds.
-
-  Also, marks legacy Tds-based simulation code as deprecated,
-  guiding users towards the trait-based backend API for better
-  abstraction and maintainability. The legacy code remains for
-  backward compatibility but its usage is discouraged.
-- Validates config and handles CLI arg parsing errors
-  [`cde9605`](https://github.com/acgetchell/causal-triangulations/commit/cde960597cd5a77f604f3847621da0e814c99a9e)
-
-  Fixes the CLI argument parsing and adds comprehensive config validation to ensure simulation parameters are within acceptable ranges. This includes checks for
-  positive measurement frequency, vertices count, and
-  temperature. Catches `SystemExit` exceptions and returns corresponding
-  error codes.
-
-  Also updates auto-changelog config and benchmark names for clarity.
-  The CI workflow is modified to target the `examples/scripts` directory
-  for linting and formatting checks.
-- Fix config.rs and other script errors [`916d103`](https://github.com/acgetchell/causal-triangulations/commit/916d1036db4d3d0293dbf09460ceeb2139557c3b)
-- Fix changelog_utils and performance_analysis and update CHANGELOG.md
-  [`38162bd`](https://github.com/acgetchell/causal-triangulations/commit/38162bdef4deacba9e5213088e06c867c14dcc16)
-- Correctly identifies estimates files in criterion runs
-  [`83f9de0`](https://github.com/acgetchell/causal-triangulations/commit/83f9de033d902cc1d12bec8cb96bb50e250973bf)
-
-  Fixes an issue where the performance analyzer was not correctly
-  identifying estimates files in criterion runs, specifically when
-  located in the "new" directory.
-
-  Updates the glob pattern to search for "estimates.json" in all
-  directories and then filters to only include files under "new" or
-  "base" directories. This ensures that the analyzer correctly
-  parses the performance data from criterion benchmark results.
-- Handles exceptions when getting CPU info, Kani, CI hardening
-  [`da415a5`](https://github.com/acgetchell/causal-triangulations/commit/da415a534742de9bf2a405926b37513188aaa289)
-
-  Corrects exception handling in hardware utils to specifically
-  catch subprocess errors and other related exceptions when
-  retrieving CPU information. This prevents the script from
-  crashing when it fails to gather CPU details.
-
-  Better job of checking Kani versions.
-
-  Better way of installing ActionLint for CI.
-
-### Maintenance
-
-- Update crates [`cbdb784`](https://github.com/acgetchell/causal-triangulations/commit/cbdb78427663bfbf9d2438b2833e0d2b7205bed3)
-- Update GitHub actions [`6b38039`](https://github.com/acgetchell/causal-triangulations/commit/6b380394a8044ce887d686cc0d4245040d83b65b)
-- Fix libc [`9ff914d`](https://github.com/acgetchell/causal-triangulations/commit/9ff914dc19e3aff7e67a305400655c2465959d70)
-- Update dependencies [`b191596`](https://github.com/acgetchell/causal-triangulations/commit/b1915961335a446601da417c790fbdd7e46e6268)
-- Fix [`e7fc2b8`](https://github.com/acgetchell/causal-triangulations/commit/e7fc2b8632a787484a5a3fb3b3da90a627feb83f)
-- Fix CodeCov [`ef8ae5b`](https://github.com/acgetchell/causal-triangulations/commit/ef8ae5b2a0991d87d8931b58acff6aa235558724)
-- Ignore cargo kani for Codecov [`4732a05`](https://github.com/acgetchell/causal-triangulations/commit/4732a0544abb4f2a155f73290654a4270046c084)
-- Ignore unused functions [`6c43277`](https://github.com/acgetchell/causal-triangulations/commit/6c4327750792c9fe11efb01f26a156115c3460b9)
-
-  These should get replaced by https://github.com/acgetchell/d-delaunay
-- Add missed unused function [`fe7670c`](https://github.com/acgetchell/causal-triangulations/commit/fe7670c5c403923b7cfcfce5b972edc0a228687c)
-- Update dependencies [`5ed0203`](https://github.com/acgetchell/causal-triangulations/commit/5ed02038c76311c7a1582549608373759c75dc4a)
-- Remove Node.js/markdownlint infrastructure and fix stale docs
-  [`d9d74d9`](https://github.com/acgetchell/causal-triangulations/commit/d9d74d935e982ce036d06dcf43f63a28d01ce45f)
-
-  Drop the `setup-node` + `npm install -g markdownlint-cli` steps from
-  CI and all associated scaffolding; `dprint` has been the active
-  markdown formatter for some time.
-
-  - ci.yml: remove `setup-node` action, `npm install -g markdownlint-cli`
-    step, and `MARKDOWNLINT_VERSION` env var
-
-  - .markdownlint.json: delete orphaned config file
-  - justfile: remove `_ensure-npx` helper (no recipe referenced it)
-  - README.md: replace `just dev` with `just fix`/`just check`; remove
-    Node.js/npx from tools checklist; fix MSRV 1.92.0 → 1.93.0
-
-  - CONTRIBUTING.md: replace all `just dev` refs with `just fix`/`just
-    check`/`just test`; fix MSRV 1.92.0 → 1.93.0 (4 sites); fix Edition
-    2021 → 2024; fix Kani toolchain note MSRV
-
-  - docs/CLI_EXAMPLES.md: fix `--simulate` default (true, not false);
-    fix triangulation-only example to pass `--simulate false`
-
-  - docs/TODO.md: tick off integration tests and CI/CD improvements as
-    done with current counts; update date to 2026-02-21
-
-  - docs/testing.md: update test counts (155 unit, 8 integration, 10 CLI,
-    408 Python); fix coverage reference (`just coverage` → HTML,
-    `cargo tarpaulin --out Json` → JSON for `just coverage-report`)
-- Remove auto-changelog artifacts and restrict kani-full to manual
-  [`6dc7269`](https://github.com/acgetchell/causal-triangulations/commit/6dc726979edeb200bb2000aea75f271effcab7c6)
-
-  - .auto-changelog: delete legacy auto-changelog config (referenced the
-    now-deleted docs/templates/changelog.hbs Handlebars template)
-
-  - docs/templates/changelog.hbs: delete Handlebars template for
-    auto-changelog; git-cliff with cliff.toml is the active tool
-
-  - cliff.toml: remove stale comment referencing changelog.hbs
-  - kani.yml: restrict kani-full job to workflow_dispatch only (was
-    running on every push to main; move to manual trigger until all
-    harnesses pass reliably)
-
-  - CHANGELOG.md: regenerated via just changelog-update
-- Fix review findings across docs, scripts, and backend
-  [`6195b11`](https://github.com/acgetchell/causal-triangulations/commit/6195b111856931353273e89f60b0304708a04022)
-
-  - Update CI Expectations in docs/dev/testing.md to match actual
-    just ci recipe (check, bench-compile, test-all, examples)
-
-  - Fix orphaned docstring fragment in changelog_utils.py main()
-  - Add prettier/npx to setup-tools verification so "Tooling setup
-    complete" guarantees yaml-fix will not hard-fail
-
-  - Convert four classmethods to @staticmethod in changelog_utils.py
-    (_strip_heading_like_emphasis, _convert_fenced_code_blocks_to_indented,
-    _indented_block_looks_like_code, _format_indented_code_block_line)
-
-  - Extract _contextual_patterns regex tuple to class-level constant
-    _CONTEXTUAL_CODE_PATTERNS (compiled once, not per-call)
-
-  - Add return type annotation to fake_run test helper
-  - Fix is_valid comment: dt.validate() runs Levels 1-4, not 1-3
-  - Apply dprint formatting to README.md
-
-### Removed
-
-- Remove DCEL [`45b2a17`](https://github.com/acgetchell/causal-triangulations/commit/45b2a17f0392934b2d8b1dcbc0abe5cb6ea3ab92)
-- Legacy Kani workflow file [`6ab5176`](https://github.com/acgetchell/causal-triangulations/commit/6ab51760c34969547a1b5e49d44aa33353d2d19d)
-
-  Removes the old Kani workflow file as it is no longer needed.
-
-[Unreleased]: https://github.com/acgetchell/causal-triangulations/compare/v0.0.1...HEAD
-[0.0.1]: https://github.com/acgetchell/causal-triangulations/tree/v0.0.1
+[0.1.0]: https://github.com/acgetchell/causal-triangulations/compare/v0.0.1...v0.1.0
