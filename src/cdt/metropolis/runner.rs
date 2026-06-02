@@ -19,6 +19,7 @@ use super::checkpoint::{
 };
 use super::helpers::{
     action_for, actions_match, measurement_for, measurement_is_due, validate_metropolis_schedule,
+    validate_temperature,
 };
 use super::telemetry::{MonteCarloStep, MonteCarloStepOutcome, ProposalStatistics};
 use crate::cdt::action::ActionConfig;
@@ -321,11 +322,16 @@ impl MetropolisConfig {
         1.0 / self.temperature
     }
 
-    /// Confirms that stored simulation-specific configuration values are valid.
+    /// Rechecks the stored simulation-specific configuration invariants.
     ///
-    /// This method is kept for code that wants a common validation hook across
-    /// configuration-like types. Because [`MetropolisConfig`] validates before
-    /// storage, it is an infallible debug assertion of the stored invariant.
+    /// Constructors and deserialization already run the same validation before a
+    /// [`MetropolisConfig`] can be observed. This method exists for callers that
+    /// want an explicit runtime validation hook when handling a stored config.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidSimulationConfiguration`] if stored values no
+    /// longer satisfy the Metropolis temperature or sampling-schedule contract.
     ///
     /// # Examples
     ///
@@ -333,7 +339,34 @@ impl MetropolisConfig {
     /// use causal_triangulations::MetropolisConfig;
     ///
     /// let config = MetropolisConfig::new(1.0, 100, 10, 5)?;
-    /// config.validate();
+    /// config.try_validate()?;
+    /// # Ok::<(), causal_triangulations::CdtError>(())
+    /// ```
+    pub fn try_validate(&self) -> CdtResult<()> {
+        validate_temperature(self.temperature)?;
+        validate_metropolis_schedule(
+            self.temperature,
+            self.steps.get(),
+            self.thermalization_steps,
+            self.measurement_frequency.get(),
+        )
+    }
+
+    /// Debug-checks that stored simulation-specific configuration values are valid.
+    ///
+    /// This method is kept for code that wants a common validation hook across
+    /// configuration-like types. Because [`MetropolisConfig`] validates before
+    /// storage, it is an infallible debug assertion of the stored invariant; use
+    /// [`Self::try_validate`] when a fallible runtime check is needed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::MetropolisConfig;
+    ///
+    /// let config = MetropolisConfig::new(1.0, 100, 10, 5)?;
+    /// config.validate(); // debug-only invariant check
+    /// config.try_validate()?;
     /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     pub fn validate(&self) {
@@ -562,7 +595,7 @@ impl MetropolisAlgorithm {
         &self,
         triangulation: CdtTriangulation2D,
     ) -> CdtResult<CdtMcmcCheckpoint> {
-        self.config.validate();
+        self.config.try_validate()?;
         self.action_config.validate();
 
         let mut state = self.initial_state(triangulation)?;
@@ -683,7 +716,7 @@ impl MetropolisAlgorithm {
         &self,
         checkpoint: CdtMcmcCheckpoint,
     ) -> CdtResult<CdtMcmcCheckpoint> {
-        self.config.validate();
+        self.config.try_validate()?;
         self.action_config.validate();
         validate_resume_compatible(self, &checkpoint)?;
 
@@ -840,7 +873,7 @@ impl MetropolisRunState {
         Ok(Self {
             triangulation,
             current_step: checkpoint.current_step.get(),
-            current_action: stored_action,
+            current_action: actual_action,
             trace_seed: checkpoint.config.seed(),
             acceptance_rng: checkpoint.acceptance_rng,
             ergodics: checkpoint.ergodics,
@@ -2279,6 +2312,21 @@ mod tests {
             },
             "action configuration",
         );
+    }
+
+    #[test]
+    fn resume_state_normalizes_tolerant_checkpoint_action() {
+        let mut parts = synthetic_one_step_checkpoint_parts(false);
+        let actual_action = parts.current_action;
+        let scale = actual_action.abs().max(1.0);
+        parts.current_action = (f64::EPSILON * scale).mul_add(4.0, actual_action);
+        let checkpoint = CdtMcmcCheckpoint::from_parts(parts)
+            .expect("tolerant checkpoint action should validate");
+
+        let state = MetropolisRunState::from_checkpoint(checkpoint)
+            .expect("tolerant checkpoint action should resume");
+
+        assert_eq!(state.current_action.to_bits(), actual_action.to_bits());
     }
 
     #[test]

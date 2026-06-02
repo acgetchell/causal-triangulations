@@ -797,8 +797,10 @@ impl<B> CdtTriangulation<B> {
         self.invalidate_foliation_bookkeeping();
         self.metadata.last_modified = Instant::now();
         // Deserialized checkpoints can carry arbitrary counters; avoid wraparound
-        // so cache keys such as MoveSiteCache never see a stale version as fresh.
+        // and rotate the instance epoch so external caches keyed by
+        // `(instance_id, modification_count)` cannot see a stale version as fresh.
         if self.metadata.modification_count == u64::MAX {
+            self.instance_id = next_triangulation_instance_id();
             self.metadata.modification_count = 1;
         } else {
             self.metadata.modification_count += 1;
@@ -1736,8 +1738,14 @@ mod tests {
         assert_eq!(triangulation.metadata().modification_count, 2);
 
         triangulation.metadata.modification_count = u64::MAX;
+        let saturated_instance_id = triangulation.instance_id();
         triangulation.bump_modification_count();
         assert_eq!(triangulation.metadata().modification_count, 1);
+        assert_ne!(
+            triangulation.instance_id(),
+            saturated_instance_id,
+            "saturated modification counters must rotate instance epochs so external caches cannot collide"
+        );
     }
 
     #[test]

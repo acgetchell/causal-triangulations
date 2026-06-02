@@ -982,8 +982,9 @@ impl ProposalStatistics {
     /// The wire form is rejected when terminal outcomes do not exactly account
     /// for selected move families, or when forward-site observations exist
     /// without any selected move family. Saturated terminal counters are accepted
-    /// because merging telemetry uses saturating arithmetic and can no longer
-    /// preserve an exact terminal-outcome partition.
+    /// only when move-family proposals also saturated, because merging telemetry
+    /// uses saturating arithmetic and can no longer preserve an exact
+    /// terminal-outcome partition.
     fn from_wire(wire: &ProposalStatisticsWire) -> CdtResult<Self> {
         let terminal_counters = [
             wire.no_site_proposals,
@@ -1001,8 +1002,16 @@ impl ProposalStatistics {
         let mut terminal_overflowed = false;
         let terminal_outcomes = terminal_outcomes.unwrap_or_else(|| {
             terminal_overflowed = true;
-            wire.move_family_proposals
+            u64::MAX
         });
+        if (terminal_saturated || terminal_overflowed) && wire.move_family_proposals != u64::MAX {
+            return Err(checkpoint_resume_failed(
+                CheckpointResumeFailure::ProposalTerminalOutcomeCountMismatch {
+                    terminal_outcomes,
+                    move_family_proposals: wire.move_family_proposals,
+                },
+            ));
+        }
         if !terminal_saturated
             && !terminal_overflowed
             && terminal_outcomes != wire.move_family_proposals
@@ -1509,5 +1518,61 @@ mod tests {
         assert_eq!(stats.move_family_proposals(), u64::MAX);
         assert_eq!(stats.no_site_proposals(), u64::MAX);
         assert_eq!(stats.site_causality_rejections(), 1);
+    }
+
+    #[test]
+    fn proposal_statistics_from_wire_rejects_saturated_terminals_without_saturated_proposals() {
+        let wire = ProposalStatisticsWire {
+            move_family_proposals: 1,
+            observed_forward_sites: 1,
+            no_site_proposals: u64::MAX,
+            site_causality_rejections: 0,
+            site_geometric_rejections: 0,
+            site_backend_rejections: 0,
+            metropolis_rejections: 0,
+            accepted_transitions: 0,
+            hard_failures: 0,
+        };
+
+        let error = ProposalStatistics::from_wire(&wire)
+            .expect_err("saturated terminal counters require saturated move-family proposals");
+
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::ProposalTerminalOutcomeCountMismatch {
+                    terminal_outcomes: u64::MAX,
+                    move_family_proposals: 1,
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn proposal_statistics_from_wire_rejects_overflowed_terminals_without_saturated_proposals() {
+        let wire = ProposalStatisticsWire {
+            move_family_proposals: 3,
+            observed_forward_sites: 3,
+            no_site_proposals: u64::MAX - 1,
+            site_causality_rejections: 2,
+            site_geometric_rejections: 0,
+            site_backend_rejections: 0,
+            metropolis_rejections: 0,
+            accepted_transitions: 0,
+            hard_failures: 0,
+        };
+
+        let error = ProposalStatistics::from_wire(&wire)
+            .expect_err("overflowed terminal counters require saturated move-family proposals");
+
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::ProposalTerminalOutcomeCountMismatch {
+                    terminal_outcomes: u64::MAX,
+                    move_family_proposals: 3,
+                }
+            }
+        );
     }
 }
