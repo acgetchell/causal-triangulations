@@ -5,16 +5,6 @@
 use num_traits::cast::NumCast;
 use rand::random;
 
-// ---------------------------------------------------------------------------
-// Safe numeric conversions
-// ---------------------------------------------------------------------------
-
-/// Converts a `usize` to `u32`, saturating at `u32::MAX`.
-#[must_use]
-pub(crate) fn saturating_usize_to_u32(n: usize) -> u32 {
-    u32::try_from(n).unwrap_or(u32::MAX)
-}
-
 /// Converts a `usize` to `f64`, preserving the checked conversion boundary.
 #[must_use]
 pub(crate) fn usize_to_f64(n: usize) -> Option<f64> {
@@ -107,29 +97,6 @@ mod tests {
             .iter()
             .all(|&x| abs_diff_eq!(x, first, epsilon = f64::EPSILON));
         assert!(!all_same, "All random values should not be identical");
-    }
-
-    // =========================================================================
-    // Safe numeric conversion tests
-    // =========================================================================
-
-    #[test]
-    fn test_saturating_usize_to_u32_normal() {
-        assert_eq!(saturating_usize_to_u32(0), 0);
-        assert_eq!(saturating_usize_to_u32(1), 1);
-        assert_eq!(saturating_usize_to_u32(42), 42);
-    }
-
-    #[test]
-    fn test_saturating_usize_to_u32_boundary() {
-        assert_eq!(saturating_usize_to_u32(u32::MAX as usize), u32::MAX);
-    }
-
-    #[test]
-    fn test_saturating_usize_to_u32_overflow() {
-        #[cfg(target_pointer_width = "64")]
-        assert_eq!(saturating_usize_to_u32(u32::MAX as usize + 1), u32::MAX);
-        assert_eq!(saturating_usize_to_u32(usize::MAX), u32::MAX);
     }
 
     #[test]

@@ -27,7 +27,7 @@ The library leverages high-performance [Delaunay triangulation] backends and pro
 - [x] Regge action calculation with configurable coupling constants
 - [x] Alexander/Pachner-style local move proposals with causal constraints
 - [x] Volume-profile, Hausdorff-dimension, and spectral-dimension observables for CDT analysis
-- [x] CSV/JSON simulation output for external analysis workflows
+- [x] Trace CSV simulation output for external analysis workflows; JSON summary/metadata for CLI/config export
 - [x] Resumable serde-backed CDT/MCMC checkpoints for durable chain continuation
 - [x] Focused public preludes for simulation, triangulation, geometry, action, and observables
 - [x] Command-line interface, examples, Criterion benchmarks, and CI-aligned validation tooling
@@ -58,7 +58,7 @@ See [`docs/roadmap.md`](docs/roadmap.md) for current direction, near-term candid
 ## 📋 Running The Binary
 
 The crate installs a `cdt` binary. Use it to construct an initial 1+1 CDT triangulation, optionally run the Metropolis move loop, and write analysis-friendly
-CSV/JSON output.
+trace CSV output plus JSON summary/metadata.
 
 ```bash
 # Build the binary
@@ -84,7 +84,7 @@ cargo build --release
   --temperature 1.5 \
   --seed 105 \
   --simulate \
-  --output-csv toroidal-measurements.csv \
+  --output-csv toroidal-trace.csv \
   --output-json toroidal-summary.json
 ```
 

@@ -77,6 +77,20 @@ Metropolis-Hastings accept/reject draw, log-probability cache, chain counters, a
 outside that generic sampler: action and schedule metadata, proposal telemetry, move statistics, measurements, elapsed time, and the serialized ergodic proposal
 RNG.
 
+## Trace CSV Diagnostics
+
+Completed Metropolis steps are recorded as upstream `markov-chain-monte-carlo::Trace` records. `SimulationResultsBackend::scalar_trace()` builds the in-memory
+trace, and `SimulationResultsBackend::write_trace_csv()` writes the same rectangular table through the upstream CSV writer. The configured `--output-csv` path
+therefore exports one row per completed step, not one row per scheduled measurement.
+
+The fixed upstream columns are `chain_id`, `step`, `accepted`, `proposed`, and `log_prob`. CDT adds numeric observable columns for the current action,
+vertex/edge/triangle counts, stable move-family code, action delta and before/after action fields with presence flags, optional seed split into exactly
+representable `u32` halves, and zero-filled `volume_profile_*` columns. The `proposed` column distinguishes no-site/no-plan self-loops from concrete proposals
+that were rejected by Metropolis-Hastings or CDT-local proposal checks.
+
+CSV is the core export format so downstream tools such as Polars can load the data without coupling the crate to a dataframe or Parquet dependency. Plotting,
+Parquet conversion, and wider ensemble analysis belong downstream of this typed trace export.
+
 The large-scale 1+1 debug harness uses this upstream-backed chunking path to run one Metropolis sweep at a time:
 
 1. Read the current number of top-dimensional simplices at the start of the sweep.

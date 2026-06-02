@@ -208,6 +208,8 @@ through to upstream `delaunay::` APIs directly.
 
 - Owns the `CdtTriangulation` state, `CdtMetadata`, `SimulationEvent`, metadata validation, cached simplex-count accessors, and common backend-agnostic state
   methods
+- `CdtSimplexCounts` carries the CDT-domain proof that constructed triangulations have positive vertex, edge, and triangle counts as `NonZeroUsize`, while
+  raw geometry queries remain `usize` so backend construction, clearing, and collection-style count APIs can represent zero
 - `from_cdt_strip(vertices_per_slice, num_slices)` — Delaunay-built open-boundary 1+1 CDT strip with strict Up/Down simplex classification and upstream Level
   1–4 Delaunay validation before wrapping
 - `from_cdt_strip_profile(volume_profile)` — open-boundary 1+1 CDT strip from explicit nonuniform per-slice vertex counts; builds labeled point data and
@@ -260,9 +262,11 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
 ### `cdt/results.rs` — Simulation outputs
 
 - `Measurement` records per-step action, simplex counts, and optional per-slice volume profiles.
-- `SimulationResultsBackend` owns the final triangulation, Monte Carlo step telemetry, move statistics, and measurement history.
+- `SimulationResultsBackend` owns the final triangulation, Monte Carlo step telemetry, upstream scalar trace rows, move statistics, and measurement history.
 - Result methods summarize acceptance rate, average action, post-thermalization volume profiles, sample volume fluctuations, and final-state Hausdorff/spectral
   dimension estimates.
+- `scalar_trace()` and `write_trace_csv()` expose step diagnostics through `markov-chain-monte-carlo::Trace`, using a rectangular CSV table suitable for Polars
+  and other downstream dataframe tools.
 
 ### `cdt/observables.rs` — User-facing estimators
 
@@ -310,7 +314,8 @@ Delaunay triangulation before CDT foliation, causality, topology, and simplex-cl
 ### `util.rs` — Numeric helpers
 
 - `saturating_usize_to_i32` — crate-internal usize→i32 conversion for Euler characteristic arithmetic
-- `saturating_usize_to_u32` — crate-internal usize→u32 conversion for simulation measurements and action inputs
+- Simulation action inputs use native `usize` topology counts; validated CDT count snapshots use `NonZeroUsize`; measurement and trace telemetry downcasts to
+  `u32` are checked at construction boundaries
 - `y_to_time_bucket` — f64→Option<u32> via round(), for time-slice assignment
 - `f64_band_to_u32` — f64→u32 clamped, for y-coordinate binning
 

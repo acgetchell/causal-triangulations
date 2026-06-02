@@ -50,8 +50,8 @@ mod integration_tests {
         assert!(results.average_action().is_finite());
         assert!(
             results.steps().iter().any(|step| {
-                step.action_after.is_some_and(|action_after| {
-                    !abs_diff_eq!(action_after, step.action_before, epsilon = f64::EPSILON)
+                step.action_after().is_some_and(|action_after| {
+                    !abs_diff_eq!(action_after, step.action_before(), epsilon = f64::EPSILON)
                 })
             }),
             "accepted moves should change the action over time"
@@ -254,9 +254,9 @@ mod integration_tests {
             CdtTriangulation::from_random_points(4, 1, 2).expect("Failed to create triangulation");
 
         let config = ActionConfig::default();
-        let vertices = u32::try_from(triangulation.vertex_count()).unwrap_or_default();
-        let edges = u32::try_from(triangulation.edge_count()).unwrap_or_default();
-        let faces = u32::try_from(triangulation.face_count()).unwrap_or_default();
+        let vertices = triangulation.vertex_count();
+        let edges = triangulation.edge_count();
+        let faces = triangulation.face_count();
 
         let action = config.calculate_action(vertices, edges, faces);
 
@@ -267,7 +267,9 @@ mod integration_tests {
         );
 
         // Defaults map the edge-count lambda convention to the critical 1+1 CDT triangle coupling.
-        let expected = DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT * f64::from(edges);
+        let expected_edges: f64 =
+            num_traits::cast::NumCast::from(edges).expect("edge count should fit f64");
+        let expected = DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT * expected_edges;
         assert_relative_eq!(action, expected, epsilon = f64::EPSILON);
     }
 
@@ -296,8 +298,8 @@ mod integration_tests {
 
         assert_eq!(results1.steps().len(), results2.steps().len());
         for (left, right) in results1.steps().iter().zip(results2.steps().iter()) {
-            assert_eq!(left.move_type, right.move_type);
-            assert_eq!(left.accepted, right.accepted);
+            assert_eq!(left.move_type(), right.move_type());
+            assert_eq!(left.accepted(), right.accepted());
         }
     }
 

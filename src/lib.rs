@@ -19,7 +19,7 @@
 //! - Metropolis-Hastings sampling over foliation-aware 2D ergodic moves
 //! - Volume-profile, Hausdorff-dimension, and spectral-dimension observables
 //!   for CDT analysis
-//! - CSV/JSON simulation output and resumable serde-backed CDT/MCMC checkpoints
+//! - Trace CSV/JSON simulation output and resumable serde-backed CDT/MCMC checkpoints
 //!
 //! The crate root re-exports the most common construction, simulation,
 //! observable, and error types. Focused preludes under [`prelude`] provide
@@ -157,8 +157,14 @@ pub mod cdt {
             CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget,
         };
         pub use checkpoint::CdtMcmcCheckpoint;
+        pub use markov_chain_monte_carlo::{
+            ChainId, StepOutcome, Trace, TraceError, TraceRecord, TraceStepOutcome,
+        };
         pub use runner::{MetropolisAlgorithm, MetropolisConfig};
-        pub use telemetry::{MonteCarloStep, ProposalStatistics};
+        pub use telemetry::{
+            AcceptedStepTelemetry, MonteCarloStep, MonteCarloStepOutcome, ProposalStatistics,
+            RejectedProposalStepTelemetry,
+        };
     }
     /// User-facing CDT observable estimators.
     pub mod observables;
@@ -177,11 +183,13 @@ pub use cdt::action::{
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
 pub use cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType};
 pub use cdt::metropolis::{
-    CdtMcmcCheckpoint, CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget,
-    MetropolisAlgorithm, MetropolisConfig, MonteCarloStep, ProposalStatistics,
+    AcceptedStepTelemetry, CdtMcmcCheckpoint, CdtProposal, CdtProposalError, CdtProposalInfo,
+    CdtProposalPlan, CdtTarget, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
+    MonteCarloStepOutcome, ProposalStatistics, RejectedProposalStepTelemetry, StepOutcome,
 };
 pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
 pub use cdt::results::{Measurement, SimulationResultsBackend};
+pub use cdt::triangulation::{CdtSimplexCounts, CdtTriangulation, SimulationEvent};
 pub use config::{
     CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, TestConfig, ValidatedCdtConfig,
     ValidatedInitialVolume,
@@ -189,19 +197,16 @@ pub use config::{
 pub use errors::{
     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
     CheckpointMoveCounter, CheckpointOperation, CheckpointResumeFailure, ConfigurationSetting,
-    DelaunayValidationLevel, GenerationParameterIssue, MetropolisMoveApplicationFailure,
-    OutputFormat, ProposalTelemetryCounter, TriangulationMetadataField,
+    DelaunayValidationLevel, GenerationParameterIssue, MeasurementCountField,
+    MetropolisMoveApplicationFailure, OutputFormat, ProposalTelemetryCounter, ScalarTraceField,
+    SimplexCountField, TriangulationMetadataField,
 };
+pub use geometry::traits::TriangulationQuery;
 
 use crate::cdt::results::SimulationResultsParts;
-use crate::util::saturating_usize_to_u32;
 use std::env;
 use std::path::PathBuf;
 use std::time::Duration;
-
-// Trait-based triangulation (recommended)
-pub use cdt::triangulation::{CdtTriangulation, SimulationEvent};
-pub use geometry::traits::TriangulationQuery;
 
 /// Prelude module for convenient imports.
 ///
@@ -223,9 +228,9 @@ pub use geometry::traits::TriangulationQuery;
 /// ```
 pub mod prelude {
     // Core CDT types
-    pub use crate::CdtTriangulation;
     pub use crate::geometry::CdtTriangulation2D;
     pub use crate::geometry::traits::TriangulationQuery;
+    pub use crate::{CdtSimplexCounts, CdtTriangulation};
 
     // Action and simulation setup
     pub use crate::cdt::action::ActionConfig;
@@ -269,8 +274,9 @@ pub mod prelude {
             BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck,
             CdtValidationFailure, CheckpointMoveCounter, CheckpointOperation,
             CheckpointResumeFailure, ConfigurationSetting, DelaunayValidationLevel,
-            GenerationParameterIssue, MetropolisMoveApplicationFailure, OutputFormat,
-            ProposalTelemetryCounter, TriangulationMetadataField,
+            GenerationParameterIssue, MeasurementCountField, MetropolisMoveApplicationFailure,
+            OutputFormat, ProposalTelemetryCounter, ScalarTraceField, SimplexCountField,
+            TriangulationMetadataField,
         };
     }
 
@@ -312,7 +318,7 @@ pub mod prelude {
         pub use crate::errors::{CdtError, CdtResult};
         pub use crate::geometry::CdtTriangulation2D;
         pub use crate::geometry::traits::TriangulationQuery;
-        pub use crate::{CdtTriangulation, SimulationEvent};
+        pub use crate::{CdtSimplexCounts, CdtTriangulation, SimulationEvent};
     }
 
     /// Focused exports for local CDT move kernels and move statistics.
@@ -338,11 +344,14 @@ pub mod prelude {
     /// configuration, the Metropolis runner, proposal-plan adapter, telemetry
     /// structs, result containers, and typed proposal errors needed by MCMC
     /// workflows. It also includes the triangulation query trait so callers can
-    /// inspect final or checkpointed states returned by simulation APIs. The
-    /// upstream MCMC traits are re-exported here because
+    /// inspect final or checkpointed states returned by simulation APIs.
+    /// Upstream MCMC traits, step outcomes, and trace/checkpoint types are
+    /// re-exported here because
     /// [`CdtProposal`](crate::cdt::metropolis::CdtProposal) and
     /// [`CdtTarget`](crate::cdt::metropolis::CdtTarget) expose their primary
-    /// behavior through those trait implementations.
+    /// behavior through those trait implementations, while
+    /// [`SimulationResultsBackend::scalar_trace`](crate::cdt::results::SimulationResultsBackend::scalar_trace)
+    /// returns an upstream [`Trace`](markov_chain_monte_carlo::Trace).
     /// Observable estimators live in [`crate::prelude::observables`].
     ///
     /// ```
@@ -371,8 +380,10 @@ pub mod prelude {
         pub use crate::cdt::action::{ActionConfig, compute_regge_action};
         pub use crate::cdt::ergodic_moves::MoveType;
         pub use crate::cdt::metropolis::{
-            CdtMcmcCheckpoint, CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan,
-            CdtTarget, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep, ProposalStatistics,
+            AcceptedStepTelemetry, CdtMcmcCheckpoint, CdtProposal, CdtProposalError,
+            CdtProposalInfo, CdtProposalPlan, CdtTarget, MetropolisAlgorithm, MetropolisConfig,
+            MonteCarloStep, MonteCarloStepOutcome, ProposalStatistics,
+            RejectedProposalStepTelemetry,
         };
         pub use crate::cdt::results::{Measurement, SimulationResultsBackend};
         pub use crate::cdt::triangulation::SimulationEvent;
@@ -380,8 +391,11 @@ pub mod prelude {
         pub use crate::errors::{CdtError, CdtResult};
         pub use crate::geometry::CdtTriangulation2D;
         pub use crate::geometry::traits::TriangulationQuery;
-        pub use crate::{CdtTriangulation, run_simulation};
-        pub use markov_chain_monte_carlo::{ChainCheckpoint, DelayedProposal, Target};
+        pub use crate::{CdtSimplexCounts, CdtTriangulation, run_simulation};
+        pub use markov_chain_monte_carlo::{
+            ChainCheckpoint, ChainId, DelayedProposal, StepOutcome, Target, Trace, TraceError,
+            TraceRecord, TraceStepOutcome,
+        };
     }
 
     /// Focused exports for CDT observables and post-simulation analysis.
@@ -605,11 +619,16 @@ pub fn run_simulation(config: &ValidatedCdtConfig) -> CdtResult<SimulationResult
         results
     } else {
         // Just return basic simulation results with the triangulation
-        let vertices = saturating_usize_to_u32(triangulation.vertex_count());
-        let edges = saturating_usize_to_u32(triangulation.edge_count());
-        let triangles = saturating_usize_to_u32(triangulation.face_count());
+        let counts = triangulation.simplex_counts()?;
         let action_config = config.to_action_config();
-        let initial_action = action_config.calculate_action(vertices, edges, triangles);
+        let initial_action = action_config.calculate_action(
+            counts.vertex_count(),
+            counts.edge_count(),
+            counts.triangle_count(),
+        );
+
+        let measurement = Measurement::try_from_simplex_counts(0, initial_action, counts)?
+            .try_with_volume_profile(triangulation.volume_profile())?;
 
         SimulationResultsBackend::from_parts(SimulationResultsParts {
             config: config.to_metropolis_config(),
@@ -617,14 +636,8 @@ pub fn run_simulation(config: &ValidatedCdtConfig) -> CdtResult<SimulationResult
             move_stats: MoveStatistics::new(),
             proposal_stats: ProposalStatistics::new(),
             steps: vec![],
-            measurements: vec![Measurement {
-                step: 0,
-                action: initial_action,
-                vertices,
-                edges,
-                triangles,
-                volume_profile: triangulation.volume_profile(),
-            }],
+            measurements: vec![measurement],
+            scalar_trace_rows: vec![],
             elapsed_time: Duration::from_millis(0),
             triangulation,
         })
@@ -684,8 +697,8 @@ fn write_configured_outputs(
     output_paths: &ResolvedOutputPaths,
 ) -> CdtResult<()> {
     if let Some(resolved) = &output_paths.csv {
-        results.write_measurements_csv(resolved)?;
-        log::info!("Wrote measurement CSV to {}", resolved.display());
+        results.write_trace_csv(resolved)?;
+        log::info!("Wrote trace CSV to {}", resolved.display());
     }
 
     if let Some(resolved) = &output_paths.json {
@@ -790,10 +803,7 @@ mod tests {
         let results = run_simulation(&config).expect("construction-only run should succeed");
         assert!(results.steps().is_empty());
         assert_eq!(
-            results
-                .measurements()
-                .first()
-                .map(|measurement| measurement.step),
+            results.measurements().first().map(Measurement::step),
             Some(0)
         );
 
@@ -803,10 +813,7 @@ mod tests {
 
         assert!(roundtrip.steps().is_empty());
         assert_eq!(
-            roundtrip
-                .measurements()
-                .first()
-                .map(|measurement| measurement.step),
+            roundtrip.measurements().first().map(Measurement::step),
             Some(0)
         );
         assert_eq!(roundtrip.triangulation().slice_sizes(), &[12, 12, 12]);
@@ -822,7 +829,7 @@ mod tests {
 
     #[test]
     fn run_simulation_writes_configured_outputs() {
-        let csv_path = temp_output_path("measurements.csv");
+        let csv_path = temp_output_path("trace.csv");
         let json_path = temp_output_path("summary.json");
         let mut config = create_test_config();
         config.output_csv = Some(csv_path.clone());
@@ -837,7 +844,9 @@ mod tests {
         fs::remove_file(&json_path).expect("temporary JSON output should be removable");
         let parsed: Value = from_str(&json).expect("JSON output should parse");
 
-        assert!(csv.starts_with("step,action,vertices,edges,triangles,accepted,delta_action\n"));
+        assert!(csv.starts_with(
+            "chain_id,step,accepted,proposed,log_prob,action,vertices,edges,triangles,move_family"
+        ));
         assert_eq!(parsed["config"]["vertices"], config.vertices().get());
         assert_eq!(
             parsed["final_triangulation"]["time_slices"],
@@ -1065,7 +1074,7 @@ mod tests {
 
         assert_eq!(results.triangulation().vertex_count(), 15);
         assert_eq!(results.triangulation().slice_sizes(), &[4, 6, 5]);
-        assert_eq!(results.measurements()[0].volume_profile.len(), 3);
+        assert_eq!(results.measurements()[0].volume_profile().len(), 3);
         results
             .triangulation()
             .validate()

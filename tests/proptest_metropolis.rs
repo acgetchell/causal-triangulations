@@ -39,9 +39,9 @@ proptest! {
         );
 
         // Must equal -action / T
-        let v = u32::try_from(tri.vertex_count()).unwrap();
-        let e = u32::try_from(tri.edge_count()).unwrap();
-        let f = u32::try_from(tri.face_count()).unwrap();
+        let v = tri.vertex_count();
+        let e = tri.edge_count();
+        let f = tri.face_count();
         let action = action_config.calculate_action(v, e, f);
         let expected = -action / temperature;
 

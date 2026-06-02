@@ -76,11 +76,11 @@ fn main() -> CdtResult<()> {
         for measurement in results.measurements().iter().take(5) {
             info!(
                 "  Step {}: Action={:.3}, V={}, E={}, T={}",
-                measurement.step,
-                measurement.action,
-                measurement.vertices,
-                measurement.edges,
-                measurement.triangles
+                measurement.step(),
+                measurement.action(),
+                measurement.vertices().get(),
+                measurement.edges().get(),
+                measurement.triangles().get()
             );
         }
 

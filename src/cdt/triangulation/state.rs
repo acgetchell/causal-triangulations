@@ -9,13 +9,13 @@
 use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::{Foliation, FoliationError};
 use crate::config::CdtTopology;
-use crate::errors::{CdtError, CdtResult, TriangulationMetadataField};
+use crate::errors::{CdtError, CdtResult, SimplexCountField, TriangulationMetadataField};
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::traits::TriangulationQuery;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -52,6 +52,115 @@ pub struct CdtTriangulation<B> {
     foliation: Option<Foliation>,
     /// Modification counter value when foliation bookkeeping was last synchronized.
     foliation_synced_at_modification: Option<u64>,
+}
+
+/// Strictly positive simplex counts for a CDT triangulation.
+///
+/// Generic geometry backends can be empty while they are being constructed,
+/// cleared, or used as test fixtures. A constructed CDT triangulation, however,
+/// must have positive vertex, edge, and triangle counts. This type carries that
+/// proof for CDT-domain code without imposing a `u32` cap on live geometry
+/// queries.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::triangulation::*;
+///
+/// fn main() -> CdtResult<()> {
+///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+///     let counts = tri.simplex_counts()?;
+///
+///     assert_eq!(counts.vertices().get(), tri.vertex_count());
+///     assert_eq!(counts.triangles().get(), tri.face_count());
+///     Ok(())
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct CdtSimplexCounts {
+    vertices: NonZeroUsize,
+    edges: NonZeroUsize,
+    triangles: NonZeroUsize,
+}
+
+impl CdtSimplexCounts {
+    /// Parses raw `usize` counts into a strictly positive CDT count snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidSimplexCount`] when any count is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{
+    ///     CdtError, CdtSimplexCounts, SimplexCountField,
+    /// };
+    /// use std::assert_matches;
+    ///
+    /// let counts = CdtSimplexCounts::try_new(3, 3, 1)?;
+    /// assert_eq!(counts.edge_count(), 3);
+    ///
+    /// assert_matches!(
+    ///     CdtSimplexCounts::try_new(3, 0, 1),
+    ///     Err(CdtError::InvalidSimplexCount {
+    ///         field: SimplexCountField::Edges,
+    ///         ..
+    ///     })
+    /// );
+    /// # Ok::<(), CdtError>(())
+    /// ```
+    pub fn try_new(vertices: usize, edges: usize, triangles: usize) -> CdtResult<Self> {
+        Ok(Self {
+            vertices: nonzero_simplex_count(SimplexCountField::Vertices, vertices)?,
+            edges: nonzero_simplex_count(SimplexCountField::Edges, edges)?,
+            triangles: nonzero_simplex_count(SimplexCountField::Triangles, triangles)?,
+        })
+    }
+
+    /// Returns the nonzero vertex count.
+    #[must_use]
+    pub const fn vertices(&self) -> NonZeroUsize {
+        self.vertices
+    }
+
+    /// Returns the nonzero edge count.
+    #[must_use]
+    pub const fn edges(&self) -> NonZeroUsize {
+        self.edges
+    }
+
+    /// Returns the nonzero triangle count.
+    #[must_use]
+    pub const fn triangles(&self) -> NonZeroUsize {
+        self.triangles
+    }
+
+    /// Returns the vertex count as a raw `usize` for collection-style APIs.
+    #[must_use]
+    pub const fn vertex_count(&self) -> usize {
+        self.vertices.get()
+    }
+
+    /// Returns the edge count as a raw `usize` for collection-style APIs.
+    #[must_use]
+    pub const fn edge_count(&self) -> usize {
+        self.edges.get()
+    }
+
+    /// Returns the triangle count as a raw `usize` for collection-style APIs.
+    #[must_use]
+    pub const fn triangle_count(&self) -> usize {
+        self.triangles.get()
+    }
+}
+
+/// Parses one raw backend count into the nonzero proof used by [`CdtSimplexCounts`].
+fn nonzero_simplex_count(field: SimplexCountField, value: usize) -> CdtResult<NonZeroUsize> {
+    NonZeroUsize::new(value).ok_or(CdtError::InvalidSimplexCount {
+        field,
+        provided_value: value,
+    })
 }
 
 impl<B: fmt::Debug> fmt::Debug for CdtTriangulation<B> {
@@ -948,6 +1057,36 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
         self.geometry.edge_count()
     }
 
+    /// Returns strictly positive CDT simplex counts for the current state.
+    ///
+    /// This is the CDT-domain counterpart to the raw `usize` count accessors. Use
+    /// it when downstream code relies on a constructed triangulation having at
+    /// least one vertex, edge, and triangle.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidSimplexCount`] if the underlying backend reports
+    /// a zero vertex, edge, or triangle count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    ///     let counts = tri.simplex_counts()?;
+    ///
+    ///     assert_eq!(counts.vertex_count(), 12);
+    ///     assert!(counts.edge_count() > 0);
+    ///     assert!(counts.triangle_count() > 0);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn simplex_counts(&self) -> CdtResult<CdtSimplexCounts> {
+        CdtSimplexCounts::try_new(self.vertex_count(), self.edge_count(), self.face_count())
+    }
+
     /// Force cache update.
     ///
     /// # Examples
@@ -1063,6 +1202,32 @@ mod tests {
         ])
         .expect("Should build labeled triangle");
         DelaunayBackend2D::from_triangulation(dt).expect("test Delaunay triangle should validate")
+    }
+
+    #[test]
+    fn simplex_counts_reject_zero_counts_before_storage() {
+        let error = CdtSimplexCounts::try_new(3, 0, 1)
+            .expect_err("zero edge count should not produce a CDT count snapshot");
+
+        assert_matches!(
+            error,
+            CdtError::InvalidSimplexCount {
+                field: SimplexCountField::Edges,
+                provided_value: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn triangulation_simplex_counts_preserve_nonzero_counts() {
+        let triangulation = CdtTriangulation::from_cdt_strip(4, 3).expect("CDT strip should build");
+        let counts = triangulation
+            .simplex_counts()
+            .expect("constructed CDT triangulation should have positive counts");
+
+        assert_eq!(counts.vertices().get(), triangulation.vertex_count());
+        assert_eq!(counts.edges().get(), triangulation.edge_count());
+        assert_eq!(counts.triangles().get(), triangulation.face_count());
     }
 
     #[test]
@@ -1970,10 +2135,11 @@ mod prop_tests {
             timeslices in 1u32..5
         ) {
             let triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
+            let counts = triangulation.simplex_counts()?;
 
-            prop_assert!(triangulation.vertex_count() >= 3, "Must have at least 3 vertices");
-            prop_assert!(triangulation.edge_count() >= 3, "Must have at least 3 edges");
-            prop_assert!(triangulation.face_count() >= 1, "Must have at least 1 face");
+            prop_assert!(counts.vertices().get() >= 3, "Must have at least 3 vertices");
+            prop_assert!(counts.edges().get() >= 3, "Must have at least 3 edges");
+            prop_assert!(counts.triangles().get() >= 1, "Must have at least 1 face");
         }
 
         #[test]

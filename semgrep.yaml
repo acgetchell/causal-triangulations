@@ -689,7 +689,7 @@ rules:
         - "/src/cdt/metropolis/**/*.rs"
         - "/tests/semgrep/src/**/*.rs"
     pattern-regex: >-
-      (?s)record_planned_step\([^;]*\)\?;\s*
+      (?ms)^\s*record_planned_step\([^;]*\)\?;\s*
       (?:(?!replace_state\s*\().)*?
       state\.current_step\s*=
 

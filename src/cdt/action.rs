@@ -6,6 +6,7 @@
 //! which is based on the Regge calculus formulation of general relativity.
 
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
+use num_traits::cast::NumCast;
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// Critical cosmological coupling for pure 1+1 CDT in the triangle-volume convention.
@@ -48,6 +49,12 @@ pub const DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT: f64 =
 ///
 /// The calculated Regge Action value
 ///
+/// # Panics
+///
+/// Panics only if the platform cannot represent a `usize` simplex count as a
+/// finite `f64`. Supported targets represent all `usize` counts as finite
+/// floating-point values, though very large counts may lose integer precision.
+///
 /// # Examples
 ///
 /// ```
@@ -59,16 +66,16 @@ pub const DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT: f64 =
 /// ```
 #[must_use]
 pub fn compute_regge_action(
-    vertices: u32,
-    edges: u32,
-    triangles: u32,
+    vertices: usize,
+    edges: usize,
+    triangles: usize,
     coupling_0: f64,
     coupling_2: f64,
     cosmological_constant: f64,
 ) -> f64 {
-    let n_0 = f64::from(vertices);
-    let n_1 = f64::from(edges);
-    let n_2 = f64::from(triangles);
+    let n_0: f64 = NumCast::from(vertices).expect("usize vertex counts should fit finite f64");
+    let n_1: f64 = NumCast::from(edges).expect("usize edge counts should fit finite f64");
+    let n_2: f64 = NumCast::from(triangles).expect("usize triangle counts should fit finite f64");
 
     cosmological_constant.mul_add(n_1, (-coupling_0).mul_add(n_0, -(coupling_2 * n_2)))
 }
@@ -239,6 +246,12 @@ impl ActionConfig {
 
     /// Calculates the action for given simplex counts.
     ///
+    /// # Panics
+    ///
+    /// Panics only if the platform cannot represent a `usize` simplex count as a
+    /// finite `f64`. Supported targets represent all `usize` counts as finite
+    /// floating-point values, though very large counts may lose integer precision.
+    ///
     /// # Examples
     ///
     /// ```
@@ -251,7 +264,7 @@ impl ActionConfig {
     /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     #[must_use]
-    pub fn calculate_action(&self, vertices: u32, edges: u32, triangles: u32) -> f64 {
+    pub fn calculate_action(&self, vertices: usize, edges: usize, triangles: usize) -> f64 {
         compute_regge_action(
             vertices,
             edges,
@@ -357,9 +370,9 @@ mod prop_tests {
     proptest! {
         #[test]
         fn action_always_finite(
-            vertices in 0u32..100,
-            edges in 0u32..500,
-            triangles in 0u32..300,
+            vertices in 0usize..100,
+            edges in 0usize..500,
+            triangles in 0usize..300,
             coupling_0 in -10.0f64..10.0,
             coupling_2 in -10.0f64..10.0,
             cosmological_constant in -5.0f64..5.0
@@ -375,9 +388,9 @@ mod prop_tests {
 
         #[test]
         fn action_config_consistency(
-            vertices in 0u32..50,
-            edges in 0u32..150,
-            triangles in 0u32..100,
+            vertices in 0usize..50,
+            edges in 0usize..150,
+            triangles in 0usize..100,
             coupling_0 in -5.0f64..5.0,
             coupling_2 in -5.0f64..5.0,
             cosmological_constant in -2.0f64..2.0

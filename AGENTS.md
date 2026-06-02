@@ -187,6 +187,8 @@ docs/dev/testing.md
 Key principle:
 
 - Rust changes must pass unit tests, integration tests, and documentation builds.
+- Do not pass multiple test-name filters to `cargo test`; Cargo accepts only one. Use a shared substring, a module/path filter, or run the broader suite
+  instead.
 
 ---
 

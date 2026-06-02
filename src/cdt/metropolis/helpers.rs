@@ -8,17 +8,16 @@ use crate::cdt::results::Measurement;
 use crate::config::validate_schedule;
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
 use crate::geometry::CdtTriangulation2D;
-use crate::util::saturating_usize_to_u32;
 use std::num::NonZeroU32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimplexCounts {
     /// Number of vertices in the live CDT triangulation.
-    pub vertices: u32,
+    pub vertices: usize,
     /// Number of edges in the live CDT triangulation.
-    pub edges: u32,
+    pub edges: usize,
     /// Number of triangular 2-simplices in the live CDT triangulation.
-    pub triangles: u32,
+    pub triangles: usize,
 }
 
 /// Adapts shared schedule validation errors to the Metropolis-specific error variant.
@@ -86,13 +85,13 @@ pub fn validate_temperature(temperature: f64) -> CdtResult<()> {
 
 /// Reads simplex counts through the CDT wrapper for action and measurement code.
 ///
-/// Centralizing these conversions keeps cached query paths authoritative and
-/// makes integer saturation explicit at the simulation boundary.
+/// Centralizing these reads keeps cached query paths authoritative for action,
+/// measurement, and trace telemetry.
 pub fn simplex_counts(triangulation: &CdtTriangulation2D) -> SimplexCounts {
     SimplexCounts {
-        vertices: saturating_usize_to_u32(triangulation.vertex_count()),
-        edges: saturating_usize_to_u32(triangulation.edge_count()),
-        triangles: saturating_usize_to_u32(triangulation.face_count()),
+        vertices: triangulation.vertex_count(),
+        edges: triangulation.edge_count(),
+        triangles: triangulation.face_count(),
     }
 }
 
@@ -109,16 +108,22 @@ pub fn action_for(action_config: &ActionConfig, triangulation: &CdtTriangulation
 ///
 /// Keeping measurement construction in one helper ensures recorded actions and
 /// simplex counts use the same query path at every measurement step.
-pub fn measurement_for(step: u32, action: f64, triangulation: &CdtTriangulation2D) -> Measurement {
-    let counts = simplex_counts(triangulation);
-    Measurement {
-        step,
-        action,
-        vertices: counts.vertices,
-        edges: counts.edges,
-        triangles: counts.triangles,
-        volume_profile: triangulation.volume_profile(),
-    }
+///
+/// # Errors
+///
+/// Returns [`CdtError::InvalidSimplexCount`] if the live triangulation reports
+/// zero vertices, edges, or triangles,
+/// [`CdtError::MeasurementCountOverflow`] if any live count cannot fit compact
+/// measurement storage, or [`CdtError::InvalidMeasurementAction`] if `action` is
+/// not finite.
+pub fn measurement_for(
+    step: u32,
+    action: f64,
+    triangulation: &CdtTriangulation2D,
+) -> CdtResult<Measurement> {
+    let counts = triangulation.simplex_counts()?;
+    Measurement::try_from_simplex_counts(step, action, counts)?
+        .try_with_volume_profile(triangulation.volume_profile())
 }
 
 /// Returns true when a completed step is on the post-thermalization measurement cadence.
