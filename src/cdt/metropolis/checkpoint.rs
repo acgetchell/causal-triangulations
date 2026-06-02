@@ -19,7 +19,9 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-use super::helpers::{actions_match, expected_measurement_count, expected_measurement_step};
+use super::helpers::{
+    action_for, actions_match, expected_measurement_count, expected_measurement_step,
+};
 use super::runner::{MetropolisAlgorithm, MetropolisConfig};
 use super::telemetry::{MonteCarloStep, ProposalStatistics};
 
@@ -41,6 +43,28 @@ pub(crate) struct CdtMcmcCheckpointParts {
     pub(crate) ergodics: ErgodicsSystem,
 }
 
+/// Finite action value stored in resumable checkpoint state.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+struct CheckpointAction(f64);
+
+impl CheckpointAction {
+    /// Parses a raw checkpoint action into a finite stored action value.
+    const fn new(value: f64) -> CdtResult<Self> {
+        if value.is_finite() {
+            Ok(Self(value))
+        } else {
+            Err(checkpoint_resume_failed(
+                CheckpointResumeFailure::NonFiniteCheckpointAction { stored: value },
+            ))
+        }
+    }
+
+    /// Returns the finite action value.
+    const fn get(self) -> f64 {
+        self.0
+    }
+}
+
 /// Resumable checkpoint for a CDT Metropolis-Hastings run.
 ///
 /// The embedded [`ChainCheckpoint`] stores the current triangulation and
@@ -53,6 +77,8 @@ pub(crate) struct CdtMcmcCheckpointParts {
 /// Metropolis step. Their current step is therefore stored and exposed as a
 /// [`NonZeroU32`]; initial step-0 samples are measurement telemetry, not a
 /// checkpoint position.
+/// Deserialized checkpoints also validate that their stored action is finite
+/// and matches the action recomputed from the restored triangulation.
 ///
 /// # Examples
 ///
@@ -80,7 +106,7 @@ pub struct CdtMcmcCheckpoint {
     pub(crate) config: MetropolisConfig,
     pub(crate) action_config: ActionConfig,
     pub(crate) current_step: NonZeroU32,
-    pub(crate) current_action: f64,
+    current_action: CheckpointAction,
     pub(crate) move_stats: MoveStatistics,
     #[serde(default)]
     pub(crate) proposal_stats: ProposalStatistics,
@@ -118,12 +144,13 @@ impl<'de> Deserialize<'de> for CdtMcmcCheckpoint {
         let wire = CdtMcmcCheckpointWire::deserialize(deserializer)?;
         let current_step = NonZeroU32::new(wire.current_step)
             .ok_or_else(|| DeError::custom("checkpoint current_step must be nonzero"))?;
+        let current_action = CheckpointAction::new(wire.current_action).map_err(DeError::custom)?;
         let checkpoint = Self {
             chain: wire.chain,
             config: wire.config,
             action_config: wire.action_config,
             current_step,
-            current_action: wire.current_action,
+            current_action,
             move_stats: wire.move_stats,
             proposal_stats: wire.proposal_stats,
             steps: wire.steps,
@@ -140,12 +167,13 @@ impl<'de> Deserialize<'de> for CdtMcmcCheckpoint {
 
 impl CdtMcmcCheckpoint {
     pub(crate) fn from_parts(parts: CdtMcmcCheckpointParts) -> CdtResult<Self> {
+        let current_action = CheckpointAction::new(parts.current_action)?;
         let checkpoint = Self {
             chain: ChainCheckpoint::new(parts.triangulation, parts.accepted, parts.rejected),
             config: parts.config,
             action_config: parts.action_config,
             current_step: parts.current_step,
-            current_action: parts.current_action,
+            current_action,
             move_stats: parts.move_stats,
             proposal_stats: parts.proposal_stats,
             steps: parts.steps,
@@ -316,7 +344,7 @@ impl CdtMcmcCheckpoint {
     /// ```
     #[must_use]
     pub const fn current_action(&self) -> f64 {
-        self.current_action
+        self.current_action.get()
     }
 
     /// Returns accumulated move statistics through the checkpoint step.
@@ -539,11 +567,12 @@ fn action_configs_match(left: &ActionConfig, right: &ActionConfig) -> bool {
 /// Returns [`CdtError::InvalidSimulationConfiguration`] for invalid
 /// Metropolis settings, [`CdtError::InvalidConfiguration`] for invalid action
 /// couplings, or [`CdtError::CheckpointResumeFailed`] when serialized chain
-/// counters, step telemetry, or measurements do not match the configured
-/// sampling schedule.
+/// counters, step telemetry, measurements, or stored action do not match the
+/// configured sampling schedule and restored triangulation state.
 pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
     checkpoint.config.validate();
     checkpoint.action_config.validate();
+    validate_checkpoint_current_action(checkpoint)?;
 
     let (accepted, rejected) = chain_counters(&checkpoint.move_stats)?;
     if checkpoint.chain.accepted() != accepted || checkpoint.chain.rejected() != rejected {
@@ -583,6 +612,18 @@ pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> Cd
         &checkpoint.steps,
         &checkpoint.scalar_trace_rows,
     )?;
+    Ok(())
+}
+
+/// Verifies that the stored checkpoint action is finite and matches the restored state.
+fn validate_checkpoint_current_action(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
+    let recomputed = action_for(&checkpoint.action_config, checkpoint.triangulation());
+    let stored = checkpoint.current_action.get();
+    if !actions_match(stored, recomputed) {
+        return Err(checkpoint_resume_failed(
+            CheckpointResumeFailure::ActionMismatch { stored, recomputed },
+        ));
+    }
     Ok(())
 }
 

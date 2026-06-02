@@ -117,7 +117,8 @@ For heavier stabilization work, run the slow-test wrapper:
 just ci-slow
 ```
 
-This runs the normal CI command and then feature-gated slow/stress tests.
+This runs the normal CI command and then feature-gated slow/stress tests through the repository `perf` Cargo profile. The slow suite includes large-scale
+toroidal debug probes, so optimized builds are part of the validation contract rather than an optional speed tweak.
 
 ## Semgrep
 

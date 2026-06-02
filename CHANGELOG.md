@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enforce simulation state invariants [#174](https://github.com/acgetchell/causal-triangulations/pull/174)
 - Encode nonzero CDT invariants
 - Run continuation through planned proposals [#153](https://github.com/acgetchell/causal-triangulations/pull/153)
+- Encode trace and count invariants [#164](https://github.com/acgetchell/causal-triangulations/pull/164)
+- Enforce trace profile invariants [#164](https://github.com/acgetchell/causal-triangulations/pull/164)
 - Enforce CDT and backend invariants
 - Harden CDT telemetry and profiled initialization
 - Reject volume-profile override overflows
@@ -32,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Merged Pull Requests
 
 - Enforce simulation state invariants [#174](https://github.com/acgetchell/causal-triangulations/pull/174)
+- Encode trace and count invariants [#164](https://github.com/acgetchell/causal-triangulations/pull/164)
+- Enforce trace profile invariants [#164](https://github.com/acgetchell/causal-triangulations/pull/164)
 - Require validated CDT runtime configs [#163](https://github.com/acgetchell/causal-triangulations/pull/163)
 - Tighten coverage and doctest assertion checks [#163](https://github.com/acgetchell/causal-triangulations/pull/163)
 - Tighten Semgrep fixture coverage [#162](https://github.com/acgetchell/causal-triangulations/pull/162)
@@ -535,6 +539,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     history.
   - Carry validated config, volume, and foliation counts as NonZeroU32 so downstream construction can rely on nonzero invariants.
   - Add Semgrep guardrails around planned-step telemetry and sampler-state synchronization.
+
+- [**breaking**] Encode trace and count invariants [#164](https://github.com/acgetchell/causal-triangulations/pull/164)
+  [`d843d16`](https://github.com/acgetchell/causal-triangulations/commit/d843d165d0392ad1e179e3d43a7984491faa5a18)
+
+  - Represent constructed CDT simplex counts with invariant-bearing nonzero types while keeping raw backend geometry counts as usize.
+  - Replace public measurement and Metropolis step fields with typed accessors and outcome-specific telemetry payloads.
+  - Export simulation diagnostics through upstream scalar trace CSV rows instead of legacy measurement CSV rows.
+  - Remove saturating telemetry downcasts in favor of checked conversions and structured count/trace error variants.
+  - Update docs, examples, preludes, and tooling guidance for the new trace and count contracts.
+
+- [**breaking**] Enforce trace profile invariants [#164](https://github.com/acgetchell/causal-triangulations/pull/164)
+  [`f481bc2`](https://github.com/acgetchell/causal-triangulations/commit/f481bc2bdf9d1ad727a90b12e4c35f67a7c8bf9c)
+
+  - Reject measurement and scalar trace volume profiles whose totals exceed the stored triangle count.
+  - Preserve checkpoint seed metadata across resumed scalar trace rows and reject mismatched trace seeds during validation.
+  - Clarify that CSV output carries trace rows while JSON output carries summary metadata and final triangulation data.
 
 ### Dependencies
 

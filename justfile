@@ -905,7 +905,7 @@ test-release: _ensure-cargo-nextest
     cargo test --doc --release
 
 test-slow: _ensure-cargo-nextest
-    cargo nextest run --tests --features slow-tests --verbose
+    CDT_LARGE_DEBUG_MAX_RUNTIME_SECS=1800 cargo nextest run --cargo-profile perf --tests --features slow-tests --verbose
 
 toml-check: toml-fmt-check toml-lint
 
