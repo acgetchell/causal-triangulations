@@ -821,6 +821,7 @@ impl MetropolisRunState {
     /// from the invariant-checked triangulation payload.
     fn from_checkpoint(checkpoint: CdtMcmcCheckpoint) -> CdtResult<Self> {
         validate_checkpoint_counters(&checkpoint)?;
+        let stored_action = checkpoint.current_action();
         let target = CdtTarget::new(
             checkpoint.action_config.clone(),
             checkpoint.config.temperature(),
@@ -828,10 +829,10 @@ impl MetropolisRunState {
         let triangulation = restore_checkpoint_state(checkpoint.chain, &target)?;
         triangulation.validate_evolved_cdt()?;
         let actual_action = action_for(&checkpoint.action_config, &triangulation);
-        if !actions_match(actual_action, checkpoint.current_action) {
+        if !actions_match(actual_action, stored_action) {
             return Err(checkpoint_resume_failed(
                 CheckpointResumeFailure::ActionMismatch {
-                    stored: checkpoint.current_action,
+                    stored: stored_action,
                     recomputed: actual_action,
                 },
             ));
@@ -840,7 +841,7 @@ impl MetropolisRunState {
         Ok(Self {
             triangulation,
             current_step: checkpoint.current_step.get(),
-            current_action: checkpoint.current_action,
+            current_action: stored_action,
             trace_seed: checkpoint.config.seed(),
             acceptance_rng: checkpoint.acceptance_rng,
             ergodics: checkpoint.ergodics,
@@ -1445,7 +1446,7 @@ mod tests {
             .expect("synthetic rejected checkpoint should validate")
     }
 
-    fn synthetic_one_step_checkpoint(accepted: bool) -> CdtMcmcCheckpoint {
+    fn synthetic_one_step_checkpoint_parts(accepted: bool) -> CdtMcmcCheckpointParts {
         let triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let config = seeded_metropolis_config(1.0, 1, 0, 1, 13);
@@ -1465,7 +1466,7 @@ mod tests {
             CdtScalarTraceOutcome::RejectedProposal
         };
 
-        CdtMcmcCheckpoint::from_parts(CdtMcmcCheckpointParts {
+        CdtMcmcCheckpointParts {
             triangulation: triangulation.clone(),
             accepted: usize::from(accepted),
             rejected: usize::from(!accepted),
@@ -1508,8 +1509,12 @@ mod tests {
             elapsed_time: Duration::ZERO,
             acceptance_rng: simulation_rng(Some(1)),
             ergodics: ErgodicsSystem::with_seed(2),
-        })
-        .expect("synthetic checkpoint should validate")
+        }
+    }
+
+    fn synthetic_one_step_checkpoint(accepted: bool) -> CdtMcmcCheckpoint {
+        CdtMcmcCheckpoint::from_parts(synthetic_one_step_checkpoint_parts(accepted))
+            .expect("synthetic checkpoint should validate")
     }
 
     fn empty_run_state(triangulation: CdtTriangulation2D) -> MetropolisRunState {
@@ -1961,6 +1966,42 @@ mod tests {
     }
 
     #[test]
+    fn serialized_checkpoint_rejects_mismatched_current_action() {
+        let checkpoint = serializable_rejected_checkpoint(ActionConfig::default());
+        let mut payload = to_value(&checkpoint).expect("checkpoint should serialize");
+        payload["current_action"] =
+            to_value(checkpoint.current_action() + 1.0).expect("action should serialize");
+
+        let Err(error) = from_str::<CdtMcmcCheckpoint>(&payload.to_string()) else {
+            panic!("checkpoint action mismatch should fail while parsing");
+        };
+
+        assert!(
+            error.to_string().contains("checkpoint action mismatch"),
+            "unexpected serde error: {error}"
+        );
+    }
+
+    #[test]
+    fn checkpoint_validation_rejects_nonfinite_current_action() {
+        for current_action in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let mut parts = synthetic_one_step_checkpoint_parts(false);
+            parts.current_action = current_action;
+
+            assert_checkpoint_resume_failed(
+                CdtMcmcCheckpoint::from_parts(parts),
+                |failure| match failure {
+                    CheckpointResumeFailure::NonFiniteCheckpointAction { stored } => {
+                        stored.to_bits() == current_action.to_bits()
+                    }
+                    _ => false,
+                },
+                "checkpoint action is non-finite",
+            );
+        }
+    }
+
+    #[test]
     fn serialized_checkpoint_rejects_zero_step_telemetry() {
         let checkpoint = serializable_rejected_checkpoint(ActionConfig::default());
         let mut payload = to_value(&checkpoint).expect("checkpoint should serialize");
@@ -2270,7 +2311,7 @@ mod tests {
         checkpoint.steps[0] = rejected_proposal_step(
             1,
             checkpoint.steps[0].move_type(),
-            checkpoint.current_action,
+            checkpoint.current_action(),
             None,
         );
         let algorithm = MetropolisAlgorithm::new(
@@ -2452,16 +2493,12 @@ mod tests {
     }
 
     #[test]
-    fn resume_rejects_checkpoint_action_mismatch() {
-        let mut checkpoint = short_checkpoint();
-        checkpoint.current_action += 1.0;
-        let algorithm = MetropolisAlgorithm::new(
-            seeded_metropolis_config(1.0, 2, 0, 1, 999),
-            ActionConfig::default(),
-        );
+    fn checkpoint_from_parts_rejects_action_mismatch() {
+        let mut parts = synthetic_one_step_checkpoint_parts(false);
+        parts.current_action += 1.0;
 
         assert_checkpoint_resume_failed(
-            algorithm.resume_from_checkpoint(checkpoint),
+            CdtMcmcCheckpoint::from_parts(parts),
             |failure| matches!(failure, CheckpointResumeFailure::ActionMismatch { .. }),
             "checkpoint action mismatch",
         );

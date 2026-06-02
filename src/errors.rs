@@ -669,6 +669,12 @@ pub enum CheckpointResumeFailure {
         /// Action recomputed from the restored triangulation.
         recomputed: f64,
     },
+    /// Stored checkpoint action is NaN or infinite.
+    #[error("checkpoint action is non-finite: stored {stored}")]
+    NonFiniteCheckpointAction {
+        /// Serialized action stored in the checkpoint.
+        stored: f64,
+    },
     /// Action configuration differs from the checkpoint.
     #[error("action configuration differs from checkpoint")]
     IncompatibleActionConfiguration,
@@ -1833,6 +1839,13 @@ mod tests {
         assert_eq!(
             failure.to_string(),
             "chain counters do not match move statistics: chain accepted=1, rejected=2; move accepted=3, rejected=4"
+        );
+
+        let action_failure =
+            CheckpointResumeFailure::NonFiniteCheckpointAction { stored: f64::NAN };
+        assert_eq!(
+            action_failure.to_string(),
+            "checkpoint action is non-finite: stored NaN"
         );
     }
 

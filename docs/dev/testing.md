@@ -176,6 +176,9 @@ Run feature-gated slow integration tests:
 just test-slow
 ```
 
+Slow tests run through the repository `perf` Cargo profile and set a wall-clock cap for large-scale debug runs. This keeps stress probes aligned with
+release/debug recipes and prevents default test-profile runtime from dominating slow validation.
+
 Run all tests:
 
 ```bash

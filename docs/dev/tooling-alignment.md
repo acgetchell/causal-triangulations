@@ -47,7 +47,8 @@ Some differences remain because CDT has different workflows and project invarian
 - CDT keeps `archive-changelog` so completed release series move under `docs/archive/changelog/`; MCMC does not yet archive old changelog sections.
 - CDT keeps a dedicated `performance.yml` workflow and local `perf-*` recipes. MCMC does not have matching CDT benchmark-baseline tooling.
 - CDT exposes feature-gated long-running Rust checks through the `slow-tests` Cargo feature and the `just test-slow` recipe, keeping normal CI fast while giving
-  stabilization work a named path for heavier integration coverage.
+  stabilization work a named path for heavier integration coverage. Issue #140 release validation runs those slow tests through CDT's local `perf` profile,
+  matching the dedicated large-scale debug recipes instead of measuring default test-profile overhead.
 - CDT has a repository rule SARIF workflow for the local Semgrep rules. A Codacy workflow was not ported because it depends on project-specific
   `CODACY_PROJECT_TOKEN` setup and would duplicate the existing repository-rule SARIF signal until Codacy is configured for this repository.
 - CDT Semgrep rules include geometry-backend isolation, foliation/topology validation, focused prelude imports, doctest assertion-idiom enforcement,
@@ -90,7 +91,8 @@ The useful Semgrep updates ported from the sibling `delaunay` repository are:
 
 The useful `justfile` updates ported from `delaunay` are:
 
-- `ci-slow`, a named CI-plus-slow-tests workflow using CDT's existing `slow-tests` feature gate;
+- `ci-slow`, a named CI-plus-slow-tests workflow using CDT's existing `slow-tests` feature gate and local `perf` profile so large-scale toroidal probes validate
+  release-relevant behavior within a bounded runtime;
 - `cargo nextest` for runnable Rust unit, integration, CLI, slow, example, and release test recipes, while keeping rustdoc doctests on `cargo test --doc`
   because nextest does not execute doctests;
 - single-pass release example builds in `scripts/run_all_examples.sh`, which preserve semantic output validation while avoiding repeated `cargo run --example`

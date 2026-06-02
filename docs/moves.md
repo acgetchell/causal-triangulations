@@ -85,10 +85,11 @@ non-success `MoveResult`. Toroidal post-move topology or closed-ring foliation f
 site was geometrically editable but would break the periodic CDT contract.
 
 The Metropolis loop first selects an explicit local proposal site, clones the current triangulation, and applies that exact site on the cloned proposed state;
-see `src/cdt/metropolis/runner.rs` and `src/cdt/metropolis/adapter.rs`. It then performs the accept/reject decision from the proposed move metadata; see
-`docs/metropolis.md`. Only accepted proposals
-swap the cloned, mutated state into the live simulation. Ordinary causal, geometric, or backend edit failures on the cloned state are self-loop proposal
-outcomes recorded in `ProposalStatistics`; hard backend mutation or invariant-refresh failures still return `CdtError::MetropolisMoveApplicationFailed`.
+see `src/cdt/metropolis/runner.rs` and `src/cdt/metropolis/adapter.rs`. The CDT proposal adapter scores the planned move with its action change and
+forward/reverse local-site ratio, then the upstream `markov-chain-monte-carlo` sampler owns the Metropolis-Hastings accept/reject draw and generic chain
+counters; see `docs/metropolis.md`. Only accepted proposals swap the cloned, mutated state into the live simulation. Ordinary causal, geometric, or backend
+edit failures on the cloned state are self-loop proposal outcomes recorded in `ProposalStatistics`; hard backend mutation or invariant-refresh failures still
+return `CdtError::MetropolisMoveApplicationFailed`.
 
 ## Ensemble And Volume Fixing
 

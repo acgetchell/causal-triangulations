@@ -37,11 +37,12 @@ See [CHANGELOG.md](CHANGELOG.md) for release history.
 
 ## 🚧 Project Status
 
-🚧 **Pre-release (0.0.x)** — The 1+1 CDT foundation is implemented and tested, but this crate is still under active development and
-**not yet ready for production use**. APIs, data structures, and module boundaries may change before v0.1.0.
+🚧 **v0.1.0 release-readiness** — The validated 1+1 CDT foundation is in place, including toroidal volume-changing moves, nonuniform initial volume
+profiles, upstream-backed MCMC sampler mechanics, and CI-aligned validation tooling. The crate remains unreleased at v0.1.0 until the release PR merges and the
+v0.1.0 package and tag are cut.
 
-The library currently supports validated 1+1 CDT construction, foliation checks, Metropolis sampling, and core observables. Higher-dimensional CDT support, full
-move-kernel maturity, visualization/export workflows, and advanced ensemble-analysis helpers remain roadmap work.
+The library currently supports validated 1+1 CDT construction, foliation checks, Metropolis sampling, resumable checkpoints, and core observables.
+Higher-dimensional CDT support, visualization/export workflows, and advanced ensemble-analysis helpers remain roadmap work.
 
 See [`docs/roadmap.md`](docs/roadmap.md) for current direction, near-term candidates, and non-goals.
 

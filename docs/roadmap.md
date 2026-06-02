@@ -13,16 +13,21 @@ The v0.1.0 foundation work focuses on making the crate a usable, validated 1+1 C
 - [x] Explicit toroidal S¹×S¹ CDT construction with χ = 0 validation
 - [x] Per-vertex foliation labels, causality checks, and strict Up/Down simplex classification
 - [x] Real 2D ergodic move kernels over Delaunay backend edit operations
-- [x] Concrete planned-proposal Metropolis-Hastings loop with forward/reverse local-site weighting
+- [x] Planned-proposal Metropolis execution through the upstream `markov-chain-monte-carlo` sampler with forward/reverse local-site weighting
 - [x] Toroidal Metropolis regression coverage requiring accepted periodic moves while preserving topology and foliation
 - [x] CLI and configuration support for open-boundary and toroidal topology selection
 - [x] Volume-profile, Hausdorff-dimension, and spectral-dimension observables on the combinatorial dual graph
 - [x] Repository validation loop covering Rust, Python support scripts, Semgrep rules, documentation, examples, and benchmarks
-- [ ] Support variable spatial volume profiles for 1+1 CDT initial geometries
-  ([#141](https://github.com/acgetchell/causal-triangulations/issues/141))
-- [ ] Track release-readiness gates for the first public release
+- [x] Support variable spatial volume profiles for 1+1 CDT initial geometries
+  ([#141](https://github.com/acgetchell/causal-triangulations/issues/141)). Open-boundary and toroidal constructors now accept explicit per-slice `N(t)`
+  profiles, while regular constructors remain the equal-slice initial-data path.
+- [x] Align CI and security tooling with the shared Rust workflow
+  ([#162](https://github.com/acgetchell/causal-triangulations/issues/162))
+- [x] Upgrade to Rust 1.96.0 and the released `markov-chain-monte-carlo` v0.4.0 baseline
+  ([#163](https://github.com/acgetchell/causal-triangulations/issues/163))
+- [x] Track release-readiness gates for the first public release
   ([#140](https://github.com/acgetchell/causal-triangulations/issues/140))
-- [ ] Audit public doctests for fallible error handling
+- [x] Audit public doctests for fallible error handling
   ([#151](https://github.com/acgetchell/causal-triangulations/issues/151))
 - [x] Use chunked Metropolis sweeps in large-scale 1+1 CDT debug runs
   ([#152](https://github.com/acgetchell/causal-triangulations/issues/152)). The v0.1.0 scientific-utility bar requires the large-scale debug path to exercise
@@ -30,12 +35,10 @@ The v0.1.0 foundation work focuses on making the crate a usable, validated 1+1 C
 - [x] Align chunked Metropolis continuation with the upstream resumable sampler pattern
   ([#153](https://github.com/acgetchell/causal-triangulations/issues/153)). CDT chunk execution now drives the proposal-plan adapter through
   `markov-chain-monte-carlo` v0.4 sampler continuation while preserving CDT-owned measurements, proposal telemetry, and current-volume sweep sizing.
-- [ ] Enforce the MCMC backend boundary
-  ([#155](https://github.com/acgetchell/causal-triangulations/issues/155)). Because GitHub releases are archived by Zenodo, the DOI-backed `v0.1.0` release
-  should not ship with generic Metropolis-Hastings mechanics duplicated in CDT-local code. Complete this after an updated `markov-chain-monte-carlo` release
-  provides the needed upstream resumable-sampler and planned-step telemetry APIs
-  ([markov-chain-monte-carlo#60](https://github.com/acgetchell/markov-chain-monte-carlo/issues/60),
-  [markov-chain-monte-carlo#61](https://github.com/acgetchell/markov-chain-monte-carlo/issues/61)).
+- [x] Enforce the MCMC backend boundary
+  ([#155](https://github.com/acgetchell/causal-triangulations/issues/155)). The production runner delegates generic acceptance/rejection,
+  proposal-ratio application, planned-proposal commit ordering, and chain-counter mechanics to `markov-chain-monte-carlo` through thin CDT adapters, with
+  repository rules guarding against accidental CDT-local reintroduction.
 
 ## 1+1 Maturity
 
