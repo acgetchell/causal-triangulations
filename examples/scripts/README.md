@@ -18,7 +18,7 @@ This directory contains shell scripts that demonstrate how to use the `cdt` comm
 **What it does**:
 
 - Builds the cdt binary in release mode
-- Builds a 10-vertex, 5-timeslice command with 1000 requested MC steps
+- Builds a 4-vertices-per-slice, 5-timeslice command with 1000 requested MC steps
 - Shows logging output for a short `--simulate` run
 
 **Use this for**: First-time testing, verifying installation
@@ -100,7 +100,7 @@ Each script has configuration variables at the top that you can easily modify:
 
 ```bash
 # Edit the simulation parameters in the script
-VERTICES=10
+VERTICES_PER_SLICE=4
 TIMESLICES=5
 STEPS=1000
 TEMPERATURE=1.0
@@ -111,7 +111,7 @@ TEMPERATURE=1.0
 ```bash
 # Modify temperature range or fixed parameters
 TEMPERATURES=(0.5 0.8 1.0 1.2 1.5 2.0 2.5 3.0)
-VERTICES=20
+VERTICES_PER_SLICE=4
 TIMESLICES=8
 STEPS=2000
 ```
@@ -142,7 +142,7 @@ echo "=== Custom CDT Script ==="
 # Build the binary
 cargo build --release
 
-# Run with custom parameters. Remove --simulate for a successful triangulation-only run.
+# Run with custom parameters. Remove --simulate when you only want triangulation construction.
 RUST_LOG=info ./target/release/cdt \
     --vertices-per-slice 4 \
     --timeslices 10 \

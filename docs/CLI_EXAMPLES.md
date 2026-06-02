@@ -40,8 +40,8 @@ The `cdt` binary accepts various command-line arguments to configure and run CDT
 
 ### Physics Parameters
 
-- `--coupling-0 <κ₀>`: Coupling constant for vertices (default: 1.0)
-- `--coupling-2 <κ₂>`: Coupling constant for triangles (default: 1.0)
+- `--coupling-0 <κ₀>`: Coupling constant for vertices (default: 0.0)
+- `--coupling-2 <κ₂>`: Coupling constant for triangles (default: 0.0)
 - `--cosmological-constant <λ>`: Edge-count cosmological constant (default: `(2 / 3) ln 2`)
 
 ### Additional Options
@@ -271,9 +271,16 @@ RUST_LOG=warn ./target/release/cdt --vertices-per-slice 5 --timeslices 10 --simu
 ### Data Analysis
 
 ```bash
-# Pipe triangulation-only output to analysis tools
-./target/release/cdt --vertices-per-slice 5 --timeslices 10 | \
-  python analysis_script.py
+# Write stable interchange files for dataframe or notebook tools
+./target/release/cdt \
+  --vertices-per-slice 5 \
+  --timeslices 10 \
+  --steps 200 \
+  --thermalization-steps 20 \
+  --measurement-frequency 10 \
+  --simulate \
+  --output-csv trace.csv \
+  --output-json summary.json
 ```
 
 ### Automation
