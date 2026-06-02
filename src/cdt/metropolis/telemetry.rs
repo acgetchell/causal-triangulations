@@ -861,9 +861,12 @@ impl Error for CdtProposalSiteRejection {
 /// references returned by
 /// [`checkpoint proposal stats`][super::CdtMcmcCheckpoint::proposal_stats] or
 /// [`result proposal stats`][crate::cdt::results::SimulationResultsBackend::proposal_stats].
-/// Deserialization requires exactly one terminal outcome for every selected
-/// move-family proposal, and counters saturate at `u64::MAX` instead of
-/// wrapping.
+/// Deserialization normally requires exactly one terminal outcome for every
+/// selected move-family proposal, and counters saturate at `u64::MAX` instead
+/// of wrapping. When telemetry merges saturate a terminal counter or terminal
+/// sum, the exact terminal-outcome partition is no longer recoverable; in that
+/// case deserialization accepts the relaxed partition only when move-family
+/// proposals also saturated.
 ///
 /// # Examples
 ///
