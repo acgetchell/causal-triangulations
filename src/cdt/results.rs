@@ -24,6 +24,7 @@ use crate::errors::{
 use crate::geometry::CdtTriangulation2D;
 use crate::util::usize_to_f64;
 use serde::de::Error as DeError;
+use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::to_writer_pretty;
 use std::fmt::Display;
@@ -85,7 +86,7 @@ const CDT_TRACE_CHAIN_ID: ChainId = ChainId::new(0);
 
 /// Invariant-bearing CDT trace outcome stored in serialized result/checkpoint rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum CdtScalarTraceOutcome {
+pub enum CdtScalarTraceOutcome {
     /// A concrete proposal was accepted and committed.
     Accepted,
     /// A concrete proposal was rejected by Metropolis-Hastings.
@@ -103,29 +104,90 @@ impl CdtScalarTraceOutcome {
             Self::NoProposal => TraceStepOutcome::no_proposal(),
         }
     }
-
-    /// Whether this row records an accepted proposal.
-    pub(crate) const fn accepted(self) -> bool {
-        matches!(self, Self::Accepted)
-    }
 }
 
 /// A rectangular scalar trace row captured from the upstream planned-step outcome.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub(crate) struct CdtScalarTraceRow {
     step: NonZeroU32,
-    outcome: CdtScalarTraceOutcome,
+    payload: CdtScalarTracePayload,
     log_prob: f64,
     action: f64,
     vertices: NonZeroU32,
     edges: NonZeroU32,
     triangles: NonZeroU32,
     move_type: MoveType,
-    delta_action: Option<f64>,
     action_before: f64,
-    action_after: Option<f64>,
     seed: Option<u64>,
     volume_profile: Vec<u32>,
+}
+
+/// Outcome-specific scalar trace action evidence.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CdtScalarTracePayload {
+    /// Accepted proposals must carry both post-move action and action delta.
+    Accepted {
+        delta_action: f64,
+        action_after: f64,
+    },
+    /// Rejected concrete proposals may carry a scored proposal delta.
+    RejectedProposal { delta_action: Option<f64> },
+    /// Local proposal absence carries no concrete action evidence.
+    NoProposal,
+}
+
+impl CdtScalarTracePayload {
+    const fn from_parts(
+        step: NonZeroU32,
+        outcome: CdtScalarTraceOutcome,
+        delta_action: Option<f64>,
+        action_after: Option<f64>,
+    ) -> CdtResult<Self> {
+        match (outcome, delta_action, action_after) {
+            (CdtScalarTraceOutcome::Accepted, Some(delta_action), Some(action_after)) => {
+                Ok(Self::Accepted {
+                    delta_action,
+                    action_after,
+                })
+            }
+            (CdtScalarTraceOutcome::Accepted, None, _)
+            | (CdtScalarTraceOutcome::NoProposal, Some(_), _) => Err(checkpoint_resume_failed(
+                CheckpointResumeFailure::ScalarTraceDeltaActionMismatch { step: step.get() },
+            )),
+            (CdtScalarTraceOutcome::Accepted, Some(_), None)
+            | (CdtScalarTraceOutcome::RejectedProposal, _, Some(_))
+            | (CdtScalarTraceOutcome::NoProposal, None, Some(_)) => Err(checkpoint_resume_failed(
+                CheckpointResumeFailure::ScalarTraceActionAfterMismatch { step: step.get() },
+            )),
+            (CdtScalarTraceOutcome::RejectedProposal, delta_action, None) => {
+                Ok(Self::RejectedProposal { delta_action })
+            }
+            (CdtScalarTraceOutcome::NoProposal, None, None) => Ok(Self::NoProposal),
+        }
+    }
+
+    const fn outcome(self) -> CdtScalarTraceOutcome {
+        match self {
+            Self::Accepted { .. } => CdtScalarTraceOutcome::Accepted,
+            Self::RejectedProposal { .. } => CdtScalarTraceOutcome::RejectedProposal,
+            Self::NoProposal => CdtScalarTraceOutcome::NoProposal,
+        }
+    }
+
+    const fn delta_action(self) -> Option<f64> {
+        match self {
+            Self::Accepted { delta_action, .. } => Some(delta_action),
+            Self::RejectedProposal { delta_action } => delta_action,
+            Self::NoProposal => None,
+        }
+    }
+
+    const fn action_after(self) -> Option<f64> {
+        match self {
+            Self::Accepted { action_after, .. } => Some(action_after),
+            Self::RejectedProposal { .. } | Self::NoProposal => None,
+        }
+    }
 }
 
 /// Raw scalar trace shape used only while deserializing result and checkpoint payloads.
@@ -159,19 +221,23 @@ impl TryFrom<CdtScalarTraceRowWire> for CdtScalarTraceRow {
         let edges = nonzero_scalar_trace_count(MeasurementCountField::Edges, wire.edges)?;
         let triangles =
             nonzero_scalar_trace_count(MeasurementCountField::Triangles, wire.triangles)?;
+        let payload = CdtScalarTracePayload::from_parts(
+            step,
+            wire.outcome,
+            wire.delta_action,
+            wire.action_after,
+        )?;
         validate_scalar_trace_volume_profile(step, triangles, &wire.volume_profile)?;
         let row = Self {
             step,
-            outcome: wire.outcome,
+            payload,
             log_prob: wire.log_prob,
             action: wire.action,
             vertices,
             edges,
             triangles,
             move_type: wire.move_type,
-            delta_action: wire.delta_action,
             action_before: wire.action_before,
-            action_after: wire.action_after,
             seed: wire.seed,
             volume_profile: wire.volume_profile,
         };
@@ -188,6 +254,29 @@ impl<'de> Deserialize<'de> for CdtScalarTraceRow {
         CdtScalarTraceRowWire::deserialize(deserializer)?
             .try_into()
             .map_err(DeError::custom)
+    }
+}
+
+impl Serialize for CdtScalarTraceRow {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut state = serializer.serialize_struct("CdtScalarTraceRow", 13)?;
+        state.serialize_field("step", &self.step)?;
+        state.serialize_field("outcome", &self.payload.outcome())?;
+        state.serialize_field("log_prob", &self.log_prob)?;
+        state.serialize_field("action", &self.action)?;
+        state.serialize_field("vertices", &self.vertices)?;
+        state.serialize_field("edges", &self.edges)?;
+        state.serialize_field("triangles", &self.triangles)?;
+        state.serialize_field("move_type", &self.move_type)?;
+        state.serialize_field("delta_action", &self.payload.delta_action())?;
+        state.serialize_field("action_before", &self.action_before)?;
+        state.serialize_field("action_after", &self.payload.action_after())?;
+        state.serialize_field("seed", &self.seed)?;
+        state.serialize_field("volume_profile", &self.volume_profile)?;
+        state.end()
     }
 }
 
@@ -218,9 +307,10 @@ impl CdtScalarTraceRow {
         seed: Option<u64>,
     ) -> CdtResult<Self> {
         let counts = triangulation.simplex_counts()?;
+        let payload = CdtScalarTracePayload::from_parts(step, outcome, delta_action, action_after)?;
         let row = Self {
             step,
-            outcome,
+            payload,
             log_prob,
             action,
             vertices: nonzero_usize_measurement_count(
@@ -236,11 +326,9 @@ impl CdtScalarTraceRow {
                 counts.triangle_count(),
             )?,
             move_type,
-            delta_action,
             action_before,
-            action_after,
             seed,
-            volume_profile: triangulation.volume_profile(),
+            volume_profile: triangulation.volume_profile()?,
         };
         validate_scalar_trace_finite_fields(&row)?;
         Ok(row)
@@ -248,12 +336,14 @@ impl CdtScalarTraceRow {
 
     /// Converts the stored CDT outcome into the upstream trace outcome.
     const fn outcome(&self) -> TraceStepOutcome {
-        self.outcome.into_trace_outcome()
+        self.payload.outcome().into_trace_outcome()
     }
 
     /// Returns observable values in scalar trace observable order.
     fn observable_values(&self, volume_profile_len: usize) -> Vec<f64> {
         let (seed_low, seed_high, seed_present) = seed_observables(self.seed);
+        let delta_action = self.payload.delta_action();
+        let action_after = self.payload.action_after();
         let mut values =
             Vec::with_capacity(SCALAR_TRACE_BASE_OBSERVABLES.len() + volume_profile_len);
         values.extend([
@@ -262,11 +352,11 @@ impl CdtScalarTraceRow {
             f64::from(self.edges.get()),
             f64::from(self.triangles.get()),
             f64::from(move_type_code(self.move_type)),
-            self.delta_action.unwrap_or(0.0),
-            option_presence(self.delta_action),
+            delta_action.unwrap_or(0.0),
+            option_presence(delta_action),
             self.action_before,
-            self.action_after.unwrap_or(0.0),
-            option_presence(self.action_after),
+            action_after.unwrap_or(0.0),
+            option_presence(action_after),
             seed_low,
             seed_high,
             seed_present,
@@ -385,36 +475,98 @@ impl Measurement {
     }
 
     /// Returns the Monte Carlo step when this measurement was taken.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::Measurement;
+    ///
+    /// let measurement = Measurement::try_new(10, -12.5, 64, 180, 117)?;
+    /// assert_eq!(measurement.step(), 10);
+    /// # Ok::<(), causal_triangulations::prelude::errors::CdtError>(())
+    /// ```
     #[must_use]
     pub const fn step(&self) -> u32 {
         self.step
     }
 
     /// Returns the finite action value recorded at this measurement.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use approx::assert_relative_eq;
+    /// use causal_triangulations::prelude::simulation::Measurement;
+    ///
+    /// let measurement = Measurement::try_new(10, -12.5, 64, 180, 117)?;
+    /// assert_relative_eq!(measurement.action(), -12.5);
+    /// # Ok::<(), causal_triangulations::prelude::errors::CdtError>(())
+    /// ```
     #[must_use]
     pub const fn action(&self) -> f64 {
         self.action
     }
 
     /// Returns the nonzero vertex count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::Measurement;
+    ///
+    /// let measurement = Measurement::try_new(10, -12.5, 64, 180, 117)?;
+    /// assert_eq!(measurement.vertices().get(), 64);
+    /// # Ok::<(), causal_triangulations::prelude::errors::CdtError>(())
+    /// ```
     #[must_use]
     pub const fn vertices(&self) -> NonZeroU32 {
         self.vertices
     }
 
     /// Returns the nonzero edge count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::Measurement;
+    ///
+    /// let measurement = Measurement::try_new(10, -12.5, 64, 180, 117)?;
+    /// assert_eq!(measurement.edges().get(), 180);
+    /// # Ok::<(), causal_triangulations::prelude::errors::CdtError>(())
+    /// ```
     #[must_use]
     pub const fn edges(&self) -> NonZeroU32 {
         self.edges
     }
 
     /// Returns the nonzero triangle count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::Measurement;
+    ///
+    /// let measurement = Measurement::try_new(10, -12.5, 64, 180, 117)?;
+    /// assert_eq!(measurement.triangles().get(), 117);
+    /// # Ok::<(), causal_triangulations::prelude::errors::CdtError>(())
+    /// ```
     #[must_use]
     pub const fn triangles(&self) -> NonZeroU32 {
         self.triangles
     }
 
     /// Returns per-slice triangle counts `N₂(t)` by time slab.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::Measurement;
+    ///
+    /// let measurement =
+    ///     Measurement::try_new(10, -12.5, 64, 180, 117)?.try_with_volume_profile(vec![39, 39, 39])?;
+    /// assert_eq!(measurement.volume_profile(), &[39, 39, 39]);
+    /// # Ok::<(), causal_triangulations::prelude::errors::CdtError>(())
+    /// ```
     #[must_use]
     pub fn volume_profile(&self) -> &[u32] {
         &self.volume_profile
@@ -633,15 +785,57 @@ struct SimulationResultsBackendWire {
 
 /// Validated components for constructing a simulation result snapshot.
 pub(crate) struct SimulationResultsParts {
-    pub(crate) config: MetropolisConfig,
-    pub(crate) action_config: ActionConfig,
-    pub(crate) move_stats: MoveStatistics,
-    pub(crate) proposal_stats: ProposalStatistics,
-    pub(crate) steps: Vec<MonteCarloStep>,
-    pub(crate) measurements: Vec<Measurement>,
-    pub(crate) scalar_trace_rows: Vec<CdtScalarTraceRow>,
-    pub(crate) elapsed_time: Duration,
-    pub(crate) triangulation: CdtTriangulation2D,
+    config: MetropolisConfig,
+    action_config: ActionConfig,
+    move_stats: MoveStatistics,
+    proposal_stats: ProposalStatistics,
+    steps: Vec<MonteCarloStep>,
+    measurements: Vec<Measurement>,
+    scalar_trace_rows: Vec<CdtScalarTraceRow>,
+    elapsed_time: Duration,
+    triangulation: CdtTriangulation2D,
+}
+
+impl SimulationResultsParts {
+    /// Parses raw result components into a validated result-parts proof.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "result snapshots are assembled from independent telemetry streams"
+    )]
+    pub(crate) fn new(
+        config: MetropolisConfig,
+        action_config: ActionConfig,
+        move_stats: MoveStatistics,
+        proposal_stats: ProposalStatistics,
+        steps: Vec<MonteCarloStep>,
+        measurements: Vec<Measurement>,
+        scalar_trace_rows: Vec<CdtScalarTraceRow>,
+        elapsed_time: Duration,
+        triangulation: CdtTriangulation2D,
+    ) -> CdtResult<Self> {
+        config.validate();
+        action_config.validate();
+        triangulation.validate_evolved_cdt()?;
+        validate_result_telemetry(
+            &config,
+            &move_stats,
+            &proposal_stats,
+            &steps,
+            &measurements,
+            &scalar_trace_rows,
+        )?;
+        Ok(Self {
+            config,
+            action_config,
+            move_stats,
+            proposal_stats,
+            steps,
+            measurements,
+            scalar_trace_rows,
+            elapsed_time,
+            triangulation,
+        })
+    }
 }
 
 impl TryFrom<SimulationResultsBackendWire> for SimulationResultsBackend {
@@ -920,7 +1114,7 @@ pub(crate) fn validate_scalar_trace_rows(
     let mut no_proposal = 0_u64;
     for (step, row) in steps.iter().zip(scalar_trace_rows) {
         validate_scalar_trace_row(config, step, row)?;
-        match row.outcome {
+        match row.payload.outcome() {
             CdtScalarTraceOutcome::Accepted => accepted = accepted.saturating_add(1),
             CdtScalarTraceOutcome::RejectedProposal => {
                 rejected_proposal = rejected_proposal.saturating_add(1);
@@ -984,12 +1178,12 @@ fn validate_scalar_trace_row(
         ));
     }
     let expected_outcome = scalar_trace_outcome_from_step(step);
-    if row.outcome != expected_outcome {
+    if row.payload.outcome() != expected_outcome {
         return Err(checkpoint_resume_failed(
             CheckpointResumeFailure::ScalarTraceAcceptedMismatch {
                 step: step_number,
-                actual: row.outcome.accepted(),
-                expected: expected_outcome.accepted(),
+                actual: row.payload.outcome(),
+                expected: expected_outcome,
             },
         ));
     }
@@ -1007,12 +1201,12 @@ fn validate_scalar_trace_row(
             CheckpointResumeFailure::ScalarTraceActionBeforeMismatch { step: step_number },
         ));
     }
-    if !optional_actions_match(row.delta_action, step.delta_action()) {
+    if !optional_actions_match(row.payload.delta_action(), step.delta_action()) {
         return Err(checkpoint_resume_failed(
             CheckpointResumeFailure::ScalarTraceDeltaActionMismatch { step: step_number },
         ));
     }
-    if !optional_actions_match(row.action_after, step.action_after()) {
+    if !optional_actions_match(row.payload.action_after(), step.action_after()) {
         return Err(checkpoint_resume_failed(
             CheckpointResumeFailure::ScalarTraceActionAfterMismatch { step: step_number },
         ));
@@ -1045,10 +1239,10 @@ fn validate_scalar_trace_finite_fields(row: &CdtScalarTraceRow) -> CdtResult<()>
     validate_scalar_trace_finite(row.step, ScalarTraceField::LogProb, row.log_prob)?;
     validate_scalar_trace_finite(row.step, ScalarTraceField::Action, row.action)?;
     validate_scalar_trace_finite(row.step, ScalarTraceField::ActionBefore, row.action_before)?;
-    if let Some(delta_action) = row.delta_action {
+    if let Some(delta_action) = row.payload.delta_action() {
         validate_scalar_trace_finite(row.step, ScalarTraceField::DeltaAction, delta_action)?;
     }
-    if let Some(action_after) = row.action_after {
+    if let Some(action_after) = row.payload.action_after() {
         validate_scalar_trace_finite(row.step, ScalarTraceField::ActionAfter, action_after)?;
     }
     Ok(())
@@ -1206,18 +1400,7 @@ impl SimulationResultsBackend {
         elapsed_time: Duration,
         triangulation: CdtTriangulation2D,
     ) -> CdtResult<Self> {
-        config.validate();
-        action_config.validate();
-        triangulation.validate_evolved_cdt()?;
-        validate_result_telemetry(
-            &config,
-            &move_stats,
-            &proposal_stats,
-            &steps,
-            &measurements,
-            &scalar_trace_rows,
-        )?;
-        Ok(Self::from_parts(SimulationResultsParts {
+        Ok(Self::from_parts(SimulationResultsParts::new(
             config,
             action_config,
             move_stats,
@@ -1227,7 +1410,7 @@ impl SimulationResultsBackend {
             scalar_trace_rows,
             elapsed_time,
             triangulation,
-        }))
+        )?))
     }
 
     /// Creates a result snapshot from components that were already validated by this crate.
@@ -1704,6 +1887,12 @@ impl SimulationResultsBackend {
     /// triangulation snapshots in [`Measurement`] or rerunning the chain.
     /// For ensemble-style recorded data, see [`Self::average_volume_profile`].
     ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::ValidationFailed`] if the final triangulation's
+    /// backend face adjacency cannot be resolved or if observable counters cannot
+    /// be represented as finite fitting inputs.
+    ///
     /// # Examples
     ///
     /// ```
@@ -1718,13 +1907,12 @@ impl SimulationResultsBackend {
     ///     )
     ///     .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
     ///     assert!(results
-    ///         .hausdorff_dimension_estimate()
+    ///         .hausdorff_dimension_estimate()?
     ///         .is_some_and(f64::is_finite));
     ///     Ok(())
     /// }
     /// ```
-    #[must_use]
-    pub fn hausdorff_dimension_estimate(&self) -> Option<f64> {
+    pub fn hausdorff_dimension_estimate(&self) -> CdtResult<Option<f64>> {
         estimate_hausdorff_dimension(&self.triangulation)
     }
 
@@ -1737,6 +1925,12 @@ impl SimulationResultsBackend {
     /// require storing triangulation snapshots in [`Measurement`] or rerunning
     /// the chain. For ensemble-style recorded data, see
     /// [`Self::average_volume_profile`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::ValidationFailed`] if the final triangulation's
+    /// backend face adjacency cannot be resolved or if observable counters cannot
+    /// be represented as finite fitting inputs.
     ///
     /// # Examples
     ///
@@ -1752,13 +1946,12 @@ impl SimulationResultsBackend {
     ///     )
     ///     .run(CdtTriangulation::from_toroidal_cdt(6, 6)?)?;
     ///     assert!(results
-    ///         .spectral_dimension_estimate()
+    ///         .spectral_dimension_estimate()?
     ///         .is_some_and(f64::is_finite));
     ///     Ok(())
     /// }
     /// ```
-    #[must_use]
-    pub fn spectral_dimension_estimate(&self) -> Option<f64> {
+    pub fn spectral_dimension_estimate(&self) -> CdtResult<Option<f64>> {
         estimate_spectral_dimension(&self.triangulation)
     }
 
@@ -2458,9 +2651,9 @@ mod tests {
                 0.0,
                 &triangulation,
                 MoveType::Move22,
-                None,
+                Some(0.0),
                 0.0,
-                None,
+                Some(0.0),
                 config.seed(),
             )
             .expect("trace row should build"),
@@ -2487,8 +2680,8 @@ mod tests {
             CdtError::CheckpointResumeFailed {
                 failure: CheckpointResumeFailure::ScalarTraceAcceptedMismatch {
                     step: 1,
-                    actual: true,
-                    expected: false
+                    actual: CdtScalarTraceOutcome::Accepted,
+                    expected: CdtScalarTraceOutcome::NoProposal
                 }
             }
         );
@@ -2873,13 +3066,78 @@ mod tests {
     }
 
     #[test]
+    fn scalar_trace_row_rejects_outcome_payload_mismatch_before_storage() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let cases = [
+            (
+                CdtScalarTraceOutcome::Accepted,
+                None,
+                Some(4.0),
+                CheckpointResumeFailure::ScalarTraceDeltaActionMismatch { step: 1 },
+            ),
+            (
+                CdtScalarTraceOutcome::Accepted,
+                Some(0.0),
+                None,
+                CheckpointResumeFailure::ScalarTraceActionAfterMismatch { step: 1 },
+            ),
+            (
+                CdtScalarTraceOutcome::RejectedProposal,
+                Some(0.0),
+                Some(4.0),
+                CheckpointResumeFailure::ScalarTraceActionAfterMismatch { step: 1 },
+            ),
+            (
+                CdtScalarTraceOutcome::NoProposal,
+                Some(0.0),
+                None,
+                CheckpointResumeFailure::ScalarTraceDeltaActionMismatch { step: 1 },
+            ),
+            (
+                CdtScalarTraceOutcome::NoProposal,
+                None,
+                Some(4.0),
+                CheckpointResumeFailure::ScalarTraceActionAfterMismatch { step: 1 },
+            ),
+        ];
+
+        for (outcome, delta_action, action_after, expected) in cases {
+            let error = CdtScalarTraceRow::new(
+                step_number(1),
+                outcome,
+                -4.0,
+                4.0,
+                &triangulation,
+                MoveType::Move22,
+                delta_action,
+                4.0,
+                action_after,
+                None,
+            )
+            .expect_err("scalar trace rows should reject mismatched outcome payloads");
+
+            assert_checkpoint_resume_failure(&error, &expected);
+        }
+    }
+
+    #[test]
     fn scalar_trace_row_rejects_nonfinite_numeric_fields_before_storage() {
         let triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let cases = [
-            (ScalarTraceField::LogProb, f64::NAN, 0.0, None, 0.0, None),
+            (
+                ScalarTraceField::LogProb,
+                CdtScalarTraceOutcome::RejectedProposal,
+                f64::NAN,
+                0.0,
+                None,
+                0.0,
+                None,
+            ),
             (
                 ScalarTraceField::Action,
+                CdtScalarTraceOutcome::RejectedProposal,
                 -0.0,
                 f64::INFINITY,
                 None,
@@ -2888,6 +3146,7 @@ mod tests {
             ),
             (
                 ScalarTraceField::ActionBefore,
+                CdtScalarTraceOutcome::RejectedProposal,
                 -0.0,
                 0.0,
                 None,
@@ -2896,6 +3155,7 @@ mod tests {
             ),
             (
                 ScalarTraceField::DeltaAction,
+                CdtScalarTraceOutcome::RejectedProposal,
                 -0.0,
                 0.0,
                 Some(f64::NAN),
@@ -2904,18 +3164,28 @@ mod tests {
             ),
             (
                 ScalarTraceField::ActionAfter,
+                CdtScalarTraceOutcome::Accepted,
                 -0.0,
                 0.0,
-                None,
+                Some(0.0),
                 0.0,
                 Some(f64::INFINITY),
             ),
         ];
 
-        for (expected_field, log_prob, action, delta_action, action_before, action_after) in cases {
+        for (
+            expected_field,
+            outcome,
+            log_prob,
+            action,
+            delta_action,
+            action_before,
+            action_after,
+        ) in cases
+        {
             let error = CdtScalarTraceRow::new(
                 step_number(1),
-                CdtScalarTraceOutcome::RejectedProposal,
+                outcome,
                 log_prob,
                 action,
                 &triangulation,
@@ -3614,12 +3884,18 @@ mod tests {
         );
 
         assert_optional_relative_eq(
-            results.hausdorff_dimension_estimate(),
-            estimate_hausdorff_dimension(results.triangulation()),
+            results
+                .hausdorff_dimension_estimate()
+                .expect("result triangulation adjacency should be readable"),
+            estimate_hausdorff_dimension(results.triangulation())
+                .expect("result triangulation adjacency should be readable"),
         );
         assert_optional_relative_eq(
-            results.spectral_dimension_estimate(),
-            estimate_spectral_dimension(results.triangulation()),
+            results
+                .spectral_dimension_estimate()
+                .expect("result triangulation adjacency should be readable"),
+            estimate_spectral_dimension(results.triangulation())
+                .expect("result triangulation adjacency should be readable"),
         );
     }
 
@@ -3634,7 +3910,17 @@ mod tests {
             triangulation,
         );
 
-        assert!(results.hausdorff_dimension_estimate().is_none());
-        assert!(results.spectral_dimension_estimate().is_none());
+        assert!(
+            results
+                .hausdorff_dimension_estimate()
+                .expect("tiny triangulation adjacency should be readable")
+                .is_none()
+        );
+        assert!(
+            results
+                .spectral_dimension_estimate()
+                .expect("tiny triangulation adjacency should be readable")
+                .is_none()
+        );
     }
 }

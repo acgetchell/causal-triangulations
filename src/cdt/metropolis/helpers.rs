@@ -114,8 +114,9 @@ pub fn action_for(action_config: &ActionConfig, triangulation: &CdtTriangulation
 /// Returns [`CdtError::InvalidSimplexCount`] if the live triangulation reports
 /// zero vertices, edges, or triangles,
 /// [`CdtError::MeasurementCountOverflow`] if any live count cannot fit compact
-/// measurement storage, or [`CdtError::InvalidMeasurementAction`] if `action` is
-/// not finite.
+/// measurement storage, [`CdtError::InvalidMeasurementAction`] if `action` is
+/// not finite, or the validation error reported by
+/// [`CdtTriangulation2D::volume_profile`].
 pub fn measurement_for(
     step: u32,
     action: f64,
@@ -123,7 +124,7 @@ pub fn measurement_for(
 ) -> CdtResult<Measurement> {
     let counts = triangulation.simplex_counts()?;
     Measurement::try_from_simplex_counts(step, action, counts)?
-        .try_with_volume_profile(triangulation.volume_profile())
+        .try_with_volume_profile(triangulation.volume_profile()?)
 }
 
 /// Returns true when a completed step is on the post-thermalization measurement cadence.

@@ -2,6 +2,8 @@
 
 //! Adapter boundary between CDT state and `markov-chain-monte-carlo`.
 
+use super::helpers::{action_for, proposed_delta_action, simplex_counts, validate_temperature};
+use super::telemetry::{CdtProposalSiteRejection, ProposalStatistics};
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType, proposal_site_count};
 use crate::errors::{CdtError, CdtResult, MetropolisMoveApplicationFailure};
@@ -13,9 +15,6 @@ use rand::Rng;
 use std::error::Error;
 use std::fmt;
 use std::hint::cold_path;
-
-use super::helpers::{action_for, proposed_delta_action, simplex_counts, validate_temperature};
-use super::telemetry::{CdtProposalSiteRejection, ProposalStatistics};
 
 /// Target distribution for CDT: log-probability from the Regge action.
 ///
@@ -95,13 +94,11 @@ impl Target<CdtTriangulation2D> for CdtTarget {
 ///     MoveType::Move22 | MoveType::Move13Add | MoveType::Move31Remove | MoveType::EdgeFlip
 /// );
 /// assert!(plan.action_before().is_finite());
-/// if let (Some(delta), Some(action_after)) = (plan.delta_action(), plan.action_after()) {
-///     approx::assert_relative_eq!(
-///         action_after,
-///         plan.action_before() + delta,
-///         epsilon = 1e-12
-///     );
-/// }
+/// approx::assert_relative_eq!(
+///     plan.action_after(),
+///     plan.action_before() + plan.delta_action(),
+///     epsilon = 1e-12
+/// );
 /// # Ok(())
 /// # }
 /// ```
@@ -109,8 +106,8 @@ impl Target<CdtTriangulation2D> for CdtTarget {
 pub struct CdtProposalPlan {
     pub(crate) move_type: MoveType,
     pub(crate) action_before: f64,
-    pub(crate) action_after: Option<f64>,
-    pub(crate) delta_action: Option<f64>,
+    pub(crate) action_after: f64,
+    pub(crate) delta_action: f64,
     pub(crate) forward_site_count: usize,
     /// Reverse proposal-site denominator for the realized proposed state.
     ///
@@ -179,11 +176,10 @@ impl CdtProposalPlan {
         self.action_before
     }
 
-    /// Returns the action of the concrete proposed state, if one was realized.
+    /// Returns the action of the concrete proposed state.
     ///
-    /// A value of `None` means the selected move could not be scored or
-    /// realized, so [`DelayedProposal::proposed_log_prob`] treats the plan as
-    /// impossible.
+    /// Concrete plans are only constructed after a selected move has been
+    /// realized and scored.
     ///
     /// # Examples
     ///
@@ -200,16 +196,16 @@ impl CdtProposalPlan {
     /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
     ///     return Ok(());
     /// };
-    /// assert_eq!(plan.action_after().is_some(), plan.delta_action().is_some());
+    /// assert!(plan.action_after().is_finite());
     /// # Ok(())
     /// # }
     /// ```
     #[must_use]
-    pub const fn action_after(&self) -> Option<f64> {
+    pub const fn action_after(&self) -> f64 {
         self.action_after
     }
 
-    /// Returns the concrete proposal action change, if it can be evaluated.
+    /// Returns the concrete proposal action change.
     ///
     /// # Examples
     ///
@@ -226,18 +222,12 @@ impl CdtProposalPlan {
     /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
     ///     return Ok(());
     /// };
-    /// if let (Some(delta), Some(action_after)) = (plan.delta_action(), plan.action_after()) {
-    ///     approx::assert_relative_eq!(
-    ///         action_after,
-    ///         plan.action_before() + delta,
-    ///         epsilon = 1e-12
-    ///     );
-    /// }
+    /// approx::assert_relative_eq!(plan.action_after(), plan.action_before() + plan.delta_action());
     /// # Ok(())
     /// # }
     /// ```
     #[must_use]
-    pub const fn delta_action(&self) -> Option<f64> {
+    pub const fn delta_action(&self) -> f64 {
         self.delta_action
     }
 }
@@ -266,9 +256,9 @@ impl CdtProposalPlan {
 ///
 /// let info = proposal.info(&plan);
 /// assert_eq!(info.move_type, plan.move_type());
-/// assert_eq!(info.delta_action.is_some(), plan.delta_action().is_some());
-/// if let (Some(info_delta), Some(plan_delta)) = (info.delta_action, plan.delta_action()) {
-///     approx::assert_relative_eq!(info_delta, plan_delta, epsilon = 1e-12);
+/// assert!(info.delta_action.is_some());
+/// if let Some(delta_action) = info.delta_action {
+///     approx::assert_relative_eq!(delta_action, plan.delta_action(), epsilon = 1e-12);
 /// }
 /// # Ok(())
 /// # }
@@ -546,8 +536,8 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
         self.last_step_info = Some(CdtProposalInfo {
             move_type: plan.move_type,
             action_before: plan.action_before,
-            action_after: plan.action_after,
-            delta_action: plan.delta_action,
+            action_after: Some(plan.action_after),
+            delta_action: Some(plan.delta_action),
         });
         self.last_no_plan_info = None;
         self.last_proposal_stats = proposal_stats;
@@ -564,9 +554,7 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
         plan: &Self::Plan,
         target: &T,
     ) -> Result<f64, Self::Error> {
-        Ok(plan
-            .action_after
-            .map_or(f64::NEG_INFINITY, |_| target.log_prob(&plan.proposed_state)))
+        Ok(target.log_prob(&plan.proposed_state))
     }
 
     fn log_q_ratio(
@@ -581,8 +569,8 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
         CdtProposalInfo {
             move_type: plan.move_type,
             action_before: plan.action_before,
-            action_after: plan.action_after,
-            delta_action: plan.delta_action,
+            action_after: Some(plan.action_after),
+            delta_action: Some(plan.delta_action),
         }
     }
 
@@ -667,8 +655,8 @@ pub(crate) fn propose_concrete_plan(
     Ok(Some(CdtProposalPlan {
         move_type,
         action_before,
-        action_after: Some(action_after),
-        delta_action: Some(delta_action),
+        action_after,
+        delta_action,
         forward_site_count,
         reverse_site_count,
         proposed_state,

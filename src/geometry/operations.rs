@@ -53,16 +53,20 @@ impl<V: Hash> Hash for UnorderedPair<V> {
 #[derive(Clone, Debug)]
 struct UnorderedSet<V>(Vec<V>);
 
-impl<V: Eq + Hash> PartialEq for UnorderedSet<V> {
+impl<V: Eq> PartialEq for UnorderedSet<V> {
     fn eq(&self, other: &Self) -> bool {
         // Compare as sets (order-independent and duplicate-robust).
-        let self_set: HashSet<_> = self.0.iter().collect();
-        let other_set: HashSet<_> = other.0.iter().collect();
-        self_set == other_set
+        self.0
+            .iter()
+            .all(|value| other.0.iter().any(|candidate| candidate == value))
+            && other
+                .0
+                .iter()
+                .all(|value| self.0.iter().any(|candidate| candidate == value))
     }
 }
 
-impl<V: Eq + Hash> Eq for UnorderedSet<V> {}
+impl<V: Eq> Eq for UnorderedSet<V> {}
 
 impl<V: Hash> Hash for UnorderedSet<V> {
     fn hash<H: Hasher>(&self, state: &mut H) {

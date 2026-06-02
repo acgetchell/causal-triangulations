@@ -1562,7 +1562,12 @@ mod tests {
         assert_eq!(tri.vertex_count(), 15);
         assert_eq!(tri.face_count(), 17);
         assert_eq!(tri.slice_sizes(), &[4, 6, 5]);
-        assert_eq!(tri.volume_profile().len(), 3);
+        assert_eq!(
+            tri.volume_profile()
+                .expect("nonuniform strip profile should be valid")
+                .len(),
+            3
+        );
         assert!(tri.validate_topology().is_ok());
         assert!(tri.validate_foliation().is_ok());
         assert!(tri.validate_causality_delaunay().is_ok());

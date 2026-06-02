@@ -3,6 +3,7 @@
 
 use approx::relative_eq;
 use causal_triangulations::prelude::action::ActionConfig;
+use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveResult};
 use causal_triangulations::prelude::simulation::{CdtTarget, Target};
 use causal_triangulations::prelude::triangulation::{CdtTriangulation, CdtTriangulation2D};
 use proptest::prelude::*;
@@ -50,5 +51,38 @@ proptest! {
             "log_prob {:.15} != -action/T {:.15}",
             log_prob, expected,
         );
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(8))]
+
+    /// Random local-move sequences must preserve the full evolved CDT invariant
+    /// contract for representative open-boundary and toroidal fixtures.
+    #[test]
+    fn random_move_sequences_preserve_cdt_invariants(
+        seed in 0_u64..10_000,
+        attempts in 1_usize..16,
+        toroidal in any::<bool>(),
+    ) {
+        let mut triangulation = if toroidal {
+            CdtTriangulation::from_toroidal_cdt(4, 3)
+                .expect("valid toroidal property-test fixture should build")
+        } else {
+            CdtTriangulation::from_cdt_strip(4, 3)
+                .expect("valid strip property-test fixture should build")
+        };
+        let mut moves = ErgodicsSystem::with_seed(seed);
+
+        for attempt in 0..attempts {
+            let result = moves.attempt_random_move(&mut triangulation);
+            prop_assert!(
+                !matches!(result, MoveResult::HardFailure(_)),
+                "attempt {attempt} produced a hard move failure: {result:?}",
+            );
+            triangulation
+                .validate()
+                .unwrap_or_else(|err| panic!("attempt {attempt} left invalid CDT state after {result:?}: {err}"));
+        }
     }
 }

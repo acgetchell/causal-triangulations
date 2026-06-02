@@ -267,7 +267,9 @@ fn debug_large_scale_1p1() {
     let started_at = Instant::now();
     let triangulation = CdtTriangulation2D::from_toroidal_cdt(vertices_per_slice, timeslices)
         .expect("large-scale toroidal CDT fixture should build");
-    let initial_profile = triangulation.volume_profile();
+    let initial_profile = triangulation
+        .volume_profile()
+        .expect("initial toroidal profile should be valid");
     let mut expected_attempts = 0_u64;
     let mut previous_acceptance = MoveAcceptanceCounts::default();
     let mut previous_proposals = ProposalOutcomeCounts::default();
@@ -333,7 +335,9 @@ fn debug_large_scale_1p1() {
             triangulation.vertex_count(),
             triangulation.edge_count(),
             triangulation.face_count(),
-            triangulation.volume_profile(),
+            triangulation
+                .volume_profile()
+                .expect("checkpoint toroidal profile should be valid"),
             sweep_acceptance.total,
             sweep_acceptance.move_22,
             sweep_acceptance.move_13,
@@ -382,7 +386,9 @@ fn debug_large_scale_1p1() {
         "large-scale Metropolis sweeps should exercise toroidal Move31Remove"
     );
     assert_ne!(
-        triangulation.volume_profile(),
+        triangulation
+            .volume_profile()
+            .expect("final toroidal profile should be valid"),
         initial_profile,
         "large-scale Metropolis sweeps should change the toroidal volume profile"
     );

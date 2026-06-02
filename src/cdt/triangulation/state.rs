@@ -119,36 +119,96 @@ impl CdtSimplexCounts {
     }
 
     /// Returns the nonzero vertex count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::CdtSimplexCounts;
+    ///
+    /// let counts = CdtSimplexCounts::try_new(3, 3, 1)?;
+    /// assert_eq!(counts.vertices().get(), 3);
+    /// # Ok::<(), causal_triangulations::prelude::errors::CdtError>(())
+    /// ```
     #[must_use]
     pub const fn vertices(&self) -> NonZeroUsize {
         self.vertices
     }
 
     /// Returns the nonzero edge count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::CdtSimplexCounts;
+    ///
+    /// let counts = CdtSimplexCounts::try_new(3, 3, 1)?;
+    /// assert_eq!(counts.edges().get(), 3);
+    /// # Ok::<(), causal_triangulations::prelude::errors::CdtError>(())
+    /// ```
     #[must_use]
     pub const fn edges(&self) -> NonZeroUsize {
         self.edges
     }
 
     /// Returns the nonzero triangle count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::CdtSimplexCounts;
+    ///
+    /// let counts = CdtSimplexCounts::try_new(3, 3, 1)?;
+    /// assert_eq!(counts.triangles().get(), 1);
+    /// # Ok::<(), causal_triangulations::prelude::errors::CdtError>(())
+    /// ```
     #[must_use]
     pub const fn triangles(&self) -> NonZeroUsize {
         self.triangles
     }
 
     /// Returns the vertex count as a raw `usize` for collection-style APIs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::CdtSimplexCounts;
+    ///
+    /// let counts = CdtSimplexCounts::try_new(3, 3, 1)?;
+    /// assert_eq!(counts.vertex_count(), 3);
+    /// # Ok::<(), causal_triangulations::prelude::errors::CdtError>(())
+    /// ```
     #[must_use]
     pub const fn vertex_count(&self) -> usize {
         self.vertices.get()
     }
 
     /// Returns the edge count as a raw `usize` for collection-style APIs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::CdtSimplexCounts;
+    ///
+    /// let counts = CdtSimplexCounts::try_new(3, 3, 1)?;
+    /// assert_eq!(counts.edge_count(), 3);
+    /// # Ok::<(), causal_triangulations::prelude::errors::CdtError>(())
+    /// ```
     #[must_use]
     pub const fn edge_count(&self) -> usize {
         self.edges.get()
     }
 
     /// Returns the triangle count as a raw `usize` for collection-style APIs.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::CdtSimplexCounts;
+    ///
+    /// let counts = CdtSimplexCounts::try_new(3, 3, 1)?;
+    /// assert_eq!(counts.triangle_count(), 1);
+    /// # Ok::<(), causal_triangulations::prelude::errors::CdtError>(())
+    /// ```
     #[must_use]
     pub const fn triangle_count(&self) -> usize {
         self.triangles.get()
@@ -218,9 +278,8 @@ impl CdtMetadata {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::cdt::triangulation::CdtTriangulation;
-    /// use causal_triangulations::geometry::backends::mock::MockBackend;
-    /// use causal_triangulations::prelude::errors::CdtResult;
+    /// use causal_triangulations::prelude::testing::*;
+    /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
@@ -238,9 +297,8 @@ impl CdtMetadata {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::cdt::triangulation::CdtTriangulation;
-    /// use causal_triangulations::geometry::backends::mock::MockBackend;
-    /// use causal_triangulations::prelude::errors::CdtResult;
+    /// use causal_triangulations::prelude::testing::*;
+    /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
@@ -258,10 +316,8 @@ impl CdtMetadata {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::cdt::triangulation::CdtTriangulation;
-    /// use causal_triangulations::config::CdtTopology;
-    /// use causal_triangulations::geometry::backends::mock::MockBackend;
-    /// use causal_triangulations::prelude::errors::CdtResult;
+    /// use causal_triangulations::prelude::testing::*;
+    /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
@@ -279,9 +335,8 @@ impl CdtMetadata {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::cdt::triangulation::CdtTriangulation;
-    /// use causal_triangulations::geometry::backends::mock::MockBackend;
-    /// use causal_triangulations::prelude::errors::CdtResult;
+    /// use causal_triangulations::prelude::testing::*;
+    /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
@@ -299,9 +354,8 @@ impl CdtMetadata {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::cdt::triangulation::CdtTriangulation;
-    /// use causal_triangulations::geometry::backends::mock::MockBackend;
-    /// use causal_triangulations::prelude::errors::CdtResult;
+    /// use causal_triangulations::prelude::testing::*;
+    /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
@@ -319,9 +373,8 @@ impl CdtMetadata {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::cdt::triangulation::CdtTriangulation;
-    /// use causal_triangulations::geometry::backends::mock::MockBackend;
-    /// use causal_triangulations::prelude::errors::CdtResult;
+    /// use causal_triangulations::prelude::testing::*;
+    /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
@@ -339,9 +392,8 @@ impl CdtMetadata {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::cdt::triangulation::CdtTriangulation;
-    /// use causal_triangulations::geometry::backends::mock::MockBackend;
-    /// use causal_triangulations::prelude::errors::CdtResult;
+    /// use causal_triangulations::prelude::testing::*;
+    /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
@@ -745,8 +797,10 @@ impl<B> CdtTriangulation<B> {
         self.invalidate_foliation_bookkeeping();
         self.metadata.last_modified = Instant::now();
         // Deserialized checkpoints can carry arbitrary counters; avoid wraparound
-        // so cache keys such as MoveSiteCache never see a stale version as fresh.
+        // and rotate the instance epoch so external caches keyed by
+        // `(instance_id, modification_count)` cannot see a stale version as fresh.
         if self.metadata.modification_count == u64::MAX {
+            self.instance_id = next_triangulation_instance_id();
             self.metadata.modification_count = 1;
         } else {
             self.metadata.modification_count += 1;
@@ -825,9 +879,9 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use causal_triangulations::{CdtError, CdtResult};
     /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
@@ -852,10 +906,10 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// ```
     ///
     /// ```rust
-    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::errors::TriangulationMetadataField;
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use causal_triangulations::{CdtError, CdtResult};
     /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
@@ -890,10 +944,10 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// ```
     ///
     /// ```rust
-    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
     /// use causal_triangulations::prelude::errors::TriangulationMetadataField;
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::triangulation::*;
+    /// use causal_triangulations::{CdtError, CdtResult};
     /// use std::assert_matches;
     ///
     /// fn main() -> CdtResult<()> {
@@ -1684,8 +1738,14 @@ mod tests {
         assert_eq!(triangulation.metadata().modification_count, 2);
 
         triangulation.metadata.modification_count = u64::MAX;
+        let saturated_instance_id = triangulation.instance_id();
         triangulation.bump_modification_count();
         assert_eq!(triangulation.metadata().modification_count, 1);
+        assert_ne!(
+            triangulation.instance_id(),
+            saturated_instance_id,
+            "saturated modification counters must rotate instance epochs so external caches cannot collide"
+        );
     }
 
     #[test]

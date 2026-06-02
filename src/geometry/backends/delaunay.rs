@@ -18,6 +18,7 @@ use delaunay::flips::BistellarFlips;
 use delaunay::geometry::kernel::AdaptiveKernel;
 use delaunay::geometry::point::Point;
 use delaunay::geometry::traits::coordinate::Coordinate;
+use delaunay::prelude::query::AdjacencyIndex;
 use delaunay::prelude::{DataType, VertexBuilder};
 use delaunay::tds::{EdgeKey, FacetHandle, SimplexKey, Tds, Vertex, VertexKey};
 use delaunay::topology::traits::{GlobalTopology, TopologyKind, ToroidalConstructionMode};
@@ -27,6 +28,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::num::NonZeroUsize;
+use std::sync::RwLock;
 
 type DelaunayKernel = AdaptiveKernel<f64>;
 type RawTriangulation<VertexData, SimplexData, const D: usize> =
@@ -47,15 +49,35 @@ type RawVertex<VertexData, const D: usize> = Vertex<f64, VertexData, D>;
 /// Serde checkpoints store the upstream triangulation data structure plus its
 /// global topology and topology-guarantee metadata. Deserialization rebuilds
 /// transient backend caches, including the interior-facet lookup used for local
-/// 2D edge queries. Toroidal topology checkpoints must contain finite,
-/// strictly positive periods; invalid domains are rejected during
-/// deserialization before a backend can observe them.
-#[derive(Debug, Clone)]
+/// 2D edge queries. Vertex-adjacency caches are not serialized; they are rebuilt
+/// lazily by read-only adjacency queries and invalidated after topology
+/// mutations. Toroidal topology checkpoints must contain finite, strictly
+/// positive periods; invalid domains are rejected during deserialization before
+/// a backend can observe them.
+#[derive(Debug)]
 pub struct DelaunayBackend<VertexData, SimplexData, const D: usize> {
     /// The underlying Delaunay triangulation from the delaunay crate
     dt: RawTriangulation<VertexData, SimplexData, D>,
     /// Interior 2D edge to one incident facet suitable for k=2 local queries.
     interior_facets_by_edge: HashMap<EdgeKey, FacetHandle>,
+    /// Lazily built vertex/simplex adjacency for repeated read-only local queries.
+    adjacency_index: RwLock<Option<AdjacencyIndex>>,
+}
+
+impl<VertexData: DataType, SimplexData: DataType, const D: usize> Clone
+    for DelaunayBackend<VertexData, SimplexData, D>
+{
+    fn clone(&self) -> Self {
+        let adjacency_index = self
+            .adjacency_index
+            .read()
+            .map_or_else(|_| None, |index| index.clone());
+        Self {
+            dt: self.dt.clone(),
+            interior_facets_by_edge: self.interior_facets_by_edge.clone(),
+            adjacency_index: RwLock::new(adjacency_index),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -554,6 +576,60 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
         self.interior_facets_by_edge = Self::build_interior_facets_by_edge(&self.dt);
     }
 
+    /// Drops query caches tied to the current raw triangulation snapshot.
+    fn invalidate_query_caches(&mut self) {
+        match self.adjacency_index.get_mut() {
+            Ok(index) => *index = None,
+            Err(poisoned) => *poisoned.into_inner() = None,
+        }
+    }
+
+    /// Restores the raw triangulation and all caches to a saved snapshot.
+    fn restore_mutation_snapshot(
+        &mut self,
+        dt_before: RawTriangulation<VertexData, SimplexData, D>,
+        facets_before: HashMap<EdgeKey, FacetHandle>,
+    ) {
+        self.dt = dt_before;
+        self.interior_facets_by_edge = facets_before;
+        self.invalidate_query_caches();
+    }
+
+    /// Returns simplex keys adjacent to `vertex`, rebuilding adjacency at most once per snapshot.
+    fn adjacent_simplex_keys(&self, vertex: VertexKey) -> Result<Vec<SimplexKey>, DelaunayError> {
+        {
+            let index =
+                self.adjacency_index
+                    .read()
+                    .map_err(|err| DelaunayError::ValidationFailed {
+                        level: DelaunayValidationLevel::Three,
+                        detail: format!("adjacency index cache read lock poisoned: {err}"),
+                    })?;
+            if let Some(index) = index.as_ref() {
+                return Ok(index.adjacent_simplices(vertex).collect());
+            }
+        }
+
+        let index =
+            self.dt
+                .build_adjacency_index()
+                .map_err(|err| DelaunayError::ValidationFailed {
+                    level: DelaunayValidationLevel::Three,
+                    detail: err.to_string(),
+                })?;
+        let adjacent = index.adjacent_simplices(vertex).collect();
+        let mut cached =
+            self.adjacency_index
+                .write()
+                .map_err(|err| DelaunayError::ValidationFailed {
+                    level: DelaunayValidationLevel::Three,
+                    detail: format!("adjacency index cache write lock poisoned: {err}"),
+                })?;
+        *cached = Some(index);
+        drop(cached);
+        Ok(adjacent)
+    }
+
     /// Validates a completed backend mutation and restores the previous snapshot on failure.
     ///
     /// This keeps local edit APIs from publishing geometry that violates the evolved-state
@@ -566,8 +642,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
         target: impl Display,
     ) -> Result<(), DelaunayError> {
         if let Err(err) = self.validate_structural() {
-            self.dt = dt_before;
-            self.interior_facets_by_edge = facets_before;
+            self.restore_mutation_snapshot(dt_before, facets_before);
             return Err(match err {
                 DelaunayError::ValidationFailed { level, detail } => {
                     DelaunayError::ValidationFailed {
@@ -614,10 +689,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::backends::delaunay::{DelaunayBackend, DelaunayError};
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
-    /// use causal_triangulations::geometry::traits::TriangulationQuery;
-    /// use causal_triangulations::DelaunayValidationLevel;
+    /// use causal_triangulations::prelude::geometry::*;
     ///
     /// fn main() -> Result<(), DelaunayError> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -642,6 +714,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
         let backend = Self {
             dt,
             interior_facets_by_edge,
+            adjacency_index: RwLock::new(None),
         };
         backend.validate_delaunay()?;
         Ok(backend)
@@ -652,10 +725,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::backends::delaunay::DelaunayError;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
-    /// use causal_triangulations::DelaunayValidationLevel;
+    /// use causal_triangulations::prelude::geometry::*;
     ///
     /// fn main() -> Result<(), DelaunayError> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -688,10 +758,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::backends::delaunay::DelaunayError;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
-    /// use causal_triangulations::DelaunayValidationLevel;
+    /// use causal_triangulations::prelude::geometry::*;
     ///
     /// fn main() -> Result<(), DelaunayError> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -728,10 +795,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::backends::delaunay::DelaunayError;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
-    /// use causal_triangulations::DelaunayValidationLevel;
+    /// use causal_triangulations::prelude::geometry::*;
     ///
     /// fn main() -> Result<(), DelaunayError> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -776,9 +840,8 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::{CdtError, CdtResult};
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -817,9 +880,8 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::{CdtError, CdtResult};
     /// use std::num::NonZeroUsize;
     ///
     /// fn main() -> CdtResult<()> {
@@ -865,9 +927,8 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::{CdtError, CdtResult};
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -919,11 +980,8 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{
-    ///     CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, DelaunayValidationLevel,
-    /// };
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::{CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure};
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -962,11 +1020,8 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::{
-    ///     CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, DelaunayValidationLevel,
-    /// };
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
+    /// use causal_triangulations::prelude::geometry::*;
+    /// use causal_triangulations::{CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure};
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -1011,12 +1066,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::{
-    ///     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck,
-    ///     CdtValidationFailure, DelaunayValidationLevel,
+    ///     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
     /// };
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -1074,12 +1127,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// # Examples
     ///
     /// ```
+    /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::{
-    ///     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck,
-    ///     CdtValidationFailure, DelaunayValidationLevel,
+    ///     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
     /// };
-    /// use causal_triangulations::geometry::DelaunayBackend2D;
-    /// use causal_triangulations::geometry::generators::build_delaunay2_with_data;
     ///
     /// fn main() -> CdtResult<()> {
     ///     let dt = build_delaunay2_with_data(&[
@@ -1333,13 +1384,8 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationQ
             return Err(DelaunayError::InvalidVertex { key: vertex.key });
         }
         Ok(self
-            .dt
-            .build_adjacency_index()
-            .map_err(|err| DelaunayError::ValidationFailed {
-                level: DelaunayValidationLevel::Three,
-                detail: err.to_string(),
-            })?
-            .adjacent_simplices(vertex.key)
+            .adjacent_simplex_keys(vertex.key)?
+            .into_iter()
             .map(|key| DelaunayFaceHandle { key })
             .collect())
     }
@@ -1399,8 +1445,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
         let key = match self.dt.insert(vertex) {
             Ok(key) => key,
             Err(err) => {
-                self.dt = dt_before;
-                self.interior_facets_by_edge = facets_before;
+                self.restore_mutation_snapshot(dt_before, facets_before);
                 return Err(DelaunayError::InsertionFailed {
                     operation: DelaunayOperation::InsertVertex,
                     coordinates: coords.to_vec(),
@@ -1409,6 +1454,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             }
         };
         self.rebuild_interior_facet_index();
+        self.invalidate_query_caches();
         self.validate_mutation_or_restore(
             dt_before,
             facets_before,
@@ -1431,8 +1477,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
         let info = match self.dt.flip_k1_remove(vertex.key) {
             Ok(info) => info,
             Err(err) => {
-                self.dt = dt_before;
-                self.interior_facets_by_edge = facets_before;
+                self.restore_mutation_snapshot(dt_before, facets_before);
                 return Err(DelaunayError::FlipFailed {
                     operation: DelaunayOperation::FlipK1Remove,
                     target: format!("vertex {:?}", vertex.key),
@@ -1441,6 +1486,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             }
         };
         self.rebuild_interior_facet_index();
+        self.invalidate_query_caches();
         self.validate_mutation_or_restore(
             dt_before,
             facets_before,
@@ -1489,8 +1535,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
         let info = match self.dt.flip_k2(facet) {
             Ok(info) => info,
             Err(err) => {
-                self.dt = dt_before;
-                self.interior_facets_by_edge = facets_before;
+                self.restore_mutation_snapshot(dt_before, facets_before);
                 return Err(DelaunayError::FlipFailed {
                     operation: DelaunayOperation::FlipK2,
                     target: format!(
@@ -1505,8 +1550,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
         };
         let mut inserted = info.inserted_face_vertices.iter().copied();
         let Some(v0) = inserted.next() else {
-            self.dt = dt_before;
-            self.interior_facets_by_edge = facets_before;
+            self.restore_mutation_snapshot(dt_before, facets_before);
             return Err(DelaunayError::UnexpectedFlipOutput {
                 operation: DelaunayOperation::FlipK2,
                 target: format!("edge {:?} -- {:?}", edge.key.v0(), edge.key.v1()),
@@ -1515,8 +1559,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             });
         };
         let Some(v1) = inserted.next() else {
-            self.dt = dt_before;
-            self.interior_facets_by_edge = facets_before;
+            self.restore_mutation_snapshot(dt_before, facets_before);
             return Err(DelaunayError::UnexpectedFlipOutput {
                 operation: DelaunayOperation::FlipK2,
                 target: format!("edge {:?} -- {:?}", edge.key.v0(), edge.key.v1()),
@@ -1525,8 +1568,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             });
         };
         if let Some(extra) = inserted.next() {
-            self.dt = dt_before;
-            self.interior_facets_by_edge = facets_before;
+            self.restore_mutation_snapshot(dt_before, facets_before);
             let actual = 3 + inserted.count();
             return Err(DelaunayError::UnexpectedFlipOutput {
                 operation: DelaunayOperation::FlipK2,
@@ -1536,6 +1578,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             });
         }
         self.rebuild_interior_facet_index();
+        self.invalidate_query_caches();
         self.validate_mutation_or_restore(
             dt_before,
             facets_before,
@@ -1575,8 +1618,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
         let info = match self.dt.flip_k1_insert(face.key, vertex) {
             Ok(info) => info,
             Err(err) => {
-                self.dt = dt_before;
-                self.interior_facets_by_edge = facets_before;
+                self.restore_mutation_snapshot(dt_before, facets_before);
                 return Err(DelaunayError::FlipFailed {
                     operation: DelaunayOperation::FlipK1Insert,
                     target: format!("face {:?} at point {:?}", face.key, point),
@@ -1586,8 +1628,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
         };
         let mut inserted = info.inserted_face_vertices.iter().copied();
         let Some(new_vertex) = inserted.next() else {
-            self.dt = dt_before;
-            self.interior_facets_by_edge = facets_before;
+            self.restore_mutation_snapshot(dt_before, facets_before);
             return Err(DelaunayError::UnexpectedFlipOutput {
                 operation: DelaunayOperation::FlipK1Insert,
                 target: format!("face {:?} at point {:?}", face.key, point),
@@ -1596,8 +1637,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             });
         };
         if let Some(extra) = inserted.next() {
-            self.dt = dt_before;
-            self.interior_facets_by_edge = facets_before;
+            self.restore_mutation_snapshot(dt_before, facets_before);
             let actual = 2 + inserted.count();
             return Err(DelaunayError::UnexpectedFlipOutput {
                 operation: DelaunayOperation::FlipK1Insert,
@@ -1607,6 +1647,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             });
         }
         self.rebuild_interior_facet_index();
+        self.invalidate_query_caches();
         self.validate_mutation_or_restore(
             dt_before,
             facets_before,
@@ -2207,6 +2248,68 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn adjacent_faces_cache_reuses_and_invalidates_on_mutation() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 1)])
+            .expect("triangle fixture should build");
+        let mut backend = validated_backend(dt);
+        let vertex = backend
+            .vertices()
+            .next()
+            .expect("triangle fixture should contain a vertex");
+
+        assert!(
+            backend
+                .adjacency_index
+                .read()
+                .expect("adjacency cache lock should be readable")
+                .is_none()
+        );
+        let first = backend
+            .adjacent_faces(&vertex)
+            .expect("first adjacency query should build the cache");
+        assert!(
+            backend
+                .adjacency_index
+                .read()
+                .expect("adjacency cache lock should be readable")
+                .is_some()
+        );
+        let second = backend
+            .adjacent_faces(&vertex)
+            .expect("second adjacency query should reuse the cache");
+        assert_eq!(first, second);
+
+        let face = backend
+            .faces()
+            .next()
+            .expect("triangle fixture should contain a face");
+        backend
+            .subdivide_face(face, &[0.25, 0.25])
+            .expect("subdivision should invalidate cached adjacency");
+        assert!(
+            backend
+                .adjacency_index
+                .read()
+                .expect("adjacency cache lock should be readable")
+                .is_none()
+        );
+        assert!(
+            backend
+                .adjacent_faces(&vertex)
+                .expect("adjacency query after mutation should rebuild the cache")
+                .len()
+                >= first.len()
+        );
+        assert!(
+            backend
+                .adjacency_index
+                .read()
+                .expect("adjacency cache lock should be readable")
+                .is_some()
+        );
     }
 
     #[test]

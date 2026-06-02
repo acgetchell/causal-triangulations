@@ -159,7 +159,7 @@ const PROPOSAL_FIXTURES: &[CdtFixture] = &[
 ];
 
 /// Fails fast when benchmark fixture setup cannot satisfy its invariant.
-fn require_result<T, E: Display>(result: Result<T, E>, operation: SetupOperation) -> T {
+fn require_result<T>(result: Result<T, impl Display>, operation: SetupOperation) -> T {
     match result {
         Ok(value) => value,
         Err(error) => panic!("{operation}: {error}"),

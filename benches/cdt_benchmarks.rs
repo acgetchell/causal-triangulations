@@ -43,7 +43,7 @@ impl Display for SetupOperation {
 }
 
 /// Fails fast when benchmark fixture setup cannot satisfy its invariant.
-fn require_result<T, E: Display>(result: Result<T, E>, operation: SetupOperation) -> T {
+fn require_result<T>(result: Result<T, impl Display>, operation: SetupOperation) -> T {
     match result {
         Ok(value) => value,
         Err(error) => panic!("{operation}: {error}"),
@@ -372,14 +372,24 @@ fn bench_simulation_analysis(c: &mut Criterion) {
 
     group.bench_function("hausdorff_dimension_estimate", |b| {
         b.iter(|| {
-            let estimate = results.hausdorff_dimension_estimate();
+            let estimate = match results.hausdorff_dimension_estimate() {
+                Ok(estimate) => estimate,
+                Err(error) => {
+                    panic!("benchmark triangulation adjacency should be readable: {error}")
+                }
+            };
             black_box(estimate)
         });
     });
 
     group.bench_function("spectral_dimension_estimate", |b| {
         b.iter(|| {
-            let estimate = results.spectral_dimension_estimate();
+            let estimate = match results.spectral_dimension_estimate() {
+                Ok(estimate) => estimate,
+                Err(error) => {
+                    panic!("benchmark triangulation adjacency should be readable: {error}")
+                }
+            };
             black_box(estimate)
         });
     });

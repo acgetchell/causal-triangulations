@@ -5,6 +5,7 @@
 //! This module contains user-facing analysis routines that measure fixed
 //! triangulations or simulation outputs without owning the simulation loop.
 
+use crate::errors::{CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure};
 use crate::geometry::CdtTriangulation2D;
 use crate::geometry::traits::TriangulationQuery;
 use crate::util::usize_to_f64;
@@ -29,8 +30,14 @@ const SPECTRAL_SELF_LOOP_PROBABILITY: f64 = 0.5;
 /// breadth-first search from every face, so its time complexity is
 /// `O(F * (F + E_d))` for `F` faces and `E_d` dual edges.
 ///
-/// Returns `None` when the triangulation is too small, disconnected data leaves
-/// fewer than two usable radii, or live face adjacency cannot be resolved.
+/// Returns `Ok(None)` when the triangulation is too small or disconnected data
+/// leaves fewer than two usable radii.
+///
+/// # Errors
+///
+/// Returns [`CdtError::ValidationFailed`] if backend face adjacency cannot be
+/// resolved or if observable counters cannot be represented as finite fitting
+/// inputs.
 ///
 /// # References
 ///
@@ -54,12 +61,11 @@ const SPECTRAL_SELF_LOOP_PROBABILITY: f64 = 0.5;
 ///
 /// fn main() -> CdtResult<()> {
 ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-///     assert!(estimate_hausdorff_dimension(&tri).is_some_and(f64::is_finite));
+///     assert!(estimate_hausdorff_dimension(&tri)?.is_some_and(f64::is_finite));
 ///     Ok(())
 /// }
 /// ```
-#[must_use]
-pub fn estimate_hausdorff_dimension(triangulation: &CdtTriangulation2D) -> Option<f64> {
+pub fn estimate_hausdorff_dimension(triangulation: &CdtTriangulation2D) -> CdtResult<Option<f64>> {
     let ball_volumes = average_dual_ball_volumes(triangulation)?;
     fit_log_log_slope(&ball_volumes)
 }
@@ -79,9 +85,15 @@ pub fn estimate_hausdorff_dimension(triangulation: &CdtTriangulation2D) -> Optio
 /// complexity is `O(S * F * (F + E_d))` for `S` diffusion steps, `F` faces, and
 /// `E_d` dual edges.
 ///
-/// Returns `None` when the triangulation is too small, fewer than two positive
-/// return-probability samples are available for the fit, the fitted dimension is
-/// not positive, or live face adjacency cannot be resolved.
+/// Returns `Ok(None)` when the triangulation is too small, fewer than two
+/// positive return-probability samples are available for the fit, or the fitted
+/// dimension is not positive.
+///
+/// # Errors
+///
+/// Returns [`CdtError::ValidationFailed`] if backend face adjacency cannot be
+/// resolved or if observable counters cannot be represented as finite fitting
+/// inputs.
 ///
 /// # References
 ///
@@ -101,21 +113,20 @@ pub fn estimate_hausdorff_dimension(triangulation: &CdtTriangulation2D) -> Optio
 ///
 /// fn main() -> CdtResult<()> {
 ///     let tri = CdtTriangulation::from_toroidal_cdt(6, 6)?;
-///     assert!(estimate_spectral_dimension(&tri).is_some_and(f64::is_finite));
+///     assert!(estimate_spectral_dimension(&tri)?.is_some_and(f64::is_finite));
 ///     Ok(())
 /// }
 /// ```
-#[must_use]
-pub fn estimate_spectral_dimension(triangulation: &CdtTriangulation2D) -> Option<f64> {
+pub fn estimate_spectral_dimension(triangulation: &CdtTriangulation2D) -> CdtResult<Option<f64>> {
     let adjacency = dual_adjacency(triangulation)?;
     estimate_spectral_dimension_from_adjacency(&adjacency)
 }
 
 /// Builds the combinatorial face-adjacency graph for CDT dual observables.
-fn dual_adjacency(triangulation: &CdtTriangulation2D) -> Option<Vec<Vec<usize>>> {
+fn dual_adjacency(triangulation: &CdtTriangulation2D) -> CdtResult<Vec<Vec<usize>>> {
     let faces: Vec<_> = triangulation.geometry().faces().collect();
     if faces.len() < 2 {
-        return Some(Vec::new());
+        return Ok(Vec::new());
     }
 
     let face_indices: HashMap<_, _> = faces
@@ -128,28 +139,34 @@ fn dual_adjacency(triangulation: &CdtTriangulation2D) -> Option<Vec<Vec<usize>>>
     faces
         .iter()
         .map(|face| {
-            let neighbors = triangulation.geometry().face_neighbors(face).ok()?;
-            Some(
-                neighbors
-                    .into_iter()
-                    .filter_map(|neighbor| face_indices.get(&neighbor).copied())
-                    .collect(),
-            )
+            let neighbors = triangulation
+                .geometry()
+                .face_neighbors(face)
+                .map_err(|err| CdtError::ValidationFailed {
+                    check: CdtValidationCheck::Geometry,
+                    failure: CdtValidationFailure::FaceVerticesUnavailable {
+                        face: format!("{:?}", face.simplex_key()),
+                        detail: err.to_string(),
+                    },
+                })?;
+            Ok(neighbors
+                .into_iter()
+                .filter_map(|neighbor| face_indices.get(&neighbor).copied())
+                .collect())
         })
         .collect()
 }
 
 /// Computes average dual-graph ball volumes for each reachable graph radius.
-fn average_dual_ball_volumes(triangulation: &CdtTriangulation2D) -> Option<Vec<f64>> {
-    dual_adjacency(triangulation)
-        .as_deref()
-        .and_then(average_dual_ball_volumes_from_adjacency)
+fn average_dual_ball_volumes(triangulation: &CdtTriangulation2D) -> CdtResult<Vec<f64>> {
+    let adjacency = dual_adjacency(triangulation)?;
+    average_dual_ball_volumes_from_adjacency(&adjacency)
 }
 
 /// Computes reachable-radius average ball volumes from a dual adjacency list.
-fn average_dual_ball_volumes_from_adjacency(adjacency: &[Vec<usize>]) -> Option<Vec<f64>> {
+fn average_dual_ball_volumes_from_adjacency(adjacency: &[Vec<usize>]) -> CdtResult<Vec<f64>> {
     if adjacency.len() < 2 {
-        return Some(Vec::new());
+        return Ok(Vec::new());
     }
 
     let mut sums = Vec::new();
@@ -185,14 +202,22 @@ fn average_dual_ball_volumes_from_adjacency(adjacency: &[Vec<usize>]) -> Option<
             .take(max_radius + 1)
         {
             ball_volume += shell_count;
-            sums[radius] += usize_to_f64(ball_volume)?;
+            sums[radius] += usize_to_f64(ball_volume).ok_or_else(|| {
+                observable_numeric_error("dual ball volume cannot be represented as f64")
+            })?;
             counts[radius] += 1;
         }
     }
 
     sums.into_iter()
         .zip(counts)
-        .map(|(sum, count)| usize_to_f64(count).map(|count_f64| sum / count_f64))
+        .map(|(sum, count)| {
+            usize_to_f64(count)
+                .map(|count_f64| sum / count_f64)
+                .ok_or_else(|| {
+                    observable_numeric_error("dual ball sample count cannot be represented as f64")
+                })
+        })
         .collect()
 }
 
@@ -230,44 +255,40 @@ fn dual_graph_distances(
 }
 
 /// Fits the slope of `log(volume)` against `log(radius)`.
-fn fit_log_log_slope(ball_volumes: &[f64]) -> Option<f64> {
-    fit_linear_slope(
-        ball_volumes
-            .iter()
-            .enumerate()
-            .skip(1)
-            .filter_map(|(radius, &volume)| {
-                // Exclude root-only samples: ln(1.0) = 0 biases the slope toward zero.
-                if volume > 1.0 && volume.is_finite() {
-                    let radius_f64 = usize_to_f64(radius)?;
-                    Some((radius_f64.ln(), volume.ln()))
-                } else {
-                    None
-                }
-            }),
-    )
+fn fit_log_log_slope(ball_volumes: &[f64]) -> CdtResult<Option<f64>> {
+    let mut samples = Vec::new();
+    for (radius, &volume) in ball_volumes.iter().enumerate().skip(1) {
+        // Exclude root-only samples: ln(1.0) = 0 biases the slope toward zero.
+        if volume > 1.0 && volume.is_finite() {
+            let radius_f64 = usize_to_f64(radius).ok_or_else(|| {
+                observable_numeric_error("dual graph radius cannot be represented as f64")
+            })?;
+            samples.push((radius_f64.ln(), volume.ln()));
+        }
+    }
+    Ok(fit_linear_slope(samples))
 }
 
 /// Estimates spectral dimension from a precomputed dual adjacency list.
-fn estimate_spectral_dimension_from_adjacency(adjacency: &[Vec<usize>]) -> Option<f64> {
+fn estimate_spectral_dimension_from_adjacency(adjacency: &[Vec<usize>]) -> CdtResult<Option<f64>> {
     if adjacency.len() < 3 {
-        return None;
+        return Ok(None);
     }
 
     let max_step = MAX_SPECTRAL_DIFFUSION_STEP.min(adjacency.len().saturating_sub(1));
     if max_step < MIN_SPECTRAL_DIFFUSION_STEP {
-        return None;
+        return Ok(None);
     }
 
-    let return_probabilities = average_return_probabilities(adjacency, max_step);
+    let return_probabilities = average_return_probabilities(adjacency, max_step)?;
     fit_spectral_dimension(&return_probabilities)
 }
 
 /// Computes average random-walk return probabilities for diffusion steps.
-fn average_return_probabilities(adjacency: &[Vec<usize>], max_step: usize) -> Vec<f64> {
+fn average_return_probabilities(adjacency: &[Vec<usize>], max_step: usize) -> CdtResult<Vec<f64>> {
     let node_count = adjacency.len();
     if node_count == 0 {
-        return Vec::new();
+        return Ok(Vec::new());
     }
 
     let mut sums = vec![0.0; max_step + 1];
@@ -300,9 +321,11 @@ fn average_return_probabilities(adjacency: &[Vec<usize>], max_step: usize) -> Ve
                     continue;
                 }
 
-                let Some(neighbor_count) = usize_to_f64(live_neighbor_count) else {
-                    return Vec::new();
-                };
+                let neighbor_count = usize_to_f64(live_neighbor_count).ok_or_else(|| {
+                    observable_numeric_error(
+                        "live dual-neighbor count cannot be represented as f64",
+                    )
+                })?;
                 let share = move_probability / neighbor_count;
                 for neighbor in adjacency[index]
                     .iter()
@@ -318,31 +341,34 @@ fn average_return_probabilities(adjacency: &[Vec<usize>], max_step: usize) -> Ve
         }
     }
 
-    let Some(node_count_f64) = usize_to_f64(node_count) else {
-        return Vec::new();
-    };
-    sums.into_iter().map(|sum| sum / node_count_f64).collect()
+    let node_count_f64 = usize_to_f64(node_count).ok_or_else(|| {
+        observable_numeric_error("dual graph node count cannot be represented as f64")
+    })?;
+    Ok(sums.into_iter().map(|sum| sum / node_count_f64).collect())
 }
 
 /// Fits `d_s = -2 d log(P(sigma)) / d log(sigma)` from return probabilities.
-fn fit_spectral_dimension(return_probabilities: &[f64]) -> Option<f64> {
-    let slope = fit_linear_slope(
-        return_probabilities
-            .iter()
-            .enumerate()
-            .skip(MIN_SPECTRAL_DIFFUSION_STEP)
-            .filter_map(|(step, &probability)| {
-                if probability > 0.0 && probability < 1.0 && probability.is_finite() {
-                    let step_f64 = usize_to_f64(step)?;
-                    Some((step_f64.ln(), probability.ln()))
-                } else {
-                    None
-                }
-            }),
-    )?;
+fn fit_spectral_dimension(return_probabilities: &[f64]) -> CdtResult<Option<f64>> {
+    let mut samples = Vec::new();
+    for (step, &probability) in return_probabilities
+        .iter()
+        .enumerate()
+        .skip(MIN_SPECTRAL_DIFFUSION_STEP)
+    {
+        if probability > 0.0 && probability < 1.0 && probability.is_finite() {
+            let step_f64 = usize_to_f64(step).ok_or_else(|| {
+                observable_numeric_error("diffusion step cannot be represented as f64")
+            })?;
+            samples.push((step_f64.ln(), probability.ln()));
+        }
+    }
+
+    let Some(slope) = fit_linear_slope(samples) else {
+        return Ok(None);
+    };
 
     let dimension = -2.0 * slope;
-    (dimension.is_finite() && dimension > 0.0).then_some(dimension)
+    Ok((dimension.is_finite() && dimension > 0.0).then_some(dimension))
 }
 
 /// Fits the slope of `y = a + bx` from streaming `(x, y)` samples.
@@ -373,6 +399,16 @@ fn fit_linear_slope(samples: impl IntoIterator<Item = (f64, f64)>) -> Option<f64
     Some(count_f64.mul_add(product_total, -x_total * y_total) / denominator)
 }
 
+/// Maps impossible-sized observable counters into the public validation error contract.
+fn observable_numeric_error(detail: &'static str) -> CdtError {
+    CdtError::ValidationFailed {
+        check: CdtValidationCheck::Geometry,
+        failure: CdtValidationFailure::BackendGeometry {
+            detail: detail.to_string(),
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -383,6 +419,7 @@ mod tests {
     fn hausdorff_estimate_uses_dual_graph_ball_growth() {
         let triangulation = CdtTriangulation::from_cdt_strip(4, 3).expect("create Delaunay strip");
         let estimate = estimate_hausdorff_dimension(&triangulation)
+            .expect("strip dual graph adjacency should be readable")
             .expect("strip dual graph should have enough radii for a fit");
 
         assert!(estimate.is_finite());
@@ -394,7 +431,11 @@ mod tests {
         let triangulation =
             CdtTriangulation::from_random_points(3, 1, 2).expect("create minimal triangulation");
 
-        assert_eq!(estimate_hausdorff_dimension(&triangulation), None);
+        assert_eq!(
+            estimate_hausdorff_dimension(&triangulation)
+                .expect("minimal triangulation adjacency should be readable"),
+            None
+        );
     }
 
     #[test]
@@ -402,6 +443,7 @@ mod tests {
         let triangulation =
             CdtTriangulation::from_toroidal_cdt(6, 6).expect("create periodic torus");
         let estimate = estimate_spectral_dimension(&triangulation)
+            .expect("torus dual graph adjacency should be readable")
             .expect("torus dual graph should have enough diffusion data");
 
         assert!(estimate.is_finite());
@@ -412,7 +454,33 @@ mod tests {
     fn spectral_estimate_returns_none_for_too_little_diffusion_data() {
         let adjacency = vec![vec![1], vec![0]];
 
-        assert_eq!(estimate_spectral_dimension_from_adjacency(&adjacency), None);
+        assert_eq!(
+            estimate_spectral_dimension_from_adjacency(&adjacency)
+                .expect("small adjacency should not fail numerically"),
+            None
+        );
+    }
+
+    #[test]
+    fn dual_ball_averages_are_empty_for_too_small_graphs() {
+        assert!(
+            average_dual_ball_volumes_from_adjacency(&[])
+                .expect("empty adjacency should not fail numerically")
+                .is_empty()
+        );
+        assert!(
+            average_dual_ball_volumes_from_adjacency(&[vec![]])
+                .expect("single-node adjacency should not fail numerically")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn return_probabilities_are_empty_for_empty_graph() {
+        let probabilities = average_return_probabilities(&[], 4)
+            .expect("empty adjacency should not fail numerically");
+
+        assert!(probabilities.is_empty());
     }
 
     #[test]
@@ -420,21 +488,38 @@ mod tests {
         let probabilities = vec![1.0, 0.75, 0.5, 1.0 / 3.0, 0.25, 0.2];
 
         let estimate = fit_spectral_dimension(&probabilities)
+            .expect("small probability vector should not fail numerically")
             .expect("decreasing power-law return probabilities should fit");
 
         assert_relative_eq!(estimate, 2.0, epsilon = 1e-12);
     }
 
     #[test]
+    fn spectral_fit_returns_none_for_non_positive_dimension() {
+        let increasing_return_probabilities = vec![1.0, 0.1, 0.2, 0.3, 0.4];
+
+        assert_eq!(
+            fit_spectral_dimension(&increasing_return_probabilities)
+                .expect("finite return probabilities should not fail numerically"),
+            None
+        );
+    }
+
+    #[test]
     fn spectral_estimate_returns_none_for_stationary_isolated_graph() {
         let adjacency = vec![vec![], vec![], vec![]];
 
-        let probabilities = average_return_probabilities(&adjacency, 4);
+        let probabilities = average_return_probabilities(&adjacency, 4)
+            .expect("small isolated graph should not fail numerically");
 
         for probability in probabilities {
             assert_relative_eq!(probability, 1.0);
         }
-        assert_eq!(estimate_spectral_dimension_from_adjacency(&adjacency), None);
+        assert_eq!(
+            estimate_spectral_dimension_from_adjacency(&adjacency)
+                .expect("isolated graph should not fail numerically"),
+            None
+        );
     }
 
     #[test]
@@ -478,7 +563,8 @@ mod tests {
     fn return_probabilities_follow_two_node_walk() {
         let adjacency = vec![vec![1], vec![0]];
 
-        let probabilities = average_return_probabilities(&adjacency, 4);
+        let probabilities = average_return_probabilities(&adjacency, 4)
+            .expect("small two-node graph should not fail numerically");
 
         assert_relative_eq!(probabilities[0], 1.0);
         assert_relative_eq!(probabilities[1], 0.5);

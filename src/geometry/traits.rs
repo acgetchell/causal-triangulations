@@ -133,8 +133,9 @@ pub trait TriangulationQuery: GeometryBackend {
     /// Get all faces adjacent to a vertex.
     ///
     /// Backend implementations may build an adjacency index for this query.
-    /// The Delaunay backend currently rebuilds that index per call, so callers
-    /// should treat it as `O(F)` in the number of finite faces.
+    /// The Delaunay backend caches that index between topology mutations, so the
+    /// first query after a mutation is `O(F)` in the number of finite faces and
+    /// later queries reuse the same snapshot.
     ///
     /// # Errors
     ///

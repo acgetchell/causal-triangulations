@@ -91,7 +91,7 @@ impl SimplexType {
 /// # Examples
 ///
 /// ```
-/// use causal_triangulations::cdt::foliation::{classify_edge, EdgeType};
+/// use causal_triangulations::prelude::triangulation::{EdgeType, classify_edge};
 ///
 /// assert_eq!(classify_edge(Some(2), Some(2)), Some(EdgeType::Spacelike));
 /// assert_eq!(classify_edge(Some(2), Some(3)), Some(EdgeType::Timelike));
@@ -118,7 +118,7 @@ pub fn classify_edge(t0: Option<u32>, t1: Option<u32>) -> Option<EdgeType> {
 /// # Examples
 ///
 /// ```
-/// use causal_triangulations::cdt::foliation::{classify_simplex, SimplexType};
+/// use causal_triangulations::prelude::triangulation::{SimplexType, classify_simplex};
 ///
 /// assert_eq!(classify_simplex(Some(0), Some(0), Some(1)), Some(SimplexType::Up));
 /// assert_eq!(classify_simplex(Some(0), Some(1), Some(1)), Some(SimplexType::Down));

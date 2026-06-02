@@ -15,16 +15,16 @@ use causal_triangulations::prelude::simulation::{
 fn main() -> CdtResult<()> {
     let triangulation = CdtTriangulation::from_toroidal_cdt(8, 8)?;
 
-    let initial_profile = triangulation.volume_profile();
+    let initial_profile = triangulation.volume_profile()?;
     println!("Initial volume profile N2(t): {initial_profile:?}");
 
-    let hausdorff = estimate_hausdorff_dimension(&triangulation).map_or_else(
+    let hausdorff = estimate_hausdorff_dimension(&triangulation)?.map_or_else(
         || "not enough dual-graph data".to_string(),
         |dimension| format!("{dimension:.3}"),
     );
     println!("Initial Hausdorff-dimension estimate: {hausdorff}");
 
-    let spectral = estimate_spectral_dimension(&triangulation).map_or_else(
+    let spectral = estimate_spectral_dimension(&triangulation)?.map_or_else(
         || "not enough dual-graph diffusion data".to_string(),
         |dimension| format!("{dimension:.3}"),
     );
@@ -43,13 +43,13 @@ fn main() -> CdtResult<()> {
         results.volume_fluctuations()
     );
 
-    let final_hausdorff = results.hausdorff_dimension_estimate().map_or_else(
+    let final_hausdorff = results.hausdorff_dimension_estimate()?.map_or_else(
         || "not enough dual-graph data".to_string(),
         |dimension| format!("{dimension:.3}"),
     );
     println!("Final Hausdorff-dimension estimate: {final_hausdorff}");
 
-    let final_spectral = results.spectral_dimension_estimate().map_or_else(
+    let final_spectral = results.spectral_dimension_estimate()?.map_or_else(
         || "not enough dual-graph diffusion data".to_string(),
         |dimension| format!("{dimension:.3}"),
     );

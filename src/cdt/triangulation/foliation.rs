@@ -7,7 +7,7 @@ use crate::cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType, cl
 use crate::config::CdtTopology;
 use crate::errors::{
     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
-    TriangulationMetadataField,
+    MeasurementCountField, TriangulationMetadataField,
 };
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
@@ -576,6 +576,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// future slice exists; toroidal triangulations wrap the last slab back to
     /// slice zero.
     ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::MeasurementCountOverflow`] if any per-slice triangle
+    /// count exceeds the compact `u32` storage used by measurements and scalar
+    /// traces.
+    ///
     /// # Examples
     ///
     /// ```
@@ -583,18 +589,17 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    ///     assert_eq!(tri.volume_profile(), vec![6, 6, 0]);
+    ///     assert_eq!(tri.volume_profile()?, vec![6, 6, 0]);
     ///     Ok(())
     /// }
     /// ```
-    #[must_use]
-    pub fn volume_profile(&self) -> Vec<u32> {
+    pub fn volume_profile(&self) -> CdtResult<Vec<u32>> {
         if !self.has_current_foliation() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         let Ok(slice_count) = usize::try_from(self.metadata.time_slices.get()) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let mut profile = vec![0_u32; slice_count];
 
@@ -606,11 +611,13 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 continue;
             };
             if let Some(count) = profile.get_mut(index) {
-                *count = count.saturating_add(1);
+                *count = count
+                    .checked_add(1)
+                    .ok_or_else(volume_profile_count_overflow)?;
             }
         }
 
-        profile
+        Ok(profile)
     }
 
     /// Computes the temporal step distance between two time labels.
@@ -1027,6 +1034,15 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 Err(err)
             }
         }
+    }
+}
+
+/// Builds the typed measurement overflow reported by [`CdtTriangulation::volume_profile`].
+fn volume_profile_count_overflow() -> CdtError {
+    CdtError::MeasurementCountOverflow {
+        field: MeasurementCountField::Triangles,
+        provided_value: usize::try_from(u32::MAX).map_or(usize::MAX, |max| max.saturating_add(1)),
+        max: u32::MAX,
     }
 }
 
@@ -1450,9 +1466,45 @@ mod tests {
     fn volume_profile_counts_temporal_wrap_slab() {
         let tri = CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
 
-        let profile = tri.volume_profile();
+        let profile = tri
+            .volume_profile()
+            .expect("toroidal CDT should have a valid volume profile");
 
         assert_eq!(profile, vec![8, 8, 8]);
         assert_eq!(profile.iter().sum::<u32>(), 24);
+    }
+
+    #[test]
+    fn volume_profile_is_empty_without_current_foliation() {
+        let triangulation =
+            CdtTriangulation::from_random_points(5, 3, 2).expect("create unfoliated triangulation");
+
+        assert!(
+            triangulation
+                .volume_profile()
+                .expect("missing foliation should not fail")
+                .is_empty()
+        );
+
+        let mut triangulation = strict_strip(4, 2);
+        let vertex = triangulation
+            .geometry()
+            .vertices()
+            .next()
+            .expect("strip should contain vertices");
+        let label = triangulation
+            .geometry()
+            .vertex_data_by_key(vertex.vertex_key())
+            .expect("strip vertices should be labeled");
+        triangulation
+            .set_vertex_data(&vertex, Some(label))
+            .expect("label rewrite should stale foliation bookkeeping");
+
+        assert!(
+            triangulation
+                .volume_profile()
+                .expect("stale foliation should not fail")
+                .is_empty()
+        );
     }
 }

@@ -991,16 +991,16 @@ impl CdtConfig {
                     total.checked_add(vertices).ok_or_else(|| {
                         invalid_config(
                             ConfigurationSetting::Vertices,
-                            &format!("{profile:?}"),
-                            &"volume profile sum <= u32::MAX",
+                            format!("{profile:?}"),
+                            "volume profile sum <= u32::MAX",
                         )
                     })
                 })?;
                 let profile_timeslices = u32::try_from(profile.len()).map_err(|err| {
                     invalid_config(
                         ConfigurationSetting::Timeslices,
-                        &profile.len(),
-                        &format!("volume profile length must fit in u32: {err}"),
+                        profile.len(),
+                        format!("volume profile length must fit in u32: {err}"),
                     )
                 })?;
 
@@ -1160,8 +1160,8 @@ fn normalize_components(path: &Path) -> PathBuf {
 /// Builds a typed configuration error from displayable values without duplicating field names.
 fn invalid_config(
     setting: ConfigurationSetting,
-    provided_value: &impl Display,
-    expected: &impl Display,
+    provided_value: impl Display,
+    expected: impl Display,
 ) -> CdtError {
     invalid_config_parts(setting, provided_value.to_string(), expected.to_string())
 }
@@ -1197,7 +1197,7 @@ fn validate_coupling(setting: ConfigurationSetting, value: f64) -> CdtResult<()>
     if value.is_finite() {
         Ok(())
     } else {
-        Err(invalid_config(setting, &value, &"finite"))
+        Err(invalid_config(setting, value, "finite"))
     }
 }
 
@@ -1207,7 +1207,7 @@ fn validate_coupling(setting: ConfigurationSetting, value: f64) -> CdtResult<()>
 /// downstream callers can preserve nonzero proof instead of rechecking raw
 /// counts.
 fn nonzero_config_count(setting: ConfigurationSetting, value: u32) -> CdtResult<NonZeroU32> {
-    NonZeroU32::new(value).ok_or_else(|| invalid_config(setting, &value, &"≥ 1"))
+    NonZeroU32::new(value).ok_or_else(|| invalid_config(setting, value, "≥ 1"))
 }
 
 /// Parses a comma-separated spatial volume profile from the CLI.
@@ -1466,23 +1466,23 @@ impl CdtConfig {
         if self.vertices < 3 {
             return Err(invalid_config(
                 ConfigurationSetting::Vertices,
-                &self.vertices,
-                &"≥ 3",
+                self.vertices,
+                "≥ 3",
             ));
         }
 
         if self.timeslices == 0 {
             return Err(invalid_config(
                 ConfigurationSetting::Timeslices,
-                &self.timeslices,
-                &"≥ 1",
+                self.timeslices,
+                "≥ 1",
             ));
         }
 
         if let Some(dim) = self.dimension
             && dim != 2
         {
-            return Err(invalid_config(ConfigurationSetting::Dimension, &dim, &"2"));
+            return Err(invalid_config(ConfigurationSetting::Dimension, dim, "2"));
         }
 
         validate_coupling(ConfigurationSetting::Coupling0, self.coupling_0)?;
