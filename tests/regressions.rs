@@ -203,7 +203,9 @@ fn resumed_scalar_trace_keeps_checkpoint_seed_not_fresh_resume_seed() {
     let checkpoint = MetropolisAlgorithm::new(resume_config, action_config)
         .resume_to_checkpoint(prefix)
         .expect("resume with a different fresh seed should still validate");
-    let results = checkpoint.into_results();
+    let results = checkpoint
+        .into_results()
+        .expect("checkpoint results should validate");
     let trace = results.scalar_trace().expect("scalar trace should export");
     let seed_low_index = trace
         .observable_names()

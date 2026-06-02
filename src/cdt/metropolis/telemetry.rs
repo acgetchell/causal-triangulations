@@ -979,13 +979,13 @@ impl ProposalStatistics {
 
     /// Rebuilds proposal telemetry from the serialized wire shape.
     ///
-    /// The wire form is rejected when terminal outcomes cannot be summed without
-    /// overflow, do not exactly account for selected move families, or when
-    /// forward-site observations exist without any selected move family. That
-    /// keeps deserialized result and checkpoint telemetry coherent before public
-    /// accessors expose the counters.
+    /// The wire form is rejected when terminal outcomes do not exactly account
+    /// for selected move families, or when forward-site observations exist
+    /// without any selected move family. Saturated terminal counters are accepted
+    /// because merging telemetry uses saturating arithmetic and can no longer
+    /// preserve an exact terminal-outcome partition.
     fn from_wire(wire: &ProposalStatisticsWire) -> CdtResult<Self> {
-        let terminal_outcomes = [
+        let terminal_counters = [
             wire.no_site_proposals,
             wire.site_causality_rejections,
             wire.site_geometric_rejections,
@@ -993,14 +993,20 @@ impl ProposalStatistics {
             wire.metropolis_rejections,
             wire.accepted_transitions,
             wire.hard_failures,
-        ]
-        .into_iter()
-        .try_fold(0_u64, |total, count| {
-            total.checked_add(count).ok_or_else(|| {
-                checkpoint_resume_failed(CheckpointResumeFailure::ProposalTerminalCounterOverflow)
-            })
-        })?;
-        if terminal_outcomes != wire.move_family_proposals {
+        ];
+        let terminal_saturated = terminal_counters.contains(&u64::MAX);
+        let terminal_outcomes = terminal_counters
+            .into_iter()
+            .try_fold(0_u64, u64::checked_add);
+        let mut terminal_overflowed = false;
+        let terminal_outcomes = terminal_outcomes.unwrap_or_else(|| {
+            terminal_overflowed = true;
+            wire.move_family_proposals
+        });
+        if !terminal_saturated
+            && !terminal_overflowed
+            && terminal_outcomes != wire.move_family_proposals
+        {
             return Err(checkpoint_resume_failed(
                 CheckpointResumeFailure::ProposalTerminalOutcomeCountMismatch {
                     terminal_outcomes,
@@ -1484,7 +1490,7 @@ mod tests {
     }
 
     #[test]
-    fn proposal_statistics_from_wire_rejects_terminal_outcome_counter_overflow() {
+    fn proposal_statistics_from_wire_accepts_saturated_terminal_outcome_counter_overflow() {
         let wire = ProposalStatisticsWire {
             move_family_proposals: u64::MAX,
             observed_forward_sites: u64::MAX,
@@ -1497,14 +1503,11 @@ mod tests {
             hard_failures: 0,
         };
 
-        let error = ProposalStatistics::from_wire(&wire)
-            .expect_err("overflowed terminal outcome partition should be rejected");
+        let stats = ProposalStatistics::from_wire(&wire)
+            .expect("saturated terminal outcome partition should deserialize");
 
-        assert_matches!(
-            error,
-            CdtError::CheckpointResumeFailed {
-                failure: CheckpointResumeFailure::ProposalTerminalCounterOverflow
-            }
-        );
+        assert_eq!(stats.move_family_proposals(), u64::MAX);
+        assert_eq!(stats.no_site_proposals(), u64::MAX);
+        assert_eq!(stats.site_causality_rejections(), 1);
     }
 }

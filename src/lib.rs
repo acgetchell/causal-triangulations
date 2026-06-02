@@ -213,7 +213,10 @@ use std::fmt::Display;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
+
+static NEXT_TEMP_OUTPUT_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Prelude module for convenient imports.
 ///
@@ -849,10 +852,16 @@ fn sibling_temp_output_path(path: &Path, format: OutputFormat) -> PathBuf {
         OutputFormat::Csv => "csv",
         OutputFormat::Json => "json",
     };
+    let token = NEXT_TEMP_OUTPUT_ID.fetch_add(1, Ordering::Relaxed);
     let file_name = path
         .file_name()
         .map_or_else(|| "output".into(), |name| name.to_string_lossy());
-    path.with_file_name(format!(".{file_name}.{}.{}.tmp", process::id(), suffix))
+    path.with_file_name(format!(
+        ".{file_name}.{}.{}.{}.tmp",
+        process::id(),
+        token,
+        suffix
+    ))
 }
 
 /// Builds a typed output write error for crate-root persistence helpers.
@@ -1052,20 +1061,41 @@ mod tests {
     }
 
     #[test]
+    fn sibling_temp_output_path_is_unique_per_call() {
+        let output_path = temp_output_path("unique-trace.csv");
+
+        let first = sibling_temp_output_path(&output_path, OutputFormat::Csv);
+        let second = sibling_temp_output_path(&output_path, OutputFormat::Csv);
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
     fn staged_outputs_roll_back_published_csv_when_json_persist_fails() {
         let csv_path = temp_output_path("rollback-trace.csv");
         let json_path = temp_output_path("rollback-summary.json");
-        let csv_temp = sibling_temp_output_path(&csv_path, OutputFormat::Csv);
-        let json_temp = sibling_temp_output_path(&json_path, OutputFormat::Json);
-        fs::write(&csv_temp, "trace").expect("staged CSV fixture should write");
-        fs::write(&json_temp, "{}").expect("staged JSON fixture should write");
-        fs::create_dir(&json_path).expect("JSON final path directory should block rename");
         let output_paths = ResolvedOutputPaths {
             csv: Some(csv_path.clone()),
             json: Some(json_path.clone()),
         };
+        let staged_outputs = StagedOutputs::new(&output_paths);
+        let csv_temp = staged_outputs
+            .csv
+            .as_ref()
+            .expect("CSV output should be staged")
+            .temp_path
+            .clone();
+        let json_temp = staged_outputs
+            .json
+            .as_ref()
+            .expect("JSON output should be staged")
+            .temp_path
+            .clone();
+        fs::write(&csv_temp, "trace").expect("staged CSV fixture should write");
+        fs::write(&json_temp, "{}").expect("staged JSON fixture should write");
+        fs::create_dir(&json_path).expect("JSON final path directory should block rename");
 
-        let error = StagedOutputs::new(&output_paths)
+        let error = staged_outputs
             .commit()
             .expect_err("JSON persist failure should roll back already-published CSV");
 

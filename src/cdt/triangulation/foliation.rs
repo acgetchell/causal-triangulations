@@ -1473,4 +1473,38 @@ mod tests {
         assert_eq!(profile, vec![8, 8, 8]);
         assert_eq!(profile.iter().sum::<u32>(), 24);
     }
+
+    #[test]
+    fn volume_profile_is_empty_without_current_foliation() {
+        let triangulation =
+            CdtTriangulation::from_random_points(5, 3, 2).expect("create unfoliated triangulation");
+
+        assert!(
+            triangulation
+                .volume_profile()
+                .expect("missing foliation should not fail")
+                .is_empty()
+        );
+
+        let mut triangulation = strict_strip(4, 2);
+        let vertex = triangulation
+            .geometry()
+            .vertices()
+            .next()
+            .expect("strip should contain vertices");
+        let label = triangulation
+            .geometry()
+            .vertex_data_by_key(vertex.vertex_key())
+            .expect("strip vertices should be labeled");
+        triangulation
+            .set_vertex_data(&vertex, Some(label))
+            .expect("label rewrite should stale foliation bookkeeping");
+
+        assert!(
+            triangulation
+                .volume_profile()
+                .expect("stale foliation should not fail")
+                .is_empty()
+        );
+    }
 }

@@ -892,8 +892,9 @@ mod tests {
             result,
             Err(CdtError::InvalidGenerationParameters {
                 issue: GenerationParameterIssue::InvalidCoordinateRange,
-                ..
-            })
+                ref provided_value,
+                ref expected_range,
+            }) if provided_value == "[5, 5]" && expected_range == "finite min < max"
         );
     }
 

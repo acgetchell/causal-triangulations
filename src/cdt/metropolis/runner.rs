@@ -454,7 +454,7 @@ impl MetropolisAlgorithm {
     /// }
     /// ```
     pub fn run(&self, triangulation: CdtTriangulation2D) -> CdtResult<SimulationResultsBackend> {
-        Ok(self.run_to_checkpoint(triangulation)?.into_results())
+        self.run_to_checkpoint(triangulation)?.into_results()
     }
 
     /// Run the simulation and return both the final results and checkpoint.
@@ -507,7 +507,7 @@ impl MetropolisAlgorithm {
         triangulation: CdtTriangulation2D,
     ) -> CdtResult<(SimulationResultsBackend, CdtMcmcCheckpoint)> {
         let checkpoint = self.run_to_checkpoint(triangulation)?;
-        let results = checkpoint.clone().into_results();
+        let results = checkpoint.clone().into_results()?;
         Ok((results, checkpoint))
     }
 
@@ -625,7 +625,7 @@ impl MetropolisAlgorithm {
         checkpoint: CdtMcmcCheckpoint,
     ) -> CdtResult<SimulationResultsBackend> {
         self.resume_to_checkpoint(checkpoint)
-            .map(CdtMcmcCheckpoint::into_results)
+            .and_then(CdtMcmcCheckpoint::into_results)
     }
 
     /// Continue a checkpoint for this algorithm's configured step count.
@@ -1837,7 +1837,9 @@ mod tests {
         assert_eq!(checkpoint.current_step().get(), 3);
         assert_eq!(results.steps().len(), checkpoint.steps().len());
         assert_eq!(results.config(), checkpoint.config());
-        let checkpoint_results = checkpoint.into_results();
+        let checkpoint_results = checkpoint
+            .into_results()
+            .expect("checkpoint results should validate");
         assert_eq!(
             results.triangulation().vertex_count(),
             checkpoint_results.triangulation().vertex_count()
@@ -1984,7 +1986,9 @@ mod tests {
             MetropolisAlgorithm::new(seeded_metropolis_config(1.0, 6, 0, 1, 999), action_config)
                 .resume_to_checkpoint(prefix)
                 .expect("chunked checkpoint resume should complete");
-        let chunked = chunked_checkpoint.into_results();
+        let chunked = chunked_checkpoint
+            .into_results()
+            .expect("chunked checkpoint results should validate");
 
         assert_eq!(chunked.config().steps().get(), 10);
         assert_eq!(

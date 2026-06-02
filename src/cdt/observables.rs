@@ -462,6 +462,28 @@ mod tests {
     }
 
     #[test]
+    fn dual_ball_averages_are_empty_for_too_small_graphs() {
+        assert!(
+            average_dual_ball_volumes_from_adjacency(&[])
+                .expect("empty adjacency should not fail numerically")
+                .is_empty()
+        );
+        assert!(
+            average_dual_ball_volumes_from_adjacency(&[vec![]])
+                .expect("single-node adjacency should not fail numerically")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn return_probabilities_are_empty_for_empty_graph() {
+        let probabilities = average_return_probabilities(&[], 4)
+            .expect("empty adjacency should not fail numerically");
+
+        assert!(probabilities.is_empty());
+    }
+
+    #[test]
     fn spectral_fit_recovers_power_law_return_probability() {
         let probabilities = vec![1.0, 0.75, 0.5, 1.0 / 3.0, 0.25, 0.2];
 
@@ -470,6 +492,17 @@ mod tests {
             .expect("decreasing power-law return probabilities should fit");
 
         assert_relative_eq!(estimate, 2.0, epsilon = 1e-12);
+    }
+
+    #[test]
+    fn spectral_fit_returns_none_for_non_positive_dimension() {
+        let increasing_return_probabilities = vec![1.0, 0.1, 0.2, 0.3, 0.4];
+
+        assert_eq!(
+            fit_spectral_dimension(&increasing_return_probabilities)
+                .expect("finite return probabilities should not fail numerically"),
+            None
+        );
     }
 
     #[test]

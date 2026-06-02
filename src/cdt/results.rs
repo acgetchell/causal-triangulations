@@ -86,7 +86,7 @@ const CDT_TRACE_CHAIN_ID: ChainId = ChainId::new(0);
 
 /// Invariant-bearing CDT trace outcome stored in serialized result/checkpoint rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) enum CdtScalarTraceOutcome {
+pub enum CdtScalarTraceOutcome {
     /// A concrete proposal was accepted and committed.
     Accepted,
     /// A concrete proposal was rejected by Metropolis-Hastings.
@@ -103,11 +103,6 @@ impl CdtScalarTraceOutcome {
             Self::RejectedProposal => TraceStepOutcome::rejected_proposal(),
             Self::NoProposal => TraceStepOutcome::no_proposal(),
         }
-    }
-
-    /// Whether this row records an accepted proposal.
-    pub(crate) const fn accepted(self) -> bool {
-        matches!(self, Self::Accepted)
     }
 }
 
@@ -1187,8 +1182,8 @@ fn validate_scalar_trace_row(
         return Err(checkpoint_resume_failed(
             CheckpointResumeFailure::ScalarTraceAcceptedMismatch {
                 step: step_number,
-                actual: row.payload.outcome().accepted(),
-                expected: expected_outcome.accepted(),
+                actual: row.payload.outcome(),
+                expected: expected_outcome,
             },
         ));
     }
@@ -2685,8 +2680,8 @@ mod tests {
             CdtError::CheckpointResumeFailed {
                 failure: CheckpointResumeFailure::ScalarTraceAcceptedMismatch {
                     step: 1,
-                    actual: true,
-                    expected: false
+                    actual: CdtScalarTraceOutcome::Accepted,
+                    expected: CdtScalarTraceOutcome::NoProposal
                 }
             }
         );

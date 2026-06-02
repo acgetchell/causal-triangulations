@@ -1,6 +1,6 @@
 # causal-triangulations
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20513229.svg)](https://doi.org/10.5281/zenodo.20513228)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20513229.svg)](https://doi.org/10.5281/zenodo.20513229)
 [![Crates.io](https://img.shields.io/crates/v/causal-triangulations.svg)](https://crates.io/crates/causal-triangulations)
 [![Downloads](https://img.shields.io/crates/d/causal-triangulations.svg)](https://crates.io/crates/causal-triangulations)
 [![Docs.rs](https://docs.rs/causal-triangulations/badge.svg)](https://docs.rs/causal-triangulations)

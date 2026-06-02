@@ -4,6 +4,7 @@
 
 use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::FoliationError;
+use crate::cdt::results::CdtScalarTraceOutcome;
 use crate::config::CdtTopology;
 use markov_chain_monte_carlo::{McmcError, StepOutcome};
 use std::fmt;
@@ -794,15 +795,15 @@ pub enum CheckpointResumeFailure {
         /// Move type stored in step telemetry.
         expected: MoveType,
     },
-    /// Scalar trace accepted outcome disagrees with step telemetry.
-    #[error("step {step} scalar trace accepted mismatch: got {actual}, expected {expected}")]
+    /// Scalar trace outcome disagrees with step telemetry.
+    #[error("step {step} scalar trace outcome mismatch: got {actual:?}, expected {expected:?}")]
     ScalarTraceAcceptedMismatch {
         /// Step with invalid scalar trace telemetry.
         step: u32,
-        /// Accepted flag reconstructed from scalar trace outcome.
-        actual: bool,
-        /// Accepted flag stored in step telemetry.
-        expected: bool,
+        /// Outcome reconstructed from scalar trace telemetry.
+        actual: CdtScalarTraceOutcome,
+        /// Outcome reconstructed from step telemetry.
+        expected: CdtScalarTraceOutcome,
     },
     /// Scalar trace optional action delta disagrees with step telemetry.
     #[error("step {step} scalar trace delta_action does not match step telemetry")]

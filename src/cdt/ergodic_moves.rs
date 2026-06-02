@@ -573,17 +573,13 @@ impl MoveStatistics {
 }
 
 /// Checks one move family's serialized counters before they become invariant-bearing telemetry.
-fn validate_move_counter(
+const fn validate_move_counter(
     move_type: MoveType,
     attempted: u64,
     accepted: u64,
     hard_failed: u64,
 ) -> CdtResult<()> {
-    let terminal = accepted
-        .checked_add(hard_failed)
-        .ok_or(CdtError::CheckpointResumeFailed {
-            failure: CheckpointResumeFailure::MoveTerminalCounterOverflow { move_type },
-        })?;
+    let terminal = accepted.saturating_add(hard_failed);
     if terminal > attempted {
         Err(CdtError::CheckpointResumeFailed {
             failure: CheckpointResumeFailure::MoveTerminalOutcomesExceedAttempted {
@@ -2100,8 +2096,8 @@ fn removal_sites(triangulation: &CdtTriangulation2D, visit: &mut impl FnMut(Prop
             let Some(remove) = toroidal_removal_candidate(triangulation, vertex) else {
                 continue;
             };
-            geometric_candidate_seen = true;
             if toroidal_removal_candidate_is_sampleable(triangulation, &remove) {
+                geometric_candidate_seen = true;
                 visit(ProposalSite::ToroidalRemoval(remove));
             }
         }
@@ -2383,7 +2379,7 @@ mod tests {
     }
 
     #[test]
-    fn move_statistics_from_wire_rejects_terminal_counter_overflow() {
+    fn move_statistics_from_wire_accepts_saturated_terminal_counters() {
         let wire = MoveStatisticsWire {
             moves_22_attempted: u64::MAX,
             moves_22_accepted: u64::MAX,
@@ -2399,17 +2395,12 @@ mod tests {
             edge_flips_hard_failed: 0,
         };
 
-        let error = MoveStatistics::from_wire(&wire)
-            .expect_err("overflowed accepted plus hard-failure counters should be rejected");
+        let stats = MoveStatistics::from_wire(&wire)
+            .expect("saturated terminal counters should deserialize");
 
-        assert_matches!(
-            error,
-            CdtError::CheckpointResumeFailed {
-                failure: CheckpointResumeFailure::MoveTerminalCounterOverflow {
-                    move_type: MoveType::Move22
-                }
-            }
-        );
+        assert_eq!(stats.attempted(MoveType::Move22), u64::MAX);
+        assert_eq!(stats.accepted(MoveType::Move22), u64::MAX);
+        assert_eq!(stats.hard_failed(MoveType::Move22), 1);
     }
 
     #[test]

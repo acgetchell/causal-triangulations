@@ -468,11 +468,10 @@ impl CdtMcmcCheckpoint {
     /// measurements, move statistics, proposal statistics, elapsed time, and the
     /// checkpointed triangulation in the returned [`SimulationResultsBackend`].
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if this validated checkpoint's private telemetry invariants no
-    /// longer satisfy the result-snapshot invariants. Constructors and
-    /// deserialization validate those invariants before a checkpoint can exist.
+    /// Returns [`CdtError`] if this checkpoint's components no longer satisfy
+    /// the result-snapshot invariants.
     ///
     /// # Examples
     ///
@@ -488,13 +487,12 @@ impl CdtMcmcCheckpoint {
     ///     )
     ///     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
     ///
-    ///     let results = checkpoint.into_results();
+    ///     let results = checkpoint.into_results()?;
     ///     assert_eq!(results.steps().len(), 1);
     ///     Ok(())
     /// }
     /// ```
-    #[must_use]
-    pub fn into_results(self) -> SimulationResultsBackend {
+    pub fn into_results(self) -> CdtResult<SimulationResultsBackend> {
         let (triangulation, _, _) = self.chain.into_parts();
         let parts = SimulationResultsParts::new(
             self.config,
@@ -506,9 +504,8 @@ impl CdtMcmcCheckpoint {
             self.scalar_trace_rows,
             self.elapsed_time,
             triangulation,
-        )
-        .expect("validated CDT checkpoint components should remain valid result components");
-        SimulationResultsBackend::from_parts(parts)
+        )?;
+        Ok(SimulationResultsBackend::from_parts(parts))
     }
 }
 
