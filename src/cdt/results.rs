@@ -36,7 +36,7 @@ use std::time::Duration;
 /// Scalar measurement data collected during simulation.
 ///
 /// Use [`Self::new`] and builder-style methods such as
-/// [`Self::with_volume_profile`] rather than struct literals outside this
+/// [`Self::try_with_volume_profile`] rather than struct literals outside this
 /// crate; additional measurement fields may be added over time. Simplex counts
 /// are stored as [`NonZeroU32`] so serialized results cannot represent an empty
 /// measured triangulation. Use [`NonZeroU32::get`] when raw `u32` counts are
@@ -155,14 +155,19 @@ impl TryFrom<CdtScalarTraceRowWire> for CdtScalarTraceRow {
                 actual: wire.step,
             })
         })?;
+        let vertices = nonzero_scalar_trace_count(MeasurementCountField::Vertices, wire.vertices)?;
+        let edges = nonzero_scalar_trace_count(MeasurementCountField::Edges, wire.edges)?;
+        let triangles =
+            nonzero_scalar_trace_count(MeasurementCountField::Triangles, wire.triangles)?;
+        validate_scalar_trace_volume_profile(step, triangles, &wire.volume_profile)?;
         let row = Self {
             step,
             outcome: wire.outcome,
             log_prob: wire.log_prob,
             action: wire.action,
-            vertices: nonzero_measurement_count(MeasurementCountField::Vertices, wire.vertices)?,
-            edges: nonzero_measurement_count(MeasurementCountField::Edges, wire.edges)?,
-            triangles: nonzero_measurement_count(MeasurementCountField::Triangles, wire.triangles)?,
+            vertices,
+            edges,
+            triangles,
             move_type: wire.move_type,
             delta_action: wire.delta_action,
             action_before: wire.action_before,
@@ -279,7 +284,7 @@ impl Measurement {
     /// Creates a measurement with an empty volume profile from validated counts.
     ///
     /// This constructor records scalar simulation counts. Attach per-slice
-    /// volume data with [`Self::with_volume_profile`] when the measured
+    /// volume data with [`Self::try_with_volume_profile`] when the measured
     /// triangulation has a foliation.
     ///
     /// Use [`Self::try_new`] when converting raw counts from serialized data,
@@ -415,10 +420,18 @@ impl Measurement {
         &self.volume_profile
     }
 
-    /// Returns this measurement with a per-slice volume profile attached.
+    /// Returns this measurement with a validated per-slice volume profile attached.
     ///
     /// The profile entries are triangle counts `N₂(t)` by time slab, matching
     /// [`CdtTriangulation::volume_profile`](crate::cdt::triangulation::CdtTriangulation::volume_profile).
+    /// An empty profile represents a measurement whose triangulation has no
+    /// current foliation. Non-empty profiles may include zero-count slices, but
+    /// their total must not exceed [`Self::triangles`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidMeasurementVolumeProfile`] when the profile
+    /// total exceeds this measurement's stored triangle count.
     ///
     /// # Examples
     ///
@@ -426,22 +439,24 @@ impl Measurement {
     /// use causal_triangulations::prelude::simulation::Measurement;
     ///
     /// let measurement =
-    ///     Measurement::try_new(20, -10.0, 12, 26, 12)?.with_volume_profile(vec![6, 6, 0]);
+    ///     Measurement::try_new(20, -10.0, 12, 26, 12)?.try_with_volume_profile(vec![6, 6, 0])?;
     /// assert_eq!(measurement.volume_profile(), &[6, 6, 0]);
     /// # Ok::<(), causal_triangulations::prelude::errors::CdtError>(())
     /// ```
-    #[must_use]
-    pub fn with_volume_profile(mut self, volume_profile: Vec<u32>) -> Self {
+    pub fn try_with_volume_profile(mut self, volume_profile: Vec<u32>) -> CdtResult<Self> {
+        validate_measurement_volume_profile(self.step, self.triangles, &volume_profile)?;
         self.volume_profile = volume_profile;
-        self
+        Ok(self)
     }
 }
 
 /// Raw measurement shape used only while deserializing result and checkpoint payloads.
 ///
 /// Serialized measurements stay JSON-numeric for compatibility with analysis
-/// tools, while conversion through [`Measurement::try_new`] rejects zero counts
-/// and non-finite actions before the public [`Measurement`] stores them.
+/// tools, while conversion through [`Measurement::try_new`] and
+/// [`Measurement::try_with_volume_profile`] rejects zero counts, non-finite
+/// actions, and impossible volume-profile totals before the public
+/// [`Measurement`] stores them.
 #[derive(Deserialize)]
 struct MeasurementWire {
     step: u32,
@@ -456,14 +471,14 @@ impl TryFrom<MeasurementWire> for Measurement {
     type Error = CdtError;
 
     fn try_from(wire: MeasurementWire) -> Result<Self, Self::Error> {
-        Ok(Self::try_new(
+        Self::try_new(
             wire.step,
             wire.action,
             wire.vertices,
             wire.edges,
             wire.triangles,
         )?
-        .with_volume_profile(wire.volume_profile))
+        .try_with_volume_profile(wire.volume_profile)
     }
 }
 
@@ -480,14 +495,67 @@ impl<'de> Deserialize<'de> for Measurement {
 
 /// Parses a raw measurement count into its nonzero domain type.
 ///
-/// This is the single boundary for `Measurement` and scalar-trace count
-/// invariants, keeping JSON deserialization, live measurement capture, and CSV
-/// trace export aligned on the same strictly-positive rule.
 fn nonzero_measurement_count(field: MeasurementCountField, value: u32) -> CdtResult<NonZeroU32> {
     NonZeroU32::new(value).ok_or(CdtError::InvalidMeasurementCount {
         field,
         provided_value: value,
     })
+}
+
+/// Parses a raw scalar trace count into its nonzero domain type.
+fn nonzero_scalar_trace_count(field: MeasurementCountField, value: u32) -> CdtResult<NonZeroU32> {
+    NonZeroU32::new(value).ok_or(CdtError::InvalidScalarTraceCount {
+        field,
+        provided_value: value,
+    })
+}
+
+/// Rejects scalar trace profiles that cannot fit the stored triangle count.
+fn validate_scalar_trace_volume_profile(
+    step: NonZeroU32,
+    triangles: NonZeroU32,
+    volume_profile: &[u32],
+) -> CdtResult<()> {
+    let Some(profile_total) = volume_profile_total(volume_profile) else {
+        return Ok(());
+    };
+    if profile_total > u64::from(triangles.get()) {
+        return Err(checkpoint_resume_failed(
+            CheckpointResumeFailure::ScalarTraceVolumeProfileExceedsTriangles {
+                step: step.get(),
+                profile_total,
+                triangles: triangles.get(),
+            },
+        ));
+    }
+    Ok(())
+}
+
+/// Rejects measurement profiles that cannot fit the stored triangle count.
+fn validate_measurement_volume_profile(
+    step: u32,
+    triangles: NonZeroU32,
+    volume_profile: &[u32],
+) -> CdtResult<()> {
+    let Some(profile_total) = volume_profile_total(volume_profile) else {
+        return Ok(());
+    };
+    if profile_total > u64::from(triangles.get()) {
+        return Err(CdtError::InvalidMeasurementVolumeProfile {
+            step,
+            profile_total,
+            triangles: triangles.get(),
+        });
+    }
+    Ok(())
+}
+
+/// Sums non-empty volume profiles in a wider type.
+fn volume_profile_total(volume_profile: &[u32]) -> Option<u64> {
+    if volume_profile.is_empty() {
+        return None;
+    }
+    Some(volume_profile.iter().map(|&volume| u64::from(volume)).sum())
 }
 
 fn nonzero_usize_measurement_count(
@@ -922,6 +990,15 @@ fn validate_scalar_trace_row(
                 step: step_number,
                 actual: row.outcome.accepted(),
                 expected: expected_outcome.accepted(),
+            },
+        ));
+    }
+    if row.seed != config.seed() {
+        return Err(checkpoint_resume_failed(
+            CheckpointResumeFailure::ScalarTraceSeedMismatch {
+                step: step_number,
+                actual: row.seed,
+                expected: config.seed(),
             },
         ));
     }
@@ -2042,6 +2119,15 @@ mod tests {
         .expect("valid rejected result should construct")
     }
 
+    fn assert_checkpoint_resume_failure(error: &CdtError, expected: &CheckpointResumeFailure) {
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure
+            } if failure == expected
+        );
+    }
+
     /// Asserts two equal-length floating-point slices using relative tolerance.
     fn assert_slice_relative_eq(actual: &[f64], expected: &[f64]) {
         assert_eq!(actual.len(), expected.len());
@@ -2096,8 +2182,12 @@ mod tests {
         let proposal_stats = ProposalStatistics::from_validated_parts(1, 7, 0, 0, 0, 0, 0, 1, 0);
         let step = accepted_step(1, MoveType::Move22, 4.0, 3.5);
         let measurements = vec![
-            measurement(0, 4.0, 12, 26, 12).with_volume_profile(vec![4, 4, 4]),
-            measurement(1, 3.5, 12, 26, 12).with_volume_profile(vec![4, 4, 4]),
+            measurement(0, 4.0, 12, 26, 12)
+                .try_with_volume_profile(vec![4, 4, 4])
+                .expect("volume profile should fit triangle count"),
+            measurement(1, 3.5, 12, 26, 12)
+                .try_with_volume_profile(vec![4, 4, 4])
+                .expect("volume profile should fit triangle count"),
         ];
         let elapsed = Duration::from_millis(42);
         let triangulation =
@@ -2321,6 +2411,39 @@ mod tests {
     }
 
     #[test]
+    fn public_constructor_rejects_scalar_trace_length_mismatch() {
+        let config = metropolis_config(1.0, 1, 0, 1);
+        let mut move_stats = MoveStatistics::new();
+        move_stats.record_attempt(MoveType::Move22);
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+
+        let error = SimulationResultsBackend::new(
+            config,
+            ActionConfig::default(),
+            move_stats,
+            ProposalStatistics::from_validated_parts(1, 0, 1, 0, 0, 0, 0, 0, 0),
+            vec![no_proposal_step(1, MoveType::Move22, 0.0)],
+            vec![
+                measurement(0, 0.0, 12, 26, 12),
+                measurement(1, 0.0, 12, 26, 12),
+            ],
+            Vec::new(),
+            Duration::ZERO,
+            triangulation,
+        )
+        .expect_err("scalar trace rows must align with step telemetry");
+
+        assert_checkpoint_resume_failure(
+            &error,
+            &CheckpointResumeFailure::ScalarTraceLengthMismatch {
+                actual: 0,
+                expected: 1,
+            },
+        );
+    }
+
+    #[test]
     fn public_constructor_rejects_scalar_trace_acceptance_mismatch() {
         let config = metropolis_config(1.0, 1, 0, 1);
         let mut move_stats = MoveStatistics::new();
@@ -2368,6 +2491,384 @@ mod tests {
                     expected: false
                 }
             }
+        );
+    }
+
+    #[test]
+    fn public_constructor_rejects_scalar_trace_action_mismatches() {
+        let config = seeded_metropolis_config(1.5, 1, 0, 1, 23);
+        let step = accepted_step(1, MoveType::Move22, 4.0, 3.5);
+        let cases = [
+            (
+                -3.5 / config.temperature(),
+                3.5,
+                Some(-0.5),
+                4.25,
+                Some(3.5),
+                CheckpointResumeFailure::ScalarTraceActionBeforeMismatch { step: 1 },
+            ),
+            (
+                -3.5 / config.temperature(),
+                3.5,
+                Some(-0.25),
+                4.0,
+                Some(3.5),
+                CheckpointResumeFailure::ScalarTraceDeltaActionMismatch { step: 1 },
+            ),
+            (
+                -3.5 / config.temperature(),
+                3.5,
+                Some(-0.5),
+                4.0,
+                Some(3.25),
+                CheckpointResumeFailure::ScalarTraceActionAfterMismatch { step: 1 },
+            ),
+            (
+                -3.25 / config.temperature(),
+                3.25,
+                Some(-0.5),
+                4.0,
+                Some(3.5),
+                CheckpointResumeFailure::ScalarTraceActionMismatch { step: 1 },
+            ),
+            (
+                -4.0 / config.temperature(),
+                3.5,
+                Some(-0.5),
+                4.0,
+                Some(3.5),
+                CheckpointResumeFailure::ScalarTraceLogProbMismatch { step: 1 },
+            ),
+        ];
+
+        for (log_prob, action, delta_action, action_before, action_after, expected) in cases {
+            let mut move_stats = MoveStatistics::new();
+            move_stats.record_attempt(MoveType::Move22);
+            move_stats.record_success(MoveType::Move22);
+            let triangulation =
+                CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+            let scalar_trace_rows = vec![
+                CdtScalarTraceRow::new(
+                    step.step(),
+                    CdtScalarTraceOutcome::Accepted,
+                    log_prob,
+                    action,
+                    &triangulation,
+                    step.move_type(),
+                    delta_action,
+                    action_before,
+                    action_after,
+                    config.seed(),
+                )
+                .expect("finite scalar trace row should build before cross-telemetry validation"),
+            ];
+
+            let error = SimulationResultsBackend::new(
+                config.clone(),
+                ActionConfig::default(),
+                move_stats,
+                ProposalStatistics::from_validated_parts(1, 7, 0, 0, 0, 0, 0, 1, 0),
+                vec![step.clone()],
+                vec![
+                    measurement(0, 4.0, 12, 26, 12),
+                    measurement(1, 3.5, 12, 26, 12),
+                ],
+                scalar_trace_rows,
+                Duration::ZERO,
+                triangulation,
+            )
+            .expect_err("scalar trace action telemetry must match step telemetry");
+
+            assert_checkpoint_resume_failure(&error, &expected);
+        }
+    }
+
+    #[test]
+    fn public_constructor_rejects_scalar_trace_seed_mismatch() {
+        let config = seeded_metropolis_config(1.0, 1, 0, 1, 23);
+        let step = no_proposal_step(1, MoveType::Move22, 0.0);
+        let mut move_stats = MoveStatistics::new();
+        move_stats.record_attempt(MoveType::Move22);
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let scalar_trace_rows = vec![
+            CdtScalarTraceRow::new(
+                step.step(),
+                CdtScalarTraceOutcome::NoProposal,
+                -0.0 / config.temperature(),
+                0.0,
+                &triangulation,
+                step.move_type(),
+                None,
+                0.0,
+                None,
+                Some(99),
+            )
+            .expect("row should build before cross-telemetry validation"),
+        ];
+
+        let error = SimulationResultsBackend::new(
+            config,
+            ActionConfig::default(),
+            move_stats,
+            ProposalStatistics::from_validated_parts(1, 0, 1, 0, 0, 0, 0, 0, 0),
+            vec![step],
+            vec![
+                measurement(0, 0.0, 12, 26, 12),
+                measurement(1, 0.0, 12, 26, 12),
+            ],
+            scalar_trace_rows,
+            Duration::ZERO,
+            triangulation,
+        )
+        .expect_err("scalar trace seed must match simulation config");
+
+        assert_checkpoint_resume_failure(
+            &error,
+            &CheckpointResumeFailure::ScalarTraceSeedMismatch {
+                step: 1,
+                actual: Some(99),
+                expected: Some(23),
+            },
+        );
+    }
+
+    #[test]
+    fn scalar_trace_validation_rejects_step_and_move_mismatches() {
+        let config = metropolis_config(1.0, 1, 0, 1);
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let step = no_proposal_step(1, MoveType::Move22, 0.0);
+        let cases = [
+            (
+                CdtScalarTraceRow::new(
+                    step_number(2),
+                    CdtScalarTraceOutcome::NoProposal,
+                    -0.0 / config.temperature(),
+                    0.0,
+                    &triangulation,
+                    MoveType::Move22,
+                    None,
+                    0.0,
+                    None,
+                    config.seed(),
+                )
+                .expect("trace row should build"),
+                CheckpointResumeFailure::ScalarTraceStepMismatch {
+                    actual: 2,
+                    expected: 1,
+                },
+            ),
+            (
+                CdtScalarTraceRow::new(
+                    step.step(),
+                    CdtScalarTraceOutcome::NoProposal,
+                    -0.0 / config.temperature(),
+                    0.0,
+                    &triangulation,
+                    MoveType::EdgeFlip,
+                    None,
+                    0.0,
+                    None,
+                    config.seed(),
+                )
+                .expect("trace row should build"),
+                CheckpointResumeFailure::ScalarTraceMoveTypeMismatch {
+                    step: 1,
+                    actual: MoveType::EdgeFlip,
+                    expected: MoveType::Move22,
+                },
+            ),
+        ];
+
+        for (row, expected) in cases {
+            let error = validate_scalar_trace_rows(
+                &config,
+                &ProposalStatistics::from_validated_parts(1, 0, 1, 0, 0, 0, 0, 0, 0),
+                std::slice::from_ref(&step),
+                &[row],
+            )
+            .expect_err("scalar trace row identity must match step telemetry");
+
+            assert_checkpoint_resume_failure(&error, &expected);
+        }
+    }
+
+    #[test]
+    fn scalar_trace_validation_rejects_optional_delta_action_presence_mismatch() {
+        let config = metropolis_config(1.0, 1, 0, 1);
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let step = rejected_proposal_step(1, MoveType::Move22, 4.0, Some(0.5));
+        let row = CdtScalarTraceRow::new(
+            step.step(),
+            CdtScalarTraceOutcome::RejectedProposal,
+            -4.0 / config.temperature(),
+            4.0,
+            &triangulation,
+            step.move_type(),
+            None,
+            step.action_before(),
+            step.action_after(),
+            config.seed(),
+        )
+        .expect("row should build before cross-telemetry validation");
+
+        let error = validate_scalar_trace_rows(
+            &config,
+            &ProposalStatistics::from_validated_parts(1, 7, 0, 0, 0, 0, 0, 1, 0),
+            &[step],
+            &[row],
+        )
+        .expect_err("optional delta_action presence must match step telemetry");
+
+        assert_checkpoint_resume_failure(
+            &error,
+            &CheckpointResumeFailure::ScalarTraceDeltaActionMismatch { step: 1 },
+        );
+    }
+
+    #[test]
+    fn scalar_trace_validation_rejects_aggregate_counter_mismatches() {
+        let config = metropolis_config(1.0, 1, 0, 1);
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let accepted_step = accepted_step(1, MoveType::Move22, 4.0, 3.5);
+        let rejected_step = rejected_proposal_step(1, MoveType::Move22, 4.0, Some(0.5));
+        let no_proposal_step = no_proposal_step(1, MoveType::Move22, 4.0);
+        let accepted_row = CdtScalarTraceRow::new(
+            accepted_step.step(),
+            CdtScalarTraceOutcome::Accepted,
+            -3.5 / config.temperature(),
+            3.5,
+            &triangulation,
+            accepted_step.move_type(),
+            accepted_step.delta_action(),
+            accepted_step.action_before(),
+            accepted_step.action_after(),
+            config.seed(),
+        )
+        .expect("accepted scalar trace row should build");
+        let rejected_row = CdtScalarTraceRow::new(
+            rejected_step.step(),
+            CdtScalarTraceOutcome::RejectedProposal,
+            -4.0 / config.temperature(),
+            4.0,
+            &triangulation,
+            rejected_step.move_type(),
+            rejected_step.delta_action(),
+            rejected_step.action_before(),
+            rejected_step.action_after(),
+            config.seed(),
+        )
+        .expect("rejected scalar trace row should build");
+        let no_proposal_row = CdtScalarTraceRow::new(
+            no_proposal_step.step(),
+            CdtScalarTraceOutcome::NoProposal,
+            -4.0 / config.temperature(),
+            4.0,
+            &triangulation,
+            no_proposal_step.move_type(),
+            no_proposal_step.delta_action(),
+            no_proposal_step.action_before(),
+            no_proposal_step.action_after(),
+            config.seed(),
+        )
+        .expect("no-proposal scalar trace row should build");
+        let cases = [
+            (
+                accepted_step,
+                accepted_row,
+                ProposalStatistics::from_validated_parts(1, 7, 0, 0, 0, 0, 0, 0, 0),
+                CheckpointResumeFailure::ScalarTraceAcceptedCountMismatch {
+                    actual: 1,
+                    expected: 0,
+                },
+            ),
+            (
+                rejected_step,
+                rejected_row,
+                ProposalStatistics::from_validated_parts(1, 7, 0, 0, 0, 0, 0, 0, 0),
+                CheckpointResumeFailure::ScalarTraceRejectedProposalCountMismatch {
+                    actual: 1,
+                    expected: 0,
+                },
+            ),
+            (
+                no_proposal_step,
+                no_proposal_row,
+                ProposalStatistics::from_validated_parts(1, 0, 0, 0, 0, 0, 0, 0, 0),
+                CheckpointResumeFailure::ScalarTraceNoProposalCountMismatch {
+                    actual: 1,
+                    expected: 0,
+                },
+            ),
+        ];
+
+        for (step, row, proposal_stats, expected) in cases {
+            let error = validate_scalar_trace_rows(&config, &proposal_stats, &[step], &[row])
+                .expect_err("scalar trace aggregate counters must match proposal telemetry");
+
+            assert_checkpoint_resume_failure(&error, &expected);
+        }
+    }
+
+    #[test]
+    fn scalar_trace_export_encodes_rejected_rows_and_absent_seed_observables() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let mut row = CdtScalarTraceRow::new(
+            step_number(1),
+            CdtScalarTraceOutcome::RejectedProposal,
+            -4.0,
+            4.0,
+            &triangulation,
+            MoveType::Move22,
+            Some(0.5),
+            4.0,
+            None,
+            None,
+        )
+        .expect("rejected trace row should build");
+        row.volume_profile = vec![2, 4];
+        let mut results = results_with(
+            metropolis_config(1.0, 1, 0, 1),
+            Vec::new(),
+            Vec::new(),
+            triangulation,
+        );
+        results.scalar_trace_rows = vec![row];
+
+        let trace = results.scalar_trace().expect("scalar trace should export");
+        assert_eq!(trace.len(), 1);
+        assert_eq!(
+            trace.observable_names(),
+            &[
+                "action",
+                "vertices",
+                "edges",
+                "triangles",
+                "move_family",
+                "delta_action",
+                "delta_action_present",
+                "action_before",
+                "action_after",
+                "action_after_present",
+                "seed_low_u32",
+                "seed_high_u32",
+                "seed_present",
+                "volume_profile_0",
+                "volume_profile_1",
+            ]
+        );
+        let record = &trace.records()[0];
+        assert_eq!(record.outcome(), TraceStepOutcome::rejected_proposal());
+        assert_relative_eq!(record.log_prob(), -4.0);
+        assert_eq!(
+            record.observable_values(),
+            &[
+                4.0, 12.0, 23.0, 12.0, 22.0, 0.5, 1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 4.0,
+            ]
         );
     }
 
@@ -2600,10 +3101,52 @@ mod tests {
                 .expect_err("zero scalar trace count should fail while parsing");
             let message = error.to_string();
             assert!(
-                message.contains("Invalid measurement count") && message.contains(field),
+                message.contains("Invalid scalar trace count") && message.contains(field),
                 "unexpected serde error for {field}: {message}"
             );
         }
+    }
+
+    #[test]
+    fn deserialization_rejects_scalar_trace_volume_profile_above_triangle_count() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let results = valid_rejected_result(triangulation);
+        let mut payload = to_value(&results).expect("results should serialize");
+        payload["scalar_trace_rows"][0]["volume_profile"] =
+            to_value([13_u32]).expect("volume profile should serialize");
+
+        let error = from_str::<SimulationResultsBackend>(&payload.to_string())
+            .expect_err("scalar trace volume profile cannot exceed stored triangle count");
+
+        assert!(
+            error
+                .to_string()
+                .contains("scalar trace volume profile total 13")
+                && error.to_string().contains("triangle count 12"),
+            "unexpected serde error: {error}"
+        );
+    }
+
+    #[test]
+    fn deserialization_rejects_measurement_volume_profile_above_triangle_count() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let results = valid_rejected_result(triangulation);
+        let mut payload = to_value(&results).expect("results should serialize");
+        payload["measurements"][0]["volume_profile"] =
+            to_value([13_u32]).expect("volume profile should serialize");
+
+        let error = from_str::<SimulationResultsBackend>(&payload.to_string())
+            .expect_err("measurement volume profile cannot exceed stored triangle count");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Invalid measurement volume profile at step 0: total 13")
+                && error.to_string().contains("triangle count 12"),
+            "unexpected serde error: {error}"
+        );
     }
 
     #[test]
@@ -2699,7 +3242,9 @@ mod tests {
 
     #[test]
     fn measurement_builders_preserve_scalar_counts_and_profile() {
-        let measurement = measurement(7, -3.5, 12, 26, 12).with_volume_profile(vec![6, 6, 0]);
+        let measurement = measurement(7, -3.5, 12, 26, 12)
+            .try_with_volume_profile(vec![6, 6, 0])
+            .expect("volume profile should fit triangle count");
 
         assert_eq!(measurement.step(), 7);
         assert_relative_eq!(measurement.action(), -3.5);
@@ -2707,6 +3252,22 @@ mod tests {
         assert_eq!(measurement.edges().get(), 26);
         assert_eq!(measurement.triangles().get(), 12);
         assert_eq!(measurement.volume_profile(), &[6, 6, 0]);
+    }
+
+    #[test]
+    fn measurement_builder_rejects_volume_profile_above_triangle_count() {
+        let error = measurement(7, -3.5, 12, 26, 12)
+            .try_with_volume_profile(vec![13])
+            .expect_err("volume profile cannot exceed stored triangle count");
+
+        assert_matches!(
+            error,
+            CdtError::InvalidMeasurementVolumeProfile {
+                step: 7,
+                profile_total: 13,
+                triangles: 12,
+            }
+        );
     }
 
     #[test]
@@ -2936,9 +3497,15 @@ mod tests {
             accepted_step(3, MoveType::Move31Remove, 2.5, 2.0),
         ];
         let measurements = vec![
-            measurement(0, 1.0, 3, 3, 1).with_volume_profile(vec![1, 0, 0]),
-            measurement(10, 2.0, 4, 5, 2).with_volume_profile(vec![1, 1, 0]),
-            measurement(15, 3.0, 5, 7, 3).with_volume_profile(vec![1, 2, 0]),
+            measurement(0, 1.0, 3, 3, 1)
+                .try_with_volume_profile(vec![1, 0, 0])
+                .expect("volume profile should fit triangle count"),
+            measurement(10, 2.0, 4, 5, 2)
+                .try_with_volume_profile(vec![1, 1, 0])
+                .expect("volume profile should fit triangle count"),
+            measurement(15, 3.0, 5, 7, 3)
+                .try_with_volume_profile(vec![1, 2, 0])
+                .expect("volume profile should fit triangle count"),
         ];
         let triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
@@ -2963,8 +3530,12 @@ mod tests {
             metropolis_config(1.0, 20, 10, 5),
             vec![],
             vec![
-                measurement(10, 2.0, 4, 5, 2).with_volume_profile(vec![4, 8, 1]),
-                measurement(15, 3.0, 5, 7, 3).with_volume_profile(vec![6]),
+                measurement(10, 2.0, 4, 5, 13)
+                    .try_with_volume_profile(vec![4, 8, 1])
+                    .expect("volume profile should fit triangle count"),
+                measurement(15, 3.0, 5, 7, 6)
+                    .try_with_volume_profile(vec![6])
+                    .expect("volume profile should fit triangle count"),
             ],
             triangulation,
         );
@@ -2999,8 +3570,12 @@ mod tests {
             metropolis_config(1.0, 20, 10, 5),
             vec![],
             vec![
-                measurement(0, 1.0, 3, 3, 1).with_volume_profile(vec![1]),
-                measurement(10, 2.0, 4, 5, 2).with_volume_profile(vec![2]),
+                measurement(0, 1.0, 3, 3, 1)
+                    .try_with_volume_profile(vec![1])
+                    .expect("volume profile should fit triangle count"),
+                measurement(10, 2.0, 4, 5, 2)
+                    .try_with_volume_profile(vec![2])
+                    .expect("volume profile should fit triangle count"),
             ],
             triangulation,
         );

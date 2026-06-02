@@ -628,7 +628,7 @@ pub fn run_simulation(config: &ValidatedCdtConfig) -> CdtResult<SimulationResult
         );
 
         let measurement = Measurement::try_from_simplex_counts(0, initial_action, counts)?
-            .with_volume_profile(triangulation.volume_profile());
+            .try_with_volume_profile(triangulation.volume_profile())?;
 
         SimulationResultsBackend::from_parts(SimulationResultsParts {
             config: config.to_metropolis_config(),

@@ -828,6 +828,28 @@ pub enum CheckpointResumeFailure {
         /// Step with invalid scalar trace telemetry.
         step: u32,
     },
+    /// Scalar trace RNG seed disagrees with the simulation configuration.
+    #[error("step {step} scalar trace seed mismatch: got {actual:?}, expected {expected:?}")]
+    ScalarTraceSeedMismatch {
+        /// Step with invalid scalar trace telemetry.
+        step: u32,
+        /// Seed stored in the scalar trace row.
+        actual: Option<u64>,
+        /// Seed from simulation configuration.
+        expected: Option<u64>,
+    },
+    /// Scalar trace volume profile exceeds the stored triangle count.
+    #[error(
+        "step {step} scalar trace volume profile total {profile_total} exceeds triangle count {triangles}"
+    )]
+    ScalarTraceVolumeProfileExceedsTriangles {
+        /// Step with invalid scalar trace telemetry.
+        step: u32,
+        /// Sum of the serialized volume profile entries.
+        profile_total: u64,
+        /// Stored scalar trace triangle count.
+        triangles: u32,
+    },
     /// Scalar trace contains a non-finite numeric value.
     #[error("step {step} scalar trace field {field} is non-finite")]
     NonFiniteScalarTraceValue {
@@ -1113,6 +1135,8 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             | CdtError::InvalidSimplexCount { .. }
             | CdtError::InvalidMeasurementAction { .. }
             | CdtError::InvalidMeasurementCount { .. }
+            | CdtError::InvalidMeasurementVolumeProfile { .. }
+            | CdtError::InvalidScalarTraceCount { .. }
             | CdtError::MeasurementCountOverflow { .. }
             | CdtError::InvalidSimulationConfiguration { .. }
             | CdtError::PlannedProposalStepFailed { .. }
@@ -1215,6 +1239,29 @@ pub enum CdtError {
     )]
     InvalidMeasurementCount {
         /// Structured category for the invalid measurement count.
+        field: MeasurementCountField,
+        /// Value supplied for the count.
+        provided_value: u32,
+    },
+    /// [`Measurement`](crate::cdt::results::Measurement) construction failed
+    /// because a per-slice volume profile could not fit the stored triangle count.
+    #[error(
+        "Invalid measurement volume profile at step {step}: total {profile_total} exceeds triangle count {triangles}"
+    )]
+    InvalidMeasurementVolumeProfile {
+        /// Measurement step with invalid volume-profile telemetry.
+        step: u32,
+        /// Sum of the supplied volume profile entries.
+        profile_total: u64,
+        /// Stored measurement triangle count.
+        triangles: u32,
+    },
+    /// Scalar trace row construction failed because a count was not strictly positive.
+    #[error(
+        "Invalid scalar trace count: {field} (got: {provided_value}, expected: strictly positive)"
+    )]
+    InvalidScalarTraceCount {
+        /// Structured category for the invalid scalar trace count.
         field: MeasurementCountField,
         /// Value supplied for the count.
         provided_value: u32,
@@ -1743,6 +1790,34 @@ mod tests {
 
         for (counter, expected) in cases {
             assert_eq!(counter.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn scalar_trace_field_display_covers_all_fields() {
+        let cases = [
+            (ScalarTraceField::LogProb, "log_prob"),
+            (ScalarTraceField::Action, "action"),
+            (ScalarTraceField::DeltaAction, "delta_action"),
+            (ScalarTraceField::ActionBefore, "action_before"),
+            (ScalarTraceField::ActionAfter, "action_after"),
+        ];
+
+        for (field, expected) in cases {
+            assert_eq!(field.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn simplex_count_field_display_covers_all_fields() {
+        let cases = [
+            (SimplexCountField::Vertices, "vertices"),
+            (SimplexCountField::Edges, "edges"),
+            (SimplexCountField::Triangles, "triangles"),
+        ];
+
+        for (field, expected) in cases {
+            assert_eq!(field.to_string(), expected);
         }
     }
 

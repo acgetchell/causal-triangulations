@@ -363,6 +363,7 @@ struct MetropolisRunState {
     triangulation: CdtTriangulation2D,
     current_step: u32,
     current_action: f64,
+    trace_seed: Option<u64>,
     acceptance_rng: Xoshiro256PlusPlus,
     ergodics: ErgodicsSystem,
     move_stats: MoveStatistics,
@@ -723,6 +724,7 @@ impl MetropolisAlgorithm {
             triangulation,
             current_step: 0,
             current_action,
+            trace_seed: self.config.seed,
             acceptance_rng: simulation_rng(self.config.seed),
             ergodics: self.config.seed.map_or_else(ErgodicsSystem::new, |seed| {
                 ErgodicsSystem::with_seed(seed.wrapping_add(0x9E37_79B9_7F4A_7C15))
@@ -839,6 +841,7 @@ impl MetropolisRunState {
             triangulation,
             current_step: checkpoint.current_step.get(),
             current_action: checkpoint.current_action,
+            trace_seed: checkpoint.config.seed(),
             acceptance_rng: checkpoint.acceptance_rng,
             ergodics: checkpoint.ergodics,
             move_stats: checkpoint.move_stats,
@@ -1058,7 +1061,7 @@ fn record_planned_step_parts(
         delta_action,
         action_before,
         action_after,
-        algorithm.config.seed(),
+        state.trace_seed,
     )?);
 
     if measurement_is_due(
@@ -1514,6 +1517,7 @@ mod tests {
             triangulation,
             current_step: 0,
             current_action: 0.0,
+            trace_seed: Some(1),
             acceptance_rng: simulation_rng(Some(1)),
             ergodics: ErgodicsSystem::with_seed(2),
             move_stats: MoveStatistics::new(),
@@ -2023,7 +2027,7 @@ mod tests {
             };
             let message = error.to_string();
             assert!(
-                message.contains("Invalid measurement count") && message.contains(field),
+                message.contains("Invalid scalar trace count") && message.contains(field),
                 "unexpected serde error for {field}: {message}"
             );
         }

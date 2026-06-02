@@ -174,3 +174,52 @@ fn proposal_site_cache_does_not_reuse_sites_for_replaced_triangulation_instances
         .validate()
         .expect("fresh strip move should preserve CDT invariants");
 }
+
+#[test]
+fn resumed_scalar_trace_keeps_checkpoint_seed_not_fresh_resume_seed() {
+    // Regression for causal-triangulations#164: checkpoint continuation ignores
+    // the fresh algorithm seed and resumes from serialized RNG state. Scalar
+    // trace metadata must therefore keep the checkpoint/run seed, not the seed
+    // on the temporary resume driver.
+    let action_config = ActionConfig::default();
+    let prefix_config = MetropolisConfig::new(1.0, 4, 0, 1)
+        .expect("prefix Metropolis config should be valid")
+        .with_seed(19);
+    let resume_config = MetropolisConfig::new(1.0, 6, 0, 1)
+        .expect("resume Metropolis config should be valid")
+        .with_seed(999);
+    let prefix = MetropolisAlgorithm::new(prefix_config, action_config.clone())
+        .run_to_checkpoint(
+            CdtTriangulation::from_cdt_strip(4, 3).expect("strip fixture should build"),
+        )
+        .expect("prefix checkpoint should build");
+
+    let checkpoint = MetropolisAlgorithm::new(resume_config, action_config)
+        .resume_to_checkpoint(prefix)
+        .expect("resume with a different fresh seed should still validate");
+    let results = checkpoint.into_results();
+    let trace = results.scalar_trace().expect("scalar trace should export");
+    let seed_low_index = trace
+        .observable_names()
+        .iter()
+        .position(|name| name == "seed_low_u32")
+        .expect("trace should include seed_low_u32");
+    let seed_high_index = trace
+        .observable_names()
+        .iter()
+        .position(|name| name == "seed_high_u32")
+        .expect("trace should include seed_high_u32");
+    let seed_present_index = trace
+        .observable_names()
+        .iter()
+        .position(|name| name == "seed_present")
+        .expect("trace should include seed_present");
+
+    assert_eq!(trace.len(), 10);
+    for record in trace.records() {
+        let values = record.observable_values();
+        assert_relative_eq!(values[seed_low_index], 19.0);
+        assert_relative_eq!(values[seed_high_index], 0.0);
+        assert_relative_eq!(values[seed_present_index], 1.0);
+    }
+}

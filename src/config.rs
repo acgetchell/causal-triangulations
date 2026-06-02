@@ -120,7 +120,7 @@ pub struct CdtConfig {
     /// Topology and boundary conditions for triangulation generation.
     pub topology: CdtTopology,
 
-    /// Write per-measurement simulation data to a CSV file.
+    /// Write scalar trace rows to a CSV file.
     ///
     /// Relative paths are resolved from the current working directory with
     /// [`CdtConfig::resolve_path`]. Parent directories are created when output
@@ -128,7 +128,7 @@ pub struct CdtConfig {
     /// and JSON output paths resolve to the same file.
     pub output_csv: Option<PathBuf>,
 
-    /// Write simulation metadata and aggregate summary data to a JSON file.
+    /// Write simulation summary, metadata, and final triangulation data to a JSON file.
     ///
     /// Relative paths are resolved from the current working directory with
     /// [`CdtConfig::resolve_path`]. Parent directories are created when output
@@ -510,7 +510,7 @@ impl ValidatedCdtConfig {
         self.config.simulate
     }
 
-    /// Configured CSV output path, if any.
+    /// Configured trace CSV output path, if any.
     ///
     /// # Examples
     ///
@@ -534,7 +534,7 @@ impl ValidatedCdtConfig {
         self.config.output_csv.as_deref()
     }
 
-    /// Configured JSON output path, if any.
+    /// Configured summary/metadata JSON output path, if any.
     ///
     /// # Examples
     ///
@@ -619,7 +619,7 @@ impl TryFrom<CdtConfig> for ValidatedCdtConfig {
     author,
     version,
     about = "Run 1+1-dimensional Causal Dynamical Triangulations simulations",
-    long_about = "Run 1+1-dimensional Causal Dynamical Triangulations simulations.\n\nConstruct a foliated CDT triangulation, optionally run the Metropolis move loop, and write measurement summaries. Prefer --vertices-per-slice for regular initial data or --volume-profile for explicit nonuniform initial slice volumes; --vertices remains available when the total initial vertex count is already known.",
+    long_about = "Run 1+1-dimensional Causal Dynamical Triangulations simulations.\n\nConstruct a foliated CDT triangulation, optionally run the Metropolis move loop, and write CSV trace rows plus JSON summary metadata. Prefer --vertices-per-slice for regular initial data or --volume-profile for explicit nonuniform initial slice volumes; --vertices remains available when the total initial vertex count is already known.",
     group = ArgGroup::new("vertex_count")
         .required(true)
         .args(["vertices", "vertices_per_slice", "volume_profile"])
@@ -732,16 +732,16 @@ struct CdtCliArgs {
     #[arg(
         long,
         value_name = "PATH",
-        help = "Write per-measurement simulation data to a CSV file",
-        long_help = "Write per-measurement simulation data to a CSV file. Relative paths are resolved from the current working directory, and parent directories are created when output is written."
+        help = "Write scalar trace rows to a CSV file",
+        long_help = "Write scalar trace rows to a CSV file for external analysis workflows. Relative paths are resolved from the current working directory, and parent directories are created when output is written."
     )]
     output_csv: Option<PathBuf>,
 
     #[arg(
         long,
         value_name = "PATH",
-        help = "Write run metadata, aggregate summaries, and final triangulation data to JSON",
-        long_help = "Write run metadata, aggregate summaries, and final triangulation data to JSON. Relative paths are resolved from the current working directory, and parent directories are created when output is written."
+        help = "Write run summary, metadata, and final triangulation data to JSON",
+        long_help = "Write run summary, metadata, and final triangulation data to JSON. Relative paths are resolved from the current working directory, and parent directories are created when output is written."
     )]
     output_json: Option<PathBuf>,
 }
