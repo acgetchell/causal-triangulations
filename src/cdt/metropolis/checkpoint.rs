@@ -4,7 +4,10 @@
 
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveStatistics, MoveType};
-use crate::cdt::results::{Measurement, SimulationResultsBackend, SimulationResultsParts};
+use crate::cdt::results::{
+    CdtScalarTraceRow, Measurement, SimulationResultsBackend, SimulationResultsParts,
+    validate_scalar_trace_rows,
+};
 use crate::errors::{
     CdtError, CdtResult, CheckpointMoveCounter, CheckpointResumeFailure, ProposalTelemetryCounter,
 };
@@ -32,6 +35,7 @@ pub(crate) struct CdtMcmcCheckpointParts {
     pub(crate) proposal_stats: ProposalStatistics,
     pub(crate) steps: Vec<MonteCarloStep>,
     pub(crate) measurements: Vec<Measurement>,
+    pub(crate) scalar_trace_rows: Vec<CdtScalarTraceRow>,
     pub(crate) elapsed_time: Duration,
     pub(crate) acceptance_rng: Xoshiro256PlusPlus,
     pub(crate) ergodics: ErgodicsSystem,
@@ -82,6 +86,7 @@ pub struct CdtMcmcCheckpoint {
     pub(crate) proposal_stats: ProposalStatistics,
     pub(crate) steps: Vec<MonteCarloStep>,
     pub(crate) measurements: Vec<Measurement>,
+    pub(crate) scalar_trace_rows: Vec<CdtScalarTraceRow>,
     pub(crate) elapsed_time: Duration,
     pub(crate) acceptance_rng: Xoshiro256PlusPlus,
     pub(crate) ergodics: ErgodicsSystem,
@@ -99,6 +104,7 @@ struct CdtMcmcCheckpointWire {
     proposal_stats: ProposalStatistics,
     steps: Vec<MonteCarloStep>,
     measurements: Vec<Measurement>,
+    scalar_trace_rows: Vec<CdtScalarTraceRow>,
     elapsed_time: Duration,
     acceptance_rng: Xoshiro256PlusPlus,
     ergodics: ErgodicsSystem,
@@ -122,6 +128,7 @@ impl<'de> Deserialize<'de> for CdtMcmcCheckpoint {
             proposal_stats: wire.proposal_stats,
             steps: wire.steps,
             measurements: wire.measurements,
+            scalar_trace_rows: wire.scalar_trace_rows,
             elapsed_time: wire.elapsed_time,
             acceptance_rng: wire.acceptance_rng,
             ergodics: wire.ergodics,
@@ -143,6 +150,7 @@ impl CdtMcmcCheckpoint {
             proposal_stats: parts.proposal_stats,
             steps: parts.steps,
             measurements: parts.measurements,
+            scalar_trace_rows: parts.scalar_trace_rows,
             elapsed_time: parts.elapsed_time,
             acceptance_rng: parts.acceptance_rng,
             ergodics: parts.ergodics,
@@ -420,7 +428,7 @@ impl CdtMcmcCheckpoint {
     /// .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)
     /// # }
     /// # let checkpoint = checkpoint()?;
-    /// assert_eq!(checkpoint.measurements().first().map(|m| m.step), Some(0));
+    /// assert_eq!(checkpoint.measurements().first().map(|m| m.step()), Some(0));
     /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     #[must_use]
@@ -463,6 +471,7 @@ impl CdtMcmcCheckpoint {
             proposal_stats: self.proposal_stats,
             steps: self.steps,
             measurements: self.measurements,
+            scalar_trace_rows: self.scalar_trace_rows,
             elapsed_time: self.elapsed_time,
             triangulation,
         })
@@ -568,6 +577,12 @@ pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> Cd
     validate_checkpoint_proposal_stats(checkpoint, accepted, rejected)?;
     validate_checkpoint_steps(checkpoint)?;
     validate_checkpoint_measurements(checkpoint)?;
+    validate_scalar_trace_rows(
+        &checkpoint.config,
+        &checkpoint.proposal_stats,
+        &checkpoint.steps,
+        &checkpoint.scalar_trace_rows,
+    )?;
     Ok(())
 }
 
@@ -637,7 +652,11 @@ fn validate_checkpoint_proposal_stats(
 
 /// Checks that serialized per-step telemetry forms the exact prefix being resumed.
 fn validate_checkpoint_steps(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
-    let accepted_steps = checkpoint.steps.iter().filter(|step| step.accepted).count();
+    let accepted_steps = checkpoint
+        .steps
+        .iter()
+        .filter(|step| step.accepted())
+        .count();
     if accepted_steps != checkpoint.chain.accepted() {
         return Err(checkpoint_resume_failed(
             CheckpointResumeFailure::StepTelemetryAcceptedCountMismatch {
@@ -651,7 +670,7 @@ fn validate_checkpoint_steps(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
         let expected_step = u32::try_from(index + 1).map_err(|_| {
             checkpoint_resume_failed(CheckpointResumeFailure::StepTelemetryIndexOverflow)
         })?;
-        let step_number = step.step.get();
+        let step_number = step.step().get();
         if step_number != expected_step {
             return Err(checkpoint_resume_failed(
                 CheckpointResumeFailure::StepTelemetrySequenceMismatch {
@@ -659,50 +678,6 @@ fn validate_checkpoint_steps(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
                     expected: expected_step,
                 },
             ));
-        }
-        if !step.action_before.is_finite() {
-            return Err(checkpoint_resume_failed(
-                CheckpointResumeFailure::NonFiniteStepActionBefore { step: step_number },
-            ));
-        }
-        if let Some(delta_action) = step.delta_action
-            && !delta_action.is_finite()
-        {
-            return Err(checkpoint_resume_failed(
-                CheckpointResumeFailure::NonFiniteStepDeltaAction { step: step_number },
-            ));
-        }
-        if step.accepted && step.delta_action.is_none() {
-            return Err(checkpoint_resume_failed(
-                CheckpointResumeFailure::AcceptedStepMissingDeltaAction { step: step_number },
-            ));
-        }
-        match (step.accepted, step.action_after) {
-            (true, Some(action_after)) if action_after.is_finite() => {
-                if let Some(delta_action) = step.delta_action
-                    && !actions_match(action_after, step.action_before + delta_action)
-                {
-                    return Err(checkpoint_resume_failed(
-                        CheckpointResumeFailure::StepActionAfterDeltaMismatch { step: step_number },
-                    ));
-                }
-            }
-            (true, Some(_)) => {
-                return Err(checkpoint_resume_failed(
-                    CheckpointResumeFailure::NonFiniteStepActionAfter { step: step_number },
-                ));
-            }
-            (true, None) => {
-                return Err(checkpoint_resume_failed(
-                    CheckpointResumeFailure::AcceptedStepMissingActionAfter { step: step_number },
-                ));
-            }
-            (false, Some(_)) => {
-                return Err(checkpoint_resume_failed(
-                    CheckpointResumeFailure::RejectedStepHasActionAfter { step: step_number },
-                ));
-            }
-            (false, None) => {}
         }
     }
     Ok(())
@@ -734,18 +709,11 @@ fn validate_checkpoint_measurements(checkpoint: &CdtMcmcCheckpoint) -> CdtResult
         .ok_or_else(|| {
             checkpoint_resume_failed(CheckpointResumeFailure::MeasurementStepOverflow)
         })?;
-        if measurement.step != expected_step {
+        if measurement.step() != expected_step {
             return Err(checkpoint_resume_failed(
                 CheckpointResumeFailure::MeasurementStepMismatch {
-                    actual: measurement.step,
+                    actual: measurement.step(),
                     expected: expected_step,
-                },
-            ));
-        }
-        if !measurement.action.is_finite() {
-            return Err(checkpoint_resume_failed(
-                CheckpointResumeFailure::NonFiniteMeasurementAction {
-                    step: measurement.step,
                 },
             ));
         }

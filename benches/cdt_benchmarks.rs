@@ -195,14 +195,14 @@ fn bench_action_calculations(c: &mut Criterion) {
     let config = ActionConfig::default();
 
     // Test different triangulation sizes
-    let test_cases = [
-        (10, 15, 6),     // Small triangulation
-        (50, 140, 92),   // Medium triangulation
-        (100, 290, 192), // Large triangulation
+    let test_cases: [(usize, usize, usize, u64); 3] = [
+        (10, 15, 6, 10),      // Small triangulation
+        (50, 140, 92, 50),    // Medium triangulation
+        (100, 290, 192, 100), // Large triangulation
     ];
 
-    for (vertices, edges, faces) in test_cases {
-        group.throughput(Throughput::Elements(u64::from(vertices)));
+    for (vertices, edges, faces, throughput_vertices) in test_cases {
+        group.throughput(Throughput::Elements(throughput_vertices));
         group.bench_with_input(
             BenchmarkId::new("calculate_action", vertices),
             &(vertices, edges, faces),

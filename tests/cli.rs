@@ -193,7 +193,7 @@ fn cdt_cli_runs_simulation_with_real_moves() {
 #[test]
 fn cdt_cli_writes_configured_outputs() {
     let output_dir = temp_output_dir("outputs");
-    let csv_path = output_dir.join("measurements.csv");
+    let csv_path = output_dir.join("trace.csv");
     let json_path = output_dir.join("summary.json");
     let mut cmd = cdt_command();
 
@@ -215,7 +215,9 @@ fn cdt_cli_writes_configured_outputs() {
     let parsed: Value = from_str(&json).expect("summary should parse");
     fs::remove_dir_all(&output_dir).expect("temporary output directory should be removable");
 
-    assert!(csv.starts_with("step,action,vertices,edges,triangles,accepted,delta_action\n"));
+    assert!(csv.starts_with(
+        "chain_id,step,accepted,proposed,log_prob,action,vertices,edges,triangles,move_family"
+    ));
     assert_eq!(parsed["config"]["vertices"], 12);
     assert_eq!(parsed["final_triangulation"]["time_slices"], 3);
 }

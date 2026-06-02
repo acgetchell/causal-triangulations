@@ -110,6 +110,9 @@ The useful `justfile` updates ported from `delaunay` are:
 - MCMC-boundary Semgrep rules for issue #155, which reject production CDT-local Metropolis-Hastings `exp(log_alpha)` acceptance draws and manual
   accepted/rejected sampler counter increments. These are CDT-specific because this crate still owns proposal planning, proposal-site telemetry, and result
   translation, while `markov-chain-monte-carlo` owns the reusable sampler mechanics.
+- The planned-step sampler-state sync rule now anchors `record_planned_step(...)` to call statements so it continues to catch missing
+  `sampler.replace_state(...)` after recorded planned steps without false-positive matches on the helper function declaration when that helper contains fallible
+  telemetry construction.
 
 ## Issue #162 CI And Security Alignment
 

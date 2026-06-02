@@ -5,7 +5,7 @@
 use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::FoliationError;
 use crate::config::CdtTopology;
-use markov_chain_monte_carlo::McmcError;
+use markov_chain_monte_carlo::{McmcError, StepOutcome};
 use std::fmt;
 
 /// Highest cumulative upstream Delaunay validation level being enforced.
@@ -234,7 +234,7 @@ impl fmt::Display for TriangulationMetadataField {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum OutputFormat {
-    /// Comma-separated measurement output.
+    /// Comma-separated trace output.
     Csv,
     /// JSON simulation summary output.
     Json,
@@ -529,6 +529,105 @@ impl fmt::Display for ProposalTelemetryCounter {
     }
 }
 
+/// Scalar trace field category used in checkpoint/result diagnostics.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::errors::ScalarTraceField;
+///
+/// assert_eq!(ScalarTraceField::ActionBefore.to_string(), "action_before");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ScalarTraceField {
+    /// Cached target log probability.
+    LogProb,
+    /// Current action observable.
+    Action,
+    /// Proposed or accepted action delta.
+    DeltaAction,
+    /// Action before the proposed move.
+    ActionBefore,
+    /// Action after an accepted move.
+    ActionAfter,
+}
+
+impl fmt::Display for ScalarTraceField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LogProb => formatter.write_str("log_prob"),
+            Self::Action => formatter.write_str("action"),
+            Self::DeltaAction => formatter.write_str("delta_action"),
+            Self::ActionBefore => formatter.write_str("action_before"),
+            Self::ActionAfter => formatter.write_str("action_after"),
+        }
+    }
+}
+
+/// Measurement count column with a strictly positive invariant.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::errors::MeasurementCountField;
+///
+/// assert_eq!(MeasurementCountField::Vertices.to_string(), "vertices");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum MeasurementCountField {
+    /// Vertex-count column.
+    Vertices,
+    /// Edge-count column.
+    Edges,
+    /// Triangle-count column.
+    Triangles,
+}
+
+impl fmt::Display for MeasurementCountField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Vertices => formatter.write_str("vertices"),
+            Self::Edges => formatter.write_str("edges"),
+            Self::Triangles => formatter.write_str("triangles"),
+        }
+    }
+}
+
+/// CDT simplex-count field with a strictly positive triangulation-state invariant.
+///
+/// Use this with [`CdtError::InvalidSimplexCount`] when converting raw backend
+/// counts into an invariant-bearing CDT count snapshot.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::errors::SimplexCountField;
+///
+/// assert_eq!(SimplexCountField::Triangles.to_string(), "triangles");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SimplexCountField {
+    /// Vertex-count field.
+    Vertices,
+    /// Edge-count field.
+    Edges,
+    /// Triangle-count field.
+    Triangles,
+}
+
+impl fmt::Display for SimplexCountField {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Vertices => formatter.write_str("vertices"),
+            Self::Edges => formatter.write_str("edges"),
+            Self::Triangles => formatter.write_str("triangles"),
+        }
+    }
+}
+
 /// Structured reason a CDT checkpoint could not be resumed.
 ///
 /// [`CdtError::CheckpointResumeFailed`] wraps this enum for CDT-owned resume
@@ -645,12 +744,6 @@ pub enum CheckpointResumeFailure {
         /// Step with invalid telemetry.
         step: u32,
     },
-    /// Accepted step telemetry is missing the action delta.
-    #[error("accepted step {step} is missing delta_action")]
-    AcceptedStepMissingDeltaAction {
-        /// Step with invalid telemetry.
-        step: u32,
-    },
     /// Accepted step telemetry has an action-after value inconsistent with the delta.
     #[error("step {step} action_after does not match delta_action")]
     StepActionAfterDeltaMismatch {
@@ -663,17 +756,109 @@ pub enum CheckpointResumeFailure {
         /// Step with invalid telemetry.
         step: u32,
     },
-    /// Accepted step telemetry is missing the post-move action.
-    #[error("accepted step {step} is missing action_after")]
-    AcceptedStepMissingActionAfter {
-        /// Step with invalid telemetry.
+    /// Scalar trace row count disagrees with step telemetry.
+    #[error("scalar trace row count mismatch: got {actual}, expected {expected}")]
+    ScalarTraceLengthMismatch {
+        /// Number of scalar trace rows.
+        actual: usize,
+        /// Expected scalar trace rows from step telemetry.
+        expected: usize,
+    },
+    /// Scalar trace row step disagrees with step telemetry.
+    #[error("scalar trace step mismatch: got {actual}, expected {expected}")]
+    ScalarTraceStepMismatch {
+        /// Serialized scalar trace step.
+        actual: u32,
+        /// Expected step from step telemetry.
+        expected: u32,
+    },
+    /// Scalar trace row step was zero before it could be aligned with step telemetry.
+    #[error("scalar trace step must be nonzero: got {actual}")]
+    ScalarTraceStepZero {
+        /// Serialized scalar trace step.
+        actual: u32,
+    },
+    /// Scalar trace move family disagrees with step telemetry.
+    #[error("step {step} scalar trace move type mismatch: got {actual:?}, expected {expected:?}")]
+    ScalarTraceMoveTypeMismatch {
+        /// Step with invalid scalar trace telemetry.
+        step: u32,
+        /// Move type stored in the scalar trace row.
+        actual: MoveType,
+        /// Move type stored in step telemetry.
+        expected: MoveType,
+    },
+    /// Scalar trace accepted outcome disagrees with step telemetry.
+    #[error("step {step} scalar trace accepted mismatch: got {actual}, expected {expected}")]
+    ScalarTraceAcceptedMismatch {
+        /// Step with invalid scalar trace telemetry.
+        step: u32,
+        /// Accepted flag reconstructed from scalar trace outcome.
+        actual: bool,
+        /// Accepted flag stored in step telemetry.
+        expected: bool,
+    },
+    /// Scalar trace optional action delta disagrees with step telemetry.
+    #[error("step {step} scalar trace delta_action does not match step telemetry")]
+    ScalarTraceDeltaActionMismatch {
+        /// Step with invalid scalar trace telemetry.
         step: u32,
     },
-    /// Rejected step telemetry unexpectedly contains a post-move action.
-    #[error("rejected step {step} unexpectedly has action_after")]
-    RejectedStepHasActionAfter {
-        /// Step with invalid telemetry.
+    /// Scalar trace action-before value disagrees with step telemetry.
+    #[error("step {step} scalar trace action_before does not match step telemetry")]
+    ScalarTraceActionBeforeMismatch {
+        /// Step with invalid scalar trace telemetry.
         step: u32,
+    },
+    /// Scalar trace current action value disagrees with step telemetry.
+    #[error("step {step} scalar trace action does not match step telemetry")]
+    ScalarTraceActionMismatch {
+        /// Step with invalid scalar trace telemetry.
+        step: u32,
+    },
+    /// Scalar trace optional action-after value disagrees with step telemetry.
+    #[error("step {step} scalar trace action_after does not match step telemetry")]
+    ScalarTraceActionAfterMismatch {
+        /// Step with invalid scalar trace telemetry.
+        step: u32,
+    },
+    /// Scalar trace log probability disagrees with the stored action and temperature.
+    #[error("step {step} scalar trace log_prob does not match action and temperature")]
+    ScalarTraceLogProbMismatch {
+        /// Step with invalid scalar trace telemetry.
+        step: u32,
+    },
+    /// Scalar trace contains a non-finite numeric value.
+    #[error("step {step} scalar trace field {field} is non-finite")]
+    NonFiniteScalarTraceValue {
+        /// Step with invalid scalar trace telemetry.
+        step: u32,
+        /// Scalar trace field containing the invalid value.
+        field: ScalarTraceField,
+    },
+    /// Scalar trace accepted outcome count disagrees with proposal telemetry.
+    #[error("scalar trace accepted count mismatch: got {actual}, expected {expected}")]
+    ScalarTraceAcceptedCountMismatch {
+        /// Accepted outcomes recorded in scalar trace rows.
+        actual: u64,
+        /// Accepted outcomes recorded in proposal telemetry.
+        expected: u64,
+    },
+    /// Scalar trace rejected-proposal count disagrees with proposal telemetry.
+    #[error("scalar trace rejected-proposal count mismatch: got {actual}, expected {expected}")]
+    ScalarTraceRejectedProposalCountMismatch {
+        /// Rejected-proposal outcomes recorded in scalar trace rows.
+        actual: u64,
+        /// Metropolis rejection outcomes recorded in proposal telemetry.
+        expected: u64,
+    },
+    /// Scalar trace no-proposal count disagrees with proposal telemetry.
+    #[error("scalar trace no-proposal count mismatch: got {actual}, expected {expected}")]
+    ScalarTraceNoProposalCountMismatch {
+        /// No-proposal outcomes recorded in scalar trace rows.
+        actual: u64,
+        /// No-proposal outcomes recorded in proposal telemetry.
+        expected: u64,
     },
     /// Measurement count calculation overflowed.
     #[error("scheduled measurement count exceeds usize::MAX")]
@@ -696,12 +881,6 @@ pub enum CheckpointResumeFailure {
         actual: u32,
         /// Expected measurement step from the sampling schedule.
         expected: u32,
-    },
-    /// Measurement telemetry contains a non-finite action.
-    #[error("measurement at step {step} has non-finite action")]
-    NonFiniteMeasurementAction {
-        /// Measurement step with invalid telemetry.
-        step: u32,
     },
     /// A per-move counter sum overflowed.
     #[error("{counter} move count exceeds u64::MAX")]
@@ -931,8 +1110,13 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             | CdtError::DelaunayGenerationFailed { .. }
             | CdtError::InvalidGenerationParameters { .. }
             | CdtError::InvalidConfiguration { .. }
+            | CdtError::InvalidSimplexCount { .. }
+            | CdtError::InvalidMeasurementAction { .. }
+            | CdtError::InvalidMeasurementCount { .. }
+            | CdtError::MeasurementCountOverflow { .. }
             | CdtError::InvalidSimulationConfiguration { .. }
             | CdtError::PlannedProposalStepFailed { .. }
+            | CdtError::UnexpectedPlannedStepOutcome { .. }
             | CdtError::PlannedProposalTelemetryMissing { .. }
             | CdtError::InvalidTriangulationMetadata { .. }
             | CdtError::VertexBuildFailed { .. }
@@ -1014,6 +1198,47 @@ pub enum CdtError {
         /// Expected constraint for the setting.
         expected: String,
     },
+    /// Live CDT simplex counts failed the strictly-positive triangulation-state invariant.
+    #[error(
+        "Invalid CDT simplex count: {field} (got: {provided_value}, expected: strictly positive)"
+    )]
+    InvalidSimplexCount {
+        /// Structured category for the invalid simplex count.
+        field: SimplexCountField,
+        /// Value observed for the count.
+        provided_value: usize,
+    },
+    /// [`Measurement`](crate::cdt::results::Measurement) construction failed
+    /// because a count was not strictly positive.
+    #[error(
+        "Invalid measurement count: {field} (got: {provided_value}, expected: strictly positive)"
+    )]
+    InvalidMeasurementCount {
+        /// Structured category for the invalid measurement count.
+        field: MeasurementCountField,
+        /// Value supplied for the count.
+        provided_value: u32,
+    },
+    /// [`Measurement`](crate::cdt::results::Measurement) construction failed
+    /// because a live triangulation count could not fit the serialized count type.
+    #[error("Measurement count overflow: {field} (got: {provided_value}, max: {max})")]
+    MeasurementCountOverflow {
+        /// Structured category for the overflowing measurement count.
+        field: MeasurementCountField,
+        /// Value supplied for the count.
+        provided_value: usize,
+        /// Maximum representable count for serialized telemetry.
+        max: u32,
+    },
+    /// [`Measurement`](crate::cdt::results::Measurement) construction failed
+    /// because the action value was not finite.
+    #[error("Invalid measurement action at step {step}: got {provided_value}, expected finite")]
+    InvalidMeasurementAction {
+        /// Monte Carlo step associated with the measurement.
+        step: u32,
+        /// Value supplied for the action.
+        provided_value: f64,
+    },
     /// Metropolis accepted a move, but a hard backend or invariant failure stopped application.
     ///
     /// The [`Self::MetropolisMoveApplicationFailed::source`] field keeps the
@@ -1056,6 +1281,14 @@ pub enum CdtError {
         step: u32,
         /// Upstream sampler diagnostic.
         detail: String,
+    },
+    /// A planned CDT proposal step returned an upstream outcome CDT does not support yet.
+    #[error("planned CDT proposal step {step} returned unsupported upstream outcome {outcome:?}")]
+    UnexpectedPlannedStepOutcome {
+        /// Monte Carlo step whose planned-proposal execution produced the outcome.
+        step: u32,
+        /// Upstream outcome variant that CDT does not support yet.
+        outcome: StepOutcome,
     },
     /// Constructed triangulation metadata is internally inconsistent.
     #[error(
@@ -2002,7 +2235,7 @@ mod tests {
     #[test]
     fn test_output_write_failed_error() {
         let error = CdtError::OutputWriteFailed {
-            path: "measurements.csv".to_string(),
+            path: "trace.csv".to_string(),
             format: OutputFormat::Csv,
             detail: "permission denied".to_string(),
         };
@@ -2014,13 +2247,13 @@ mod tests {
         else {
             panic!("expected OutputWriteFailed variant");
         };
-        assert_eq!(path, "measurements.csv");
+        assert_eq!(path, "trace.csv");
         assert_eq!(*format, OutputFormat::Csv);
         assert_eq!(detail, "permission denied");
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Failed to write CSV output to measurements.csv: permission denied"
+            "Failed to write CSV output to trace.csv: permission denied"
         );
     }
 

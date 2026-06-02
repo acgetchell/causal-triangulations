@@ -2,9 +2,9 @@
 
 //! Example: writing simulation output files and using CDT checkpoints.
 //!
-//! This example runs a short CDT simulation, writes the configured CSV and JSON
-//! outputs, round-trips a Delaunay-valid triangulation checkpoint, and resumes an
-//! in-memory MCMC checkpoint.
+//! This example runs a short CDT simulation, writes the configured trace CSV and
+//! JSON outputs, round-trips a Delaunay-valid triangulation checkpoint, and
+//! resumes an in-memory MCMC checkpoint.
 
 use causal_triangulations::prelude::errors::{CheckpointOperation, OutputFormat};
 use causal_triangulations::prelude::simulation::*;
@@ -17,7 +17,7 @@ use std::process;
 fn main() -> CdtResult<()> {
     let output_dir =
         env::temp_dir().join(format!("causal-triangulations-output-{}", process::id()));
-    let csv_path = output_dir.join("measurements.csv");
+    let csv_path = output_dir.join("trace.csv");
     let json_path = output_dir.join("summary.json");
 
     let config = CdtConfig {
@@ -41,7 +41,9 @@ fn main() -> CdtResult<()> {
         format: OutputFormat::Json,
         detail: err.to_string(),
     })?;
-    assert!(csv.starts_with("step,action,vertices,edges,triangles,accepted,delta_action\n"));
+    assert!(csv.starts_with(
+        "chain_id,step,accepted,proposed,log_prob,action,vertices,edges,triangles,move_family"
+    ));
     assert_eq!(summary["config"]["vertices"], config.vertices().get());
     assert_eq!(
         summary["final_triangulation"]["time_slices"],
@@ -81,7 +83,7 @@ fn main() -> CdtResult<()> {
     )
     .resume_from_checkpoint(mcmc_checkpoint)?;
 
-    println!("CSV output rows: {}", csv.lines().count().saturating_sub(1));
+    println!("Trace CSV rows: {}", csv.lines().count().saturating_sub(1));
     println!(
         "JSON summary measurements: {}",
         summary["measurements"].as_array().map_or(0, Vec::len)

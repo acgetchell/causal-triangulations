@@ -15,15 +15,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Resolve periodic toroidal moves with Simplex APIs
 - Complete 1+1 toroidal CDT sampling
 - Add proposal-site accounting and profiled CDT starts
+- Require validated CDT runtime configs [#163](https://github.com/acgetchell/causal-triangulations/pull/163)
 - Harden foliation validation and unify backend payload APIs
+- Split Metropolis into module tree
+- Validate runtime invariants at parse boundaries
+- Enforce simulation state invariants [#174](https://github.com/acgetchell/causal-triangulations/pull/174)
+- Encode nonzero CDT invariants
+- Run continuation through planned proposals [#153](https://github.com/acgetchell/causal-triangulations/pull/153)
 - Enforce CDT and backend invariants
 - Harden CDT telemetry and profiled initialization
 - Reject volume-profile override overflows
+- Make Metropolis step telemetry nonzero [#153](https://github.com/acgetchell/causal-triangulations/pull/153)
 - Align tooling and CDT error APIs
 - Align repository tooling with MCMC
 
 ### Merged Pull Requests
 
+- Enforce simulation state invariants [#174](https://github.com/acgetchell/causal-triangulations/pull/174)
+- Require validated CDT runtime configs [#163](https://github.com/acgetchell/causal-triangulations/pull/163)
+- Tighten coverage and doctest assertion checks [#163](https://github.com/acgetchell/causal-triangulations/pull/163)
+- Tighten Semgrep fixture coverage [#162](https://github.com/acgetchell/causal-triangulations/pull/162)
+- Harden Semgrep and zizmor checks [#162](https://github.com/acgetchell/causal-triangulations/pull/162)
+- Run continuation through planned proposals [#153](https://github.com/acgetchell/causal-triangulations/pull/153)
+- Make Metropolis step telemetry nonzero [#153](https://github.com/acgetchell/causal-triangulations/pull/153)
+- Add chunked Metropolis checkpoint sweeps [#152](https://github.com/acgetchell/causal-triangulations/pull/152)
+- Support fallible public examples [#151](https://github.com/acgetchell/causal-triangulations/pull/151)
+- Tighten unwrap Semgrep fixtures [#151](https://github.com/acgetchell/causal-triangulations/pull/151)
+- Anchor unwrap fixture exclusions [#151](https://github.com/acgetchell/causal-triangulations/pull/151)
 - Replace Node formatters with Rust-native checks [#129](https://github.com/acgetchell/causal-triangulations/pull/129)
 - Add toroidal topology infrastructure [#61](https://github.com/acgetchell/causal-triangulations/pull/61)
 - Implement foliation for 1+1 CDT [#57](https://github.com/acgetchell/causal-triangulations/pull/57)
@@ -242,6 +260,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     failures.
   - Replace stringly validation and history fields with typed error categories and move enums.
   - Document detailed-balance semantics and add proposal-site benchmark coverage.
+- Add chunked Metropolis checkpoint sweeps [#152](https://github.com/acgetchell/causal-triangulations/pull/152)
+  [`5065bd2`](https://github.com/acgetchell/causal-triangulations/commit/5065bd253b75812ac691ee7ca1e4bf69e5ce3cbf)
+
+  - Add resumable Metropolis checkpoint continuation so chunked drivers can inspect checkpointed triangulations between sweeps.
+  - Route the large-scale 1+1 debug harness through checkpoint-preserving Metropolis chunks sized from the current simplex count.
+  - Document the MCMC backend boundary and roadmap blockers for upstream markov-chain-monte-carlo continuation work.
+- Support fallible public examples [#151](https://github.com/acgetchell/causal-triangulations/pull/151)
+  [`9c10f0b`](https://github.com/acgetchell/causal-triangulations/commit/9c10f0b5daa1e6deea9c04c1f1af8474e0d26f28)
+
+  - Convert public Rust doctests to CdtResult-based flows with typed error propagation.
+  - Add Semgrep guardrails for unwrap/expect in doctests, benches, and examples.
+  - Preserve standalone CDT proposal application failures as typed CdtError variants.
+  - Re-export MCMC simulation traits from the simulation prelude for proposal workflows.
+  - Replace benchmark fixture expect paths with operation-aware setup helpers.
+- [**breaking**] Require validated CDT runtime configs [#163](https://github.com/acgetchell/causal-triangulations/pull/163)
+  [`fbdcc41`](https://github.com/acgetchell/causal-triangulations/commit/fbdcc417583966faf6e7c68fb253b07197f3335f)
+
+  - Add `ValidatedCdtConfig` and `ValidatedInitialVolume` so runtime construction consumes topology, volume, schedule, dimensionality, and coupling invariants
+    after validation.
+  - Move Metropolis/action runtime conversion behind validated configs and route `run_simulation` and examples through the proof-bearing API.
+  - Report invalid Metropolis schedules and temperatures with `InvalidSimulationConfiguration` while keeping geometry, topology, and action failures on
+    `InvalidConfiguration` .
+  - Bump the Rust baseline to 1.96.0, update the MCMC backend to 0.4.0, and align docs.rs metadata, API docs, and test assertions with the new baseline.
 
 ### Changed
 
@@ -440,6 +481,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refactor!(cdt): split triangulation modules and harden invariants
   [`aa08007`](https://github.com/acgetchell/causal-triangulations/commit/aa08007cdb662d9e8863c4954a9294501f7dee0b)
 
+- Refine Semgrep unwrap fixture exclusion patterns
+  [`0f4fb0f`](https://github.com/acgetchell/causal-triangulations/commit/0f4fb0fc89bd62c0786b25482f6b58dd8e0e4fc2)
+
+  Replace wildcard function arguments with explicit signatures for internal
+  Semgrep unwrap/expect rule exclusions. This ensures more precise pattern
+  matching and prevents unintended false negatives for doctests and internal
+  utility functions.
+  Refs: #151
+
+- Update tooling documentation on Semgrep unwrap/expect rules
+  [`8ac8398`](https://github.com/acgetchell/causal-triangulations/commit/8ac839845bbaeb8deaa35c59d5ef9530147a5902)
+
+  Document refinements to Semgrep rules for `unwrap()` and `expect()`.
+  This clarifies how rules distinguish code from prose mentions and
+  anchor fixture exclusions, preventing false positives in doctests
+  and ensuring accurate public-surface checks.
+
+- [**breaking**] Split Metropolis into module tree
+  [`3d602c5`](https://github.com/acgetchell/causal-triangulations/commit/3d602c5139fbfae35d7eec1ceb3d7f07697ae314)
+
+  - Move CDT Metropolis adapter, runner, checkpoint, telemetry, and shared helper logic into an explicit `src/cdt/metropolis/` module tree.
+  - Keep `adapter.rs` as the single boundary to `markov-chain-monte-carlo` while preserving existing public simulation re-exports.
+  - Calibrate the default 1+1 CDT action constants to `kappa_0 = 0`, `kappa_2 = 0`, and `lambda_edge = (2 / 3) ln 2`.
+  - Document the Metropolis module layout, Delaunay initialization role, and 1+1 CDT coupling calibration.
+
+- [**breaking**] Validate runtime invariants at parse boundaries
+  [`8a03da7`](https://github.com/acgetchell/causal-triangulations/commit/8a03da753747d6374ddf1da94f30ccb5b0194de3)
+
+  - Require action, Metropolis, and top-level simulation configuration to enter runtime code through validated private-field types.
+  - Validate result, checkpoint, move, and proposal telemetry before storage or deserialization so impossible counters and incoherent step records cannot be
+    represented.
+  - Move CDT triangulation state into the triangulation module tree and expose metadata, statistics, and constants through focused accessors and preludes.
+
+- [**breaking**] Enforce simulation state invariants [#174](https://github.com/acgetchell/causal-triangulations/pull/174)
+  [`583e5d4`](https://github.com/acgetchell/causal-triangulations/commit/583e5d485f35d9124cb85afd1bca4754d0537497)
+
+  - Reject checkpoints and completed results whose proposal telemetry does not match recorded sampler steps, accepted transitions, or rejected transitions
+  - Record Metropolis measurements only on the configured post-thermalization cadence and validate deserialized measurement streams against the same schedule
+  - Resolve configured output paths before triangulation or sampling begins, and prevent CDT modification counters from wrapping into stale cache versions
+
+- [**breaking**] Encode nonzero CDT invariants [`938d712`](https://github.com/acgetchell/causal-triangulations/commit/938d712175c35fe85aa893042f159afe0593f6ce)
+
+  - Store Metropolis step counts, measurement cadence, foliation slice counts, and CDT time-slice metadata as NonZeroU32.
+  - Preserve validated Metropolis configuration inside ValidatedCdtConfig instead of rebuilding from raw fields.
+  - Move time-slice parsing into construction and deserialization boundaries so downstream accessors can stay infallible.
+  - Widen measurement-count arithmetic before including the current step to avoid overflow.
+
+- [**breaking**] Run continuation through planned proposals [#153](https://github.com/acgetchell/causal-triangulations/pull/153)
+  [`262518f`](https://github.com/acgetchell/causal-triangulations/commit/262518fee46949251b4f77003270e6eff990a4df)
+
+  - Drive chunked Metropolis runs and checkpoint resume through the upstream sampler planned-step handoff while preserving CDT measurements, telemetry, and move
+    history.
+  - Carry validated config, volume, and foliation counts as NonZeroU32 so downstream construction can rely on nonzero invariants.
+  - Add Semgrep guardrails around planned-step telemetry and sampler-state synchronization.
+
 ### Dependencies
 
 - Bump actions/cache from 5.0.1 to 5.0.4 [`063c3fc`](https://github.com/acgetchell/causal-triangulations/commit/063c3fc7601935b9399be2105e5359e1a39fade9)
@@ -481,6 +577,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump codecov/codecov-action from 6.0.0 to 6.0.1
   [`3847062`](https://github.com/acgetchell/causal-triangulations/commit/38470624f992c3fca087228d663fd6dcf8af864d)
 - Bump serde_json [`1780261`](https://github.com/acgetchell/causal-triangulations/commit/1780261e6f13fc4f222f02ae220145cb0ca8c6a4)
+- Bump log from 0.4.29 to 0.4.30 in the dependencies group
+  [`ac3237f`](https://github.com/acgetchell/causal-triangulations/commit/ac3237fff81a4d1c0233cfc9125a87d7cbca56ed)
+- Bump taiki-e/install-action from 2.79.2 to 2.79.9
+  [`788eea8`](https://github.com/acgetchell/causal-triangulations/commit/788eea8b1cc1b9b91773c53d5c6a1cc172d1c369)
 
 ### Documentation
 
@@ -494,6 +594,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - Document that src/geometry/ wraps upstream Delaunay operations through crate-owned traits.
   - Spell out its conversion, validation, and error translation role between Delaunay and CDT geometry types.
+- Clarify Metropolis proposal cache identity [`b3bfa4b`](https://github.com/acgetchell/causal-triangulations/commit/b3bfa4b58d8be05423dc305f00e08a377edc0698)
+
+  - Document that proposal-site cache validity uses `(instance_id, modification_count)`.
+  - Explain the reverse proposal-site denominator stored on CDT proposal plans.
+- Wrap volume-fixing citation prose [`7cf8ffd`](https://github.com/acgetchell/causal-triangulations/commit/7cf8ffd6bdf19ce885359d5ce9df5c3baea9fc33)
+
+  - Keep the Metropolis documentation within the raw Markdown line-length limit.
+- Clarify saturated proposal telemetry merging [`3e218da`](https://github.com/acgetchell/causal-triangulations/commit/3e218da37312875587ca2970885324c5c4797bc0)
+
+  - Document that ProposalStatistics::extend uses saturating counter addition.
+  - Explain that saturated telemetry remains serializable while exact terminal-outcome partitions may be coarsened.
 
 ### Fixed
 
@@ -701,6 +812,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Make CdtConfig::merge_with_override fail on volume-profile count overflow instead of clamping derived vertices and timeslices.
   - Preserve profile-derived configuration invariants before post-merge validation runs.
   - Track the v0.1.0 public doctest error-handling audit in the roadmap.
+- Tighten unwrap Semgrep fixtures [#151](https://github.com/acgetchell/causal-triangulations/pull/151)
+  [`2e44e17`](https://github.com/acgetchell/causal-triangulations/commit/2e44e1771d98ac03f62ebb7b8c09f785a7bd0831)
+
+  - Avoid flagging doctest prose that merely mentions .unwrap() or .expect().
+  - Keep bench/example unwrap checks scoped away from rust-style fixture helpers.
+  - Remove stale bench/example annotations from the rust-style Semgrep fixture.
+- Anchor unwrap fixture exclusions [#151](https://github.com/acgetchell/causal-triangulations/pull/151)
+  [`5048842`](https://github.com/acgetchell/causal-triangulations/commit/50488420a926e795701938240cb5f8863ae043c1)
+
+  - Tie Semgrep bench/example unwrap exclusions to the rust-style fixture path.
+  - Mirror the fixture-path anchors beside the rust-style unwrap fixture helpers.
+- Count multi-rule Semgrep fixtures [`657f478`](https://github.com/acgetchell/causal-triangulations/commit/657f478c14dda6d141df6696d50b7ba64e2c7408)
+
+  - Split comma-separated Semgrep fixture annotations before comparing expected findings.
+  - Keep Python fixture helpers typed and remove a stale unwrap expectation from the bench/example fixture.
+- Require literal UTF-8 test fixture I/O [`759437b`](https://github.com/acgetchell/causal-triangulations/commit/759437bd5b5f6e83394124a536540356390bafda)
+
+  - Tighten the Python test encoding Semgrep rule so Path.read_text and Path.write_text only pass with explicit encoding="utf-8".
+- [**breaking**] Make Metropolis step telemetry nonzero [#153](https://github.com/acgetchell/causal-triangulations/pull/153)
+  [`f736b97`](https://github.com/acgetchell/causal-triangulations/commit/f736b970c194ec4f71422b3d2120b7aee84d5b48)
+
+  - Store completed Metropolis step numbers as NonZeroU32 in public telemetry and resumable checkpoints.
+  - Reject zero-valued completed-step telemetry while preserving step 0 for initial measurement records.
+  - Derive accepted planned-step delta_action from the same action_after value used to update CDT state, including reconstructed action values.
+  - Return a typed telemetry error when an accepted planned proposal lacks action evidence.
 
 ### Maintenance
 
@@ -768,6 +904,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Limit dprint to YAML formatting with the pretty_yaml plugin and add check/fix aliases for TOML, YAML, and shell tooling.
   - Enforce workflow action pinning, allowlisting, and version comments with Semgrep fixtures.
   - Document the Rust-native tooling setup and check-before-fix workflow guidance.
+- Tighten coverage and doctest assertion checks [#163](https://github.com/acgetchell/causal-triangulations/pull/163)
+  [`36be83f`](https://github.com/acgetchell/causal-triangulations/commit/36be83f18d36d12d3fc079efa4b1f1fa091aea7d)
+
+  - Include `src/lib.rs` in Codecov analysis so public API and `run_simulation` changes are visible in patch coverage.
+  - Add a Semgrep rule that rejects `assert!(matches!(...))` in public Rust doctests.
+  - Update public examples and development docs to use `std::assert_matches` for diagnostic-friendly enum and result assertions.
+- Align security checks with shared Rust workflow
+  [`3d5fbec`](https://github.com/acgetchell/causal-triangulations/commit/3d5fbecdf869df9d6d7e98de555eb14f360df9d7)
+
+  - Run the CI matrix through pinned `just ci` tooling on Linux, macOS, and Windows.
+  - Move workflow tool installation to cached Cargo installs and uv-managed Python tooling.
+  - Add zizmor workflow coverage, SECURITY.md, and Dependabot cooldowns for security maintenance.
+  - Expand repository Semgrep rules for GitHub Actions hardening, subprocess wrapper usage, and MCMC adapter boundaries.
+  - Mirror pinned tool versions across workflows and justfile setup checks.
+- Lock local Python tool installs [`9cf18d7`](https://github.com/acgetchell/causal-triangulations/commit/9cf18d76aa9d9e261593cd2a3b4593ed153dcbf1)
+
+  - Require `setup-tools` to sync uv dependencies with the lockfile.
+  - Pin pytest and ty in the dev dependency group so local installs match the locked tooling set.
+- Make Semgrep fixture cleanup Windows-safe [`2bec72a`](https://github.com/acgetchell/causal-triangulations/commit/2bec72a7468fd6c250b23ea0e6cf254f42bbfb93)
+
+  - Remove the temporary mirrored Semgrep config directory in one guarded cleanup step.
+  - Avoid manual symlink unlinking and directory removal that fails on Windows runners.
+- Tighten Semgrep fixture coverage [#162](https://github.com/acgetchell/causal-triangulations/pull/162)
+  [`5ff5abe`](https://github.com/acgetchell/causal-triangulations/commit/5ff5abe26511f9e64d340c3f7e8c003a4b0b1376)
+
+  - Port low-risk MCMC Semgrep rules for unchecked Rust APIs and dynamic error erasure in public examples.
+  - Check repository Semgrep fixtures with direct annotation counts so path-sensitive rules stay covered.
+  - Require explicit UTF-8 fixture I/O in benchmark utility tests to keep Windows runs portable.
+- Harden Semgrep and zizmor checks [#162](https://github.com/acgetchell/causal-triangulations/pull/162)
+  [`acbf1ad`](https://github.com/acgetchell/causal-triangulations/commit/acbf1ad1673372e05af9f0eb2e49b760d40d0298)
+
+  - Avoid zizmor concurrency group collisions across refs and runs.
+  - Validate Semgrep fixture checker inputs before comparing rule results.
+  - Accept explicit UTF-8 encodings in fixture rules for both quote styles and the shared UTF8 constant.
+- Enforce MCMC sampler boundary [`d523854`](https://github.com/acgetchell/causal-triangulations/commit/d523854737a2b77395741a761b707c85cbea52a8)
+
+  - Add repository Semgrep rules that reject CDT-local Metropolis-Hastings acceptance draws and manual accepted/rejected sampler counters.
+  - Cover the new guardrails with positive and negative Semgrep fixtures.
+  - Document that CDT owns proposal planning and telemetry while markov-chain-monte-carlo owns reusable sampler mechanics
 
 ### Performance
 
@@ -782,6 +957,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Wire benchmark analysis and baseline comparison tooling to use stable Criterion benchmark IDs from the new suite.
   - Keep Linux, macOS, and Windows CI coverage while speeding Windows Rust validation with nextest.
   - Align coverage and changelog tooling with the Delaunay refresh, including cargo-llvm-cov 0.8.7 and archive heading normalization.
+- Cache Metropolis proposal-site universes [`6b3bfbe`](https://github.com/acgetchell/causal-triangulations/commit/6b3bfbe8643816ec1cb87ff5664330c756adaa19)
+
+  - Cache sampleable local sites per move family and triangulation instance so Metropolis sampling and proposal denominators share the same candidate set
+    without repeatedly re-enumerating sites.
+  - Give cloned and deserialized triangulations fresh transient identities so cached backend handles cannot leak across distinct states with matching
+    modification counts.
+  - Store reverse proposal-site counts on concrete CDT proposal plans to keep Hastings ratios tied to the proposed state that was actually planned.
+  - Document cached proposal-site semantics and the v0.1.x roadmap split for chunked Metropolis sweeps.
+  - Harden changelog formatting when no archived changelog files are present.
 
 ## [0.0.1] - 2026-03-23
 

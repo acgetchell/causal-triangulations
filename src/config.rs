@@ -521,11 +521,11 @@ impl ValidatedCdtConfig {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let config = CdtConfig {
-    ///         output_csv: Some("measurements.csv".into()),
+    ///         output_csv: Some("trace.csv".into()),
     ///         ..CdtConfig::new(16, 4)
     ///     }
     ///     .into_validated()?;
-    ///     assert_eq!(config.output_csv(), Some(Path::new("measurements.csv")));
+    ///     assert_eq!(config.output_csv(), Some(Path::new("trace.csv")));
     ///     Ok(())
     /// }
     /// ```
@@ -1899,7 +1899,7 @@ mod tests {
         let raw = CdtConfig {
             topology: CdtTopology::Toroidal,
             simulate: false,
-            output_csv: Some(PathBuf::from("measurements.csv")),
+            output_csv: Some(PathBuf::from("trace.csv")),
             output_json: Some(PathBuf::from("summary.json")),
             ..CdtConfig::new(12, 3)
         };
@@ -1913,7 +1913,7 @@ mod tests {
         assert!(!validated.simulate());
         assert_eq!(
             validated.output_csv(),
-            Some(PathBuf::from("measurements.csv").as_path())
+            Some(PathBuf::from("trace.csv").as_path())
         );
         assert_eq!(
             validated.output_json(),
@@ -2485,7 +2485,7 @@ mod tests {
             cosmological_constant: Some(0.25),
             seed: Some(Some(99)),
             topology: Some(CdtTopology::Toroidal),
-            output_csv: Some(Some(PathBuf::from("measurements.csv"))),
+            output_csv: Some(Some(PathBuf::from("trace.csv"))),
             output_json: Some(Some(PathBuf::from("summary.json"))),
             ..CdtConfigOverrides::default()
         };
@@ -2506,7 +2506,7 @@ mod tests {
         assert_relative_eq!(merged.cosmological_constant, 0.25);
         assert_eq!(merged.seed, Some(99));
         assert_eq!(merged.topology, CdtTopology::Toroidal);
-        assert_eq!(merged.output_csv, Some(PathBuf::from("measurements.csv")));
+        assert_eq!(merged.output_csv, Some(PathBuf::from("trace.csv")));
         assert_eq!(merged.output_json, Some(PathBuf::from("summary.json")));
     }
 

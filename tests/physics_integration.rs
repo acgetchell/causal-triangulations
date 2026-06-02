@@ -34,12 +34,12 @@ fn assert_physics_pipeline(config: CdtConfig) {
         .measurements()
         .first()
         .expect("simulation should record measurements")
-        .action;
+        .action();
     assert!(
         results
             .measurements()
             .iter()
-            .any(|measurement| (measurement.action - first_action).abs() > 1e-6),
+            .any(|measurement| (measurement.action() - first_action).abs() > 1e-6),
         "action never changed"
     );
 

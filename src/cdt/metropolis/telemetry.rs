@@ -3,11 +3,14 @@
 //! Proposal and step telemetry for CDT Metropolis sampling.
 
 use crate::cdt::ergodic_moves::MoveType;
-use crate::errors::CdtError;
+use crate::errors::{CdtError, CdtResult, CheckpointResumeFailure};
+use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::error::Error;
 use std::fmt;
 use std::num::NonZeroU32;
+
+use super::helpers::actions_match;
 
 /// Telemetry for one completed Monte Carlo step.
 ///
@@ -16,10 +19,9 @@ use std::num::NonZeroU32;
 /// sample appears as a [`Measurement`](crate::cdt::results::Measurement), not as
 /// a `MonteCarloStep`.
 ///
-/// Accepted steps include both [`Self::action_after`] and [`Self::delta_action`]
-/// from the same recorded action. Rejected self-loop steps leave
-/// `action_after` empty while retaining the proposed action change when it was
-/// available.
+/// Accepted, rejected-proposal, and no-proposal outcomes are stored as
+/// [`MonteCarloStepOutcome`] variants, so accepted action payloads cannot be
+/// partially present and rejected steps cannot carry an action-after value.
 ///
 /// # Examples
 ///
@@ -36,25 +38,778 @@ use std::num::NonZeroU32;
 ///     .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
 ///
 ///     let step = &results.steps()[0];
-///     assert_eq!(step.step.get(), 1);
-///     assert!(step.action_before.is_finite());
+///     assert_eq!(step.step().get(), 1);
+///     assert!(step.action_before().is_finite());
 ///     Ok(())
 /// }
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MonteCarloStep {
-    /// Nonzero Monte Carlo step number.
-    pub step: NonZeroU32,
-    /// Move type attempted during this step.
-    pub move_type: MoveType,
-    /// Whether the move was accepted by the Metropolis-Hastings transition.
-    pub accepted: bool,
-    /// Action before the proposed move.
-    pub action_before: f64,
-    /// Action after the move, present only for accepted steps.
-    pub action_after: Option<f64>,
-    /// Proposed or accepted change in action.
-    pub delta_action: Option<f64>,
+    step: NonZeroU32,
+    move_type: MoveType,
+    action_before: f64,
+    outcome: MonteCarloStepOutcome,
+}
+
+#[derive(Deserialize)]
+struct MonteCarloStepWire {
+    step: NonZeroU32,
+    move_type: MoveType,
+    action_before: f64,
+    outcome: MonteCarloStepOutcomeWire,
+}
+
+impl<'de> Deserialize<'de> for MonteCarloStep {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let wire = MonteCarloStepWire::deserialize(deserializer)?;
+        let outcome = MonteCarloStepOutcome::from_wire(wire.step, wire.action_before, wire.outcome)
+            .map_err(DeError::custom)?;
+        Self::new(wire.step, wire.move_type, wire.action_before, outcome).map_err(DeError::custom)
+    }
+}
+
+impl MonteCarloStep {
+    /// Creates validated telemetry for one completed Monte Carlo step.
+    ///
+    /// Use the outcome-specific constructors such as [`Self::accepted_step`] for
+    /// the common public cases. This constructor is useful when code already has a
+    /// validated [`MonteCarloStepOutcome`] from another boundary.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::CheckpointResumeFailed`] when `action_before` is
+    /// non-finite or when the supplied outcome carries non-finite or inconsistent
+    /// action telemetry for this step.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStep, MonteCarloStepOutcome, MoveType,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let outcome = MonteCarloStepOutcome::accepted_transition(
+    ///         step_number,
+    ///         4.0,
+    ///         3.5,
+    ///         -0.5,
+    ///     )?;
+    ///     let step = MonteCarloStep::new(step_number, MoveType::Move22, 4.0, outcome)?;
+    ///
+    ///     assert!(step.accepted());
+    ///     assert_eq!(step.action_after(), Some(3.5));
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn new(
+        step: NonZeroU32,
+        move_type: MoveType,
+        action_before: f64,
+        outcome: MonteCarloStepOutcome,
+    ) -> CdtResult<Self> {
+        validate_action_before(step, action_before)?;
+        outcome.validate_for_step(step, action_before)?;
+        Ok(Self {
+            step,
+            move_type,
+            action_before,
+            outcome,
+        })
+    }
+
+    /// Creates validated telemetry for an accepted Metropolis step.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::CheckpointResumeFailed`] when any action value is
+    /// non-finite or `action_after` does not match `action_before + delta_action`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStep, MoveType,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let step = MonteCarloStep::accepted_step(
+    ///         step_number,
+    ///         MoveType::Move22,
+    ///         4.0,
+    ///         3.5,
+    ///         -0.5,
+    ///     )?;
+    ///
+    ///     assert!(step.accepted());
+    ///     assert_eq!(step.delta_action(), Some(-0.5));
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn accepted_step(
+        step: NonZeroU32,
+        move_type: MoveType,
+        action_before: f64,
+        action_after: f64,
+        delta_action: f64,
+    ) -> CdtResult<Self> {
+        Self::new(
+            step,
+            move_type,
+            action_before,
+            MonteCarloStepOutcome::accepted_transition(
+                step,
+                action_before,
+                action_after,
+                delta_action,
+            )?,
+        )
+    }
+
+    /// Creates validated telemetry for a rejected step with a sampled proposal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::CheckpointResumeFailed`] when `action_before` or the
+    /// optional proposal delta is non-finite.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStep, MoveType,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let step = MonteCarloStep::rejected_proposal(
+    ///         step_number,
+    ///         MoveType::Move13Add,
+    ///         4.0,
+    ///         Some(0.25),
+    ///     )?;
+    ///
+    ///     assert!(!step.accepted());
+    ///     assert_eq!(step.action_after(), None);
+    ///     assert_eq!(step.delta_action(), Some(0.25));
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn rejected_proposal(
+        step: NonZeroU32,
+        move_type: MoveType,
+        action_before: f64,
+        delta_action: Option<f64>,
+    ) -> CdtResult<Self> {
+        Self::new(
+            step,
+            move_type,
+            action_before,
+            MonteCarloStepOutcome::rejected_proposal(step, delta_action)?,
+        )
+    }
+
+    /// Creates validated telemetry for a selected move family with no local proposal.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::CheckpointResumeFailed`] when `action_before` is
+    /// non-finite.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStep, MoveType,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let step = MonteCarloStep::no_proposal(step_number, MoveType::EdgeFlip, 4.0)?;
+    ///
+    ///     assert!(!step.accepted());
+    ///     assert_eq!(step.action_after(), None);
+    ///     assert_eq!(step.delta_action(), None);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn no_proposal(
+        step: NonZeroU32,
+        move_type: MoveType,
+        action_before: f64,
+    ) -> CdtResult<Self> {
+        Self::new(
+            step,
+            move_type,
+            action_before,
+            MonteCarloStepOutcome::NoProposal,
+        )
+    }
+
+    /// Returns the nonzero Monte Carlo step number.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStep, MoveType,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 2, 0, 1)?.steps();
+    ///     let step = MonteCarloStep::no_proposal(step_number, MoveType::EdgeFlip, 4.0)?;
+    ///
+    ///     assert_eq!(step.step().get(), 2);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn step(&self) -> NonZeroU32 {
+        self.step
+    }
+
+    /// Returns the move type attempted during this step.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStep, MoveType,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let step = MonteCarloStep::no_proposal(step_number, MoveType::EdgeFlip, 4.0)?;
+    ///
+    ///     assert_eq!(step.move_type(), MoveType::EdgeFlip);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn move_type(&self) -> MoveType {
+        self.move_type
+    }
+
+    /// Returns the action before the proposed move.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStep, MoveType,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let step = MonteCarloStep::no_proposal(step_number, MoveType::EdgeFlip, 4.0)?;
+    ///
+    ///     assert_eq!(step.action_before(), 4.0);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn action_before(&self) -> f64 {
+        self.action_before
+    }
+
+    /// Returns the validated step outcome.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStep, MonteCarloStepOutcome, MoveType,
+    /// };
+    /// use std::assert_matches;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let step = MonteCarloStep::no_proposal(step_number, MoveType::EdgeFlip, 4.0)?;
+    ///
+    ///     assert_matches!(step.outcome(), MonteCarloStepOutcome::NoProposal);
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn outcome(&self) -> &MonteCarloStepOutcome {
+        &self.outcome
+    }
+
+    /// Returns whether the step was accepted by the Metropolis-Hastings transition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStep, MoveType,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let step = MonteCarloStep::accepted_step(
+    ///         step_number,
+    ///         MoveType::Move22,
+    ///         4.0,
+    ///         3.5,
+    ///         -0.5,
+    ///     )?;
+    ///
+    ///     assert!(step.accepted());
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn accepted(&self) -> bool {
+        matches!(self.outcome, MonteCarloStepOutcome::Accepted(_))
+    }
+
+    /// Returns the action after the step when the proposal was accepted.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStep, MoveType,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let step = MonteCarloStep::accepted_step(
+    ///         step_number,
+    ///         MoveType::Move22,
+    ///         4.0,
+    ///         3.5,
+    ///         -0.5,
+    ///     )?;
+    ///
+    ///     assert_eq!(step.action_after(), Some(3.5));
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn action_after(&self) -> Option<f64> {
+        self.outcome.action_after()
+    }
+
+    /// Returns the proposed or accepted action delta when available.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStep, MoveType,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let step = MonteCarloStep::rejected_proposal(
+    ///         step_number,
+    ///         MoveType::Move13Add,
+    ///         4.0,
+    ///         Some(0.25),
+    ///     )?;
+    ///
+    ///     assert_eq!(step.delta_action(), Some(0.25));
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn delta_action(&self) -> Option<f64> {
+        self.outcome.delta_action()
+    }
+}
+
+/// Action payload for an accepted Monte Carlo step.
+///
+/// This payload is present only in [`MonteCarloStepOutcome::Accepted`]. It keeps
+/// `action_after` and `delta_action` together so accepted telemetry cannot store
+/// one without the other.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct AcceptedStepTelemetry {
+    action_after: f64,
+    delta_action: f64,
+}
+
+impl AcceptedStepTelemetry {
+    /// Returns the action after the accepted transition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStepOutcome,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let outcome =
+    ///         MonteCarloStepOutcome::accepted_transition(step_number, 4.0, 3.5, -0.5)?;
+    ///
+    ///     if let MonteCarloStepOutcome::Accepted(payload) = outcome {
+    ///         assert_eq!(payload.action_after(), 3.5);
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn action_after(self) -> f64 {
+        self.action_after
+    }
+
+    /// Returns the accepted action delta.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStepOutcome,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let outcome =
+    ///         MonteCarloStepOutcome::accepted_transition(step_number, 4.0, 3.5, -0.5)?;
+    ///
+    ///     if let MonteCarloStepOutcome::Accepted(payload) = outcome {
+    ///         assert_eq!(payload.delta_action(), -0.5);
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn delta_action(self) -> f64 {
+        self.delta_action
+    }
+}
+
+/// Action payload for a rejected concrete proposal.
+///
+/// Rejected proposals never carry an action-after value, but the proposal kernel
+/// may still report the action delta for the rejected candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct RejectedProposalStepTelemetry {
+    delta_action: Option<f64>,
+}
+
+impl RejectedProposalStepTelemetry {
+    /// Returns the proposed action delta when the proposal kernel supplied one.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStepOutcome,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let outcome = MonteCarloStepOutcome::rejected_proposal(step_number, Some(0.25))?;
+    ///
+    ///     if let MonteCarloStepOutcome::RejectedProposal(payload) = outcome {
+    ///         assert_eq!(payload.delta_action(), Some(0.25));
+    ///     }
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn delta_action(self) -> Option<f64> {
+        self.delta_action
+    }
+}
+
+/// Validated outcome for one completed Monte Carlo step.
+///
+/// The variants encode which action payloads are legal for the step outcome.
+/// Accepted steps carry both an action-after value and a delta, rejected
+/// proposals may carry only a candidate delta, and no-proposal steps carry no
+/// action payload.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::simulation::{
+///     CdtResult, MetropolisConfig, MonteCarloStepOutcome,
+/// };
+/// use std::assert_matches;
+///
+/// fn main() -> CdtResult<()> {
+///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+///     let outcome =
+///         MonteCarloStepOutcome::accepted_transition(step_number, 4.0, 3.5, -0.5)?;
+///
+///     assert_matches!(outcome, MonteCarloStepOutcome::Accepted(_));
+///     if let MonteCarloStepOutcome::Accepted(payload) = outcome {
+///         assert_eq!(payload.action_after(), 3.5);
+///         assert_eq!(payload.delta_action(), -0.5);
+///     }
+///     Ok(())
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub enum MonteCarloStepOutcome {
+    /// A proposal was accepted and committed to the CDT chain.
+    Accepted(AcceptedStepTelemetry),
+    /// A valid proposal was sampled but rejected by the Metropolis draw.
+    RejectedProposal(RejectedProposalStepTelemetry),
+    /// The selected move family had no sampleable local proposal.
+    NoProposal,
+}
+
+#[derive(Clone, Copy, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+enum MonteCarloStepOutcomeWire {
+    Accepted {
+        action_after: f64,
+        delta_action: f64,
+    },
+    RejectedProposal {
+        delta_action: Option<f64>,
+    },
+    NoProposal,
+}
+
+impl MonteCarloStepOutcome {
+    /// Creates a validated accepted-step outcome.
+    ///
+    /// Use this when a boundary already has the move-independent action telemetry
+    /// and needs an invariant-bearing outcome before constructing a
+    /// [`MonteCarloStep`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::CheckpointResumeFailed`] when either action value is
+    /// non-finite or `action_after` does not match `action_before + delta_action`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStepOutcome,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let outcome =
+    ///         MonteCarloStepOutcome::accepted_transition(step_number, 4.0, 3.5, -0.5)?;
+    ///
+    ///     assert!(outcome.accepted());
+    ///     assert_eq!(outcome.action_after(), Some(3.5));
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn accepted_transition(
+        step: NonZeroU32,
+        action_before: f64,
+        action_after: f64,
+        delta_action: f64,
+    ) -> CdtResult<Self> {
+        validate_action_after(step, action_after)?;
+        validate_delta_action(step, delta_action)?;
+        if !actions_match(action_after, action_before + delta_action) {
+            return Err(checkpoint_resume_failed(
+                CheckpointResumeFailure::StepActionAfterDeltaMismatch { step: step.get() },
+            ));
+        }
+        Ok(Self::Accepted(AcceptedStepTelemetry {
+            action_after,
+            delta_action,
+        }))
+    }
+
+    /// Creates a validated rejected-proposal outcome.
+    ///
+    /// Use this for a concrete proposal that was sampled and rejected by the
+    /// Metropolis draw. Use [`Self::NoProposal`] when no local candidate was
+    /// available.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::CheckpointResumeFailed`] when the optional proposal
+    /// delta is non-finite.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStepOutcome,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let outcome = MonteCarloStepOutcome::rejected_proposal(step_number, Some(0.5))?;
+    ///
+    ///     assert!(!outcome.accepted());
+    ///     assert_eq!(outcome.delta_action(), Some(0.5));
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn rejected_proposal(step: NonZeroU32, delta_action: Option<f64>) -> CdtResult<Self> {
+        if let Some(delta_action) = delta_action {
+            validate_delta_action(step, delta_action)?;
+        }
+        Ok(Self::RejectedProposal(RejectedProposalStepTelemetry {
+            delta_action,
+        }))
+    }
+
+    /// Returns whether this outcome accepted the proposed transition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStepOutcome,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let outcome =
+    ///         MonteCarloStepOutcome::accepted_transition(step_number, 4.0, 3.5, -0.5)?;
+    ///
+    ///     assert!(outcome.accepted());
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn accepted(self) -> bool {
+        matches!(self, Self::Accepted(_))
+    }
+
+    /// Returns the action after the step when this is an accepted outcome.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStepOutcome,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let outcome =
+    ///         MonteCarloStepOutcome::accepted_transition(step_number, 4.0, 3.5, -0.5)?;
+    ///
+    ///     assert_eq!(outcome.action_after(), Some(3.5));
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn action_after(self) -> Option<f64> {
+        match self {
+            Self::Accepted(payload) => Some(payload.action_after()),
+            Self::RejectedProposal(_) | Self::NoProposal => None,
+        }
+    }
+
+    /// Returns the proposal or accepted action delta when available.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtResult, MetropolisConfig, MonteCarloStepOutcome,
+    /// };
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let step_number = MetropolisConfig::new(1.0, 1, 0, 1)?.steps();
+    ///     let outcome = MonteCarloStepOutcome::rejected_proposal(step_number, Some(0.25))?;
+    ///
+    ///     assert_eq!(outcome.delta_action(), Some(0.25));
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub const fn delta_action(self) -> Option<f64> {
+        match self {
+            Self::Accepted(payload) => Some(payload.delta_action()),
+            Self::RejectedProposal(payload) => payload.delta_action(),
+            Self::NoProposal => None,
+        }
+    }
+
+    /// Re-validates an outcome with the step-local action-before context.
+    ///
+    /// Public constructors call this before storing caller-supplied outcomes so
+    /// deserialized or externally assembled telemetry cannot bypass the accepted
+    /// action-after/delta consistency contract.
+    fn validate_for_step(self, step: NonZeroU32, action_before: f64) -> CdtResult<()> {
+        match self {
+            Self::Accepted(payload) => {
+                Self::accepted_transition(
+                    step,
+                    action_before,
+                    payload.action_after(),
+                    payload.delta_action(),
+                )?;
+            }
+            Self::RejectedProposal(payload) => {
+                Self::rejected_proposal(step, payload.delta_action())?;
+            }
+            Self::NoProposal => {}
+        }
+        Ok(())
+    }
+
+    /// Converts the raw serialized outcome shape into validated domain telemetry.
+    ///
+    /// The wire payload is intentionally private because finite-action and
+    /// accepted-step delta consistency checks need the enclosing step number and
+    /// action-before value for precise diagnostics.
+    fn from_wire(
+        step: NonZeroU32,
+        action_before: f64,
+        wire: MonteCarloStepOutcomeWire,
+    ) -> CdtResult<Self> {
+        match wire {
+            MonteCarloStepOutcomeWire::Accepted {
+                action_after,
+                delta_action,
+            } => Self::accepted_transition(step, action_before, action_after, delta_action),
+            MonteCarloStepOutcomeWire::RejectedProposal { delta_action } => {
+                Self::rejected_proposal(step, delta_action)
+            }
+            MonteCarloStepOutcomeWire::NoProposal => Ok(Self::NoProposal),
+        }
+    }
+}
+
+const fn checkpoint_resume_failed(failure: CheckpointResumeFailure) -> CdtError {
+    CdtError::CheckpointResumeFailed { failure }
+}
+
+const fn validate_action_before(step: NonZeroU32, action_before: f64) -> CdtResult<()> {
+    if action_before.is_finite() {
+        Ok(())
+    } else {
+        Err(checkpoint_resume_failed(
+            CheckpointResumeFailure::NonFiniteStepActionBefore { step: step.get() },
+        ))
+    }
+}
+
+const fn validate_action_after(step: NonZeroU32, action_after: f64) -> CdtResult<()> {
+    if action_after.is_finite() {
+        Ok(())
+    } else {
+        Err(checkpoint_resume_failed(
+            CheckpointResumeFailure::NonFiniteStepActionAfter { step: step.get() },
+        ))
+    }
+}
+
+const fn validate_delta_action(step: NonZeroU32, delta_action: f64) -> CdtResult<()> {
+    if delta_action.is_finite() {
+        Ok(())
+    } else {
+        Err(checkpoint_resume_failed(
+            CheckpointResumeFailure::NonFiniteStepDeltaAction { step: step.get() },
+        ))
+    }
 }
 
 /// Local-site rejection observed while trying to realize an accepted CDT proposal.
@@ -164,7 +919,7 @@ impl<'de> Deserialize<'de> for ProposalStatistics {
         D: Deserializer<'de>,
     {
         let wire = ProposalStatisticsWire::deserialize(deserializer)?;
-        Self::from_wire(&wire).map_err(serde::de::Error::custom)
+        Self::from_wire(&wire).map_err(DeError::custom)
     }
 }
 
@@ -225,10 +980,11 @@ impl ProposalStatistics {
 
     /// Rebuilds proposal telemetry from the serialized wire shape.
     ///
-    /// The wire form is rejected when terminal outcomes do not exactly account
-    /// for selected move families, or when forward-site observations exist
-    /// without any selected move family. That keeps deserialized result and
-    /// checkpoint telemetry coherent before public accessors expose the counters.
+    /// The wire form is rejected when terminal outcomes cannot be summed without
+    /// overflow, do not exactly account for selected move families, or when
+    /// forward-site observations exist without any selected move family. That
+    /// keeps deserialized result and checkpoint telemetry coherent before public
+    /// accessors expose the counters.
     fn from_wire(wire: &ProposalStatisticsWire) -> Result<Self, String> {
         let terminal_outcomes = [
             wire.no_site_proposals,
@@ -240,7 +996,11 @@ impl ProposalStatistics {
             wire.hard_failures,
         ]
         .into_iter()
-        .fold(0_u64, u64::saturating_add);
+        .try_fold(0_u64, |total, count| {
+            total
+                .checked_add(count)
+                .ok_or_else(|| "proposal terminal outcome counters exceed u64::MAX".to_string())
+        })?;
         if terminal_outcomes != wire.move_family_proposals {
             return Err(format!(
                 "proposal terminal outcomes ({terminal_outcomes}) do not match move-family proposals ({})",
@@ -512,6 +1272,131 @@ impl ProposalStatistics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::assert_matches;
+
+    fn step_number(step: u32) -> NonZeroU32 {
+        NonZeroU32::new(step).expect("test step number should be nonzero")
+    }
+
+    fn assert_checkpoint_failure(
+        error: CdtError,
+        matches_failure: impl FnOnce(&CheckpointResumeFailure) -> bool,
+    ) {
+        match error {
+            CdtError::CheckpointResumeFailed { failure } => assert!(
+                matches_failure(&failure),
+                "unexpected checkpoint failure: {failure:?}"
+            ),
+            other => panic!("expected checkpoint resume failure, got {other:?}"),
+        }
+    }
+
+    fn assert_optional_actions_match(actual: Option<f64>, expected: Option<f64>) {
+        match (actual, expected) {
+            (Some(actual), Some(expected)) => assert!(
+                actions_match(actual, expected),
+                "expected {actual} to match {expected}"
+            ),
+            (None, None) => {}
+            (actual, expected) => panic!("expected {actual:?} to match {expected:?}"),
+        }
+    }
+
+    #[test]
+    fn monte_carlo_step_new_revalidates_outcome_against_action_before() {
+        let outcome = MonteCarloStepOutcome::accepted_transition(step_number(1), 4.0, 3.5, -0.5)
+            .expect("test outcome should satisfy its original action context");
+
+        let error = MonteCarloStep::new(step_number(1), MoveType::Move22, 10.0, outcome)
+            .expect_err("step constructor should reject outcome inconsistent with action_before");
+
+        assert_checkpoint_failure(error, |failure| {
+            matches!(
+                failure,
+                CheckpointResumeFailure::StepActionAfterDeltaMismatch { step: 1 }
+            )
+        });
+    }
+
+    #[test]
+    fn monte_carlo_step_serde_round_trips_valid_outcome_variants() {
+        let steps = [
+            MonteCarloStep::accepted_step(step_number(1), MoveType::Move22, 4.0, 3.5, -0.5)
+                .expect("test accepted step should satisfy action invariants"),
+            MonteCarloStep::rejected_proposal(step_number(2), MoveType::Move13Add, 3.5, Some(0.25))
+                .expect("test rejected-proposal step should satisfy action invariants"),
+            MonteCarloStep::no_proposal(step_number(3), MoveType::EdgeFlip, 3.5)
+                .expect("test no-proposal step should satisfy action invariants"),
+        ];
+
+        for step in steps {
+            let value = serde_json::to_value(&step).expect("step telemetry should serialize");
+            let round_tripped: MonteCarloStep =
+                serde_json::from_value(value).expect("valid step telemetry should deserialize");
+
+            assert_eq!(round_tripped.step(), step.step());
+            assert_eq!(round_tripped.move_type(), step.move_type());
+            assert!(
+                actions_match(round_tripped.action_before(), step.action_before()),
+                "round-tripped action_before should match original"
+            );
+            assert_eq!(round_tripped.accepted(), step.accepted());
+            assert_optional_actions_match(round_tripped.action_after(), step.action_after());
+            assert_optional_actions_match(round_tripped.delta_action(), step.delta_action());
+        }
+    }
+
+    #[test]
+    fn monte_carlo_step_deserialization_rejects_accepted_delta_mismatch() {
+        let payload = r#"{
+            "step": 1,
+            "move_type": "Move22",
+            "action_before": 4.0,
+            "outcome": {
+                "Accepted": {
+                    "action_after": 3.5,
+                    "delta_action": 0.0
+                }
+            }
+        }"#;
+
+        let error = serde_json::from_str::<MonteCarloStep>(payload)
+            .expect_err("accepted action-after/delta mismatch should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("action_after does not match delta_action"),
+            "serde error should explain accepted-step action invariant, got {error}"
+        );
+    }
+
+    #[test]
+    fn monte_carlo_step_deserialization_preserves_rejected_proposal_kind() {
+        let payload = r#"{
+            "step": 2,
+            "move_type": "Move13Add",
+            "action_before": 3.5,
+            "outcome": {
+                "RejectedProposal": {
+                    "delta_action": null
+                }
+            }
+        }"#;
+
+        let step = serde_json::from_str::<MonteCarloStep>(payload)
+            .expect("rejected proposal without delta should deserialize");
+
+        assert_eq!(step.step().get(), 2);
+        assert_eq!(step.move_type(), MoveType::Move13Add);
+        assert_matches!(
+            step.outcome(),
+            MonteCarloStepOutcome::RejectedProposal(payload) if payload.delta_action().is_none()
+        );
+        assert!(!step.accepted());
+        assert_eq!(step.action_after(), None);
+        assert_eq!(step.delta_action(), None);
+    }
 
     #[test]
     fn proposal_statistics_deserialization_rejects_terminal_outcomes_above_proposals() {
@@ -583,7 +1468,7 @@ mod tests {
     }
 
     #[test]
-    fn proposal_statistics_extend_preserves_saturated_round_trip_invariant() {
+    fn proposal_statistics_deserialization_rejects_terminal_outcome_counter_overflow() {
         let mut stats = ProposalStatistics::from_validated_parts(
             u64::MAX,
             u64::MAX,
@@ -605,9 +1490,12 @@ mod tests {
 
         let serialized =
             serde_json::to_string(&stats).expect("saturated telemetry should serialize");
-        let round_tripped: ProposalStatistics = serde_json::from_str(&serialized)
-            .expect("saturated merged telemetry should deserialize");
+        let error = serde_json::from_str::<ProposalStatistics>(&serialized)
+            .expect_err("overflowed terminal outcome partition should be rejected");
 
-        assert_eq!(round_tripped, stats);
+        assert!(
+            error.to_string().contains("exceed u64::MAX"),
+            "serde error should explain terminal outcome counter overflow, got {error}"
+        );
     }
 }

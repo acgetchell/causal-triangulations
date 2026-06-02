@@ -5,7 +5,7 @@
 use approx::assert_relative_eq;
 use causal_triangulations::{
     ActionConfig, CdtTriangulation, ErgodicsSystem, MetropolisAlgorithm, MetropolisConfig,
-    MoveResult, SimulationEvent,
+    MonteCarloStep, MoveResult, SimulationEvent,
 };
 use std::assert_matches;
 
@@ -31,7 +31,7 @@ fn toroidal_observables_run_accepts_periodic_moves_after_offset_support() {
         "periodic toroidal runs should accept moves after delaunay offset-aware flips"
     );
     assert!(
-        results.steps().iter().any(|step| step.accepted),
+        results.steps().iter().any(MonteCarloStep::accepted),
         "observables workflow should expose at least one accepted periodic move"
     );
     assert!(
@@ -113,22 +113,22 @@ fn accepted_step_telemetry_keeps_action_delta_consistent_after_planned_proposal_
 
     let mut accepted_steps = 0_u64;
     for step in results.steps() {
-        if step.accepted {
+        if step.accepted() {
             accepted_steps = accepted_steps.saturating_add(1);
             let action_after = step
-                .action_after
+                .action_after()
                 .expect("accepted steps should expose action_after");
             let delta_action = step
-                .delta_action
+                .delta_action()
                 .expect("accepted steps should expose delta_action");
             assert_relative_eq!(
                 delta_action,
-                action_after - step.action_before,
+                action_after - step.action_before(),
                 epsilon = 1e-12
             );
         } else {
             assert!(
-                step.action_after.is_none(),
+                step.action_after().is_none(),
                 "rejected steps should not expose action_after"
             );
         }
