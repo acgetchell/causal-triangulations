@@ -1,270 +1,113 @@
-# CDT-RS CLI Example Scripts
+# CLI Example Scripts
 
-This directory contains shell scripts that demonstrate how to use the `cdt` command-line binary for simulation-oriented scenarios.
+This directory contains maintained shell scripts for common `cdt` command-line workflows. For a first manual run, see
+[`docs/QUICKSTART.md`](../../docs/QUICKSTART.md). For individual CLI patterns, see [`docs/CLI_EXAMPLES.md`](../../docs/CLI_EXAMPLES.md).
 
-> **Current simulation status:** scripts that pass `--simulate` run the Metropolis-Hastings loop over the 2D CDT move kernels. Remove `--simulate` only when you
-> want triangulation construction without Monte Carlo steps.
+Commands that pass `--simulate` run the 2D CDT Metropolis-Hastings loop. Remove `--simulate` when you only want triangulation construction and the initial
+measurement.
 
-## Available Scripts
+## Scripts
 
-### 1. `basic_simulation.sh`
+### `basic_simulation.sh`
 
-**Purpose**: Demonstrates a simple CDT simulation command. **Usage**:
+Runs a small open-boundary simulation with logging enabled.
 
 ```bash
 ./examples/scripts/basic_simulation.sh
 ```
 
-**What it does**:
+Use this to check that the release binary builds and the CLI can run a short simulation.
 
-- Builds the cdt binary in release mode
-- Builds a 4-vertices-per-slice, 5-timeslice command with 1000 requested MC steps
-- Shows logging output for a short `--simulate` run
+### `parameter_sweep.sh`
 
-**Use this for**: First-time testing, verifying installation
-
-### 2. `parameter_sweep.sh`
-
-**Purpose**: Runs a systematic temperature-sweep command set. **Usage**:
+Runs a small temperature sweep and writes per-temperature logs to `sweep_results/`.
 
 ```bash
 ./examples/scripts/parameter_sweep.sh
 ```
 
-**What it does**:
+Use this as a starting point for acceptance, action, and volume diagnostics. Temperature is a sampler parameter here, not a claim about a physical heat bath.
 
-- Tests temperatures from 0.5 to 3.0
-- Requests 2000 MC steps for each temperature
-- Saves individual logs to `sweep_results/`
-- Runs each sweep point with `--simulate`
+### `performance_test.sh`
 
-**Use this for**: Parameter exploration setup and early phase-transition analysis
-
-### 3. `performance_test.sh`
-
-**Purpose**: Benchmarks CDT performance across different system sizes **Usage**:
+Runs CLI timing checks across several system sizes and writes `performance_results.txt`.
 
 ```bash
 ./examples/scripts/performance_test.sh
 ```
 
-**What it does**:
+Use this for quick command-level scaling checks. For regression-quality benchmarking, use `just bench-ci`, `just perf-check`, and the Criterion suites described
+in [`benches/README.md`](../../benches/README.md) and [`docs/PERFORMANCE_TESTING.md`](../../docs/PERFORMANCE_TESTING.md).
 
-- Tests small to extra-large system configurations
-- Measures current command runtime and setup overhead
-- Generates performance summary report
-- Saves results to `performance_results.txt`
+## Requirements
 
-**Use this for**: Construction and simulation scaling studies
+- Bash or zsh
+- Rust toolchain
+- `bc` for `performance_test.sh`
+- Project dependencies available to Cargo
 
-## Prerequisites
-
-### System Requirements
-
-- Bash shell (zsh also works)
-- `bc` calculator (for performance script)
-- Sufficient memory for large triangulation runs
-
-### Build Requirements
-
-- Rust toolchain (stable)
-- All project dependencies available
-
-## Quick Start
-
-1. **Make scripts executable** (already done):
-
-   ```bash
-   chmod +x examples/scripts/*.sh
-   ```
-
-2. **Run basic simulation**:
-
-   ```bash
-   ./examples/scripts/basic_simulation.sh
-   ```
-
-3. **Try a parameter sweep**:
-
-   ```bash
-   ./examples/scripts/parameter_sweep.sh
-   ```
-
-## Script Customization
-
-### Modifying Parameters
-
-Each script has configuration variables at the top that you can easily modify:
-
-**basic_simulation.sh**:
+The scripts build the release binary before running:
 
 ```bash
-# Edit the simulation parameters in the script
+cargo build --release
+```
+
+## Customization
+
+Each script keeps editable parameters near the top. Common knobs are:
+
+```bash
 VERTICES_PER_SLICE=4
 TIMESLICES=5
 STEPS=1000
 TEMPERATURE=1.0
 ```
 
-**parameter_sweep.sh**:
+For sweeps, edit the temperature list and fixed lattice parameters:
 
 ```bash
-# Modify temperature range or fixed parameters
 TEMPERATURES=(0.5 0.8 1.0 1.2 1.5 2.0 2.5 3.0)
 VERTICES_PER_SLICE=4
 TIMESLICES=8
 STEPS=2000
 ```
 
-**performance_test.sh**:
+For performance checks, edit the size tuples:
 
 ```bash
-# Add or modify system size configurations
 TEST_CONFIGS=(
-    "10 5 1000"      # Small
-    "20 8 2000"      # Medium
-    "50 10 3000"     # Large
-    "100 15 5000"    # Extra Large
-    "200 20 10000"   # Custom large config
+    "10 5 1000"
+    "20 8 2000"
+    "50 10 3000"
 )
 ```
 
-### Creating Custom Scripts
+## Outputs
 
-Template for new scripts:
+- `sweep_results/`: one log per sweep point
+- `performance_results.txt`: command-level timing summary
+- Terminal logs from `RUST_LOG=info`
 
-```bash
-#!/bin/bash
-set -e  # Exit on error
-
-echo "=== Custom CDT Script ==="
-
-# Build the binary
-cargo build --release
-
-# Run with custom parameters. Remove --simulate when you only want triangulation construction.
-RUST_LOG=info ./target/release/cdt \
-    --vertices-per-slice 4 \
-    --timeslices 10 \
-    --temperature 1.5 \
-    --steps 3000 \
-    --simulate
-
-echo "Custom command completed!"
-```
-
-## Expected Output
-
-### Current `--simulate` Runs
-
-Scripts that pass `--simulate` currently show:
-
-- Build confirmation
-- Progress messages
-- Simulation logs (with `RUST_LOG=info`)
-- Completed Metropolis-Hastings measurements when the sampled move applications remain valid
-- A non-zero exit from the `cdt` command if configuration validation fails or an accepted move cannot be applied after bounded retries
-
-### Error Handling
-
-Scripts include error checking for:
-
-- Build failures
-- Binary not found
-- Simulation crashes
-- Invalid parameters
-
-## Integration Examples
-
-### Makefile Integration
-
-```makefile
-.PHONY: run-basic run-sweep run-performance
-
-run-basic:
- ./examples/scripts/basic_simulation.sh
-
-run-sweep:
- ./examples/scripts/parameter_sweep.sh
-
-run-performance:
- ./examples/scripts/performance_test.sh
-```
-
-### CI/CD Integration
-
-```yaml
-# Example GitHub Actions step
-- name: Run CDT performance tests
-  run: |
-    ./examples/scripts/performance_test.sh
-    # Upload results artifact
-```
-
-### Data Analysis Pipeline
-
-```bash
-# Chain with analysis tools
-./examples/scripts/parameter_sweep.sh && python analyze_results.py sweep_results/
-```
-
-## Output Files
-
-### Generated by Scripts
-
-- `sweep_results/`: Directory with individual simulation logs
-- `performance_results.txt`: Performance benchmark data
-- Various log files depending on script configuration
-
-### Log Format
-
-Triangulation-only logs contain:
-
-```text
-[INFO] Dimensionality: 2
-[INFO] Number of vertices: 32
-[INFO] Number of timeslices: 8
-[INFO] Topology: OpenBoundary
-[INFO] Using trait-based backend system
-[INFO] Triangulation created with 32 vertices, <edge-count> edges, <face-count> faces
-[INFO] CDT simulation completed successfully
-```
+Typical successful logs include dimensionality, vertex count, time-slice count, topology, triangulation construction, output-file writes when configured, and
+completion status.
 
 ## Troubleshooting
 
-### Common Issues
+Permission denied:
 
-1. **Permission denied**:
+```bash
+chmod +x examples/scripts/*.sh
+```
 
-   ```bash
-   chmod +x examples/scripts/*.sh
-   ```
+`bc: command not found` on macOS:
 
-2. **Command not found**:
-   - Ensure you're in the project root directory
-   - Run `cargo build --release` first
+```bash
+brew install bc
+```
 
-3. **bc command not found** (macOS):
+Slow or memory-heavy runs:
 
-   ```bash
-   brew install bc
-   ```
-
-4. **Memory issues**:
-   - Reduce vertex counts in scripts
-   - Monitor system resources
-
-### Performance Tips
-
-- Use release builds (scripts do this automatically)
-- Adjust measurement frequency for long runs
-- Monitor memory usage for large systems
-- Run on systems with adequate RAM
-
-## Related Documentation
-
-- [`docs/CLI_EXAMPLES.md`](../../docs/CLI_EXAMPLES.md): Comprehensive CLI usage guide
-- [`examples/basic_cdt.rs`](../basic_cdt.rs): Library usage examples
-- [`benches/README.md`](../../benches/README.md): Benchmarking documentation
-
-These scripts provide a practical starting point for configuring CDT runs with the `cdt` binary.
+- Use the release build; the scripts already do this.
+- Reduce vertices per slice, time slices, or steps.
+- Increase measurement frequency for long simulations.
+- Prefer Criterion benchmarks for repeatable performance comparisons.

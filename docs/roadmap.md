@@ -44,7 +44,7 @@ The v0.1.0 foundation work focuses on making the crate a usable, validated 1+1 C
 
 Likely follow-up work before broadening the dimensional surface:
 
-- Weight move-type selection by available application sites to reduce uniform-sampling bias
+- Evaluate move-family weighting by available application sites to improve proposal efficiency while preserving the documented Hastings correction
 - Broaden per-kernel toroidal tests around spatial and temporal wrap-around simplices
 - Accept fixed triangle simplices directly in explicit-simplex generator APIs to remove per-triangle `Vec` adaptation
 - Add manual foliation assignment APIs with the same validation and synchronization guarantees as constructor-assigned labels

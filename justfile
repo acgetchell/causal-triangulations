@@ -10,9 +10,9 @@ cargo_llvm_cov_version := "0.8.7"
 cargo_nextest_version := "0.9.137"
 dprint_version := "0.54.0"
 git_cliff_version := "2.13.1"
-rumdl_version := "0.2.4"
+rumdl_version := "0.2.10"
 taplo_version := "0.10.0"
-typos_version := "1.47.0"
+typos_version := "1.47.2"
 zizmor_version := "1.25.2"
 
 # Common cargo-llvm-cov arguments for all coverage runs.
@@ -34,7 +34,7 @@ _ensure-cargo-llvm-cov:
     set -euo pipefail
     installed_version=""
     if command -v cargo-llvm-cov >/dev/null; then
-        installed_version="$(cargo llvm-cov --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        installed_version="$(cargo llvm-cov --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
     if [[ "$installed_version" != "{{cargo_llvm_cov_version}}" ]]; then
         echo "❌ 'cargo-llvm-cov' {{cargo_llvm_cov_version}} not found. See 'just setup-tools' or install:"
@@ -56,7 +56,7 @@ _ensure-cargo-nextest:
     set -euo pipefail
     installed_version=""
     if cargo nextest --version >/dev/null 2>&1; then
-        installed_version="$(cargo nextest --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        installed_version="$(cargo nextest --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
     if [[ "$installed_version" != "{{cargo_nextest_version}}" ]]; then
         echo "❌ 'cargo-nextest' {{cargo_nextest_version}} not found. See 'just setup-tools' or install:"
@@ -69,7 +69,7 @@ _ensure-dprint:
     set -euo pipefail
     installed_version=""
     if command -v dprint >/dev/null; then
-        installed_version="$(dprint --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        installed_version="$(dprint --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
     if [[ "$installed_version" != "{{dprint_version}}" ]]; then
         echo "❌ 'dprint' {{dprint_version}} not found. See 'just setup-tools' or install:"
@@ -82,7 +82,7 @@ _ensure-git-cliff:
     set -euo pipefail
     installed_version=""
     if command -v git-cliff >/dev/null; then
-        installed_version="$(git-cliff --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        installed_version="$(git-cliff --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
     if [[ "$installed_version" != "{{git_cliff_version}}" ]]; then
         echo "❌ 'git-cliff' {{git_cliff_version}} not found. Install with:"
@@ -100,7 +100,7 @@ _ensure-rumdl:
     set -euo pipefail
     installed_version=""
     if command -v rumdl >/dev/null; then
-        installed_version="$(rumdl --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        installed_version="$(rumdl --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
     if [[ "$installed_version" != "{{rumdl_version}}" ]]; then
         echo "❌ 'rumdl' {{rumdl_version}} not found. See 'just setup-tools' or install:"
@@ -126,7 +126,7 @@ _ensure-taplo:
     set -euo pipefail
     installed_version=""
     if command -v taplo >/dev/null; then
-        installed_version="$(taplo --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        installed_version="$(taplo --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
     if [[ "$installed_version" != "{{taplo_version}}" ]]; then
         echo "❌ 'taplo' {{taplo_version}} not found. See 'just setup-tools' or install:"
@@ -140,7 +140,7 @@ _ensure-typos:
     set -euo pipefail
     installed_version=""
     if command -v typos >/dev/null; then
-        installed_version="$(typos --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        installed_version="$(typos --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
     if [[ "$installed_version" != "{{typos_version}}" ]]; then
         echo "❌ 'typos' {{typos_version}} not found. See 'just setup-tools' or install:"
@@ -165,7 +165,7 @@ _ensure-zizmor:
     set -euo pipefail
     installed_version=""
     if command -v zizmor >/dev/null; then
-        installed_version="$(zizmor --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        installed_version="$(zizmor --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
     if [[ "$installed_version" != "{{zizmor_version}}" ]]; then
         echo "❌ 'zizmor' {{zizmor_version}} not found. See 'just setup-tools' or install:"
@@ -686,7 +686,7 @@ setup-tools:
 
     echo "Ensuring cargo tools..."
     dprint_version="{{dprint_version}}"
-    if ! have dprint || [[ "$(dprint --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$dprint_version" ]]; then
+    if ! have dprint || [[ "$(dprint --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$dprint_version" ]]; then
         echo "  ⏳ Installing dprint ${dprint_version} (cargo)..."
         cargo install --locked dprint --version "${dprint_version}"
     else
@@ -694,7 +694,7 @@ setup-tools:
     fi
 
     rumdl_version="{{rumdl_version}}"
-    if ! have rumdl || [[ "$(rumdl --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$rumdl_version" ]]; then
+    if ! have rumdl || [[ "$(rumdl --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$rumdl_version" ]]; then
         echo "  ⏳ Installing rumdl ${rumdl_version} (cargo)..."
         cargo install --locked rumdl --version "${rumdl_version}"
     else
@@ -702,7 +702,7 @@ setup-tools:
     fi
 
     taplo_version="{{taplo_version}}"
-    if ! have taplo || [[ "$(taplo --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$taplo_version" ]]; then
+    if ! have taplo || [[ "$(taplo --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$taplo_version" ]]; then
         echo "  ⏳ Installing taplo-cli ${taplo_version} (cargo)..."
         cargo install --locked taplo-cli --version "${taplo_version}"
     else
@@ -710,7 +710,7 @@ setup-tools:
     fi
 
     typos_version="{{typos_version}}"
-    if ! have typos || [[ "$(typos --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$typos_version" ]]; then
+    if ! have typos || [[ "$(typos --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$typos_version" ]]; then
         echo "  ⏳ Installing typos-cli ${typos_version} (cargo)..."
         cargo install --locked typos-cli --version "${typos_version}"
     else
@@ -718,7 +718,7 @@ setup-tools:
     fi
 
     git_cliff_version="{{git_cliff_version}}"
-    if ! have git-cliff || [[ "$(git-cliff --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$git_cliff_version" ]]; then
+    if ! have git-cliff || [[ "$(git-cliff --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$git_cliff_version" ]]; then
         echo "  ⏳ Installing git-cliff ${git_cliff_version} (cargo)..."
         cargo install --locked git-cliff --version "${git_cliff_version}"
     else
@@ -726,7 +726,7 @@ setup-tools:
     fi
 
     cargo_llvm_cov_version="{{cargo_llvm_cov_version}}"
-    if ! have cargo-llvm-cov || [[ "$(cargo-llvm-cov --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$cargo_llvm_cov_version" ]]; then
+    if ! have cargo-llvm-cov || [[ "$(cargo-llvm-cov --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$cargo_llvm_cov_version" ]]; then
         echo "  ⏳ Installing cargo-llvm-cov ${cargo_llvm_cov_version} (cargo)..."
         cargo install --locked cargo-llvm-cov --version "${cargo_llvm_cov_version}"
     else
@@ -734,7 +734,7 @@ setup-tools:
     fi
 
     cargo_nextest_version="{{cargo_nextest_version}}"
-    if ! cargo nextest --version >/dev/null 2>&1 || [[ "$(cargo nextest --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$cargo_nextest_version" ]]; then
+    if ! cargo nextest --version >/dev/null 2>&1 || [[ "$(cargo nextest --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$cargo_nextest_version" ]]; then
         echo "  ⏳ Installing cargo-nextest ${cargo_nextest_version} (cargo)..."
         cargo install --locked cargo-nextest --version "${cargo_nextest_version}"
     else
@@ -749,7 +749,7 @@ setup-tools:
     fi
 
     zizmor_version="{{zizmor_version}}"
-    if ! have zizmor || [[ "$(zizmor --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$zizmor_version" ]]; then
+    if ! have zizmor || [[ "$(zizmor --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$zizmor_version" ]]; then
         echo "  ⏳ Installing zizmor ${zizmor_version} (cargo)..."
         cargo install --locked zizmor --version "${zizmor_version}"
     else

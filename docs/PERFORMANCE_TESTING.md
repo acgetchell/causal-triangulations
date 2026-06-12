@@ -1,392 +1,141 @@
 # Performance Testing Guide
 
-This document explains how to use the performance regression testing system for the Causal Dynamical Triangulations (CDT) library.
+This document explains the regression and reporting workflow around CDT performance benchmarks. For the benchmark inventory and instructions for adding new
+Criterion benchmarks, see [benches/README.md](../benches/README.md).
 
 ## Overview
 
-The CDT project uses [Criterion.rs](https://github.com/bheisler/criterion.rs) for benchmarking with a custom performance analysis system that:
+The performance workflow uses Criterion benchmark output plus `scripts/performance_analysis.py` to:
 
-- **Detects regressions** automatically on pull requests
-- **Tracks performance trends** over time
-- **Generates detailed reports** with statistical analysis
-- **Integrates with CI/CD** to prevent performance regressions
+- compare current results with saved baselines;
+- report regressions and improvements;
+- generate Markdown reports for PR or release review;
+- keep local and CI checks using the same benchmark contract.
 
-## Quick Start
+The default CI contract is `benches/ci_performance_suite.rs`. It is intentionally smaller than the full exploratory benchmark suite so it can provide a stable
+regression signal across platforms.
 
-### Running Performance Checks Locally
+## Local Commands
 
 ```bash
-# Check for performance regressions (10% threshold)
-just perf-check
-
-# Check with custom threshold (5% threshold)
-just perf-check 5.0
-
-# Save current performance as baseline
-just perf-baseline
-
-# Generate detailed performance report
-just perf-report
-
-# Analyze performance trends over last 7 days
-just perf-trends 7
+just bench-ci          # Run the CI regression benchmark contract
+just perf-check        # Compare current results against the latest baseline
+just perf-check 5.0    # Use a stricter 5% regression threshold
+just perf-baseline     # Save current results as a timestamped baseline
+just perf-baseline tag # Save current results with a descriptive tag
+just perf-report       # Generate a Markdown performance report
+just perf-trends 7     # Summarize recent baseline trends
 ```
 
-### Understanding Results
-
-The performance analysis categorizes benchmark changes:
-
-- 🔴 **Regressions**: Performance degraded beyond threshold
-- 🟢 **Improvements**: Performance improved beyond threshold
-- ✅ **Stable**: Changes within acceptable range
-- 🆕 **New**: First-time benchmarks
-
-## Detailed Usage
-
-### Command Reference
-
-#### `just perf-baseline [tag]`
-
-Save current benchmark results as a baseline for future comparisons.
+Useful direct analyzer commands:
 
 ```bash
-# Save baseline with automatic timestamp
-just perf-baseline
-
-# Save baseline with version tag
-just perf-baseline v1.2.0
-
-# Save baseline for feature branch
-just perf-baseline feature-optimization
-```
-
-**When to use**: Before major changes, releases, or when establishing new performance baselines.
-
-#### `just perf-check [threshold]`
-
-Run benchmarks and check for performance regressions.
-
-```bash
-# Default 10% regression threshold
-just perf-check
-
-# Strict 5% threshold for critical changes
-just perf-check 5.0
-
-# Relaxed 15% threshold for exploratory changes
-just perf-check 15.0
-```
-
-**Exit codes**:
-
-- `0`: No regressions detected
-- `1`: Performance regressions found (fails CI)
-
-#### `just perf-report [file]`
-
-Generate detailed performance analysis report.
-
-```bash
-# Generate report with timestamp
-just perf-report
-
-# Save to specific file
-just perf-report release-v1.2-performance.md
-
-# Generate report without running benchmarks
-uv run performance-analysis --no-run --report my-report.md
-```
-
-#### `just perf-trends [days]`
-
-Analyze performance trends over time.
-
-```bash
-# Last week's trends
-just perf-trends 7
-
-# Last month's trends  
-just perf-trends 30
-
-# Analyze specific benchmarks
-uv run performance-analysis --trends 14
-```
-
-### Advanced Usage
-
-#### Comparing Specific Baselines
-
-```bash
-# Compare against specific baseline file
-uv run performance-analysis --compare performance_baselines/baseline_v1.0.0_20231201_120000.json
-
-# Skip running benchmarks, use cached results
+uv run performance-analysis --no-run
 uv run performance-analysis --no-run --threshold 5.0
+uv run performance-analysis --compare performance_baselines/baseline_pre-change.json
+uv run performance-analysis --report performance-report.md
 ```
 
-#### Python API Usage
+`just perf-check` returns exit code `1` when regressions exceed the threshold. Local callers may treat that as blocking. In CI, benchmark noise is reported
+but does not by itself fail the PR workflow.
 
-```python
-from scripts.performance_analysis import PerformanceAnalyzer
-from pathlib import Path
+## CI Behavior
 
-# Initialize analyzer
-analyzer = PerformanceAnalyzer(Path("."))
+The performance workflow:
 
-# Extract current results
-results = analyzer.extract_criterion_results()
+- runs the CI benchmark suite on pull requests;
+- compares PR results with the main-branch baseline;
+- comments with regressions, improvements, stable benchmarks, and new benchmarks;
+- uploads report artifacts;
+- saves updated baselines on main after successful merges.
 
-# Compare with baseline
-baseline = analyzer.load_baseline()
-comparison = analyzer.compare_results(results, baseline, threshold=10.0)
-
-# Generate report
-report = analyzer.generate_report(comparison)
-```
-
-## CI/CD Integration
-
-### Automatic Performance Testing
-
-The project runs performance tests automatically:
-
-#### On Pull Requests
-
-- 🔍 **Regression Detection**: Compares PR performance against main branch baseline
-- 📊 **Detailed Reports**: Posts performance analysis as PR comments
-- ❌ **Blocks Merging**: Fails CI if regressions exceed threshold
-- 📁 **Artifact Storage**: Uploads performance reports for review
-
-#### On Main Branch
-
-- 💾 **Baseline Updates**: Automatically saves new baselines after successful merges
-- 🏷️ **Tagging**: Baselines tagged with commit SHA and timestamp
-- 📈 **Trend Tracking**: Enables long-term performance monitoring
-
-### Manual Workflow Triggers
-
-You can manually trigger performance analysis from GitHub Actions:
-
-1. Go to **Actions** tab in GitHub repository
-2. Select **Performance Testing** workflow
-3. Click **Run workflow**
-4. Configure options:
-   - **Threshold**: Regression detection sensitivity (default: 10%)
-   - **Save Baseline**: Whether to save results as new baseline
-
-### Interpreting CI Results
-
-#### Successful Performance Check ✅
-
-```text
-✅ Performance Check Passed
-   Total benchmarks: 40
-   Regressions: 0
-   Improvements: 3
-   Stable: 37
-   New: 0
-```
-
-#### Performance Regression Detected ❌
-
-```text
-🔴 Performance regressions detected!
-   triangulation_creation/delaunay_backend/100: +15.2% slower
-   Current: 12.5ms, Baseline: 10.8ms
-```
-
-The CI will:
-
-- ❌ **Fail the workflow** to prevent merging
-- 💬 **Post detailed comment** with regression analysis
-- 📊 **Upload report artifact** for detailed investigation
+Regression comments should be reviewed carefully, especially for changes touching geometry construction, move proposal enumeration, action calculation,
+Metropolis simulation, output generation, or validation.
 
 ## Benchmark Categories
 
-### Critical Benchmarks (Strict Thresholds)
+The CI suite focuses on release-relevant CDT paths:
 
-- **Triangulation Creation**: Core algorithm performance
-- **Action Calculations**: Physics computation efficiency
-- **Cached Operations**: Memory/caching system performance
+- open-boundary and toroidal triangulation construction;
+- topology, foliation, causality, and simplex-classification validation;
+- individual ergodic move attempts;
+- proposal-site iteration and single-step Metropolis proposal planning;
+- short random-move sweeps;
+- short Metropolis simulations.
 
-### Standard Benchmarks
+The broader Criterion suite includes exploratory groups for geometry queries, cache behavior, action calculations, simulation analysis, and validation. Those
+are documented in [benches/README.md](../benches/README.md).
 
-- **Geometry Queries**: Mesh interrogation operations
-- **Ergodic Moves**: Monte Carlo move operations
-- **Validation**: Correctness checking performance
+## Performance Workflow
 
-### Variable Benchmarks (Relaxed Thresholds)
-
-- **Metropolis Simulation**: Short `MetropolisAlgorithm::run()` paths over real CDT move kernels
-- **File I/O Operations**: System-dependent operations
-
-## Performance Optimization Workflow
-
-### 1. Identify Bottlenecks
+Before a performance-sensitive change:
 
 ```bash
-# Generate detailed performance report
-just perf-report bottleneck-analysis.md
-
-# Analyze recent trends
-just perf-trends 30
+just bench-ci
+just perf-baseline pre-change
 ```
 
-### 2. Create Optimization Branch
+During development:
 
 ```bash
-git checkout -b perf/optimize-triangulation
+just perf-check 15.0
 ```
 
-### 3. Save Pre-optimization Baseline
+Before review:
 
 ```bash
-just perf-baseline pre-optimization
+just perf-check
+just perf-report
 ```
 
-### 4. Implement Optimizations
-
-Make your performance improvements...
-
-### 5. Measure Impact
-
-```bash
-# Check improvements against pre-optimization baseline
-uv run performance-analysis --compare performance_baselines/baseline_pre-optimization_*.json
-
-# Strict threshold to ensure meaningful improvement
-just perf-check 3.0
-```
-
-### 6. Document Changes
-
-Include performance results in your PR description:
+For optimization PRs, include a short performance summary:
 
 ```markdown
 ## Performance Impact
 
-- Triangulation creation: **25% faster** (8.2ms → 6.1ms)
-- Memory usage: **15% reduction** in peak allocation
-- Cache hit rate: **Improved from 85% to 94%**
+- proposal-site enumeration: 18% faster on the CI suite
+- short Metropolis runs: stable within threshold
+- memory allocation: no new persistent allocations in the hot path
+```
+
+## Baselines
+
+- Main-branch baselines are saved by CI.
+- Feature baselines can be saved locally with descriptive tags.
+- Release baselines should use version tags.
+- The analyzer keeps recent baselines and report artifacts for comparison.
+
+Keep baseline names descriptive enough to recover the comparison later:
+
+```bash
+just perf-baseline pre-proposal-cache
+just perf-baseline v0.1.1
 ```
 
 ## Troubleshooting
 
-### Common Issues
+`No benchmark results found`
 
-#### "No benchmark results found"
+: Run `just bench-ci` first, or run `uv run performance-analysis --no-run` only after Criterion JSON output exists.
 
-```bash
-# Ensure benchmarks are compiled and run first
-just bench-ci
-just perf-check
-```
+`No baseline found for comparison`
 
-#### "No baseline found for comparison"
+: Save one with `just perf-baseline initial`, or compare directly against a known baseline file.
 
-```bash
-# Create initial baseline
-just perf-baseline initial
+High variance
 
-# Or run against existing results
-uv run performance-analysis --no-run
-```
+: Close other CPU-heavy work, rerun the benchmark, and compare trends rather than one noisy sample. Treat large PR comments as investigation prompts, not
+  automatic proof of a regression.
 
-#### "Performance variance too high"
+Need deeper timing data
 
-- Run benchmarks multiple times to establish confidence
-- Check for system load during benchmark execution
-- Consider using cloud CI for consistent results
+: Run a focused Criterion group from [benches/README.md](../benches/README.md), inspect the HTML report under `target/criterion/`, or use platform-specific
+  profilers. Memory profiling is not exposed as a Cargo feature in this crate; use external profilers or targeted benchmark instrumentation.
 
-### Performance Investigation
+## Components
 
-#### Detailed Timing Analysis
-
-```bash
-# Run with verbose output
-RUST_BACKTRACE=1 cargo bench --profile perf --bench ci_performance_suite -- --verbose
-
-# Analyze specific benchmark group
-cargo bench triangulation_creation
-```
-
-#### Memory Profiling Integration
-
-```bash
-# Run benchmarks with memory profiling (requires additional tools)
-cargo bench --features memory-profiling
-```
-
-## Best Practices
-
-### For Contributors
-
-1. **Run performance checks** before submitting PRs
-2. **Include performance impact** in PR descriptions
-3. **Investigate regressions** thoroughly - they may indicate real issues
-4. **Save baselines** before making significant algorithmic changes
-
-### For Maintainers
-
-1. **Review performance comments** on PRs carefully
-2. **Update baselines** after confirming acceptable changes
-3. **Monitor long-term trends** using `just perf-trends`
-4. **Set appropriate thresholds** for different types of changes
-
-### Performance-Sensitive Development
-
-```bash
-# Before implementing new features
-just perf-baseline feature-start
-
-# During development - check impact frequently  
-just perf-check 15.0  # Relaxed threshold during development
-
-# Before finalizing - ensure no major regressions
-just perf-check 5.0   # Strict threshold before completion
-```
-
-## Configuration
-
-### Threshold Guidelines
-
-| Change Type   | Recommended Threshold | Rationale                                   |
-| ------------- | --------------------- | ------------------------------------------- |
-| Bug fixes     | 5%                    | Should not impact performance significantly |
-| New features  | 10-15%                | May have some performance cost              |
-| Optimizations | 3%                    | Should show measurable improvement          |
-| Experimental  | 20%                   | Exploratory changes, focus on functionality |
-
-### Baseline Management
-
-- **Main branch baselines**: Automatically saved on merge
-- **Feature baselines**: Manually saved with descriptive tags
-- **Release baselines**: Tagged with version numbers
-- **Retention**: Last 10 baselines kept automatically
-
-## Architecture
-
-### Components
-
-1. **Criterion Benchmarks** (`benches/cdt_benchmarks.rs`, `benches/ci_performance_suite.rs`): Core and CI regression benchmark definitions
-2. **Performance Analyzer** (`scripts/performance_analysis.py`): Analysis and reporting engine
-3. **Justfile Integration**: User-friendly command interface
-4. **GitHub Actions** (`.github/workflows/performance.yml`): CI/CD automation
-5. **Baseline Storage** (`performance_baselines/`): Historical performance data
-
-### Data Flow
-
-```text
-┌───────────┐     ┌──────────┐     ┌─────────────┐
-│ Criterion │───▶│ Analysis │───▶│ Reports     │
-│ benches   │     │ script   │     │ comparisons │
-└───────────┘     └──────────┘     └─────────────┘
-      │                │                 │
-      ▼                ▼                 ▼
-┌───────────┐     ┌──────────┐     ┌─────────────┐
-│ JSON      │     │ Baseline │     │ CI comments │
-│ results   │     │ storage  │     │ artifacts   │
-└───────────┘     └──────────┘     └─────────────┘
-```
-
-This system provides comprehensive performance monitoring while remaining easy to use for both contributors and maintainers.
+- `benches/ci_performance_suite.rs`: stable CI regression contract
+- `benches/cdt_benchmarks.rs`: broader Criterion benchmark groups
+- `scripts/performance_analysis.py`: baseline comparison and report generation
+- `.github/workflows/performance.yml`: CI performance workflow
+- `performance_baselines/`: saved local and CI baselines

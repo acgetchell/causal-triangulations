@@ -1,7 +1,7 @@
 #!/bin/bash
 # Parameter sweep example for CDT simulations
 # This script runs multiple simulations across different temperatures
-# to study phase transitions and scaling behavior
+# to inspect acceptance, action, and volume diagnostics
 
 set -e # Exit on any error
 
@@ -36,9 +36,12 @@ for temp in "${TEMPERATURES[@]}"; do
 
 	# Create output filename
 	output_file="${OUTPUT_DIR}/simulation_T${temp}.log"
+	success_file="${output_file}.success"
+	status_file="${output_file}.status"
+	rm -f "$success_file" "$status_file"
 
 	# Run simulation and save output
-	RUST_LOG=info ./target/release/cdt \
+	if RUST_LOG=info ./target/release/cdt \
 		--vertices-per-slice $VERTICES_PER_SLICE \
 		--timeslices $TIMESLICES \
 		--temperature "$temp" \
@@ -46,9 +49,15 @@ for temp in "${TEMPERATURES[@]}"; do
 		--thermalization-steps 200 \
 		--measurement-frequency 20 \
 		--simulate \
-		>"$output_file" 2>&1
-
-	echo "  ✓ T = $temp completed, saved to $output_file"
+		>"$output_file" 2>&1; then
+		printf '0\n' >"$status_file"
+		touch "$success_file"
+		echo "  ✓ T = $temp completed, saved to $output_file"
+	else
+		status=$?
+		printf '%s\n' "$status" >"$status_file"
+		echo "  FAILED: T = $temp exited with status $status; see $output_file"
+	fi
 done
 
 echo
@@ -63,8 +72,13 @@ echo "------------|--------"
 
 for temp in "${TEMPERATURES[@]}"; do
 	output_file="${OUTPUT_DIR}/simulation_T${temp}.log"
-	if grep -q "CDT simulation completed successfully" "$output_file"; then
+	success_file="${output_file}.success"
+	status_file="${output_file}.status"
+	if [[ -f "$success_file" ]]; then
 		echo "    $temp    | SUCCESS"
+	elif [[ -f "$status_file" ]]; then
+		status="$(<"$status_file")"
+		echo "    $temp    | FAILED (${status})"
 	else
 		echo "    $temp    | FAILED"
 	fi
@@ -73,6 +87,6 @@ done
 echo
 echo "Analysis suggestions:"
 echo "  - Plot acceptance rates vs temperature"
-echo "  - Analyze action values for phase transitions"
-echo "  - Study scaling behavior with system size"
+echo "  - Compare action and volume diagnostics across temperatures"
+echo "  - Repeat with larger systems before drawing scaling conclusions"
 echo "  - Use data from $OUTPUT_DIR/ for further analysis"
