@@ -30,6 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Document that ProposalStatistics deserialization only relaxes exact terminal-outcome partitioning after saturated telemetry merges when move-family
     proposals also saturated.
 
+- Add physicist quickstart and streamline guides
+  [`34b86f9`](https://github.com/acgetchell/causal-triangulations/commit/34b86f995cb5ef128e87a62d21ef9fd6a923b54b)
+
+  - Add a non-programmer quickstart for running 1+1 CDT simulations, interpreting CSV/JSON output, and tuning the main physics knobs.
+  - Refocus README around current 1+1 scope, grand-canonical volume behavior, the crate ecosystem, and reviewer-facing documentation entry points.
+  - Streamline CLI, script, contributing, benchmark, and performance docs so each guide has a distinct maintenance role.
+  - Document how Delaunay bistellar k-flips map onto foliation-preserving CDT/Pachner moves, including the planned interface revisit after delaunay#252.
+  - Align Markdown and spelling tool pins with sibling repositories.
+
 ### Fixed
 
 - [**breaking**] Propagate checkpoint result invariant failures

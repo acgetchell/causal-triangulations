@@ -117,6 +117,10 @@ The useful `justfile` updates ported from `delaunay` are:
   telemetry construction.
 - The Markdown and spelling tool pins now use `rumdl` 0.2.10 and `typos-cli` 1.47.2 in both the justfile and `.github/workflows/ci.yml`, matching the
   current Cargo-installed sibling-repository tools while preserving the existing `rumdl.toml`, `typos.toml`, and raw 160-column guard.
+- The Cargo manifest description changed from `Causal Dynamical Triangulations in d-dimensions` to
+  `Validated 1+1 Causal Dynamical Triangulations for quantum gravity`. This mirrors a config/manifest change per the repository guideline and records why the
+  new wording was chosen: it makes the validated 1+1 scope and quantum-gravity domain explicit in package metadata. This update fulfills the
+  `{.github/**/*,*.yml,*.yaml,*.toml,*.json}` tooling-alignment requirement for the `Cargo.toml` description edit.
 
 ## Issue #162 CI And Security Alignment
 

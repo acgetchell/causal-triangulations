@@ -12,7 +12,7 @@ verify, reproduce, or extend.
 
 Prerequisites:
 
-- Rust 1.96.0 or newer, managed by `rust-toolchain.toml`
+- Rust 1.96.0, pinned by `rust-toolchain.toml`; `Cargo.toml` also specifies `rust-version = "1.96.0"` as the required toolchain
 - Git
 - [Just] command runner: `cargo install just`
 - `uv` for Python support tooling

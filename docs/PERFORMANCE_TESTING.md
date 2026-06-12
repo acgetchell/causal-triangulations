@@ -32,7 +32,7 @@ Useful direct analyzer commands:
 ```bash
 uv run performance-analysis --no-run
 uv run performance-analysis --no-run --threshold 5.0
-uv run performance-analysis --compare performance_baselines/baseline_pre-change_*.json
+uv run performance-analysis --compare performance_baselines/baseline_pre-change.json
 uv run performance-analysis --report performance-report.md
 ```
 
