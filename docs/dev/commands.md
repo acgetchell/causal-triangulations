@@ -190,6 +190,12 @@ Run:
 just spell-check
 ```
 
+The `typos` binary is provided by the Cargo crate `typos-cli`. `just setup-tools` installs the pinned version, or you can install it directly:
+
+```bash
+cargo install --locked typos-cli --version 1.47.2
+```
+
 If a legitimate technical word fails, add it to `typos.toml` under:
 
 ```toml

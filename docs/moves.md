@@ -79,6 +79,34 @@ Move validation follows a two-layer design:
 Move code lives in the CDT domain layer. It may call `DelaunayBackend2D` methods and trait-backed mutation hooks, but it must not import upstream `delaunay::`
 APIs directly.
 
+The public CDT move interface will be revisited after [`delaunay#252`](https://github.com/acgetchell/delaunay/issues/252) lands. Until then, this crate keeps
+the current CDT-owned move API and maps it onto the available Delaunay k-flip primitives through the geometry backend layer.
+
+### Bistellar Flips And CDT Moves
+
+Pachner's theorem gives the PL-manifold backdrop: within a fixed topology, triangulations of a piecewise-linear manifold are connected by finite sequences of
+bistellar moves. The `delaunay` crate exposes the geometric 2D operations this crate needs as bistellar-style k-flips:
+
+- `flip_k2` — the geometric edge flip, corresponding to the 2D `(2,2)` move;
+- `flip_k1_insert` — local vertex insertion, the geometric substrate for a `(1,3)` subdivision;
+- `flip_k1_remove` — local vertex removal, the geometric substrate for a `(3,1)` collapse.
+
+CDT cannot apply arbitrary geometric k-flips directly. A CDT move must also preserve the discrete time foliation, keep every simplex classified as causal
+(`Up` or `Down` in 1+1), obey topology-specific slice-size constraints, and pass topology/causality validation after the edit. The implementation therefore
+maps Delaunay's local edit primitives into foliation-preserving CDT proposals:
+
+- `Move22` / `EdgeFlip` use the k=2 edge flip only when the replacement diagonal preserves adjacent-slice causality and simplex classification.
+- Open-boundary `Move13Add` uses k=1 insertion as a triangle subdivision and assigns the inserted vertex the time label required by the adjacent causal
+  simplex pattern.
+- Open-boundary `Move31Remove` uses k=1 removal only for removable degree-3 vertices whose replacement triangle remains causal and does not empty a time slice.
+- Toroidal `Move13Add` is realized as a spacelike-link split: subdivide an adjacent face, then flip the original spacelike link away so the closed-S¹ spatial
+  slice remains valid.
+- Toroidal `Move31Remove` uses the inverse flip-then-collapse path for degree-4 configurations produced by the spacelike-link split.
+
+This is why the public move API is expressed in CDT/Pachner language while the backend layer is expressed in Delaunay k-flip language. The local geometric
+operation is necessary but not sufficient; the CDT layer supplies the foliation, causality, topology, and proposal-ratio bookkeeping needed for a valid
+Metropolis-Hastings transition.
+
 Public `attempt_*` methods snapshot only after a valid local site has been selected and mutation is about to begin; ordinary geometric or causal rejections do
 not clone the triangulation. If a selected mutation or required post-mutation synchronization fails, the method restores that snapshot before returning the
 non-success `MoveResult`. Toroidal post-move topology or closed-ring foliation failures are treated as rollbackable local-site rejections, because the candidate
@@ -94,8 +122,8 @@ return `CdtError::MetropolisMoveApplicationFailed`.
 ## Ensemble And Volume Fixing
 
 Current CDT simulations do not add a volume-fixing term. The `(1,3)` and `(3,1)` kernels are genuine volume-changing proposals, so accepted moves may change
-the total number of vertices and simplices over time. The resulting Markov chain should therefore be interpreted as sampling the unfixed-volume ensemble
-specified by the configured action, cosmological term, proposal probabilities, and Metropolis-Hastings acceptance rule.
+the total number of vertices and simplices over time. The resulting Markov chain should therefore be interpreted as sampling the grand-canonical,
+unfixed-volume ensemble specified by the configured action, cosmological term, proposal probabilities, and Metropolis-Hastings acceptance rule.
 
 This is a valid 1+1 CDT setting rather than an implementation accident. Israel and Lindner use a 1+1 CDT Monte Carlo model where add/remove moves satisfy
 detailed balance and the cosmological constant controls whether the universe size is stable, shrinking, or diverging:
@@ -106,7 +134,9 @@ the lattice volume term, so changing it changes the relative acceptance of volum
 difference. The current binary exposes this as `--cosmological-constant`, and programmatic callers set it through `ActionConfig`.
 
 The default 1+1 action constants are calibrated to the standard 2D CDT critical cosmological coupling. They use zero curvature couplings and set the edge-count
-cosmological constant to `(2 / 3) ln 2`, mapping this crate's `λ N1` action convention to `λc N2` with `λc = ln 2` on closed toroidal triangulations.
+cosmological constant to `(2 / 3) ln 2`, mapping this crate's `λ N1` action convention to `λc N2` with `λc = ln 2` on closed 1+1 triangulations where
+`N1 = 3 N2 / 2`. Open-boundary strips have boundary-count corrections, so the same default is a practical baseline rather than an exact open-boundary critical
+value.
 
 Approximate volume fixing is also standard in higher-dimensional CDT when the scientific goal is a finite-size ensemble at a chosen lattice volume. In that
 case the fixing term is part of the sampled action, for example a quadratic penalty around a target volume, and detailed balance is with respect to the
@@ -117,5 +147,5 @@ fixing yet; if added, it should be explicit and opt-in.
 
 ## Planned Work
 
-- [ ] Weight `select_random_move()` by available application sites per move type to remove uniform-sampling chain bias
+- [ ] Evaluate move-family weighting by available application sites to improve proposal efficiency while preserving the documented Hastings correction
 - [ ] Broaden per-kernel toroidal move-site tests around periodic boundary simplices

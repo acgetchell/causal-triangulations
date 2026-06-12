@@ -17,7 +17,7 @@ license = "BSD-3-Clause"
 readme = "README.md"
 repository = "https://github.com/acgetchell/causal-triangulations"
 rust-version = "1.96.0"
-description = "Causal Dynamical Triangulations in d-dimensions"
+description = "Validated 1+1 Causal Dynamical Triangulations for quantum gravity"
 
 # Features removed - backend system is now internal implementation detail
 # Both delaunay and mock backends are always compiled

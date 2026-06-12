@@ -115,6 +115,8 @@ The useful `justfile` updates ported from `delaunay` are:
 - The planned-step sampler-state sync rule now anchors `record_planned_step(...)` to call statements so it continues to catch missing
   `sampler.replace_state(...)` after recorded planned steps without false-positive matches on the helper function declaration when that helper contains fallible
   telemetry construction.
+- The Markdown and spelling tool pins now use `rumdl` 0.2.10 and `typos-cli` 1.47.2 in both the justfile and `.github/workflows/ci.yml`, matching the
+  current Cargo-installed sibling-repository tools while preserving the existing `rumdl.toml`, `typos.toml`, and raw 160-column guard.
 
 ## Issue #162 CI And Security Alignment
 
@@ -127,8 +129,8 @@ Issue #162 refreshed the CI and security baseline against `markov-chain-monte-ca
   `taiki-e/install-action`.
 - Repository-owned Semgrep rules now also guard checkout credential persistence, `pull_request_target`, direct `github-script` expression interpolation,
   unlocked workflow `uv sync`, direct Python `subprocess.run` bypasses, and direct MCMC imports outside the CDT Metropolis adapter boundary.
-- Tool versions are pinned in workflow `env` blocks and mirrored in `justfile` constants for `cargo-nextest`, `dprint`, `rumdl`, `taplo`, `typos`, `zizmor`,
-  `cargo-llvm-cov`, and `git-cliff`.
+- Tool versions are pinned in workflow `env` blocks and mirrored in `justfile` constants for `cargo-nextest`, `dprint`, `rumdl`, `taplo`, `typos-cli`,
+  `zizmor`, `cargo-llvm-cov`, and `git-cliff`.
 - Local validation includes `just zizmor` through `lint-config`, while `.github/workflows/zizmor.yml` uploads the GitHub Actions security signal in CI.
 - `SECURITY.md` documents private vulnerability reporting and the repository security check set.
 

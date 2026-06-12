@@ -42,6 +42,7 @@ causal-triangulations/
 │   │   └── tooling-alignment.md
 │   ├── CLI_EXAMPLES.md
 │   ├── PERFORMANCE_TESTING.md
+│   ├── QUICKSTART.md
 │   ├── RELEASING.md
 │   ├── code_organization.md
 │   ├── foliation.md

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Parameter sweep example for CDT simulations
 # This script runs multiple simulations across different temperatures
-# to study phase transitions and scaling behavior
+# to inspect acceptance, action, and volume diagnostics
 
 set -e # Exit on any error
 
@@ -73,6 +73,6 @@ done
 echo
 echo "Analysis suggestions:"
 echo "  - Plot acceptance rates vs temperature"
-echo "  - Analyze action values for phase transitions"
-echo "  - Study scaling behavior with system size"
+echo "  - Compare action and volume diagnostics across temperatures"
+echo "  - Repeat with larger systems before drawing scaling conclusions"
 echo "  - Use data from $OUTPUT_DIR/ for further analysis"

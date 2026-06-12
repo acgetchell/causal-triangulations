@@ -5,6 +5,48 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### ⚠️ Breaking Changes
+
+- Enforce fallible observable and trace invariants
+- Propagate checkpoint result invariant failures
+
+### Changed
+
+- [**breaking**] Enforce fallible observable and trace invariants
+  [`513140f`](https://github.com/acgetchell/causal-triangulations/commit/513140f1d2a22e505c212389c981c8fefacbc3d1)
+
+  - Make CDT observable estimators and volume-profile APIs return typed errors instead of silently collapsing backend or overflow failures.
+  - Store Metropolis proposal plans and scalar trace rows with invariant-bearing action and count evidence before serialization.
+  - Validate checkpoint, result, move-statistics, and measurement reconstruction through typed CDT error paths.
+  - Carry API docs, examples, benchmarks, citation metadata, and the lockfile through the stricter contracts.
+
+### Documentation
+
+- Clarify saturated proposal telemetry deserialization
+  [`e5a3efb`](https://github.com/acgetchell/causal-triangulations/commit/e5a3efb7adb25c53e7c5e11a325ded64d8ad2f77)
+
+  - Document that ProposalStatistics deserialization only relaxes exact terminal-outcome partitioning after saturated telemetry merges when move-family
+    proposals also saturated.
+
+### Fixed
+
+- [**breaking**] Propagate checkpoint result invariant failures
+  [`faf5ece`](https://github.com/acgetchell/causal-triangulations/commit/faf5ecedf8f80566c6241b952edf2f2ca944fa97)
+
+  - Return CdtResult from CdtMcmcCheckpoint::into_results so result snapshot invariant failures propagate instead of panicking.
+  - Preserve saturated move and proposal telemetry, and report concrete scalar trace outcomes during resume validation.
+  - Avoid same-process staged output temp-file collisions and keep toroidal removal selection limited to sampleable inverse sites.
+  - Align the Zenodo DOI badge and cover empty observable/profile boundaries.
+- Harden checkpoint and adjacency invariants [`1795533`](https://github.com/acgetchell/causal-triangulations/commit/17955336be720cd3533db644af287f10e252db71)
+
+  - Recompute resumed checkpoint actions into live state after tolerant validation so telemetry starts from the canonical action value.
+  - Reject saturated or overflowed proposal-terminal counters unless the selected move-family counter saturated too.
+  - Rotate triangulation instance epochs when modification counters saturate so proposal-site caches cannot collide with stale versions.
+  - Cache Delaunay vertex-adjacency indexes between topology mutations while keeping mutation rollback and serialization cache boundaries explicit.
+  - Add fallible MetropolisConfig runtime validation for runner entry points.
+
 ## [0.1.0] - 2026-06-02
 
 ### ⚠️ Breaking Changes
@@ -1033,4 +1075,5 @@ Older releases are archived by minor series:
 
 - [0.0.x](docs/archive/changelog/0.0.md)
 
+[Unreleased]: https://github.com/acgetchell/causal-triangulations/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/acgetchell/causal-triangulations/compare/v0.0.1...v0.1.0

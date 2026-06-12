@@ -10,9 +10,9 @@ cargo_llvm_cov_version := "0.8.7"
 cargo_nextest_version := "0.9.137"
 dprint_version := "0.54.0"
 git_cliff_version := "2.13.1"
-rumdl_version := "0.2.4"
+rumdl_version := "0.2.10"
 taplo_version := "0.10.0"
-typos_version := "1.47.0"
+typos_version := "1.47.2"
 zizmor_version := "1.25.2"
 
 # Common cargo-llvm-cov arguments for all coverage runs.
@@ -140,7 +140,7 @@ _ensure-typos:
     set -euo pipefail
     installed_version=""
     if command -v typos >/dev/null; then
-        installed_version="$(typos --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+        installed_version="$(typos --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
     if [[ "$installed_version" != "{{typos_version}}" ]]; then
         echo "❌ 'typos' {{typos_version}} not found. See 'just setup-tools' or install:"
@@ -710,7 +710,7 @@ setup-tools:
     fi
 
     typos_version="{{typos_version}}"
-    if ! have typos || [[ "$(typos --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)" != "$typos_version" ]]; then
+    if ! have typos || [[ "$(typos --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$typos_version" ]]; then
         echo "  ⏳ Installing typos-cli ${typos_version} (cargo)..."
         cargo install --locked typos-cli --version "${typos_version}"
     else
