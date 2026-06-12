@@ -115,7 +115,7 @@ The useful `justfile` updates ported from `delaunay` are:
 - The planned-step sampler-state sync rule now anchors `record_planned_step(...)` to call statements so it continues to catch missing
   `sampler.replace_state(...)` after recorded planned steps without false-positive matches on the helper function declaration when that helper contains fallible
   telemetry construction.
-- The Markdown and spelling tool pins now use `rumdl` 0.2.10 and `typos-cli` 1.47.2 in both the justfile and `.github/workflows/ci.yml`, matching the
+- The Markdown and spelling tool pins now use `rumdl` 0.2.14 and `typos-cli` 1.47.2 in both the justfile and `.github/workflows/ci.yml`, matching the
   current Cargo-installed sibling-repository tools while preserving the existing `rumdl.toml`, `typos.toml`, and raw 160-column guard.
 - The Cargo manifest description changed from `Causal Dynamical Triangulations in d-dimensions` to
   `Validated 1+1 Causal Dynamical Triangulations for quantum gravity`. This mirrors a config/manifest change per the repository guideline and records why the
