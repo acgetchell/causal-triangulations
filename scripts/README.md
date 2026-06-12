@@ -5,7 +5,7 @@ This directory contains Python and shell tooling used by the CDT repository. Whe
 
 ## Prerequisites
 
-- Python 3.12+
+- Python 3.13+
 - `uv`
 
 Install dev dependencies:
@@ -56,12 +56,14 @@ uv run hardware-utils info --json
 just coverage-ci
 uv run performance-analysis --help
 uv run coverage-report --help
+uv run notebook-check --help
 
 # Backwards-compatible alias
 uv run coverage_report --help
 ```
 
 `coverage-report` summarizes the Cobertura XML produced by `just coverage-ci`.
+`notebook-check` inspects `.ipynb` files, rejects committed outputs, and runs Ruff and ty over extracted code cells.
 
 ## Shell helpers
 

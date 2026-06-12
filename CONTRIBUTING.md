@@ -29,8 +29,9 @@ just check
 Useful entry points:
 
 - [README.md](README.md) — project overview and top-level documentation map
-- [docs/QUICKSTART.md](docs/QUICKSTART.md) — first local CDT run
-- [docs/code_organization.md](docs/code_organization.md) — module layout and architecture boundaries
+- [notebooks/00_quickstart.ipynb](notebooks/00_quickstart.ipynb) — first local CDT run
+- [docs/scientific-basis.md](docs/scientific-basis.md) — CDT scope, validated invariants, current ensemble, and interpretation boundaries
+- [docs/code-organization.md](docs/code-organization.md) — module layout and architecture boundaries
 - [docs/dev/commands.md](docs/dev/commands.md) — authoritative local command guide
 - [docs/dev/rust.md](docs/dev/rust.md) — Rust API, error, prelude, backend, and MCMC boundary rules
 - [docs/dev/python.md](docs/dev/python.md) — Python support-script rules
@@ -43,12 +44,34 @@ Common commands:
 
 ```bash
 just --list          # Show available recipes
+just setup           # Complete environment setup
 just check           # Non-mutating validation
 just fix             # Formatters and auto-fixes
 just ci              # CI parity
 just commit-check    # Full pre-commit validation
+just run-example     # Basic simulation example
 just bench-ci        # CI benchmark contract
 just perf-check      # Local performance regression check
+just perf-help       # Performance analysis command index
+```
+
+`just setup` installs or verifies Cargo-hosted tools such as `dprint`, `rumdl`, `taplo-cli`, `typos-cli`, `cargo-nextest`, `cargo-llvm-cov`, and `zizmor`.
+It also prints a checklist for external tools such as `uv`, `actionlint`, `shfmt`, `shellcheck`, and `jq`.
+
+Ready-to-use shell workflows live under `examples/scripts/`:
+
+```bash
+./examples/scripts/basic_simulation.sh      # Simple simulation command
+./examples/scripts/parameter_sweep.sh       # Temperature sweep setup
+./examples/scripts/performance_test.sh      # Performance benchmarking across system sizes
+```
+
+Release-support recipes are documented in [docs/RELEASING.md](docs/RELEASING.md). The most common entry points are:
+
+```bash
+just changelog                       # Regenerate CHANGELOG.md
+just changelog-unreleased v0.1.0     # Generate a release changelog before the final tag exists
+just tag v0.1.0                      # Create an annotated git tag from changelog content
 ```
 
 Prefer small focused branches. Branch names should follow `{type}/{issue}-descriptor-or-two`, for example:
@@ -63,7 +86,7 @@ Before opening a PR:
 
 - run the appropriate `just` checks;
 - update tests and docs with the code change;
-- update `docs/code_organization.md` when files or architecture-significant modules move;
+- update `docs/code-organization.md` when files or architecture-significant modules move;
 - update `docs/dev/tooling-alignment.md` before changing repository tooling, workflows, or config policy;
 - do not edit `CHANGELOG.md` directly; it is generated from commits.
 
@@ -101,7 +124,7 @@ just ci
 ```
 
 Testing expectations live in [docs/dev/testing.md](docs/dev/testing.md). Benchmarks and performance regression workflows live in
-[benches/README.md](benches/README.md) and [docs/PERFORMANCE_TESTING.md](docs/PERFORMANCE_TESTING.md).
+[benches/README.md](benches/README.md) and [docs/performance-testing.md](docs/performance-testing.md).
 
 ## Documentation
 
@@ -110,8 +133,10 @@ Documentation changes are first-class contributions. Keep prose accurate for bot
 When editing docs:
 
 - keep README high-level and link to deeper docs;
-- keep [docs/QUICKSTART.md](docs/QUICKSTART.md) beginner-oriented;
-- keep [docs/CLI_EXAMPLES.md](docs/CLI_EXAMPLES.md) focused on advanced CLI patterns;
+- keep [notebooks/00_quickstart.ipynb](notebooks/00_quickstart.ipynb) beginner-oriented and executable;
+- keep [docs/scientific-basis.md](docs/scientific-basis.md) focused on scientific scope, validated invariants, and ensemble interpretation;
+- keep [docs/cli-examples.md](docs/cli-examples.md) focused on scriptable CLI patterns;
+- keep [docs/hpc.md](docs/hpc.md) focused on Slurm, Open OnDemand, and cluster execution;
 - keep technical move/sampler details in [docs/moves.md](docs/moves.md) and [docs/metropolis.md](docs/metropolis.md);
 - add or update citations in [REFERENCES.md](REFERENCES.md) when scientific claims depend on literature.
 
@@ -120,7 +145,7 @@ When editing docs:
 Performance is part of the scientific contract for this project. Use:
 
 - [benches/README.md](benches/README.md) for benchmark inventory, Criterion usage, and adding new benchmarks;
-- [docs/PERFORMANCE_TESTING.md](docs/PERFORMANCE_TESTING.md) for regression checks, baselines, CI behavior, and reporting.
+- [docs/performance-testing.md](docs/performance-testing.md) for regression checks, baselines, CI behavior, and reporting.
 
 Before large algorithmic changes, save or inspect a baseline:
 

@@ -351,7 +351,8 @@ fn open_profile_vertices(profile: &[u32], total_vertices: u32) -> CdtResult<Vec<
     let min_spacing = 1.0_f64 / f64::from(max_slice_volume - 1);
     let side_jitter = min_spacing / 4.0;
     let interior_jitter = min_spacing / (16.0 * f64::from(profile_len));
-    let vertical_jitter = 1.0_f64 / (64.0 * f64::from(profile_len));
+    // TODO(acgetchell/delaunay#447): remove once exact collinear CDT boundaries build.
+    let vertical_jitter = 1.0e-9;
     let coordinate_max = f64::from(profile_len).max(2.0);
     let mut vertex_specs = Vec::new();
     vertex_specs.try_reserve_exact(expected_vertices).map_err(|err| {
@@ -392,7 +393,7 @@ fn open_profile_vertices(profile: &[u32], total_vertices: u32) -> CdtResult<Vec<
             let spatial_index = f64::from(index);
             let arc = vertical_jitter * spatial_index * f64::from(vertices - 1 - index)
                 / f64::from((vertices - 1).pow(2));
-            let base_y = f64::from(label) + vertical_jitter;
+            let base_y = f64::from(label);
             let y = if slice == 0 {
                 base_y - arc
             } else if slice + 1 == profile.len() {
@@ -711,7 +712,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let spacing = 1.0_f64 / f64::from(vertices_per_slice - 1);
         let side_jitter = spacing / 4.0;
         let interior_jitter = spacing / (16.0 * f64::from(num_slices));
-        let vertical_jitter = 1.0_f64 / (64.0 * f64::from(num_slices));
+        // TODO(acgetchell/delaunay#447): remove once exact collinear CDT boundaries build.
+        let vertical_jitter = 1.0e-9;
         let mut vertex_specs: Vec<([f64; 2], u32)> = Vec::new();
         vertex_specs
             .try_reserve_exact(expected_vertices)
@@ -740,7 +742,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 let spatial_index = f64::from(i);
                 let arc = vertical_jitter * spatial_index * f64::from(vertices_per_slice - 1 - i)
                     / f64::from((vertices_per_slice - 1).pow(2));
-                let base_y = f64::from(t) + vertical_jitter;
+                let base_y = f64::from(t);
                 let y = if t == 0 {
                     base_y - arc
                 } else if t == num_slices - 1 {
@@ -1096,7 +1098,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 mod tests {
     use super::*;
     use crate::cdt::foliation::{EdgeType, FoliationError, SimplexType};
-    use crate::errors::{CdtValidationCheck, CdtValidationFailure, TriangulationMetadataField};
+    use crate::errors::TriangulationMetadataField;
     use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
     use std::assert_matches;
 
@@ -1434,7 +1436,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_labeled_delaunay_rejects_non_cdt_simplices() {
+    fn test_from_labeled_delaunay_rejects_non_interval_spatial_slice() {
         let dt = build_delaunay2_from_simplices(
             &[
                 ([0.0, 0.0], 0),
@@ -1452,10 +1454,13 @@ mod tests {
 
         assert_matches!(
             result,
-            Err(CdtError::ValidationFailed {
-                ref check,
-                failure: CdtValidationFailure::InvalidCdtTriangle { .. },
-            }) if *check == CdtValidationCheck::Causality
+            Err(CdtError::Foliation(
+                FoliationError::SpacelikeOpenSliceEndpointCount {
+                    slice: 0,
+                    observed: 0,
+                    expected: 2,
+                }
+            ))
         );
     }
 

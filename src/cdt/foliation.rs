@@ -208,8 +208,8 @@ pub enum FoliationError {
         /// Total labeled vertex count.
         labeled: usize,
     },
-    /// The spacelike subgraph of a toroidal spatial slice does not contain
-    /// every labeled vertex of that slice.
+    /// The spacelike subgraph of a spatial slice does not contain every
+    /// labeled vertex of that slice.
     ///
     /// On a toroidal CDT every vertex of slice `t` must participate in at
     /// least one spacelike edge so the spacelike subgraph forms a closed S¹.
@@ -246,6 +246,68 @@ pub enum FoliationError {
         /// Expected number of vertices in the closed ring.
         expected: usize,
     },
+    /// An open-boundary spatial slice has the wrong number of interval
+    /// endpoints.
+    SpacelikeOpenSliceEndpointCount {
+        /// Slice index where the violation was detected.
+        slice: usize,
+        /// Number of degree-1 endpoints observed in the spacelike subgraph.
+        observed: usize,
+        /// Expected number of endpoints for this open interval.
+        expected: usize,
+    },
+    /// A vertex on an open-boundary spatial slice has the wrong number of
+    /// spacelike neighbours.
+    SpacelikeOpenSliceDegreeViolation {
+        /// Slice index where the violation was detected.
+        slice: usize,
+        /// Human-readable identifier for the offending vertex (e.g.
+        /// `"VertexKey(123v1)"`). Pre-formatted so this enum stays
+        /// backend-agnostic.
+        vertex: String,
+        /// Observed number of spacelike neighbours.
+        observed_degree: usize,
+    },
+    /// The spacelike subgraph of an open-boundary spatial slice is not a
+    /// single interval.
+    SpacelikeNonOpenInterval {
+        /// Slice index where the violation was detected.
+        slice: usize,
+        /// Number of vertices reached when walking from one endpoint.
+        walked: usize,
+        /// Expected number of vertices in the open interval.
+        expected: usize,
+    },
+    /// Timelike edges in an open-boundary slab cross when the adjacent
+    /// spatial slices are viewed as ordered intervals.
+    OpenBoundarySlabEdgeCrossing {
+        /// Lower time slice of the slab where the crossing was detected.
+        lower_slice: usize,
+        /// Human-readable identifier for the first crossing edge.
+        first_edge: String,
+        /// Human-readable identifier for the second crossing edge.
+        second_edge: String,
+    },
+    /// The spacelike path order of an open-boundary slice disagrees with the
+    /// backend spatial coordinate order.
+    OpenBoundarySpatialOrderMismatch {
+        /// Slice index where the mismatch was detected.
+        slice: usize,
+        /// Number of vertices in the combinatorial slice path.
+        path_vertices: usize,
+        /// Number of vertices in the coordinate-sorted slice path.
+        coordinate_vertices: usize,
+    },
+    /// An open-boundary vertex's backend `y` coordinate disagrees with its
+    /// integer foliation time label.
+    OpenBoundaryTimeCoordinateMismatch {
+        /// Slice label stored on the vertex.
+        label: u32,
+        /// Human-readable identifier for the offending vertex.
+        vertex: String,
+        /// Backend `y` coordinate.
+        y: String,
+    },
     /// A toroidal spatial slice is missing the timelike adjacency required
     /// for temporal wrap-around — every slice must have at least one
     /// timelike edge to both its `(t-1) mod T` and `(t+1) mod T` neighbours.
@@ -264,6 +326,10 @@ pub enum FoliationError {
 }
 
 impl fmt::Display for FoliationError {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the public foliation error enum has many diagnostic variants, and keeping their Display text together makes coverage auditable"
+    )]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyFoliation => write!(f, "foliation must contain at least one time slice"),
@@ -316,7 +382,7 @@ impl fmt::Display for FoliationError {
                 expected,
             } => write!(
                 f,
-                "toroidal spatial slice {slice} spacelike subgraph contains {observed} \
+                "spatial slice {slice} spacelike subgraph contains {observed} \
                  vertices but slice_sizes reports {expected}"
             ),
             Self::SpacelikeDegreeViolation {
@@ -336,6 +402,57 @@ impl fmt::Display for FoliationError {
                 f,
                 "toroidal spatial slice {slice} is not a single closed S¹: walked a \
                  cycle of length {walked} but slice has {expected} vertices"
+            ),
+            Self::SpacelikeOpenSliceEndpointCount {
+                slice,
+                observed,
+                expected,
+            } => write!(
+                f,
+                "open-boundary spatial slice {slice} has {observed} interval endpoints, \
+                 expected {expected}"
+            ),
+            Self::SpacelikeOpenSliceDegreeViolation {
+                slice,
+                vertex,
+                observed_degree,
+            } => write!(
+                f,
+                "open-boundary spatial slice {slice} vertex {vertex} has {observed_degree} \
+                 spacelike neighbours, expected 1 at interval endpoints and 2 in the interior"
+            ),
+            Self::SpacelikeNonOpenInterval {
+                slice,
+                walked,
+                expected,
+            } => write!(
+                f,
+                "open-boundary spatial slice {slice} is not a single interval: walked \
+                 {walked} vertices but slice has {expected} vertices"
+            ),
+            Self::OpenBoundarySlabEdgeCrossing {
+                lower_slice,
+                first_edge,
+                second_edge,
+            } => write!(
+                f,
+                "open-boundary slab {lower_slice}->{upper_slice} has crossing timelike \
+                 edges {first_edge} and {second_edge}",
+                upper_slice = lower_slice.saturating_add(1)
+            ),
+            Self::OpenBoundarySpatialOrderMismatch {
+                slice,
+                path_vertices,
+                coordinate_vertices,
+            } => write!(
+                f,
+                "open-boundary spatial slice {slice} path order does not match backend \
+                 x-coordinate order ({path_vertices} path vertices, {coordinate_vertices} \
+                 coordinate-sorted vertices)"
+            ),
+            Self::OpenBoundaryTimeCoordinateMismatch { label, vertex, y } => write!(
+                f,
+                "open-boundary vertex {vertex} has time label {label} but backend y-coordinate {y}"
             ),
             Self::MissingTemporalWrapAround {
                 slice,
@@ -867,11 +984,8 @@ mod tests {
         };
         let msg = err.to_string();
         assert!(
-            msg.contains("slice 2")
-                && msg.contains("contains 4")
-                && msg.contains("reports 5")
-                && msg.contains("toroidal"),
-            "Display should describe the toroidal slice and both vertex counts: {msg}"
+            msg.contains("slice 2") && msg.contains("contains 4") && msg.contains("reports 5"),
+            "Display should describe the spatial slice and both vertex counts: {msg}"
         );
     }
 
@@ -922,6 +1036,70 @@ mod tests {
                 && msg.contains("temporal wrap-around"),
             "Display should describe missing wrap-around between specific slices: {msg}"
         );
+    }
+
+    #[test]
+    fn test_foliation_error_open_boundary_variants_display() {
+        let cases = [
+            (
+                FoliationError::SpacelikeOpenSliceEndpointCount {
+                    slice: 2,
+                    observed: 3,
+                    expected: 2,
+                },
+                ["open-boundary", "slice 2", "3 interval endpoints"],
+            ),
+            (
+                FoliationError::SpacelikeOpenSliceDegreeViolation {
+                    slice: 1,
+                    vertex: "VertexKey(7v3)".to_string(),
+                    observed_degree: 0,
+                },
+                ["open-boundary", "VertexKey(7v3)", "0 spacelike neighbours"],
+            ),
+            (
+                FoliationError::SpacelikeNonOpenInterval {
+                    slice: 4,
+                    walked: 3,
+                    expected: 5,
+                },
+                ["open-boundary", "slice 4", "single interval"],
+            ),
+            (
+                FoliationError::OpenBoundarySlabEdgeCrossing {
+                    lower_slice: 0,
+                    first_edge: "a->d".to_string(),
+                    second_edge: "b->c".to_string(),
+                },
+                ["open-boundary slab 0->1", "a->d", "b->c"],
+            ),
+            (
+                FoliationError::OpenBoundarySpatialOrderMismatch {
+                    slice: 3,
+                    path_vertices: 4,
+                    coordinate_vertices: 5,
+                },
+                ["open-boundary", "slice 3", "x-coordinate order"],
+            ),
+            (
+                FoliationError::OpenBoundaryTimeCoordinateMismatch {
+                    label: 6,
+                    vertex: "VertexKey(9v1)".to_string(),
+                    y: "6.25".to_string(),
+                },
+                ["open-boundary", "VertexKey(9v1)", "y-coordinate 6.25"],
+            ),
+        ];
+
+        for (err, expected_fragments) in cases {
+            let msg = err.to_string();
+            for fragment in expected_fragments {
+                assert!(
+                    msg.contains(fragment),
+                    "Display should contain {fragment:?}: {msg}"
+                );
+            }
+        }
     }
 
     #[test]

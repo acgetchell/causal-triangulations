@@ -171,14 +171,43 @@ fn proposal_site_cache_does_not_reuse_sites_for_replaced_triangulation_instances
     assert_eq!(triangulation.metadata().modification_count(), 0);
 
     let second_result = system.attempt_13_move(&mut triangulation);
-    assert_eq!(
+    assert_matches!(
         second_result,
-        MoveResult::Success,
-        "fresh strip state should rebuild its face-subdivision sites instead of reusing stale toroidal insertion sites"
+        MoveResult::Success | MoveResult::GeometricViolation,
+        "fresh strip state should rebuild face-subdivision sites instead of surfacing stale toroidal-site hard failures"
     );
     triangulation
         .validate()
         .expect("fresh strip move should preserve CDT invariants");
+}
+
+#[test]
+fn open_boundary_visualization_seed_preserves_spatial_interval_slices() {
+    // Regression for causal-triangulations#191: the README visualization seed
+    // exposed accepted open-boundary proposals whose spacelike subgraph branched
+    // within a single time slice. Such candidates should be rejected and rolled
+    // back, leaving every spatial slice as one interval.
+    let triangulation =
+        CdtTriangulation::from_cdt_strip(24, 7).expect("visualization fixture should build");
+    let metropolis_config = MetropolisConfig::new(1.0, 160, 0, 1)
+        .expect("visualization Metropolis config should be valid")
+        .with_seed(20_260_612);
+    let action_config =
+        ActionConfig::new(0.0, 0.0, 0.9).expect("visualization action config should be valid");
+
+    let results = MetropolisAlgorithm::new(metropolis_config, action_config)
+        .run(triangulation)
+        .expect("visualization regression run should complete");
+
+    assert_eq!(
+        results.move_stats().total_hard_failures(),
+        0,
+        "invalid open-interval candidates should be rejected, not surfaced as hard failures"
+    );
+    results
+        .triangulation()
+        .validate()
+        .expect("final visualization triangulation should preserve open-boundary CDT invariants");
 }
 
 #[test]

@@ -541,6 +541,41 @@ rules:
       )
       \s*;
 
+  - id: causal-triangulations.rust.no-direct-delaunay-paths-outside-geometry
+    languages:
+      - rust
+    severity: WARNING
+    message: "Keep direct delaunay paths inside src/geometry; use CDT geometry abstractions elsewhere."
+    metadata:
+      category: architecture
+      rationale: >-
+        CDT physics should not couple to upstream delaunay paths through
+        fully-qualified names outside the geometry adapter layer.
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+      exclude:
+        - "/src/geometry/**/*.rs"
+    pattern-regex: >-
+      (?mx)^
+      \s*
+      (?!
+        (?:
+          (?:pub(?:\([^)]*\))?\s+)?
+          use\b
+          |///
+          |//!
+          |//
+          |/\*
+          |\*
+        )
+      )
+      (?:
+        delaunay::
+        |[^\n]*[^A-Za-z0-9_:]delaunay::
+      )
+
   - id: causal-triangulations.rust.no-direct-mcmc-imports-outside-metropolis
     languages:
       - rust
@@ -570,6 +605,43 @@ rules:
         |\s*
       )
       \s*;
+
+  - id: causal-triangulations.rust.no-direct-mcmc-paths-outside-metropolis
+    languages:
+      - rust
+    severity: WARNING
+    message: "Keep direct markov-chain-monte-carlo paths at the CDT Metropolis adapter boundary."
+    metadata:
+      category: architecture
+      rationale: >-
+        Generic MCMC mechanics should not leak through fully-qualified upstream
+        paths outside the CDT Metropolis adapter and public boundary wrappers.
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/tests/semgrep/src/**/*.rs"
+      exclude:
+        - "/src/cdt/metropolis/**/*.rs"
+        - "/src/errors.rs"
+        - "/src/lib.rs"
+    pattern-regex: >-
+      (?mx)^
+      \s*
+      (?!
+        (?:
+          (?:pub(?:\([^)]*\))?\s+)?
+          use\b
+          |///
+          |//!
+          |//
+          |/\*
+          |\*
+        )
+      )
+      (?:
+        markov_chain_monte_carlo::
+        |[^\n]*[^A-Za-z0-9_:]markov_chain_monte_carlo::
+      )
 
   - id: causal-triangulations.rust.no-local-metropolis-acceptance-draws
     languages:
@@ -958,6 +1030,25 @@ rules:
       - pattern-regex: '(?m)^\s*(?:RUST_LOG=\S+\s+)?(?:\./target/(?:debug|release)/)?cdt\b[^\n]*\s--vertices(?:\s|=)' # yamllint disable-line rule:line-length
       - pattern-regex: '(?m)^\s*cargo\s+run\b[^\n]*--bin\s+cdt\b[^\n]*--\s+[^\n]*--vertices(?:\s|=)' # yamllint disable-line rule:line-length
       - pattern-regex: '(?m)^\s*--vertices(?:\s|=)'
+
+  - id: causal-triangulations.notebooks.no-committed-outputs
+    languages:
+      - regex
+    severity: WARNING
+    message: "Clear notebook outputs and execution counts before committing."
+    metadata:
+      category: reproducibility
+      rationale: >-
+        Source notebooks should be executable artifacts, not stale rendered
+        state. Keep generated outputs under target/notebooks/ and clear source
+        outputs with just notebook-clear-outputs-all before committing.
+    paths:
+      include:
+        - "/notebooks/**/*.ipynb"
+        - "/tests/semgrep/notebooks/**/*.ipynb"
+    pattern-either:
+      - pattern-regex: '"execution_count"\s*:\s*(?!\s*null\b)[^,\n}]+'
+      - pattern-regex: '(?ms)"outputs"\s*:\s*\[\s*\{'
 
   - id: causal-triangulations.github-actions.external-action-sha-pinned
     languages:

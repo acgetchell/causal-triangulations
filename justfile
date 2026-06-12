@@ -272,7 +272,7 @@ check-fast:
 # CI simulation: comprehensive validation (matches .github/workflows/ci.yml).
 # Rust unit/integration tests use nextest; doctests remain on cargo test because
 # nextest does not execute rustdoc doctests.
-ci: check bench-compile test-all examples-validate
+ci: check bench-compile test-all examples-validate notebook-check
     @echo "🎯 CI checks complete!"
 
 # CI with performance baseline
@@ -354,46 +354,49 @@ fmt-check:
 help-workflows:
     @echo "Common Just workflows:"
     @echo "  just check             # Run all non-mutating lints/validators"
-    @echo "  just fix               # Apply formatters/auto-fixes (mutating)"
     @echo "  just check-fast        # Fast compile check (cargo check)"
     @echo "  just ci                # Full CI run (checks + all tests + examples + bench compile)"
     @echo "  just ci-baseline       # CI + save performance baseline"
     @echo "  just ci-slow           # CI + feature-gated slow/stress tests"
     @echo "  just commit-check      # Comprehensive pre-commit validation"
+    @echo "  just fix               # Apply formatters/auto-fixes (mutating)"
     @echo ""
     @echo "Testing:"
-    @echo "  just test              # Lib and doc tests only (fast, used by CI)"
-    @echo "  just test-integration  # Integration tests (tests/)"
-    @echo "  just test-slow         # Feature-gated slow integration tests"
-    @echo "  just test-all          # All tests (lib + doc + integration + Python)"
-    @echo "  just test-python       # Python tests only (pytest)"
-    @echo "  just test-release      # All tests in release mode"
-    @echo "  just test-cli          # CLI integration tests only"
-    @echo "  just test-examples     # Compile all examples as tests"
-    @echo "  just examples          # Run all example scripts"
-    @echo "  just examples-validate # Run examples and validate stable output markers"
     @echo "  just coverage          # Generate coverage report (HTML)"
     @echo "  just coverage-ci       # Generate coverage for CI (XML)"
+    @echo "  just examples          # Run all example scripts"
+    @echo "  just examples-validate # Run examples and validate stable output markers"
+    @echo "  just test              # Lib and doc tests only (fast, used by CI)"
+    @echo "  just test-all          # All tests (lib + doc + integration + Python)"
+    @echo "  just test-cli          # CLI integration tests only"
+    @echo "  just test-examples     # Compile all examples as tests"
+    @echo "  just test-integration  # Integration tests (tests/)"
+    @echo "  just test-python       # Python tests only (pytest)"
+    @echo "  just test-release      # All tests in release mode"
+    @echo "  just test-slow         # Feature-gated slow integration tests"
     @echo ""
     @echo "Quality Check Groups:"
     @echo "  just lint          # All linting (code + docs + config)"
     @echo "  just lint-code     # Code linting (Rust, Python, Shell)"
-    @echo "  just lint-docs     # Documentation linting (Markdown, Spelling)"
     @echo "  just lint-config   # Configuration validation (JSON, TOML, Actions)"
+    @echo "  just lint-docs     # Documentation linting (Markdown, Spelling)"
     @echo ""
     @echo "Benchmark System:"
     @echo "  just bench              # Run all benchmarks"
     @echo "  just bench-ci           # Run CI regression benchmarks with the perf profile"
+    @echo "  just bench-compile      # Compile benchmarks without running"
+    @echo "  just bench-smoke        # Smoke-test benchmark harnesses with minimal samples"
+    @echo "  just bench-test-compile # Compile benches + release integration tests without running"
     @echo "  just debug-large-scale-1p1 # Run one toroidal 1+1 CDT debug case"
     @echo "  just perf-large-scale-debug # Run curated large-scale CDT debug cases"
-    @echo "  just bench-smoke        # Smoke-test benchmark harnesses with minimal samples"
-    @echo "  just bench-compile      # Compile benchmarks without running"
-    @echo "  just bench-test-compile # Compile benches + release integration tests without running"
     @echo ""
     @echo "Performance Analysis:"
-    @echo "  just perf-help     # Show performance analysis commands"
-    @echo "  just perf-check    # Check for performance regressions"
     @echo "  just perf-baseline # Save current performance as baseline"
+    @echo "  just perf-check    # Check for performance regressions"
+    @echo "  just perf-compare  # Compare with a specific baseline file"
+    @echo "  just perf-help     # Show performance analysis commands"
+    @echo "  just perf-report   # Generate performance report"
+    @echo "  just perf-trends   # Analyze performance trends"
     @echo ""
     @echo "Changelog:"
     @echo "  just changelog                   # Generate/update CHANGELOG.md"
@@ -401,13 +404,19 @@ help-workflows:
     @echo "  just tag <ver>                   # Create git tag with changelog content"
     @echo ""
     @echo "Static Analysis:"
+    @echo "  just publish-check       # Validate crates.io metadata and dry-run publish"
     @echo "  just semgrep             # Run repository-owned Semgrep rules"
     @echo "  just semgrep-test        # Test repository-owned Semgrep rules"
-    @echo "  just zizmor              # GitHub Actions security analysis"
     @echo "  just unused-deps         # Check for unused direct Cargo dependencies"
-    @echo "  just publish-check       # Validate crates.io metadata and dry-run publish"
+    @echo "  just zizmor              # GitHub Actions security analysis"
     @echo ""
     @echo "Running:"
+    @echo "  just notebook         # Launch the quickstart notebook with uv-managed dependencies"
+    @echo "  just notebook-check   # Lint, check output hygiene, and execute notebooks headlessly"
+    @echo "  just notebook-clear-outputs     # Clear outputs from the quickstart notebook"
+    @echo "  just notebook-clear-outputs-all # Clear outputs from every notebook"
+    @echo "  just notebook-execute # Execute the quickstart notebook headlessly for CI/HPC"
+    @echo "  just notebook-setup   # Install the uv notebook dependency group"
     @echo "  just run -- <args>  # Run with custom arguments"
     @echo "  just run-example    # Run with example arguments"
     @echo "  just run-simulation # Run basic_simulation.sh example script"
@@ -434,6 +443,7 @@ markdown-check: _ensure-rumdl
         case "$file" in
             CHANGELOG.md|docs/archive/*) continue ;;
         esac
+        [[ -f "$file" ]] || continue
         files+=("$file")
     done < <(git ls-files -z '*.md')
     if [ "${#files[@]}" -gt 0 ]; then
@@ -467,6 +477,7 @@ markdown-fix: _ensure-rumdl
         case "$file" in
             CHANGELOG.md|docs/archive/*) continue ;;
         esac
+        [[ -f "$file" ]] || continue
         files+=("$file")
     done < <(git ls-files -z '*.md')
     if [ "${#files[@]}" -gt 0 ]; then
@@ -477,6 +488,100 @@ markdown-fix: _ensure-rumdl
     fi
 
 markdown-lint: markdown-check
+
+notebook notebook="notebooks/00_quickstart.ipynb": _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    notebook_cache="$(pwd)/target/notebooks"
+    mkdir -p "$notebook_cache/.ipython" "$notebook_cache/.matplotlib"
+    MPLBACKEND=Agg IPYTHONDIR="$notebook_cache/.ipython" MPLCONFIGDIR="$notebook_cache/.matplotlib" uv run --group notebooks jupyter lab --ServerApp.open_browser=True --LabApp.open_browser=True "{{notebook}}"
+
+notebook-check: notebook-lint notebook-execute-fast
+    @echo "📓 Notebook checks complete!"
+
+notebook-check-slow: notebook-check notebook-execute-slow
+    @echo "📓 Slow notebook checks complete!"
+
+notebook-clear-outputs notebook="notebooks/00_quickstart.ipynb": _ensure-uv
+    uv run --group notebooks jupyter nbconvert --clear-output --inplace "{{notebook}}"
+
+notebook-clear-outputs-all: _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    while IFS= read -r notebook; do
+        uv run --group notebooks jupyter nbconvert --clear-output --inplace "$notebook"
+    done < <(find notebooks -type f -name '*.ipynb' | sort)
+
+notebook-execute notebook="notebooks/00_quickstart.ipynb" output_dir="target/notebooks": _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    output_path="$(pwd)/{{output_dir}}"
+    mkdir -p "$output_path/.ipython" "$output_path/.matplotlib"
+    MPLBACKEND=Agg IPYTHONDIR="$output_path/.ipython" MPLCONFIGDIR="$output_path/.matplotlib" uv run --group notebooks jupyter nbconvert --execute --ExecutePreprocessor.timeout=600 --ExecutePreprocessor.shutdown_kernel=immediate --to notebook --output-dir "{{output_dir}}" "{{notebook}}"
+
+notebook-execute-all output_dir="target/notebooks": _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    output_path="$(pwd)/{{output_dir}}"
+    mkdir -p "$output_path/.ipython" "$output_path/.matplotlib"
+    found=0
+    while IFS= read -r notebook; do
+        found=1
+        MPLBACKEND=Agg IPYTHONDIR="$output_path/.ipython" MPLCONFIGDIR="$output_path/.matplotlib" uv run --group notebooks jupyter nbconvert --execute --ExecutePreprocessor.timeout=600 --ExecutePreprocessor.shutdown_kernel=immediate --to notebook --output-dir "{{output_dir}}" "$notebook"
+    done < <(find notebooks -type f -name '*.ipynb' | sort)
+    if [ "$found" -eq 0 ]; then
+        echo "No notebooks found to execute."
+    fi
+
+notebook-execute-fast output_dir="target/notebooks": _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    output_path="$(pwd)/{{output_dir}}"
+    mkdir -p "$output_path/.ipython" "$output_path/.matplotlib"
+    for notebook in notebooks/00_quickstart.ipynb notebooks/01_spacetime_visualization.ipynb; do
+        MPLBACKEND=Agg IPYTHONDIR="$output_path/.ipython" MPLCONFIGDIR="$output_path/.matplotlib" uv run --group notebooks jupyter nbconvert --execute --ExecutePreprocessor.timeout=600 --ExecutePreprocessor.shutdown_kernel=immediate --to notebook --output-dir "{{output_dir}}" "$notebook"
+    done
+
+notebook-execute-slow output_dir="target/notebooks": _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    output_path="$(pwd)/{{output_dir}}"
+    mkdir -p "$output_path/.ipython" "$output_path/.matplotlib"
+    MPLBACKEND=Agg IPYTHONDIR="$output_path/.ipython" MPLCONFIGDIR="$output_path/.matplotlib" uv run --group notebooks jupyter nbconvert --execute --ExecutePreprocessor.timeout=1800 --ExecutePreprocessor.shutdown_kernel=immediate --to notebook --output-dir "{{output_dir}}" notebooks/02_analysis_caches.ipynb
+
+notebook-output-check: _ensure-jq
+    #!/usr/bin/env bash
+    set -euo pipefail
+    found=0
+    violations=0
+    while IFS= read -r notebook; do
+        found=1
+        jq empty "$notebook"
+        dirty_cells="$(jq '[.cells[] | select(.cell_type == "code") | select((.execution_count != null) or (((.outputs // []) | length) > 0))] | length' "$notebook")"
+        if [ "$dirty_cells" -gt 0 ]; then
+            printf '%s: %s code cell(s) have outputs or execution counts\n' "$notebook" "$dirty_cells" >&2
+            violations=1
+        fi
+    done < <(find notebooks -type f -name '*.ipynb' | sort)
+    if [ "$found" -eq 0 ]; then
+        echo "No notebooks found to check."
+    fi
+    exit "$violations"
+
+notebook-lint: _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    found=0
+    while IFS= read -r notebook; do
+        found=1
+        uv run notebook-check --lint "$notebook" --repo-root .
+    done < <(find notebooks -type f -name '*.ipynb' | sort)
+    if [ "$found" -eq 0 ]; then
+        echo "No notebooks found to lint."
+    fi
+
+notebook-setup: _ensure-uv
+    uv sync --group notebooks
 
 perf-baseline tag="": _ensure-uv
     #!/usr/bin/env bash
@@ -498,9 +603,9 @@ perf-help:
     @echo "Performance Analysis Commands:"
     @echo "  just perf-baseline [tag]    # Save current performance as baseline (optionally tagged)"
     @echo "  just perf-check [threshold] # Check for regressions (default: 10% threshold)"
+    @echo "  just perf-compare <file>    # Compare with specific baseline file"
     @echo "  just perf-report [file]     # Generate performance report"
     @echo "  just perf-trends [days]     # Analyze trends over N days (default: 7)"
-    @echo "  just perf-compare <file>    # Compare with specific baseline file"
     @echo ""
     @echo "Examples:"
     @echo "  just perf-baseline v1.0.0   # Save tagged baseline"
@@ -601,7 +706,7 @@ python-sync: _ensure-uv
     uv sync --group dev
 
 python-typecheck: _ensure-uv
-    uv run ty check scripts/
+    uv run ty check scripts/ --error all
 
 # Running the binary
 run *args:

@@ -6,39 +6,22 @@ themes, and non-goals.
 
 ## v0.1.0 CDT Foundations
 
-The v0.1.0 foundation work focuses on making the crate a usable, validated 1+1 CDT simulation library:
+The v0.1.0 foundation release centers on validated 1+1 CDT construction, toroidal volume-changing moves, nonuniform initial volume profiles, upstream-backed
+MCMC sampler mechanics, trace/summary exports, resumable checkpoints, and CI-aligned validation tooling.
 
-- [x] Trait-based geometry backend boundary around the `delaunay` crate
-- [x] Explicit open-boundary CDT strip construction
-- [x] Explicit toroidal S¹×S¹ CDT construction with χ = 0 validation
-- [x] Per-vertex foliation labels, causality checks, and strict Up/Down simplex classification
-- [x] Real 2D ergodic move kernels over Delaunay backend edit operations
-- [x] Planned-proposal Metropolis execution through the upstream `markov-chain-monte-carlo` sampler with forward/reverse local-site weighting
-- [x] Toroidal Metropolis regression coverage requiring accepted periodic moves while preserving topology and foliation
-- [x] CLI and configuration support for open-boundary and toroidal topology selection
-- [x] Volume-profile, Hausdorff-dimension, and spectral-dimension observables on the combinatorial dual graph
-- [x] Repository validation loop covering Rust, Python support scripts, Semgrep rules, documentation, examples, and benchmarks
-- [x] Support variable spatial volume profiles for 1+1 CDT initial geometries
-  ([#141](https://github.com/acgetchell/causal-triangulations/issues/141)). Open-boundary and toroidal constructors now accept explicit per-slice `N(t)`
-  profiles, while regular constructors remain the equal-slice initial-data path.
-- [x] Align CI and security tooling with the shared Rust workflow
-  ([#162](https://github.com/acgetchell/causal-triangulations/issues/162))
-- [x] Upgrade to Rust 1.96.0 and the released `markov-chain-monte-carlo` v0.4.0 baseline
-  ([#163](https://github.com/acgetchell/causal-triangulations/issues/163))
-- [x] Track release-readiness gates for the first public release
-  ([#140](https://github.com/acgetchell/causal-triangulations/issues/140))
-- [x] Audit public doctests for fallible error handling
-  ([#151](https://github.com/acgetchell/causal-triangulations/issues/151))
-- [x] Use chunked Metropolis sweeps in large-scale 1+1 CDT debug runs
-  ([#152](https://github.com/acgetchell/causal-triangulations/issues/152)). The v0.1.0 scientific-utility bar requires the large-scale debug path to exercise
-  Metropolis CDT behavior with literature-style sweeps sized from the current simplex count, not only the raw move kernel.
-- [x] Align chunked Metropolis continuation with the upstream resumable sampler pattern
-  ([#153](https://github.com/acgetchell/causal-triangulations/issues/153)). CDT chunk execution now drives the proposal-plan adapter through
-  `markov-chain-monte-carlo` v0.4 sampler continuation while preserving CDT-owned measurements, proposal telemetry, and current-volume sweep sizing.
-- [x] Enforce the MCMC backend boundary
-  ([#155](https://github.com/acgetchell/causal-triangulations/issues/155)). The production runner delegates generic acceptance/rejection,
-  proposal-ratio application, planned-proposal commit ordering, and chain-counter mechanics to `markov-chain-monte-carlo` through thin CDT adapters, with
-  repository rules guarding against accidental CDT-local reintroduction.
+Current scope: higher-dimensional CDT, production volume fixing, automated λ scans, visualization/export workflows, and full ensemble-analysis tooling remain
+roadmap work.
+
+Completed foundation work:
+
+- [x] Trait-based geometry backend boundary around the `delaunay` crate.
+- [x] Validated open-boundary and toroidal S¹×S¹ 1+1 CDT constructors, including explicit per-slice spatial volume profiles.
+- [x] Per-vertex foliation labels, adjacent-slice causality checks, topology validation, and strict Up/Down simplex classification.
+- [x] Real 2D local CDT move kernels over checked Delaunay edit operations, with rollback or rejection on invariant failures.
+- [x] Planned-proposal Metropolis execution through `markov-chain-monte-carlo`, including proposal-site weighting and resumable chunked sweeps.
+- [x] CLI support, trace/summary exports, checkpoints, and core observables for downstream analysis.
+- [x] Repository validation loop covering Rust, Python support scripts, Semgrep rules, documentation, notebooks, examples, and benchmarks.
+- [x] Release-readiness work for Rust 1.96.0, public doctest fallibility, CI/security alignment, and the first DOI-backed foundation release.
 
 ## 1+1 Maturity
 
@@ -48,6 +31,9 @@ Likely follow-up work before broadening the dimensional surface:
 - Broaden per-kernel toroidal tests around spatial and temporal wrap-around simplices
 - Accept fixed triangle simplices directly in explicit-simplex generator APIs to remove per-triangle `Vec` adaptation
 - Add manual foliation assignment APIs with the same validation and synchronization guarantees as constructor-assigned labels
+- Add a causality-filtering Delaunay construction path inspired by CDT++ ([#192](https://github.com/acgetchell/causal-triangulations/issues/192)): generate a
+  Delaunay PL-manifold from surplus labeled points, delete vertices incident to acausal simplices through backend retriangulation, and accept only states that
+  pass the existing CDT validators.
 - Add tutorial-style examples for open-boundary strips, toroidal runs, observables, and interpreting Metropolis acceptance behavior
 
 ## v0.1.1 Maturity And Ensemble Controls
@@ -61,12 +47,9 @@ polish that are useful but not required for the first DOI-backed foundation rele
 - Add λ scan utilities for unfixed-volume 1+1 CDT runs
   ([#143](https://github.com/acgetchell/causal-triangulations/issues/143)). These should help users tune the cosmological constant, which is conjugate to the
   lattice volume term and controls volume growth or shrinkage in unfixed-volume runs.
-- Add a Polars notebook workflow for CDT analysis caches
-  ([#176](https://github.com/acgetchell/causal-triangulations/issues/176)). This should show how to load the v0.1.0 CSV/JSON outputs, reshape volume-profile
+- Added a Polars notebook workflow for CDT analysis caches
+  ([#176](https://github.com/acgetchell/causal-triangulations/issues/176)). The notebook shows how to load the stable CSV/JSON outputs, reshape volume-profile
   data for exploratory analysis, and cache local Parquet files without adding plotting or Parquet dependencies to the Rust crate.
-- Ship prebuilt `cdt` release binaries
-  ([#169](https://github.com/acgetchell/causal-triangulations/issues/169)). This should make the command-line tool easier to try after the first source and
-  crates.io release, while keeping `cargo install` and local release builds supported.
 - Adopt the upstream lift-aware simplex barycenter helper once `delaunay#420` ships
   ([#147](https://github.com/acgetchell/causal-triangulations/issues/147)). This should replace the local `(1,3)` insertion-point policy while preserving the
   existing k=1 flip delegation, and is dependency-gated cleanup for move-kernel geometry ownership rather than a new CDT ensemble.
@@ -76,6 +59,12 @@ polish that are useful but not required for the first DOI-backed foundation rele
 - Use exact Delaunay flip-feasibility validators for proposal-site accounting once `delaunay#419` ships
   ([#146](https://github.com/acgetchell/causal-triangulations/issues/146)). v0.1.0 should prove CDT's counted proposal sites match the sites sampled by the
   proposal kernel; backend-provided immutable feasibility checks are post-release dependency-gated tightening that avoids duplicating Delaunay dry-run policy.
+
+## Later Distribution Ergonomics
+
+- Ship prebuilt `cdt` release binaries
+  ([#169](https://github.com/acgetchell/causal-triangulations/issues/169)). This should make the command-line tool easier to try once the notebook and local
+  source-build path are stable, while keeping `cargo install` and local release builds supported.
 
 ## Higher-Dimensional CDT Tracks
 

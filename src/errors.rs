@@ -6,6 +6,7 @@ use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::FoliationError;
 use crate::cdt::results::CdtScalarTraceOutcome;
 use crate::config::CdtTopology;
+use crate::geometry::{SpacetimeCoordinateComponent, SpacetimeCoordinateError};
 use markov_chain_monte_carlo::{McmcError, StepOutcome};
 use std::fmt;
 
@@ -404,6 +405,24 @@ pub enum CdtValidationFailure {
         /// Minimum number of coordinates expected.
         expected_minimum: usize,
     },
+    /// A vertex coordinate had the wrong exact dimensionality for a parsed coordinate type.
+    VertexCoordinateDimensionMismatch {
+        /// Vertex whose coordinate dimensionality was invalid.
+        vertex: String,
+        /// Number of coordinates observed.
+        actual: usize,
+        /// Exact number of coordinates expected.
+        expected: usize,
+    },
+    /// A vertex coordinate component was NaN or infinite.
+    VertexCoordinateNonFinite {
+        /// Vertex whose coordinate was invalid.
+        vertex: String,
+        /// Component that was non-finite.
+        component: SpacetimeCoordinateComponent,
+        /// Observed non-finite value, stored as text because `f64` is not `Eq`.
+        value: String,
+    },
     /// A foliated face was not classifiable as a strict Up or Down CDT simplex.
     NonStrictSimplex {
         /// Face being classified.
@@ -414,6 +433,31 @@ pub enum CdtValidationFailure {
         /// Diagnostic for the failed local candidate.
         detail: String,
     },
+}
+
+impl CdtValidationFailure {
+    /// Converts a parsed spacetime-coordinate failure into a validation failure.
+    pub(crate) fn from_spacetime_coordinate_error(
+        vertex: String,
+        err: SpacetimeCoordinateError,
+    ) -> Self {
+        match err {
+            SpacetimeCoordinateError::Dimension { actual, expected } => {
+                Self::VertexCoordinateDimensionMismatch {
+                    vertex,
+                    actual,
+                    expected,
+                }
+            }
+            SpacetimeCoordinateError::NonFiniteComponent { component, value } => {
+                Self::VertexCoordinateNonFinite {
+                    vertex,
+                    component,
+                    value: value.to_string(),
+                }
+            }
+        }
+    }
 }
 
 impl fmt::Display for CdtValidationFailure {
@@ -461,6 +505,22 @@ impl fmt::Display for CdtValidationFailure {
             } => write!(
                 formatter,
                 "vertex {vertex} has {actual} coordinates, expected ≥ {expected_minimum}"
+            ),
+            Self::VertexCoordinateDimensionMismatch {
+                vertex,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "vertex {vertex} has {actual} coordinates, expected exactly {expected}"
+            ),
+            Self::VertexCoordinateNonFinite {
+                vertex,
+                component,
+                value,
+            } => write!(
+                formatter,
+                "vertex {vertex} has non-finite {component} coordinate: {value}"
             ),
             Self::NonStrictSimplex { face } => write!(
                 formatter,
@@ -2003,6 +2063,22 @@ mod tests {
                     expected_minimum: 2,
                 },
                 "vertex VertexKey(7v1) has 1 coordinates, expected ≥ 2",
+            ),
+            (
+                CdtValidationFailure::VertexCoordinateDimensionMismatch {
+                    vertex: "VertexKey(7v1)".to_string(),
+                    actual: 3,
+                    expected: 2,
+                },
+                "vertex VertexKey(7v1) has 3 coordinates, expected exactly 2",
+            ),
+            (
+                CdtValidationFailure::VertexCoordinateNonFinite {
+                    vertex: "VertexKey(7v1)".to_string(),
+                    component: SpacetimeCoordinateComponent::Space,
+                    value: "NaN".to_string(),
+                },
+                "vertex VertexKey(7v1) has non-finite space coordinate: NaN",
             ),
             (
                 CdtValidationFailure::NonStrictSimplex {

@@ -40,4 +40,4 @@ echo
 echo "Next steps:"
 echo "  - Try modifying parameters in this script"
 echo "  - Run parameter_sweep.sh for systematic studies"
-echo "  - Check docs/CLI_EXAMPLES.md for more advanced usage"
+echo "  - Check docs/cli-examples.md for more advanced usage"
