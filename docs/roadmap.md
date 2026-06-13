@@ -18,6 +18,8 @@ Completed foundation work:
 - [x] Validated open-boundary and toroidal S¹×S¹ 1+1 CDT constructors, including explicit per-slice spatial volume profiles.
 - [x] Per-vertex foliation labels, adjacent-slice causality checks, topology validation, and strict Up/Down simplex classification.
 - [x] Real 2D local CDT move kernels over checked Delaunay edit operations, with rollback or rejection on invariant failures.
+- [x] Causality-filtering Delaunay construction path inspired by CDT++ ([#192](https://github.com/acgetchell/causal-triangulations/issues/192)), with repeated
+  removal of vertices incident to non-strict causal simplices until the strict violation count converges to zero.
 - [x] Planned-proposal Metropolis execution through `markov-chain-monte-carlo`, including proposal-site weighting and resumable chunked sweeps.
 - [x] CLI support, trace/summary exports, checkpoints, and core observables for downstream analysis.
 - [x] Repository validation loop covering Rust, Python support scripts, Semgrep rules, documentation, notebooks, examples, and benchmarks.
@@ -31,9 +33,8 @@ Likely follow-up work before broadening the dimensional surface:
 - Broaden per-kernel toroidal tests around spatial and temporal wrap-around simplices
 - Accept fixed triangle simplices directly in explicit-simplex generator APIs to remove per-triangle `Vec` adaptation
 - Add manual foliation assignment APIs with the same validation and synchronization guarantees as constructor-assigned labels
-- Add a causality-filtering Delaunay construction path inspired by CDT++ ([#192](https://github.com/acgetchell/causal-triangulations/issues/192)): generate a
-  Delaunay PL-manifold from surplus labeled points, delete vertices incident to acausal simplices through backend retriangulation, and accept only states that
-  pass the existing CDT validators.
+- Integrate upstream embedded-triangulation validation from `delaunay` once acgetchell/delaunay#449 is available, so evolved CDT states can reject overlapping
+  simplices without requiring Delaunay Level 4 ([#195](https://github.com/acgetchell/causal-triangulations/issues/195)).
 - Add tutorial-style examples for open-boundary strips, toroidal runs, observables, and interpreting Metropolis acceptance behavior
 
 ## v0.1.1 Maturity And Ensemble Controls

@@ -152,6 +152,8 @@ pub fn classify_simplex(t0: Option<u32>, t1: Option<u32>, t2: Option<u32>) -> Op
 pub enum FoliationError {
     /// No time slices were supplied for foliation bookkeeping.
     EmptyFoliation,
+    /// The triangulation has no stored foliation bookkeeping.
+    MissingBookkeeping,
     /// `slice_sizes` length does not match `num_slices`.
     SliceSizeMismatch {
         /// Actual length of the `slice_sizes` vector.
@@ -380,6 +382,7 @@ impl fmt::Display for FoliationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::EmptyFoliation => write!(f, "foliation must contain at least one time slice"),
+            Self::MissingBookkeeping => write!(f, "triangulation has no foliation bookkeeping"),
             Self::SliceSizeMismatch {
                 slice_sizes_len,
                 num_slices,
@@ -908,6 +911,15 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "foliation must contain at least one time slice"
+        );
+    }
+
+    #[test]
+    fn test_foliation_error_missing_bookkeeping_display() {
+        let err = FoliationError::MissingBookkeeping;
+        assert_eq!(
+            err.to_string(),
+            "triangulation has no foliation bookkeeping"
         );
     }
 

@@ -318,6 +318,8 @@ pub enum DelaunayOperation {
     InsertVertex,
     /// Move a vertex to new coordinates.
     MoveVertex,
+    /// Remove a vertex through the upstream vertex-removal API.
+    RemoveVertex,
     /// Build a vertex for face subdivision.
     SubdivideFace,
     /// Remove a vertex through the upstream k=1 flip API.
@@ -337,6 +339,7 @@ impl fmt::Display for DelaunayOperation {
         match self {
             Self::InsertVertex => formatter.write_str("insert_vertex"),
             Self::MoveVertex => formatter.write_str("move_vertex"),
+            Self::RemoveVertex => formatter.write_str("remove_vertex"),
             Self::SubdivideFace => formatter.write_str("subdivide_face"),
             Self::FlipK1Remove => formatter.write_str("flip_k1_remove"),
             Self::FlipK1Insert => formatter.write_str("flip_k1_insert"),
@@ -447,6 +450,17 @@ pub enum DelaunayError {
         /// Coordinates of the vertex passed to the insertion routine.
         coordinates: Vec<f64>,
         /// Underlying insertion diagnostic.
+        detail: String,
+    },
+
+    /// A vertex-removal mutation failed after the vertex handle was accepted.
+    #[error("{operation} failed on {target}: {detail}")]
+    RemovalFailed {
+        /// Vertex-removal operation that failed.
+        operation: DelaunayOperation,
+        /// Human-readable target passed to the removal operation.
+        target: String,
+        /// Underlying removal diagnostic.
         detail: String,
     },
 
@@ -1474,31 +1488,26 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
 
         let dt_before = self.dt.clone();
         let facets_before = self.interior_facets_by_edge.clone();
-        let info = match self.dt.flip_k1_remove(vertex.key) {
-            Ok(info) => info,
+        match self.dt.remove_vertex(vertex.key) {
+            Ok(_) => {}
             Err(err) => {
                 self.restore_mutation_snapshot(dt_before, facets_before);
-                return Err(DelaunayError::FlipFailed {
-                    operation: DelaunayOperation::FlipK1Remove,
+                return Err(DelaunayError::RemovalFailed {
+                    operation: DelaunayOperation::RemoveVertex,
                     target: format!("vertex {:?}", vertex.key),
                     detail: err.to_string(),
                 });
             }
-        };
+        }
         self.rebuild_interior_facet_index();
         self.invalidate_query_caches();
         self.validate_mutation_or_restore(
             dt_before,
             facets_before,
-            DelaunayOperation::FlipK1Remove,
+            DelaunayOperation::RemoveVertex,
             format!("vertex {:?}", vertex.key),
         )?;
-        Ok(info
-            .new_simplices
-            .iter()
-            .copied()
-            .map(|key| DelaunayFaceHandle { key })
-            .collect())
+        Ok(Vec::new())
     }
 
     fn move_vertex(
@@ -1848,6 +1857,7 @@ mod tests {
         let cases = [
             (DelaunayOperation::InsertVertex, "insert_vertex"),
             (DelaunayOperation::MoveVertex, "move_vertex"),
+            (DelaunayOperation::RemoveVertex, "remove_vertex"),
             (DelaunayOperation::SubdivideFace, "subdivide_face"),
             (DelaunayOperation::FlipK1Remove, "flip_k1_remove"),
             (DelaunayOperation::FlipK1Insert, "flip_k1_insert"),
@@ -1889,6 +1899,16 @@ mod tests {
         assert_eq!(
             flip.to_string(),
             "flip_k2 failed on edge VertexKey(1v1) -- VertexKey(2v1): non-convex cavity"
+        );
+
+        let removal = DelaunayError::RemovalFailed {
+            operation: DelaunayOperation::RemoveVertex,
+            target: "vertex VertexKey(1v1)".to_string(),
+            detail: "cavity is not retriangulable".to_string(),
+        };
+        assert_eq!(
+            removal.to_string(),
+            "remove_vertex failed on vertex VertexKey(1v1): cavity is not retriangulable"
         );
 
         let malformed = DelaunayError::UnexpectedFlipOutput {
