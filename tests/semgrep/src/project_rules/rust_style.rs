@@ -42,6 +42,12 @@ use delaunay::prelude::DelaunayTriangulation;
 // ruleid: causal-triangulations.rust.no-direct-mcmc-imports-outside-metropolis
 use markov_chain_monte_carlo::Target;
 
+// ruleid: causal-triangulations.rust.no-direct-delaunay-paths-outside-geometry
+type DirectDelaunayPathFixture = delaunay::prelude::DelaunayTriangulation;
+
+// ruleid: causal-triangulations.rust.no-direct-mcmc-paths-outside-metropolis
+type DirectMcmcPathFixture = markov_chain_monte_carlo::Trace;
+
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 pub use delaunay::prelude::VertexBuilder;
 

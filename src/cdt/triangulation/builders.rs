@@ -339,6 +339,64 @@ fn toroidal_profile_vertices(
     Ok(vertex_specs)
 }
 
+/// Computes one labeled open-boundary strip coordinate.
+///
+/// Both regular and profiled open-strip constructors use this helper so the
+/// same boundary side-arc, interior perturbation, and vertical jitter rules feed
+/// Delaunay generation. Keeping those coordinates centralized preserves the
+/// public constructor contract that initial open-boundary slices validate as
+/// ordered intervals before any Metropolis moves run.
+fn open_strip_vertex_spec(
+    slice: u32,
+    index: u32,
+    vertices: u32,
+    profile_len: u32,
+    side_jitter: f64,
+    interior_jitter: f64,
+    vertical_jitter: f64,
+) -> ([f64; 2], u32) {
+    let spacing = 1.0_f64 / f64::from(vertices - 1);
+    let temporal_index = f64::from(slice);
+    let temporal_span = f64::from(profile_len - 1);
+    let side_arc = if temporal_span.abs() < f64::EPSILON {
+        0.0
+    } else {
+        side_jitter * temporal_index * (temporal_span - temporal_index) / temporal_span.powi(2)
+    };
+    let x = if index == 0 || index == vertices - 1 {
+        let boundary = f64::from(index).mul_add(spacing, side_jitter);
+        if index == 0 {
+            boundary - side_arc
+        } else {
+            boundary + side_arc
+        }
+    } else {
+        let sign = if (index + slice).is_multiple_of(2) {
+            1.0
+        } else {
+            -1.0
+        };
+        f64::from(index).mul_add(spacing, side_jitter) + sign * interior_jitter
+    };
+    let spatial_index = f64::from(index);
+    let arc = vertical_jitter * spatial_index * f64::from(vertices - 1 - index)
+        / f64::from((vertices - 1).pow(2));
+    let base_y = f64::from(slice);
+    let y = if slice == 0 {
+        base_y - arc
+    } else if slice + 1 == profile_len {
+        base_y + arc
+    } else {
+        let sign = if (index + slice).is_multiple_of(2) {
+            1.0
+        } else {
+            -1.0
+        };
+        (sign * arc).mul_add(0.5, base_y)
+    };
+    ([x, y], slice)
+}
+
 /// Builds labeled open-boundary coordinates for a CDT strip profile.
 fn open_profile_vertices(profile: &[u32], total_vertices: u32) -> CdtResult<Vec<([f64; 2], u32)>> {
     let expected_vertices = usize::try_from(total_vertices).map_err(|err| {
@@ -351,7 +409,8 @@ fn open_profile_vertices(profile: &[u32], total_vertices: u32) -> CdtResult<Vec<
     let min_spacing = 1.0_f64 / f64::from(max_slice_volume - 1);
     let side_jitter = min_spacing / 4.0;
     let interior_jitter = min_spacing / (16.0 * f64::from(profile_len));
-    let vertical_jitter = 1.0_f64 / (64.0 * f64::from(profile_len));
+    // TODO(acgetchell/delaunay#447): remove once exact collinear CDT boundaries build.
+    let vertical_jitter = 1.0e-9;
     let coordinate_max = f64::from(profile_len).max(2.0);
     let mut vertex_specs = Vec::new();
     vertex_specs.try_reserve_exact(expected_vertices).map_err(|err| {
@@ -368,44 +427,16 @@ fn open_profile_vertices(profile: &[u32], total_vertices: u32) -> CdtResult<Vec<
         let label = u32::try_from(slice).map_err(|err| {
             strip_generation_error(total_vertices, coordinate_max, err.to_string())
         })?;
-        let spacing = 1.0_f64 / f64::from(vertices - 1);
-        let temporal_index = f64::from(label);
-        let temporal_span = f64::from(profile_len - 1);
-        let side_arc =
-            side_jitter * temporal_index * (temporal_span - temporal_index) / temporal_span.powi(2);
         for index in 0..vertices {
-            let x = if index == 0 || index == vertices - 1 {
-                let boundary = f64::from(index).mul_add(spacing, side_jitter);
-                if index == 0 {
-                    boundary - side_arc
-                } else {
-                    boundary + side_arc
-                }
-            } else {
-                let sign = if (index + label).is_multiple_of(2) {
-                    1.0
-                } else {
-                    -1.0
-                };
-                f64::from(index).mul_add(spacing, side_jitter) + sign * interior_jitter
-            };
-            let spatial_index = f64::from(index);
-            let arc = vertical_jitter * spatial_index * f64::from(vertices - 1 - index)
-                / f64::from((vertices - 1).pow(2));
-            let base_y = f64::from(label) + vertical_jitter;
-            let y = if slice == 0 {
-                base_y - arc
-            } else if slice + 1 == profile.len() {
-                base_y + arc
-            } else {
-                let sign = if (index + label).is_multiple_of(2) {
-                    1.0
-                } else {
-                    -1.0
-                };
-                (sign * arc).mul_add(0.5, base_y)
-            };
-            vertex_specs.push(([x, y], label));
+            vertex_specs.push(open_strip_vertex_spec(
+                label,
+                index,
+                vertices,
+                profile_len,
+                side_jitter,
+                interior_jitter,
+                vertical_jitter,
+            ));
         }
     }
 
@@ -647,10 +678,6 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///     Ok(())
     /// }
     /// ```
-    #[expect(
-        clippy::too_many_lines,
-        reason = "Delaunay strip construction includes fallible allocation handling and post-build validation"
-    )]
     pub fn from_cdt_strip(vertices_per_slice: u32, num_slices: u32) -> CdtResult<Self> {
         if vertices_per_slice < 4 {
             return Err(CdtError::InvalidGenerationParameters {
@@ -708,10 +735,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let t_count =
             usize::try_from(num_slices).map_err(|err| generation_failed(err.to_string()))?;
 
-        let spacing = 1.0_f64 / f64::from(vertices_per_slice - 1);
-        let side_jitter = spacing / 4.0;
-        let interior_jitter = spacing / (16.0 * f64::from(num_slices));
-        let vertical_jitter = 1.0_f64 / (64.0 * f64::from(num_slices));
+        let min_spacing = 1.0_f64 / f64::from(vertices_per_slice - 1);
+        let side_jitter = min_spacing / 4.0;
+        let interior_jitter = min_spacing / (16.0 * f64::from(num_slices));
+        // TODO(acgetchell/delaunay#447): remove once exact collinear CDT boundaries build.
+        let vertical_jitter = 1.0e-9;
         let mut vertex_specs: Vec<([f64; 2], u32)> = Vec::new();
         vertex_specs
             .try_reserve_exact(expected_vertices)
@@ -722,34 +750,15 @@ impl CdtTriangulation<DelaunayBackend2D> {
             })?;
         for t in 0..num_slices {
             for i in 0..vertices_per_slice {
-                let temporal_index = f64::from(t);
-                let temporal_span = f64::from(num_slices - 1);
-                let side_arc = side_jitter * temporal_index * f64::from(num_slices - 1 - t)
-                    / temporal_span.powi(2);
-                let x = if i == 0 || i == vertices_per_slice - 1 {
-                    let boundary = f64::from(i).mul_add(spacing, side_jitter);
-                    if i == 0 {
-                        boundary - side_arc
-                    } else {
-                        boundary + side_arc
-                    }
-                } else {
-                    let sign = if (i + t).is_multiple_of(2) { 1.0 } else { -1.0 };
-                    f64::from(i).mul_add(spacing, side_jitter) + sign * interior_jitter
-                };
-                let spatial_index = f64::from(i);
-                let arc = vertical_jitter * spatial_index * f64::from(vertices_per_slice - 1 - i)
-                    / f64::from((vertices_per_slice - 1).pow(2));
-                let base_y = f64::from(t) + vertical_jitter;
-                let y = if t == 0 {
-                    base_y - arc
-                } else if t == num_slices - 1 {
-                    base_y + arc
-                } else {
-                    let sign = if (i + t).is_multiple_of(2) { 1.0 } else { -1.0 };
-                    (sign * arc).mul_add(0.5, base_y)
-                };
-                vertex_specs.push(([x, y], t));
+                vertex_specs.push(open_strip_vertex_spec(
+                    t,
+                    i,
+                    vertices_per_slice,
+                    num_slices,
+                    side_jitter,
+                    interior_jitter,
+                    vertical_jitter,
+                ));
             }
         }
 
@@ -1096,8 +1105,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
 mod tests {
     use super::*;
     use crate::cdt::foliation::{EdgeType, FoliationError, SimplexType};
-    use crate::errors::{CdtValidationCheck, CdtValidationFailure, TriangulationMetadataField};
+    use crate::errors::TriangulationMetadataField;
     use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
+    use approx::assert_relative_eq;
     use std::assert_matches;
 
     /// Builds a minimal labeled Delaunay backend for constructor tests.
@@ -1434,7 +1444,7 @@ mod tests {
     }
 
     #[test]
-    fn test_from_labeled_delaunay_rejects_non_cdt_simplices() {
+    fn test_from_labeled_delaunay_rejects_non_interval_spatial_slice() {
         let dt = build_delaunay2_from_simplices(
             &[
                 ([0.0, 0.0], 0),
@@ -1452,10 +1462,13 @@ mod tests {
 
         assert_matches!(
             result,
-            Err(CdtError::ValidationFailed {
-                ref check,
-                failure: CdtValidationFailure::InvalidCdtTriangle { .. },
-            }) if *check == CdtValidationCheck::Causality
+            Err(CdtError::Foliation(
+                FoliationError::SpacelikeOpenSliceEndpointCount {
+                    slice: 0,
+                    observed: 0,
+                    expected: 2,
+                }
+            ))
         );
     }
 
@@ -1541,6 +1554,31 @@ mod tests {
                 && provided_value == "2 × 4294836224"
                 && expected_range == "product ≤ u32::MAX"
         );
+    }
+
+    #[test]
+    fn open_strip_vertex_spec_applies_arc_and_jitter() {
+        let side_jitter = 1.0 / 12.0;
+        let interior_jitter = 1.0 / 48.0;
+        let vertical_jitter = 1.0e-9;
+
+        let ([left_boundary_x, left_boundary_y], left_boundary_label) =
+            open_strip_vertex_spec(1, 0, 4, 3, side_jitter, interior_jitter, vertical_jitter);
+        assert_eq!(left_boundary_label, 1);
+        assert_relative_eq!(left_boundary_x, 1.0 / 16.0, epsilon = 1e-15);
+        assert_relative_eq!(left_boundary_y, 1.0, epsilon = 1e-15);
+
+        let ([interior_x, interior_y], interior_label) =
+            open_strip_vertex_spec(1, 1, 4, 3, side_jitter, interior_jitter, vertical_jitter);
+        assert_eq!(interior_label, 1);
+        assert_relative_eq!(interior_x, 7.0 / 16.0, epsilon = 1e-15);
+        assert_relative_eq!(interior_y, 1.0 + 1.0e-9 / 9.0, epsilon = 1e-18);
+
+        let ([top_boundary_x, top_boundary_y], top_boundary_label) =
+            open_strip_vertex_spec(2, 3, 4, 3, side_jitter, interior_jitter, vertical_jitter);
+        assert_eq!(top_boundary_label, 2);
+        assert_relative_eq!(top_boundary_x, 13.0 / 12.0, epsilon = 1e-15);
+        assert_relative_eq!(top_boundary_y, 2.0, epsilon = 1e-15);
     }
 
     #[test]

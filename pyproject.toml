@@ -7,7 +7,7 @@ name = "causal-triangulations-scripts"
 version = "0.1.0"
 description = "Python utility scripts for the causal-triangulations Rust library"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.13"
 license = { text = "BSD-3-Clause" }
 authors = [ { name = "Adam Getchell", email = "adam@adamgetchell.org" } ]
 keywords = [ "cdt", "triangulation", "benchmarking", "utilities" ]
@@ -18,7 +18,6 @@ classifiers = [
     "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: Physics",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -38,6 +37,7 @@ archive-changelog = "archive_changelog:main"
 benchmark-utils = "benchmark_utils:main"
 coverage-report = "coverage_report:main"
 hardware-utils = "hardware_utils:main"
+notebook-check = "notebook_check:main"
 performance-analysis = "performance_analysis:main"
 postprocess-changelog = "postprocess_changelog:main"
 tag-release = "tag_release:main"
@@ -53,6 +53,7 @@ py-modules = [
     "benchmark_utils",
     "coverage_report",
     "hardware_utils",
+    "notebook_check",
     "performance_analysis",
     "postprocess_changelog",
     "subprocess_utils",
@@ -61,7 +62,7 @@ py-modules = [
 
 [tool.ruff]
 line-length = 160
-target-version = "py312"
+target-version = "py313"
 src = [ "scripts" ]
 
 [tool.ruff.lint]
@@ -144,6 +145,7 @@ known-first-party = [
     "benchmark_utils",
     "coverage_report",
     "hardware_utils",
+    "notebook_check",
     "performance_analysis",
     "postprocess_changelog",
     "subprocess_utils",
@@ -188,4 +190,12 @@ dev = [
     "shfmt-py==4.0.0",
     "ty==0.0.40",
     "yamllint==1.38.0",
+]
+notebooks = [
+    "ipykernel>=7.1.0",
+    "nbconvert>=7.17.1",
+    "jupyterlab>=4.5.1",
+    "matplotlib>=3.10.8",
+    "plotly>=6.5.0",
+    "polars>=1.36.1",
 ]

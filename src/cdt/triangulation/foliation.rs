@@ -9,13 +9,13 @@ use crate::errors::{
     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
     MeasurementCountField, TriangulationMetadataField,
 };
-use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
 };
 use crate::geometry::traits::TriangulationQuery;
+use crate::geometry::{DelaunayBackend2D, SpacetimeCoordinate};
 use crate::util::f64_band_to_u32;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroU32;
 
 impl CdtTriangulation<DelaunayBackend2D> {
@@ -32,21 +32,16 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Returns [`FoliationError::StaleBookkeeping`] if stored foliation
     /// bookkeeping belongs to an older geometry revision. Returns the relevant
     /// [`FoliationError`] variant if live vertex labels are missing, out of
-    /// range, inconsistent with stored slice sizes, or violate toroidal
-    /// spacelike-ring invariants.
+    /// range, inconsistent with stored slice sizes, violate open-boundary
+    /// interval/order invariants, or violate toroidal spacelike-ring invariants.
     ///
     /// # Examples
     ///
     /// ```
     /// use causal_triangulations::prelude::triangulation::*;
-    /// use std::num::NonZeroU32;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let mut tri = CdtTriangulation::from_seeded_points(12, 3, 2, 42)?;
-    ///     let Some(num_slices) = NonZeroU32::new(3) else {
-    ///         return Ok(());
-    ///     };
-    ///     tri.assign_foliation_by_y(num_slices)?;
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
     ///     tri.validate_foliation()?;
     ///     Ok(())
     /// }
@@ -110,9 +105,14 @@ impl CdtTriangulation<DelaunayBackend2D> {
             }
         }
 
-        if matches!(self.metadata.topology, CdtTopology::Toroidal) {
-            self.validate_toroidal_spatial_rings()?;
-            self.validate_toroidal_temporal_wraparound()?;
+        match self.metadata.topology {
+            CdtTopology::OpenBoundary => {
+                self.validate_open_boundary_spatial_intervals()?;
+            }
+            CdtTopology::Toroidal => {
+                self.validate_toroidal_spatial_rings()?;
+                self.validate_toroidal_temporal_wraparound()?;
+            }
         }
 
         Ok(())
@@ -182,15 +182,27 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(())
     }
 
-    /// Validates that every spatial slice forms a closed S¹.
-    fn validate_toroidal_spatial_rings(&self) -> CdtResult<()> {
-        let Some(foliation) = &self.foliation else {
-            return Ok(());
-        };
-
-        let num_slices = foliation.slice_sizes().len();
+    /// Collects the spacelike subgraph for each live time slice.
+    ///
+    /// Both open-boundary interval validation and toroidal ring validation use
+    /// this shared adjacency view so they enforce the same label and edge
+    /// interpretation before applying topology-specific shape checks.
+    fn spacelike_adjacency_by_slice(
+        &self,
+        num_slices: usize,
+    ) -> Vec<HashMap<DelaunayVertexHandle, Vec<DelaunayVertexHandle>>> {
         let mut spacelike_neighbors: Vec<HashMap<DelaunayVertexHandle, Vec<DelaunayVertexHandle>>> =
             vec![HashMap::new(); num_slices];
+
+        for vertex in self.geometry.vertices() {
+            let Some(label) = self.geometry.vertex_data_by_key(vertex.vertex_key()) else {
+                continue;
+            };
+            let slice = label as usize;
+            if slice < num_slices {
+                spacelike_neighbors[slice].entry(vertex).or_default();
+            }
+        }
 
         for edge in self.geometry.edges() {
             let Some((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
@@ -215,6 +227,282 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 .push(v1.clone());
             spacelike_neighbors[slice].entry(v1).or_default().push(v0);
         }
+
+        spacelike_neighbors
+    }
+
+    /// Validates that every open-boundary spatial slice forms one interval.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "open-boundary interval validation keeps the slice-degree, path-order, coordinate-order, and slab-crossing diagnostics in one invariant pass"
+    )]
+    fn validate_open_boundary_spatial_intervals(&self) -> CdtResult<()> {
+        let Some(foliation) = &self.foliation else {
+            return Ok(());
+        };
+
+        let num_slices = foliation.slice_sizes().len();
+        let spacelike_neighbors = self.spacelike_adjacency_by_slice(num_slices);
+        let mut slice_orders = Vec::with_capacity(num_slices);
+
+        for (slice, adjacency) in spacelike_neighbors.into_iter().enumerate() {
+            let expected_size = foliation.slice_sizes()[slice];
+            if adjacency.len() != expected_size {
+                return Err(FoliationError::SpacelikeSubgraphSizeMismatch {
+                    slice,
+                    observed: adjacency.len(),
+                    expected: expected_size,
+                }
+                .into());
+            }
+
+            if expected_size == 1 {
+                if let Some((vertex, neighbors)) = adjacency
+                    .iter()
+                    .find(|(_, neighbors)| !neighbors.is_empty())
+                {
+                    return Err(FoliationError::SpacelikeOpenSliceDegreeViolation {
+                        slice,
+                        vertex: format!("{:?}", vertex.vertex_key()),
+                        observed_degree: neighbors.len(),
+                    }
+                    .into());
+                }
+                let Some(single_vertex) = adjacency.keys().next().cloned() else {
+                    return Err(FoliationError::SpacelikeSubgraphSizeMismatch {
+                        slice,
+                        observed: 0,
+                        expected: expected_size,
+                    }
+                    .into());
+                };
+                let coordinate_order = self.open_boundary_coordinate_order(&[single_vertex])?;
+                slice_orders.push(coordinate_order);
+                continue;
+            }
+
+            let mut endpoints = Vec::with_capacity(2);
+            for (vertex, neighbors) in &adjacency {
+                match neighbors.len() {
+                    1 => endpoints.push(vertex.clone()),
+                    2 => {}
+                    observed_degree => {
+                        return Err(FoliationError::SpacelikeOpenSliceDegreeViolation {
+                            slice,
+                            vertex: format!("{:?}", vertex.vertex_key()),
+                            observed_degree,
+                        }
+                        .into());
+                    }
+                }
+            }
+
+            let [start, target] = endpoints.as_slice() else {
+                return Err(FoliationError::SpacelikeOpenSliceEndpointCount {
+                    slice,
+                    observed: endpoints.len(),
+                    expected: 2,
+                }
+                .into());
+            };
+
+            let target = target.clone();
+            let mut visited: HashSet<DelaunayVertexHandle> = HashSet::new();
+            let mut ordered_vertices = Vec::with_capacity(expected_size);
+            let mut previous: Option<DelaunayVertexHandle> = None;
+            let mut current = start.clone();
+
+            loop {
+                if !visited.insert(current.clone()) {
+                    return Err(FoliationError::SpacelikeNonOpenInterval {
+                        slice,
+                        walked: visited.len(),
+                        expected: expected_size,
+                    }
+                    .into());
+                }
+                ordered_vertices.push(current.clone());
+
+                let Some(neighbors) = adjacency.get(&current) else {
+                    return Err(FoliationError::SpacelikeNonOpenInterval {
+                        slice,
+                        walked: visited.len(),
+                        expected: expected_size,
+                    }
+                    .into());
+                };
+                let Some(next) = neighbors
+                    .iter()
+                    .find(|neighbor| previous.as_ref() != Some(*neighbor))
+                    .cloned()
+                else {
+                    break;
+                };
+                previous = Some(current);
+                current = next;
+            }
+
+            if current != target || visited.len() != expected_size {
+                return Err(FoliationError::SpacelikeNonOpenInterval {
+                    slice,
+                    walked: visited.len(),
+                    expected: expected_size,
+                }
+                .into());
+            }
+            let coordinate_order =
+                self.open_boundary_coordinate_order(ordered_vertices.as_slice())?;
+            if !orders_match_with_orientation(ordered_vertices.as_slice(), &coordinate_order) {
+                return Err(FoliationError::OpenBoundarySpatialOrderMismatch {
+                    slice,
+                    path_vertices: ordered_vertices.len(),
+                    coordinate_vertices: coordinate_order.len(),
+                }
+                .into());
+            }
+            slice_orders.push(coordinate_order);
+        }
+
+        self.validate_open_boundary_slab_embedding(&slice_orders)?;
+
+        Ok(())
+    }
+
+    /// Returns the backend x-coordinate order for one open-boundary slice.
+    ///
+    /// Open strips use this to ensure the combinatorial spacelike interval and
+    /// displayed spatial embedding describe the same spatial ordering. Evolved
+    /// CDT moves are still abstract bistellar edits, so exact coordinate
+    /// re-embedding is tracked separately from this combinatorial validator.
+    fn open_boundary_coordinate_order(
+        &self,
+        vertices: &[DelaunayVertexHandle],
+    ) -> CdtResult<Vec<DelaunayVertexHandle>> {
+        let mut keyed_vertices = Vec::with_capacity(vertices.len());
+        for vertex in vertices {
+            let raw_coordinates = self.geometry.vertex_coordinates(vertex).map_err(|err| {
+                CdtError::ValidationFailed {
+                    check: CdtValidationCheck::Geometry,
+                    failure: CdtValidationFailure::VertexCoordinateReadFailed {
+                        vertex: format!("{:?}", vertex.vertex_key()),
+                        detail: err.to_string(),
+                    },
+                }
+            })?;
+            let coordinate = SpacetimeCoordinate::try_from_space_time_slice(&raw_coordinates)
+                .map_err(|err| CdtError::ValidationFailed {
+                    check: CdtValidationCheck::Geometry,
+                    failure: CdtValidationFailure::from_spacetime_coordinate_error(
+                        format!("{:?}", vertex.vertex_key()),
+                        err,
+                    ),
+                })?;
+            let Some(label) = self.geometry.vertex_data_by_key(vertex.vertex_key()) else {
+                return Err(CdtError::ValidationFailed {
+                    check: CdtValidationCheck::FoliationAssignment,
+                    failure: CdtValidationFailure::MissingVertexTimeLabel {
+                        vertex: format!("{:?}", vertex.vertex_key()),
+                    },
+                });
+            };
+            if (coordinate.time() - f64::from(label)).abs() > OPEN_BOUNDARY_TIME_COORDINATE_EPSILON
+            {
+                return Err(FoliationError::OpenBoundaryTimeCoordinateMismatch {
+                    label,
+                    vertex: format!("{:?}", vertex.vertex_key()),
+                    y: coordinate.time().to_string(),
+                }
+                .into());
+            }
+            keyed_vertices.push((
+                vertex.clone(),
+                coordinate.space(),
+                coordinate.time(),
+                format!("{:?}", vertex.vertex_key()),
+            ));
+        }
+
+        keyed_vertices.sort_by(|left, right| {
+            left.1
+                .total_cmp(&right.1)
+                .then_with(|| left.2.total_cmp(&right.2))
+                .then_with(|| left.3.cmp(&right.3))
+        });
+        Ok(keyed_vertices
+            .into_iter()
+            .map(|(vertex, _, _, _)| vertex)
+            .collect())
+    }
+
+    /// Validates that adjacent open-boundary slices form noncrossing slabs.
+    fn validate_open_boundary_slab_embedding(
+        &self,
+        slice_orders: &[Vec<DelaunayVertexHandle>],
+    ) -> CdtResult<()> {
+        if slice_orders.len() < 2 {
+            return Ok(());
+        }
+
+        let mut slab_edges: Vec<Vec<SlabEdge>> = vec![Vec::new(); slice_orders.len() - 1];
+        for edge in self.geometry.edges() {
+            let Some((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
+                continue;
+            };
+            let Some(t0) = self.geometry.vertex_data_by_key(v0.vertex_key()) else {
+                continue;
+            };
+            let Some(t1) = self.geometry.vertex_data_by_key(v1.vertex_key()) else {
+                continue;
+            };
+            if t0.abs_diff(t1) != 1 {
+                continue;
+            }
+            let lower_slice = t0.min(t1) as usize;
+            if lower_slice >= slab_edges.len() {
+                continue;
+            }
+            let (lower, upper) = if t0 < t1 { (v0, v1) } else { (v1, v0) };
+            slab_edges[lower_slice].push((lower, upper));
+        }
+
+        let slice_positions: Vec<HashMap<DelaunayVertexHandle, usize>> = slice_orders
+            .iter()
+            .map(|order| {
+                order
+                    .iter()
+                    .cloned()
+                    .enumerate()
+                    .map(|(position, vertex)| (vertex, position))
+                    .collect()
+            })
+            .collect();
+
+        for (lower_slice, edges) in slab_edges.iter().enumerate() {
+            if let Some((first, second)) = first_slab_crossing(
+                edges,
+                &slice_positions[lower_slice],
+                &slice_positions[lower_slice + 1],
+            ) {
+                return Err(FoliationError::OpenBoundarySlabEdgeCrossing {
+                    lower_slice,
+                    first_edge: open_slab_edge_label(first),
+                    second_edge: open_slab_edge_label(second),
+                }
+                .into());
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validates that every spatial slice forms a closed S¹.
+    fn validate_toroidal_spatial_rings(&self) -> CdtResult<()> {
+        let Some(foliation) = &self.foliation else {
+            return Ok(());
+        };
+
+        let num_slices = foliation.slice_sizes().len();
+        let spacelike_neighbors = self.spacelike_adjacency_by_slice(num_slices);
 
         for (slice, adjacency) in spacelike_neighbors.iter().enumerate() {
             let expected_size = foliation.slice_sizes()[slice];
@@ -1046,6 +1334,96 @@ fn volume_profile_count_overflow() -> CdtError {
     }
 }
 
+const OPEN_BOUNDARY_TIME_COORDINATE_EPSILON: f64 = 1e-9;
+
+type SlabEdge = (DelaunayVertexHandle, DelaunayVertexHandle);
+type SlabCrossing<'a> = (&'a SlabEdge, &'a SlabEdge);
+
+/// Reports whether two slab edges share either endpoint.
+fn slab_edges_share_endpoint(first: &SlabEdge, second: &SlabEdge) -> bool {
+    let first_endpoints = [&first.0, &first.1];
+    let second_endpoints = [&second.0, &second.1];
+    first_endpoints
+        .iter()
+        .any(|endpoint| second_endpoints.contains(endpoint))
+}
+
+/// Checks whether two slice orders match up to reversal.
+fn orders_match_with_orientation(
+    path_order: &[DelaunayVertexHandle],
+    coordinate_order: &[DelaunayVertexHandle],
+) -> bool {
+    path_order == coordinate_order || path_order.iter().eq(coordinate_order.iter().rev())
+}
+
+/// Finds the first pair of non-incident timelike slab edges that cross.
+///
+/// Open-boundary validation calls this while enforcing that adjacent spatial
+/// intervals embed as a noncrossing slab. Edges missing position data are
+/// ignored because earlier foliation checks own missing-label diagnostics, and
+/// incident edges are allowed to meet at shared vertices. The ordered scan keeps
+/// the validation path practical for evolved triangulations with many timelike
+/// edges while preserving the crossing pair used in public diagnostics.
+fn first_slab_crossing<'a>(
+    edges: &'a [SlabEdge],
+    lower_positions: &HashMap<DelaunayVertexHandle, usize>,
+    upper_positions: &HashMap<DelaunayVertexHandle, usize>,
+) -> Option<SlabCrossing<'a>> {
+    let mut positioned_edges = Vec::with_capacity(edges.len());
+    for edge in edges {
+        let Some(&lower_index) = lower_positions.get(&edge.0) else {
+            continue;
+        };
+        let Some(&upper_index) = upper_positions.get(&edge.1) else {
+            continue;
+        };
+        positioned_edges.push((lower_index, upper_index, edge));
+    }
+    positioned_edges.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+
+    let mut seen_by_upper: BTreeMap<usize, Vec<&SlabEdge>> = BTreeMap::new();
+    let mut index = 0;
+    while index < positioned_edges.len() {
+        let lower_index = positioned_edges[index].0;
+        let mut group_end = index + 1;
+        while group_end < positioned_edges.len() && positioned_edges[group_end].0 == lower_index {
+            group_end += 1;
+        }
+
+        for &(_, current_upper, current_edge) in &positioned_edges[index..group_end] {
+            let Some(first_larger_upper) = current_upper.checked_add(1) else {
+                continue;
+            };
+            let Some((&max_seen_upper, _)) = seen_by_upper.last_key_value() else {
+                continue;
+            };
+            if current_upper >= max_seen_upper {
+                continue;
+            }
+            for (_, earlier_edges) in seen_by_upper.range(first_larger_upper..) {
+                if let Some(earlier_edge) = earlier_edges
+                    .iter()
+                    .copied()
+                    .find(|earlier_edge| !slab_edges_share_endpoint(earlier_edge, current_edge))
+                {
+                    return Some((earlier_edge, current_edge));
+                }
+            }
+        }
+
+        for &(_, upper_index, edge) in &positioned_edges[index..group_end] {
+            seen_by_upper.entry(upper_index).or_default().push(edge);
+        }
+        index = group_end;
+    }
+    None
+}
+
+/// Formats an open-slab edge for topology validation diagnostics.
+fn open_slab_edge_label(edge: &SlabEdge) -> String {
+    format!("{:?}->{:?}", edge.0.vertex_key(), edge.1.vertex_key())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1096,6 +1474,132 @@ mod tests {
         tri.validate_simplex_classification()
             .expect("all Delaunay strip simplices should classify");
         tri
+    }
+
+    #[test]
+    fn slice_order_matching_accepts_only_coordinate_order_or_reversal() {
+        let tri = strict_strip(4, 2);
+        let path_order = tri.vertices_at_time(0);
+        let reversed_order = path_order.iter().rev().cloned().collect::<Vec<_>>();
+        let mut rotated_order = path_order.clone();
+        rotated_order.rotate_left(1);
+
+        assert!(orders_match_with_orientation(&path_order, &path_order));
+        assert!(orders_match_with_orientation(&path_order, &reversed_order));
+        assert!(
+            !orders_match_with_orientation(&path_order, &rotated_order),
+            "cyclic rotations are not valid for open-boundary interval slices"
+        );
+    }
+
+    #[test]
+    fn open_boundary_coordinate_order_rejects_mismatched_time_coordinate() {
+        let dt = build_delaunay2_with_data(&[
+            ([0.0, 0.0], 0),
+            ([1.0, 0.0], 0),
+            ([0.0, 1.25], 1),
+            ([1.0, 1.0], 1),
+        ])
+        .expect("mismatched-y fixture should build as Delaunay data");
+        let backend =
+            DelaunayBackend2D::from_triangulation(dt).expect("mismatched-y backend should wrap");
+
+        assert_matches!(
+            CdtTriangulation::from_labeled_delaunay(backend, 2, 2),
+            Err(CdtError::Foliation(
+                FoliationError::OpenBoundaryTimeCoordinateMismatch {
+                    label: 1,
+                    vertex: _,
+                    y,
+                }
+            )) if y == "1.25"
+        );
+    }
+
+    #[test]
+    fn first_slab_crossing_ignores_incident_edges_and_reports_inversion() {
+        let tri = strict_strip(4, 2);
+        let lower = tri.vertices_at_time(0);
+        let upper = tri.vertices_at_time(1);
+        let lower_positions = lower
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, vertex)| (vertex, index))
+            .collect::<HashMap<_, _>>();
+        let upper_positions = upper
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, vertex)| (vertex, index))
+            .collect::<HashMap<_, _>>();
+        let incident_edges = [
+            (lower[0].clone(), upper[3].clone()),
+            (lower[0].clone(), upper[0].clone()),
+        ];
+        let crossing_edges = [
+            (lower[0].clone(), upper[3].clone()),
+            (lower[1].clone(), upper[1].clone()),
+        ];
+
+        assert!(
+            first_slab_crossing(&incident_edges, &lower_positions, &upper_positions).is_none(),
+            "edges sharing a vertex are incident and should not be reported as crossings"
+        );
+        let Some((first, second)) =
+            first_slab_crossing(&crossing_edges, &lower_positions, &upper_positions)
+        else {
+            panic!("expected an inverted non-incident edge pair to be reported");
+        };
+        assert_eq!(first, &crossing_edges[0]);
+        assert_eq!(second, &crossing_edges[1]);
+    }
+
+    #[test]
+    fn slab_crossing_skips_missing_positions_and_ties() {
+        let tri = strict_strip(4, 2);
+        let lower = tri.vertices_at_time(0);
+        let upper = tri.vertices_at_time(1);
+        let mut lower_positions = lower
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, vertex)| (vertex, index))
+            .collect::<HashMap<_, _>>();
+        let mut upper_positions = upper
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, vertex)| (vertex, index))
+            .collect::<HashMap<_, _>>();
+        let crossing_edges = [
+            (lower[0].clone(), upper[3].clone()),
+            (lower[1].clone(), upper[1].clone()),
+        ];
+
+        assert!(
+            first_slab_crossing(&crossing_edges, &lower_positions, &upper_positions).is_some(),
+            "fixture should contain an inverted non-incident pair before position data is removed"
+        );
+
+        lower_positions.remove(&lower[1]);
+        assert!(
+            first_slab_crossing(&crossing_edges, &lower_positions, &upper_positions).is_none(),
+            "edges missing lower position data should be skipped rather than reported"
+        );
+
+        lower_positions.insert(lower[1].clone(), 0);
+        assert!(
+            first_slab_crossing(&crossing_edges, &lower_positions, &upper_positions).is_none(),
+            "edges with the same lower rank are not ordered crossings"
+        );
+
+        lower_positions.insert(lower[1].clone(), 1);
+        upper_positions.remove(&upper[3]);
+        assert!(
+            first_slab_crossing(&crossing_edges, &lower_positions, &upper_positions).is_none(),
+            "edges missing upper position data should be skipped rather than reported"
+        );
     }
 
     #[test]
@@ -1427,15 +1931,13 @@ mod tests {
 
         assert_matches!(
             CdtTriangulation::from_labeled_delaunay(backend, 1, 2),
-            Err(CdtError::ValidationFailed {
-                ref check,
-                failure: CdtValidationFailure::InvalidCdtTriangle {
-                    spacelike_edges: 3,
-                    timelike_edges: 0,
-                    ..
-                },
-            })
-                if *check == CdtValidationCheck::Causality
+            Err(CdtError::Foliation(
+                FoliationError::SpacelikeOpenSliceEndpointCount {
+                    slice: 0,
+                    observed: 0,
+                    expected: 2,
+                }
+            ))
         );
     }
 
@@ -1459,7 +1961,14 @@ mod tests {
         for face in tri.geometry().faces() {
             assert_eq!(tri.simplex_type_from_data(&face), None);
         }
-        assert!(tri.validate_foliation().is_ok());
+        assert_matches!(
+            tri.validate_foliation(),
+            Err(CdtError::Foliation(
+                FoliationError::SpacelikeNonOpenInterval { .. }
+                    | FoliationError::OpenBoundarySpatialOrderMismatch { .. }
+                    | FoliationError::SpacelikeOpenSliceDegreeViolation { .. }
+            ))
+        );
     }
 
     #[test]

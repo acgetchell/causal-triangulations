@@ -34,21 +34,25 @@ causal-triangulations/
 │   ├── cdt_benchmarks.rs
 │   └── ci_performance_suite.rs
 ├── docs/
+│   ├── assets/
+│   │   ├── cdt_spacetime.png
+│   │   └── cdt_spacetime.svg
 │   ├── dev/
 │   │   ├── commands.md
 │   │   ├── python.md
 │   │   ├── rust.md
 │   │   ├── testing.md
 │   │   └── tooling-alignment.md
-│   ├── CLI_EXAMPLES.md
-│   ├── PERFORMANCE_TESTING.md
-│   ├── QUICKSTART.md
 │   ├── RELEASING.md
-│   ├── code_organization.md
+│   ├── cli-examples.md
+│   ├── code-organization.md
 │   ├── foliation.md
+│   ├── hpc.md
 │   ├── metropolis.md
 │   ├── moves.md
+│   ├── performance-testing.md
 │   ├── roadmap.md
+│   ├── scientific-basis.md
 │   └── testing.md
 ├── examples/
 │   ├── scripts/
@@ -60,6 +64,10 @@ causal-triangulations/
 │   ├── find_good_seeds.rs
 │   ├── observables.rs
 │   └── output_and_checkpoint.rs
+├── notebooks/
+│   ├── 00_quickstart.ipynb
+│   ├── 01_spacetime_visualization.ipynb
+│   └── 02_analysis_caches.ipynb
 ├── proptest-regressions/
 │   └── cdt/
 │       └── triangulation.txt
@@ -82,6 +90,7 @@ causal-triangulations/
 │   ├── check_semgrep_fixtures.py
 │   ├── coverage_report.py
 │   ├── hardware_utils.py
+│   ├── notebook_check.py
 │   ├── performance_analysis.py
 │   ├── postprocess_changelog.py
 │   ├── run_all_examples.sh
@@ -110,6 +119,7 @@ causal-triangulations/
 │   │   ├── backends/
 │   │   │   ├── delaunay.rs
 │   │   │   └── mock.rs
+│   │   ├── coordinates.rs
 │   │   ├── generators.rs
 │   │   ├── operations.rs
 │   │   └── traits.rs
@@ -127,6 +137,9 @@ causal-triangulations/
 │   │   │   └── command_order.sh
 │   │   ├── doctests/
 │   │   │   └── unwrap_expect.txt
+│   │   ├── notebooks/
+│   │   │   ├── clean.ipynb
+│   │   │   └── dirty.ipynb
 │   │   ├── scripts/
 │   │   │   └── tests/
 │   │   │       └── python_exceptions.py
@@ -189,6 +202,17 @@ Generic MCMC mechanics should be delegated to `markov-chain-monte-carlo` through
 foliation/topology validation, measurements, and result translation; the upstream MCMC crate owns Metropolis-Hastings acceptance, proposal-ratio application,
 chain counters, planned-proposal commit ordering, and reusable sampler continuation behavior. Repository-owned Semgrep rules enforce the issue #155 boundary
 against new CDT-local generic acceptance draws or manual accepted/rejected sampler counters.
+
+## Repository Areas
+
+- `src/` — core Rust library modules and the `cdt` binary entry point. The detailed source file map is below.
+- `examples/` — runnable public API examples and shell workflows for simulation, observables, output, checkpoints, parameter sweeps, and performance checks.
+- `notebooks/` — notebook front ends and analysis consumers for CLI-generated artifacts such as trace CSV and JSON summary files. Notebook code may run the
+  binary for tutorials, but simulation logic stays in Rust.
+- `tests/` — CLI, integration, physics, property-based, regression, slow-debug, and project-rule tests.
+- `benches/` — Criterion benchmark harnesses and CI performance suites.
+- `docs/` — user guides, architecture notes, development rules, and release/testing/performance documentation.
+- `scripts/` — Python and shell support tooling for benchmarks, coverage, changelog/release work, examples, and validation.
 
 ## Key Modules
 
@@ -288,6 +312,12 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
 - Result structs such as `FlipResult`, `EdgeAdjacentFaces`, and `SubdivisionResult` keep local topology operations backend-neutral
 - Use `prelude::geometry` for real backend construction and geometry traits; use `prelude::testing` for mock-backend doctests or downstream fixture code
 
+### `geometry/coordinates.rs` — Crate-Owned Coordinate Types
+
+- `SpacetimeCoordinate` parses raw 2D backend coordinate vectors into finite 1+1 coordinates with named spatial and time accessors
+- The type serializes as a two-element `[x, y]` array for notebook and JSON compatibility while keeping CDT code from depending on raw coordinate indexes
+- `SpacetimeCoordinateError` reports wrong-dimensional and non-finite raw coordinate payloads at the boundary
+
 ### `geometry/backends/delaunay.rs` — Delaunay adapter
 
 - Wraps the upstream `delaunay` triangulation in `DelaunayBackend`
@@ -319,6 +349,17 @@ Delaunay triangulation before CDT foliation, causality, topology, and simplex-cl
   `u32` are checked at construction boundaries
 - `y_to_time_bucket` — f64→Option<u32> via round(), for time-slice assignment
 - `f64_band_to_u32` — f64→u32 clamped, for y-coordinate binning
+
+## Notebooks
+
+Notebook files live in `notebooks/` and should wrap the CLI or consume generated artifacts rather than reimplementing CDT sampling logic:
+
+- `notebooks/00_quickstart.ipynb` — builds or finds the `cdt` binary, runs a tiny quickstart simulation, reads the generated trace CSV and JSON summary, plots
+  acceptance/action/volume diagnostics, and points users to safe first parameter changes.
+- `notebooks/01_spacetime_visualization.ipynb` — runs a small 1+1 CDT simulation, reads the exported final triangulation mesh from the JSON summary, and
+  generates a static example spacetime visualization under `target/notebooks/visualization/`.
+- `notebooks/02_analysis_caches.ipynb` — runs moderate deterministic CDT simulations for debugging, reads stable trace CSV and summary JSON outputs with
+  Polars, materializes local Parquet caches, flattens volume profiles into long-form tables with run metadata, and plots exploratory run diagnostics.
 
 ## Key Dependencies
 

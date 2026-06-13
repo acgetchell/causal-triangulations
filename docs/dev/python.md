@@ -13,11 +13,11 @@ Run Python validators through the repository toolchain:
 
 ```bash
 uv run ruff check scripts/
-uv run ty check scripts/
+uv run ty check scripts/ --error all
 uv run pytest scripts/tests
 ```
 
-`ty check scripts/` is the type-checking authority. Prefer reducing untyped surfaces in code and tests over adding more `ty` configuration.
+`ty check scripts/ --error all` is the type-checking authority. Prefer reducing untyped surfaces in code and tests over adding more `ty` configuration.
 
 `just check` also runs Python formatting checks, Ruff, `ty`, and repository-owned Semgrep rules as part of the normal validation bundle.
 

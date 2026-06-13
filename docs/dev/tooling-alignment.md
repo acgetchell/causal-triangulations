@@ -55,7 +55,7 @@ Some differences remain because CDT has different workflows and project invarian
   Python support-script discipline, and typed error policies. These are repository-specific and should not be weakened while porting generic rules. The
   `prefer-assert-matches-in-doctests` rule keeps public `///` examples on `std::assert_matches` (Rust 1.96.0) so documentation teaches the diagnostic-friendly
   idiom rather than `assert!(matches!(...))`.
-- CDT and MCMC both require Python `>=3.12` for repository-managed support tooling.
+- CDT requires Python `>=3.13` for repository-managed support tooling, matching the local `.python-version`, Ruff target, Ty environment, and CI setup.
 
 ## Ported Updates
 
@@ -112,6 +112,9 @@ The useful `justfile` updates ported from `delaunay` are:
 - MCMC-boundary Semgrep rules for issue #155, which reject production CDT-local Metropolis-Hastings `exp(log_alpha)` acceptance draws and manual
   accepted/rejected sampler counter increments. These are CDT-specific because this crate still owns proposal planning, proposal-site telemetry, and result
   translation, while `markov-chain-monte-carlo` owns the reusable sampler mechanics.
+- A notebook hygiene Semgrep rule now rejects committed `.ipynb` execution counts and output objects in source notebooks. This complements the structured
+  `just notebook-output-check` and `just notebook-check` recipes: Semgrep gives a fast repository-rule signal during normal linting, while the notebook recipe
+  remains the authoritative JSON/output and headless-execution validation path.
 - The planned-step sampler-state sync rule now anchors `record_planned_step(...)` to call statements so it continues to catch missing
   `sampler.replace_state(...)` after recorded planned steps without false-positive matches on the helper function declaration when that helper contains fallible
   telemetry construction.
@@ -121,6 +124,9 @@ The useful `justfile` updates ported from `delaunay` are:
   `Validated 1+1 Causal Dynamical Triangulations for quantum gravity`. This mirrors a config/manifest change per the repository guideline and records why the
   new wording was chosen: it makes the validated 1+1 scope and quantum-gravity domain explicit in package metadata. This update fulfills the
   `{.github/**/*,*.yml,*.yaml,*.toml,*.json}` tooling-alignment requirement for the `Cargo.toml` description edit.
+- Python support tooling now targets Python 3.13 across `.python-version`, `pyproject.toml`, `ty.toml`, and CI, and `just python-typecheck` runs
+  `uv run ty check scripts/ --error all`. This closes the issue #182 follow-up by making strict Ty checking the default local and CI contract while keeping
+  Python tooling aligned with sibling repositories that already use a 3.13 baseline.
 
 ## Issue #162 CI And Security Alignment
 
@@ -174,6 +180,13 @@ only rewrites the active minor series. Delaunay's profiling, Codacy SARIF
 filtering, and benchmark-comparison machinery remained deferred from that pass
 because CDT needed a different benchmark contract and has no configured Codacy
 workflow.
+
+Codecov status thresholds now match Delaunay's stricter coverage policy:
+project coverage targets 90% with a 1% threshold, and patch coverage targets
+70%. CDT keeps its existing `src/main.rs` ignore because the crate has a binary
+entry point, and also ignores `src/lib.rs` like Delaunay because the crate root
+is primarily module wiring and public re-exports rather than behavior-bearing
+implementation code.
 
 The follow-up benchmark alignment introduced a CDT-specific
 `ci_performance_suite` rather than copying Delaunay's dimensional construction

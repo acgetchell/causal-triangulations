@@ -6,6 +6,7 @@ use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::FoliationError;
 use crate::cdt::results::CdtScalarTraceOutcome;
 use crate::config::CdtTopology;
+use crate::geometry::{SpacetimeCoordinateComponent, SpacetimeCoordinateError};
 use markov_chain_monte_carlo::{McmcError, StepOutcome};
 use std::fmt;
 
@@ -404,6 +405,24 @@ pub enum CdtValidationFailure {
         /// Minimum number of coordinates expected.
         expected_minimum: usize,
     },
+    /// A vertex coordinate had the wrong exact dimensionality for a parsed coordinate type.
+    VertexCoordinateDimensionMismatch {
+        /// Vertex whose coordinate dimensionality was invalid.
+        vertex: String,
+        /// Number of coordinates observed.
+        actual: usize,
+        /// Exact number of coordinates expected.
+        expected: usize,
+    },
+    /// A vertex coordinate component was NaN or infinite.
+    VertexCoordinateNonFinite {
+        /// Vertex whose coordinate was invalid.
+        vertex: String,
+        /// Component that was non-finite.
+        component: SpacetimeCoordinateComponent,
+        /// Observed non-finite value, stored as text because `f64` is not `Eq`.
+        value: String,
+    },
     /// A foliated face was not classifiable as a strict Up or Down CDT simplex.
     NonStrictSimplex {
         /// Face being classified.
@@ -414,6 +433,31 @@ pub enum CdtValidationFailure {
         /// Diagnostic for the failed local candidate.
         detail: String,
     },
+}
+
+impl CdtValidationFailure {
+    /// Converts a parsed spacetime-coordinate failure into a validation failure.
+    pub(crate) fn from_spacetime_coordinate_error(
+        vertex: String,
+        err: SpacetimeCoordinateError,
+    ) -> Self {
+        match err {
+            SpacetimeCoordinateError::Dimension { actual, expected } => {
+                Self::VertexCoordinateDimensionMismatch {
+                    vertex,
+                    actual,
+                    expected,
+                }
+            }
+            SpacetimeCoordinateError::NonFiniteComponent { component, value } => {
+                Self::VertexCoordinateNonFinite {
+                    vertex,
+                    component,
+                    value: value.to_string(),
+                }
+            }
+        }
+    }
 }
 
 impl fmt::Display for CdtValidationFailure {
@@ -461,6 +505,22 @@ impl fmt::Display for CdtValidationFailure {
             } => write!(
                 formatter,
                 "vertex {vertex} has {actual} coordinates, expected ≥ {expected_minimum}"
+            ),
+            Self::VertexCoordinateDimensionMismatch {
+                vertex,
+                actual,
+                expected,
+            } => write!(
+                formatter,
+                "vertex {vertex} has {actual} coordinates, expected exactly {expected}"
+            ),
+            Self::VertexCoordinateNonFinite {
+                vertex,
+                component,
+                value,
+            } => write!(
+                formatter,
+                "vertex {vertex} has non-finite {component} coordinate: {value}"
             ),
             Self::NonStrictSimplex { face } => write!(
                 formatter,
@@ -1547,6 +1607,44 @@ pub enum CdtError {
     },
 }
 
+impl CdtError {
+    /// Returns whether this error represents a shape-invalid local proposal
+    /// that should be treated as an ordinary geometric rejection after a
+    /// successful backend mutation.
+    ///
+    /// This is the top-level policy used by CDT move finalization after
+    /// evolved-CDT validation rejects a candidate. The same topology and
+    /// foliation invariants are visible through
+    /// [`CdtTriangulation::validate`](crate::cdt::triangulation::CdtTriangulation::validate).
+    /// Topology mismatches and foliation shape errors are recoverable candidate
+    /// rejections; backend mutation failures, stale foliation bookkeeping, and
+    /// unrelated validation failures remain hard errors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::errors::{CdtError, FoliationError};
+    ///
+    /// let err = CdtError::Foliation(FoliationError::SpacelikeNonOpenInterval {
+    ///     slice: 0,
+    ///     walked: 3,
+    ///     expected: 4,
+    /// });
+    /// assert!(err.is_post_mutation_candidate_rejection());
+    ///
+    /// let hard = CdtError::Foliation(FoliationError::MissingVertexLabel { vertex: 7 });
+    /// assert!(!hard.is_post_mutation_candidate_rejection());
+    /// ```
+    #[must_use]
+    pub const fn is_post_mutation_candidate_rejection(&self) -> bool {
+        match self {
+            Self::TopologyMismatch { .. } => true,
+            Self::Foliation(error) => error.is_post_mutation_candidate_rejection(),
+            _ => false,
+        }
+    }
+}
+
 /// Keeps causality error formatting centralized so open and toroidal distances stay consistent.
 fn format_causality_violation(time_0: u32, time_1: u32, step_distance: u32) -> String {
     let raw = time_0.abs_diff(time_1);
@@ -2003,6 +2101,22 @@ mod tests {
                     expected_minimum: 2,
                 },
                 "vertex VertexKey(7v1) has 1 coordinates, expected ≥ 2",
+            ),
+            (
+                CdtValidationFailure::VertexCoordinateDimensionMismatch {
+                    vertex: "VertexKey(7v1)".to_string(),
+                    actual: 3,
+                    expected: 2,
+                },
+                "vertex VertexKey(7v1) has 3 coordinates, expected exactly 2",
+            ),
+            (
+                CdtValidationFailure::VertexCoordinateNonFinite {
+                    vertex: "VertexKey(7v1)".to_string(),
+                    component: SpacetimeCoordinateComponent::Space,
+                    value: "NaN".to_string(),
+                },
+                "vertex VertexKey(7v1) has non-finite space coordinate: NaN",
             ),
             (
                 CdtValidationFailure::NonStrictSimplex {

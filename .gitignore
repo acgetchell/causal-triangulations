@@ -1,6 +1,14 @@
 /target
 .vscode/
 
+# macOS filesystem metadata
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
 
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md

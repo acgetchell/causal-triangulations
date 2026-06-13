@@ -3,7 +3,7 @@
 
 Provides detailed statistics, trend analysis, and regression detection.
 
-Requires Python 3.12+.
+Requires Python 3.13+.
 """
 
 import argparse

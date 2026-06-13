@@ -5,7 +5,7 @@
 //! This module contains integration tests that verify the complete CDT simulation
 //! workflows, topology preservation, error handling, and consistency between components.
 
-use approx::{abs_diff_eq, assert_relative_eq};
+use approx::assert_relative_eq;
 use causal_triangulations::prelude::action::{
     ActionConfig, DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
 };
@@ -49,12 +49,8 @@ mod integration_tests {
         assert!(!results.measurements().is_empty());
         assert!(results.average_action().is_finite());
         assert!(
-            results.steps().iter().any(|step| {
-                step.action_after().is_some_and(|action_after| {
-                    !abs_diff_eq!(action_after, step.action_before(), epsilon = f64::EPSILON)
-                })
-            }),
-            "accepted moves should change the action over time"
+            results.triangulation().metadata().modification_count() > 0,
+            "accepted moves should mutate the triangulation even when the count-based action is unchanged"
         );
         assert!(
             results

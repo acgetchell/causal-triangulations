@@ -30,23 +30,22 @@ fn assert_physics_pipeline(config: CdtConfig) {
         "acceptance rate suspiciously high: {acceptance_rate}"
     );
 
-    let first_action = results
-        .measurements()
-        .first()
-        .expect("simulation should record measurements")
-        .action();
     assert!(
         results
             .measurements()
             .iter()
-            .any(|measurement| (measurement.action() - first_action).abs() > 1e-6),
-        "action never changed"
+            .all(|measurement| measurement.action().is_finite()),
+        "all recorded actions should be finite"
     );
 
     results
         .triangulation()
         .validate()
         .expect("triangulation invalid after simulation");
+    assert!(
+        results.triangulation().metadata().modification_count() > 0,
+        "accepted moves should mutate the triangulation even when the count-based action is unchanged"
+    );
 
     let profile = results.average_volume_profile();
     assert_eq!(

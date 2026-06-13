@@ -234,6 +234,8 @@ The `ci` recipe runs `check bench-compile test-all examples-validate`, which enf
 - **check** (via `lint`): formatting, clippy, documentation builds, markdown, spelling, config validation (JSON, TOML, YAML, GitHub Actions)
 - **bench-compile**: benchmarks compile without warnings under `-D warnings`
 - **test-all**: unit tests and integration tests via nextest, rustdoc doctests via `cargo test --doc`, and Python tests via pytest
+- **notebook-check**: Jupyter notebooks are output-clean, pass extracted-code Ruff and ty checks, and execute headlessly through the uv-managed notebook
+  environment
 - **examples-validate**: Cargo examples build once, then the compiled binaries run successfully with stable output markers
 
 ---

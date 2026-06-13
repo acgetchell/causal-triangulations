@@ -490,21 +490,19 @@ mod tests {
     }
 
     #[test]
-    fn validate_and_causality_reject_all_spacelike_triangle() {
+    fn validate_rejects_all_spacelike_triangle_before_causality_check() {
         let backend = labeled_triangle_backend([0, 0, 0]);
         let result = CdtTriangulation::from_labeled_delaunay(backend, 1, 2);
 
         assert_matches!(
             result,
-            Err(CdtError::ValidationFailed {
-                ref check,
-                failure: CdtValidationFailure::InvalidCdtTriangle {
-                    spacelike_edges: 3,
-                    timelike_edges: 0,
-                    ..
-                },
-            })
-                if *check == CdtValidationCheck::Causality
+            Err(CdtError::Foliation(
+                FoliationError::SpacelikeOpenSliceEndpointCount {
+                    slice: 0,
+                    observed: 0,
+                    expected: 2,
+                }
+            ))
         );
     }
 

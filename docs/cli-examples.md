@@ -1,7 +1,7 @@
 # CDT CLI Examples
 
-This page collects advanced `cdt` command-line patterns. For a first run with parameter explanations and troubleshooting, start with
-[Quick Start](QUICKSTART.md).
+This page collects `cdt` command-line patterns for users who want scriptable runs. For the notebook-first beginner path, start with
+[`notebooks/00_quickstart.ipynb`](../notebooks/00_quickstart.ipynb).
 
 The examples use the installed `cdt` binary. From a repository clone, build with `cargo build --release` and replace `cdt` with `./target/release/cdt`.
 
@@ -31,6 +31,30 @@ Physics and sampler flags:
 - `--temperature <T>`: Metropolis sampler temperature; keep `1.0` unless deliberately studying sampler behavior.
 - `--coupling-0 <κ₀>` and `--coupling-2 <κ₂>`: vertex and triangle action couplings.
 - `--cosmological-constant <λ>`: edge-count cosmological coupling. In unfixed-volume runs it controls volume growth or shrinkage.
+
+## Tiny Smoke Run
+
+This is the same small run used by the beginner notebook:
+
+```bash
+RUST_LOG=info cdt \
+  --dimension 2 \
+  --vertices-per-slice 4 \
+  --timeslices 5 \
+  --topology open-boundary \
+  --steps 100 \
+  --thermalization-steps 10 \
+  --measurement-frequency 10 \
+  --temperature 1.0 \
+  --cosmological-constant 0.46209812037329684 \
+  --seed 105 \
+  --simulate \
+  --output-csv cdt-runs/quickstart/trace.csv \
+  --output-json cdt-runs/quickstart/summary.json
+```
+
+The command builds a small 1+1-dimensional CDT strip, runs 100 Metropolis-Hastings proposal steps, and writes analysis artifacts under
+`cdt-runs/quickstart/`. Parent directories are created automatically.
 
 ## Topology Examples
 
@@ -131,7 +155,7 @@ done
 ## Performance Runs
 
 Use release builds for representative timings. For benchmark-quality comparisons, use [benches/README.md](../benches/README.md) and
-[PERFORMANCE_TESTING.md](PERFORMANCE_TESTING.md) rather than ad hoc CLI timings.
+[performance-testing.md](performance-testing.md) rather than ad hoc CLI timings.
 
 ```bash
 cdt \

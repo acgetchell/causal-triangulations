@@ -89,6 +89,8 @@ pub mod util;
 /// This module provides trait-based geometry operations that isolate CDT algorithms
 /// from specific geometry implementations.
 pub mod geometry {
+    /// Crate-owned coordinate parsers and invariant-bearing coordinate types.
+    pub mod coordinates;
     /// High-level triangulation operations.
     pub mod operations;
     /// Core geometry traits for CDT abstraction.
@@ -118,6 +120,9 @@ pub mod geometry {
     /// Convenient alias for CDT triangulations using the default backend
     pub type CdtTriangulation2D = crate::cdt::triangulation::CdtTriangulation<DefaultBackend>;
 
+    pub use coordinates::{
+        SpacetimeCoordinate, SpacetimeCoordinateComponent, SpacetimeCoordinateError,
+    };
     pub use generators::{
         DelaunayTriangulation2D, GlobalTopology, TopologyGuarantee, ToroidalConstructionMode,
     };
@@ -206,6 +211,7 @@ pub use errors::{
     SimplexCountField, TriangulationMetadataField,
 };
 pub use geometry::traits::TriangulationQuery;
+pub use geometry::{SpacetimeCoordinate, SpacetimeCoordinateComponent, SpacetimeCoordinateError};
 
 use crate::cdt::results::SimulationResultsParts;
 use std::env;
@@ -262,10 +268,38 @@ pub mod prelude {
     /// Focused exports for crate error handling.
     ///
     /// ```
+    /// use std::assert_matches;
     /// use causal_triangulations::prelude::errors::{
-    ///     BackendMutationOperation, CdtError, MetropolisMoveApplicationFailure,
+    ///     BackendMutationOperation, CdtError, CdtValidationCheck,
+    ///     CdtValidationFailure, FoliationError,
+    ///     MetropolisMoveApplicationFailure,
+    ///     SpacetimeCoordinateComponent,
     /// };
     /// use causal_triangulations::prelude::moves::MoveType;
+    ///
+    /// let foliation_err = CdtError::Foliation(FoliationError::EmptyFoliation);
+    /// assert_matches!(
+    ///     foliation_err,
+    ///     CdtError::Foliation(FoliationError::EmptyFoliation)
+    /// );
+    /// let coordinate_err = CdtError::ValidationFailed {
+    ///     check: CdtValidationCheck::Geometry,
+    ///     failure: CdtValidationFailure::VertexCoordinateNonFinite {
+    ///         vertex: "VertexKey(7v1)".to_string(),
+    ///         component: SpacetimeCoordinateComponent::Space,
+    ///         value: "NaN".to_string(),
+    ///     },
+    /// };
+    /// assert_matches!(
+    ///     coordinate_err,
+    ///     CdtError::ValidationFailed {
+    ///         failure: CdtValidationFailure::VertexCoordinateNonFinite {
+    ///             component: SpacetimeCoordinateComponent::Space,
+    ///             ..
+    ///         },
+    ///         ..
+    ///     }
+    /// );
     ///
     /// let err = CdtError::MetropolisMoveApplicationFailed {
     ///     step: 3,
@@ -280,6 +314,7 @@ pub mod prelude {
     /// assert!(format!("{err}").contains("Metropolis accepted Move31Remove"));
     /// ```
     pub mod errors {
+        pub use crate::cdt::foliation::FoliationError;
         pub use crate::errors::{
             BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck,
             CdtValidationFailure, CheckpointMoveCounter, CheckpointOperation,
@@ -288,6 +323,7 @@ pub mod prelude {
             OutputFormat, ProposalTelemetryCounter, ScalarTraceField, SimplexCountField,
             TriangulationMetadataField,
         };
+        pub use crate::geometry::SpacetimeCoordinateComponent;
     }
 
     /// Focused exports for CDT action calculations.
@@ -495,6 +531,9 @@ pub mod prelude {
             SubdivisionResult, TriangulationMut, TriangulationQuery,
         };
         pub use crate::geometry::{DelaunayBackend2D, DelaunayTriangulation2D};
+        pub use crate::geometry::{
+            SpacetimeCoordinate, SpacetimeCoordinateComponent, SpacetimeCoordinateError,
+        };
     }
 
     /// Focused exports for tests and documentation fixtures.

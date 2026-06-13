@@ -13,7 +13,7 @@ Before modifying code, agents MUST read:
 
 - `AGENTS.md` (this file)
 - **All files in `docs/dev/*.md`** – repository development rules
-- `docs/code_organization.md` – module layout and architecture
+- `docs/code-organization.md` – module layout and architecture
 
 The `docs/dev/` directory contains the authoritative development guidance for this repository. Agents must load every file in that directory before making
 changes.
@@ -212,12 +212,12 @@ Key principle:
 - **Ergodic moves**: `attempt_22_move`, `attempt_13_move`, `attempt_31_move`, `attempt_edge_flip` are Delaunay-backed, foliation-aware move kernels. They mutate
   through narrow CDT-owned edit operations, roll back failed finalized mutations, and preserve topology/foliation invariants
 - **Python scripts**: `scripts/` contains benchmark, changelog, and hardware utilities; tests in `scripts/tests/` run via pytest
-- **When adding/removing files**: Update `docs/code_organization.md`
+- **When adding/removing files**: Update `docs/code-organization.md`
 
 Architecture details are documented in:
 
 ```text
-docs/code_organization.md
+docs/code-organization.md
 ```
 
 ---

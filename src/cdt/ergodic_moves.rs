@@ -1361,6 +1361,9 @@ impl ErgodicsSystem {
             return MoveResult::HardFailure(err);
         }
         if let Err(err) = triangulation.validate_evolved_cdt() {
+            if err.is_post_mutation_candidate_rejection() {
+                return MoveResult::GeometricViolation;
+            }
             return MoveResult::HardFailure(err);
         }
 
@@ -2128,7 +2131,8 @@ fn is_toroidal_foliated(triangulation: &CdtTriangulation2D) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::{CdtValidationCheck, CdtValidationFailure};
+    use crate::cdt::foliation::FoliationError;
+    use crate::errors::{CdtValidationCheck, CdtValidationFailure, DelaunayValidationLevel};
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
     use approx::assert_relative_eq;
@@ -2450,16 +2454,29 @@ mod tests {
     }
 
     #[test]
-    fn move_13_inserts_labeled_vertex() {
+    fn open_boundary_move_13_rolls_back_slab_embedding_violation() {
         let mut system = ErgodicsSystem::new();
         let mut triangulation = single_triangle();
-        let before_vertices = triangulation.vertex_count();
+        let counts_before = (
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+            triangulation.metadata().modification_count(),
+        );
 
         let result = system.attempt_13_move(&mut triangulation);
 
         assert_eq!(system.stats.moves_13_attempted, 1);
-        assert_eq!(result, MoveResult::Success);
-        assert_eq!(triangulation.vertex_count(), before_vertices + 1);
+        assert_eq!(result, MoveResult::GeometricViolation);
+        assert_eq!(
+            (
+                triangulation.vertex_count(),
+                triangulation.edge_count(),
+                triangulation.face_count(),
+                triangulation.metadata().modification_count(),
+            ),
+            counts_before
+        );
         assert!(
             triangulation
                 .geometry()
@@ -2565,6 +2582,82 @@ mod tests {
     }
 
     #[test]
+    fn is_post_mutation_candidate_rejection_classifies_topological_shape_errors() {
+        let shape_errors = [
+            CdtError::TopologyMismatch {
+                topology: CdtTopology::Toroidal,
+                euler_characteristic: 1,
+                expected_euler_characteristics: vec![0],
+                vertices: 4,
+                edges: 5,
+                faces: 2,
+            },
+            CdtError::Foliation(FoliationError::SpacelikeNonClosedRing {
+                slice: 0,
+                walked: 3,
+                expected: 4,
+            }),
+            CdtError::Foliation(FoliationError::SpacelikeOpenSliceEndpointCount {
+                slice: 1,
+                observed: 3,
+                expected: 2,
+            }),
+            CdtError::Foliation(FoliationError::OpenBoundarySlabEdgeCrossing {
+                lower_slice: 0,
+                first_edge: "a->d".to_string(),
+                second_edge: "b->c".to_string(),
+            }),
+            CdtError::Foliation(FoliationError::OpenBoundarySpatialOrderMismatch {
+                slice: 2,
+                path_vertices: 4,
+                coordinate_vertices: 4,
+            }),
+            CdtError::Foliation(FoliationError::OpenBoundaryTimeCoordinateMismatch {
+                label: 2,
+                vertex: "VertexKey(4v1)".to_string(),
+                y: "2.1".to_string(),
+            }),
+        ];
+
+        for err in shape_errors {
+            assert!(
+                err.is_post_mutation_candidate_rejection(),
+                "shape-invalid post-mutation candidate should be an ordinary rejection: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn is_post_mutation_candidate_rejection_keeps_unexpected_failures_hard() {
+        let hard_errors = [
+            CdtError::Foliation(FoliationError::MissingVertexLabel { vertex: 0 }),
+            CdtError::Foliation(FoliationError::StaleBookkeeping {
+                synced_at_modification: Some(1),
+                current_modification_count: 2,
+            }),
+            CdtError::DelaunayValidationFailed {
+                level: DelaunayValidationLevel::Four,
+                detail: "level-four fixture failure".to_string(),
+            },
+            CdtError::ValidationFailed {
+                check: CdtValidationCheck::Causality,
+                failure: CdtValidationFailure::InvalidCdtTriangle {
+                    face: "FaceKey(1f1)".to_string(),
+                    spacelike_edges: 0,
+                    timelike_edges: 3,
+                },
+            },
+        ];
+
+        for err in hard_errors {
+            assert!(
+                !err.is_post_mutation_candidate_rejection(),
+                "unexpected post-mutation validation failure should remain hard: {err}"
+            );
+        }
+    }
+
+    #[test]
     fn proposal_site_count_matches_open_boundary_move_availability() {
         let mut system = ErgodicsSystem::new();
         let mut triangulation = single_triangle();
@@ -2577,16 +2670,31 @@ mod tests {
             0
         );
 
+        let counts_before = (
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+            triangulation.metadata().modification_count(),
+        );
         let insert = system.attempt_13_move(&mut triangulation);
-        assert_eq!(insert, MoveResult::Success);
-        assert_eq!(proposal_site_count(&triangulation, MoveType::Move13Add), 3);
+        assert_eq!(insert, MoveResult::GeometricViolation);
+        assert_eq!(
+            (
+                triangulation.vertex_count(),
+                triangulation.edge_count(),
+                triangulation.face_count(),
+                triangulation.metadata().modification_count(),
+            ),
+            counts_before
+        );
+        assert_eq!(proposal_site_count(&triangulation, MoveType::Move13Add), 1);
         assert_eq!(
             proposal_site_count(&triangulation, MoveType::Move31Remove),
-            1
+            0
         );
 
         let removal = system.attempt_31_move(&mut triangulation);
-        assert_eq!(removal, MoveResult::Success);
+        assert_eq!(removal, MoveResult::GeometricViolation);
         assert_eq!(proposal_site_count(&triangulation, MoveType::Move13Add), 1);
         assert_eq!(
             proposal_site_count(&triangulation, MoveType::Move31Remove),
@@ -2614,14 +2722,14 @@ mod tests {
 
         let result =
             system.apply_proposal_site(&mut triangulation, MoveType::Move13Add, insertion_site);
-        assert_eq!(result, MoveResult::Success);
+        assert_eq!(result, MoveResult::GeometricViolation);
 
         let removal_selection = system.select_proposal_site(&triangulation, MoveType::Move31Remove);
         assert_eq!(
             removal_selection.site_count,
             proposal_site_count(&triangulation, MoveType::Move31Remove)
         );
-        assert!(removal_selection.site.is_some());
+        assert!(removal_selection.site.is_none());
     }
 
     #[test]
@@ -2667,7 +2775,7 @@ mod tests {
     }
 
     #[test]
-    fn proposal_site_cache_refreshes_after_accepted_mutation() {
+    fn proposal_site_cache_remains_current_after_rolled_back_mutation() {
         let mut system = ErgodicsSystem::with_seed(11);
         let mut triangulation = single_triangle();
         let initial_modification_count = triangulation.metadata().modification_count();
@@ -2687,16 +2795,18 @@ mod tests {
 
         let result =
             system.apply_proposal_site(&mut triangulation, MoveType::Move13Add, insertion_site);
-        assert_eq!(result, MoveResult::Success);
-        let mutated_modification_count = triangulation.metadata().modification_count();
-        assert!(mutated_modification_count > initial_modification_count);
+        assert_eq!(result, MoveResult::GeometricViolation);
+        assert_eq!(
+            triangulation.metadata().modification_count(),
+            initial_modification_count
+        );
         assert_eq!(
             system
                 .site_cache
                 .family(MoveType::Move13Add)
                 .modification_count,
             Some(initial_modification_count),
-            "accepted mutations leave the old cache stale until the next selection"
+            "rolled-back mutations leave the old cache current"
         );
 
         let removal_selection = system.select_proposal_site(&triangulation, MoveType::Move31Remove);
@@ -2705,13 +2815,13 @@ mod tests {
                 .site_cache
                 .family(MoveType::Move31Remove)
                 .modification_count,
-            Some(mutated_modification_count)
+            Some(initial_modification_count)
         );
         assert_eq!(
             removal_selection.site_count,
             proposal_site_count(&triangulation, MoveType::Move31Remove)
         );
-        assert!(removal_selection.site.is_some());
+        assert!(removal_selection.site.is_none());
     }
 
     #[test]
@@ -2779,8 +2889,8 @@ mod tests {
         let mut proposed_state = original.clone();
         let result =
             system.apply_proposal_site(&mut proposed_state, MoveType::Move13Add, insertion_site);
-        assert_eq!(result, MoveResult::Success);
-        assert_ne!(
+        assert_eq!(result, MoveResult::GeometricViolation);
+        assert_eq!(
             proposed_state.metadata().modification_count(),
             original.metadata().modification_count()
         );
@@ -2794,7 +2904,7 @@ mod tests {
                 .modification_count,
             Some(proposed_state.metadata().modification_count())
         );
-        assert!(proposed_selection.site.is_some());
+        assert!(proposed_selection.site.is_none());
 
         let original_selection = system.select_proposal_site(&original, MoveType::Move13Add);
         assert_eq!(
@@ -2842,6 +2952,43 @@ mod tests {
                 .expect("second selection should populate cache instance identity")
         );
         assert_eq!(second_selection.site_count, first_selection.site_count);
+    }
+
+    #[test]
+    fn proposal_site_cache_refreshes_across_topology_replacement() {
+        let mut system = ErgodicsSystem::with_seed(11);
+        let toroidal =
+            CdtTriangulation2D::from_toroidal_cdt(4, 3).expect("toroidal fixture should build");
+        let strip = CdtTriangulation2D::from_cdt_strip(4, 3).expect("strip fixture should build");
+        assert_eq!(
+            toroidal.metadata().modification_count(),
+            strip.metadata().modification_count()
+        );
+        assert_ne!(toroidal.instance_id(), strip.instance_id());
+
+        let toroidal_selection = system.select_proposal_site(&toroidal, MoveType::Move13Add);
+        assert_eq!(
+            system.site_cache.family(MoveType::Move13Add).instance_id,
+            Some(toroidal.instance_id())
+        );
+        let Some(toroidal_site) = toroidal_selection.site else {
+            panic!("toroidal fixture should expose insertion sites");
+        };
+        assert!(matches!(toroidal_site, ProposalSite::ToroidalInsertion(_)));
+
+        let strip_selection = system.select_proposal_site(&strip, MoveType::Move13Add);
+        assert_eq!(
+            system.site_cache.family(MoveType::Move13Add).instance_id,
+            Some(strip.instance_id())
+        );
+        assert_eq!(
+            strip_selection.site_count,
+            proposal_site_count(&strip, MoveType::Move13Add)
+        );
+        let Some(strip_site) = strip_selection.site else {
+            panic!("open-boundary strip fixture should expose insertion sites");
+        };
+        assert!(matches!(strip_site, ProposalSite::FaceSubdivision { .. }));
     }
 
     #[test]
@@ -2957,18 +3104,31 @@ mod tests {
     }
 
     #[test]
-    fn move_31_removes_degree_three() {
+    fn open_boundary_move_31_reports_unavailable_without_inverse_site() {
         let mut system = ErgodicsSystem::new();
         let mut triangulation = single_triangle();
         let result = system.attempt_13_move(&mut triangulation);
-        assert_matches!(result, MoveResult::Success);
-        let before_vertices = triangulation.vertex_count();
+        assert_matches!(result, MoveResult::GeometricViolation);
+        let counts_before = (
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+            triangulation.metadata().modification_count(),
+        );
 
         let result = system.attempt_31_move(&mut triangulation);
 
         assert_eq!(system.stats.moves_31_attempted, 1);
-        assert_eq!(result, MoveResult::Success);
-        assert_eq!(triangulation.vertex_count(), before_vertices - 1);
+        assert_eq!(result, MoveResult::GeometricViolation);
+        assert_eq!(
+            (
+                triangulation.vertex_count(),
+                triangulation.edge_count(),
+                triangulation.face_count(),
+                triangulation.metadata().modification_count(),
+            ),
+            counts_before
+        );
         assert!(
             triangulation
                 .geometry()

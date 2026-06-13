@@ -22,6 +22,7 @@ These commands ensure:
 - linting
 - static analysis
 - tests
+- notebook execution and output hygiene
 
 ## Justfile Usage
 
@@ -108,6 +109,7 @@ This runs:
 - unit tests
 - integration tests
 - documentation builds
+- notebook output hygiene and headless execution
 - validated example runs
 - benchmark compilation
 
@@ -334,8 +336,26 @@ Python scripts are linted and type-checked:
 ```bash
 just python-lint       # ruff format + ruff check
 just python-fix        # ruff check --fix + ruff format
-just python-typecheck  # ty check (blocking)
+just python-typecheck  # strict ty check (blocking)
 just test-python       # pytest
+```
+
+## Notebook Validation
+
+Notebook source files should not commit generated outputs or execution counts. Notebook code is also extracted and checked with Ruff and ty so `.ipynb` cells
+follow the same Python standards as repository scripts. Use:
+
+```bash
+just notebook-output-check  # Non-mutating output and execution-count hygiene check
+just notebook-check         # Output hygiene, extracted-code checks, and fast headless notebook execution
+just notebook-check-slow    # Also execute heavier run-debugging notebooks
+```
+
+`just ci` includes `notebook-check`, which executes the quickstart and visualization notebooks but only lints heavier analysis notebooks. Headless execution
+writes executed notebooks under `target/notebooks/` and leaves the source notebooks unchanged. To clear source notebook outputs before committing, run:
+
+```bash
+just notebook-clear-outputs-all
 ```
 
 ## Benchmark And Release Hygiene
@@ -422,6 +442,7 @@ just publish-check
 | Run Python tests      | `just test-python`       |
 | Run examples          | `just examples`          |
 | Validate examples     | `just examples-validate` |
+| Validate notebooks    | `just notebook-check`    |
 | Run full CI           | `just ci`                |
 | Pre-commit check      | `just commit-check`      |
 

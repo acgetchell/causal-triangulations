@@ -1,32 +1,32 @@
 # causal-triangulations
 
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20513229.svg)](https://doi.org/10.5281/zenodo.20513229)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20513228.svg)](https://doi.org/10.5281/zenodo.20513228)
 [![Crates.io](https://img.shields.io/crates/v/causal-triangulations.svg)](https://crates.io/crates/causal-triangulations)
 [![Downloads](https://img.shields.io/crates/d/causal-triangulations.svg)](https://crates.io/crates/causal-triangulations)
+[![License](https://img.shields.io/crates/l/causal-triangulations.svg)](LICENSE)
 [![Docs.rs](https://docs.rs/causal-triangulations/badge.svg)](https://docs.rs/causal-triangulations)
 [![CI][ci-badge]][ci-workflow]
 [![rust-clippy analyze][clippy-badge]][clippy-workflow]
 [![Codecov](https://codecov.io/gh/acgetchell/causal-triangulations/graph/badge.svg?token=CsbOJBypGC)](https://codecov.io/gh/acgetchell/causal-triangulations)
 [![Audit dependencies][audit-badge]][audit-workflow]
 
-Causal Dynamical Triangulations for quantum gravity in [Rust], built on fast [Delaunay triangulation] primitives
-and composable, adaptable Metropolis-Hastings sampling via [`markov-chain-monte-carlo`].
+Causal Dynamical Triangulations for quantum gravity in [Rust], built on fast [Delaunay triangulation] primitives and composable, adaptable
+[Metropolis-Hastings sampling].
 
 ## Contents
 
 - [Introduction](#-introduction)
-- [Project Status](#-project-status)
-- [Ensemble And Volume Behavior](#-ensemble-and-volume-behavior)
 - [Features](#-features)
+- [Quickstart](#-quickstart)
+- [Scientific Basis](#-scientific-basis)
 - [Documentation Map](#-documentation-map)
-- [Requirements](#-requirements)
-- [Running The Binary](#-running-the-binary)
 - [Ecosystem](#-ecosystem)
 - [Benchmarking](#-benchmarking)
 - [Roadmap](#-roadmap)
-- [How to Contribute](#-how-to-contribute)
+- [Contributing](#-contributing)
+- [Citation](#-citation)
 - [References](#-references)
-- [AI Agents](#-ai-agents)
+- [AI-assisted Development](#-ai-assisted-development)
 - [License](#-license)
 
 ## 🌌 Introduction
@@ -36,118 +36,97 @@ path integral over causally triangulated spacetimes and evaluating it using Mark
 [“Non-perturbative Lorentzian quantum gravity, causality and topology change”](https://arxiv.org/abs/hep-th/0105267). The library leverages high-performance
 [Delaunay triangulation] backends and provides a foundational toolkit for CDT research and exploration.
 
-## 🚧 Project Status
-
-**v0.1.0 foundation release** — The validated 1+1 CDT foundation is in place, including toroidal volume-changing moves, nonuniform initial volume profiles,
-upstream-backed MCMC sampler mechanics, trace/summary exports, resumable checkpoints, and CI-aligned validation tooling.
-
-The library currently supports validated 1+1 CDT construction, foliation checks, Metropolis sampling, resumable checkpoints, and core observables.
-Higher-dimensional CDT support, visualization/export workflows, and advanced ensemble-analysis helpers remain roadmap work.
-
-Current scope:
-
-- Supported now: validated 1+1 open-boundary and toroidal CDT construction, local CDT move proposals, Metropolis sampling, trace/summary output, and core
-  observables.
-- Not supported yet: 2+1 or 3+1 CDT, production volume fixing, automated λ scans, visualization/export workflows, and full ensemble-analysis tooling.
-- Planned next: 1+1 refinement work for finite-volume scans, release binaries, analysis ergonomics, and explicit topology tracks for higher-dimensional CDT.
-
-For a copy-paste local run written for physicists rather than Rust contributors, start with the [Quick Start](docs/QUICKSTART.md).
-
-See [`docs/roadmap.md`](docs/roadmap.md) for current direction, near-term candidates, and non-goals.
-
-## ⚖️ Ensemble And Volume Behavior
-
-Current simulations do not apply volume fixing. Volume-changing moves may change the total number of vertices and simplices during a run, so the sampled
-ensemble is the grand-canonical, unfixed-volume ensemble defined by the configured CDT action and Metropolis-Hastings proposal rules. This is intentional for
-now: in 1+1 CDT, unfixed-volume simulations controlled by the cosmological constant are a standard toy-model setting, as in Israel and Lindner,
-[Quantum gravity on a laptop: 1+1 Dimensional Causal Dynamical Triangulation simulation](https://doi.org/10.1016/j.rinp.2012.10.001).
-
-In a grand-canonical CDT ensemble, the cosmological constant is the coupling that controls volume growth or shrinkage because it is conjugate to the lattice
-volume term in the action. Use `--cosmological-constant` to tune that behavior. Values too far from the useful finite-volume regime can drive runs toward
-minimum-volume configurations or toward rapid growth; this is expected physics for the unfixed-volume ensemble, not volume fixing.
-Automated λ-scan utilities for finding practical finite-volume windows are planned as [#143](https://github.com/acgetchell/causal-triangulations/issues/143);
-for v0.1.0, tune `--cosmological-constant` manually and inspect the reported volume and acceptance diagnostics.
-
-The default 1+1 action constants use `κ0 = 0`, `κ2 = 0`, and an edge-count cosmological constant `(2 / 3) ln 2`, mapping the crate's `λ N1` convention to the
-standard 2D CDT critical triangle-volume coupling `λc = ln 2` for closed 1+1 triangulations, where `N1 = 3 N2 / 2`. Open-boundary strips have boundary-count
-corrections, so the same default should be treated as a practical baseline rather than an exact open-boundary critical value. The Delaunay backend supplies
-construction and validation infrastructure for a well-formed initial PL triangulation; the simulation ensemble is defined by CDT moves, constraints, action,
-and Metropolis-Hastings acceptance, not by maintaining the Delaunay condition after every move.
-
-Higher-dimensional CDT studies often use explicit approximate volume fixing for finite-size numerical work. For example, Ambjørn et al. discuss quadratic
-volume fixing in [The Semiclassical Limit of Causal Dynamical Triangulations](https://arxiv.org/abs/1102.3929), and the toroidal phase-structure study uses
-quadratic volume fixing in [The phase structure of Causal Dynamical Triangulations with toroidal spatial topology](https://arxiv.org/abs/1802.10434). This
-crate may add such a mode later, but it should be opt-in because it samples a modified action rather than the current bare unfixed-volume ensemble.
-
 ## ✨ Features
 
-- Delaunay-built 1+1 CDT strip and periodic toroidal S¹×S¹ constructors with foliation invariants
-- Foliation-aware topology, causality, and simplex-classification validation
-- Proposal-before-mutation Metropolis-Hastings simulation with rollback on failed accepted moves
-- Regge action calculation with configurable coupling constants
 - Alexander/Pachner-style local move proposals with causal constraints
-- Volume-profile, Hausdorff-dimension, and spectral-dimension observables for CDT analysis
-- Trace CSV simulation output for external analysis workflows; JSON summary/metadata for CLI/config export
-- Resumable serde-backed CDT/MCMC checkpoints for durable chain continuation
-- Focused public preludes for simulation, triangulation, geometry, action, and observables
 - Command-line interface, examples, Criterion benchmarks, and CI-aligned validation tooling
 - Cross-platform compatibility: Linux, macOS, Windows
+- Delaunay-built 1+1 CDT strip and periodic toroidal S¹×S¹ constructors with foliation invariants
+- Focused public preludes for simulation, triangulation, geometry, action, and observables
+- Foliation-aware topology, causality, and simplex-classification validation
+- Notebook-first quickstart for physicists, AI/ML users, and Rust contributors
+- Proposal-before-mutation Metropolis-Hastings simulation with rollback on failed accepted moves
+- Regge action calculation with configurable coupling constants
+- Resumable serde-backed CDT/MCMC checkpoints for durable chain continuation
+- Trace CSV simulation output for external analysis workflows; JSON summary/metadata for CLI/config export
+- Volume-profile, Hausdorff-dimension, and spectral-dimension observables for CDT analysis
 
-See [CHANGELOG.md](CHANGELOG.md) for release history.
+See [CHANGELOG.md](CHANGELOG.md) for release history and [`docs/roadmap.md`](docs/roadmap.md) for current direction, near-term candidates, and non-goals.
+
+## 🚀 Quickstart
+
+For most users, start with the notebook-first local run:
+
+```bash
+just notebook-setup
+just notebook
+```
+
+`just notebook-setup` installs the uv-managed notebook dependency group, and `just notebook` launches JupyterLab with
+[`notebooks/00_quickstart.ipynb`](notebooks/00_quickstart.ipynb) loaded. The recipes are defined in the `justfile`; inspect that file if you want to see
+exactly what they run.
+
+The notebook uses the `cdt` binary as the engine, then loads the trace CSV and JSON summary into plots. It also explains setup, installation expectations,
+parameters, outputs, and small first experiments.
+
+### Requirements
+
+- Rust 1.96.0 or newer (pinned by `Cargo.toml` and `rust-toolchain.toml`)
+- `uv` for the notebook environment and repository-managed Python tooling
+
+Rust keeps the simulation engine memory-safe and fast while preserving validation tooling for tests, documentation, benchmarks, and CI parity.
+
+For headless CI or batch execution, use:
+
+```bash
+just notebook-execute
+```
+
+For Slurm and Open OnDemand workflows, see [`docs/hpc.md`](docs/hpc.md).
+
+Before committing edited notebooks, clear generated outputs and execution counts:
+
+```bash
+just notebook-clear-outputs-all
+```
+
+Use the binary directly when you want a scriptable run. For CLI usage, topology examples, and logging/output patterns, see
+[`docs/cli-examples.md`](docs/cli-examples.md).
+
+## 🧪 Scientific Basis
+
+CDT approximates the gravitational path integral by summing over discrete, foliated spacetime geometries and sampling them with Markov Chain Monte Carlo. This
+crate currently implements a validated 1+1-dimensional CDT foundation: it builds open-boundary and toroidal initial triangulations, checks foliation,
+topology, causality, and simplex classification invariants, and runs local CDT move proposals through a Metropolis-Hastings sampler.
+
+The validation is computational and ensemble-specific. The crate can check that generated and simulated triangulations satisfy the implemented discrete CDT
+contract, that accepted moves preserve the configured topology and foliation constraints, and that proposal asymmetry is handled through the sampler's
+Hastings correction. It does not prove continuum-limit physics, chain mixing, finite-size scaling, or suitability of a particular parameter choice for a
+scientific study.
+
+Current simulations are grand-canonical, unfixed-volume runs. Volume-changing `(1,3)` and `(3,1)` moves may grow or shrink the lattice, and the cosmological
+constant controls that behavior through the action. This is intentional for the 1+1 foundation release; production volume fixing, automated λ scans, and
+higher-dimensional CDT remain future work.
+
+For the detailed scientific contract, ensemble scope, backend role, and parameter interpretation, see
+[`docs/scientific-basis.md`](docs/scientific-basis.md). Move semantics and detailed-balance notes live in [`docs/moves.md`](docs/moves.md) and
+[`docs/metropolis.md`](docs/metropolis.md).
 
 ## 🗺️ Documentation Map
 
-- [Quick Start](docs/QUICKSTART.md) — first local 1+1 CDT run, parameter meanings, output files, and troubleshooting
-- [CLI Examples](docs/CLI_EXAMPLES.md) — advanced command-line usage and output workflows
+- [CDT Spacetime Visualization notebook](notebooks/01_spacetime_visualization.ipynb) — example 1+1 CDT mesh visualization generator
+- [CLI Examples](docs/cli-examples.md) — command-line usage and output workflows
+- [Code Organization](docs/code-organization.md) — module layout, backend boundaries, and architecture notes
+- [Example Scripts](examples/scripts/README.md) — maintained shell workflows for simulations, sweeps, and timing checks
+- [Foliation](docs/foliation.md) — time labels, spacelike/timelike classification, causality validation, and toroidal time handling
+- [HPC Notebook Workflows](docs/hpc.md) — Slurm, Open OnDemand, and cluster cache setup
 - [Metropolis](docs/metropolis.md) — proposal-before-mutation ordering, detailed balance, trace semantics, and sampler/backend boundaries
 - [Moves](docs/moves.md) — CDT local move semantics, proposal ratios, rollback behavior, and action calibration
-- [Foliation](docs/foliation.md) — time labels, spacelike/timelike classification, causality validation, and toroidal time handling
-- [Roadmap](docs/roadmap.md) — near-term work, higher-dimensional topology tracks, and non-goals
-- [Code Organization](docs/code_organization.md) — module layout, backend boundaries, and architecture notes
+- [Polars Analysis Caches notebook](notebooks/02_analysis_caches.ipynb) — local Parquet caches and diagnostic plots for debugging CDT CSV/JSON outputs
+- [Quickstart notebook](notebooks/00_quickstart.ipynb) — notebook-first local 1+1 CDT run, parameter meanings, output files, and troubleshooting
 - [References](REFERENCES.md) — physics, numerical, and computational-geometry citations
-
-## ⚙️ Requirements
-
-- Rust 1.96.0 or newer (pinned by `Cargo.toml` and `rust-toolchain.toml`)
-
-**Why Rust for CDT?**
-
-- **Memory safety** for large-scale simulations
-- **Zero-cost abstractions** for performance-critical geometry operations
-- **Validation tooling** for tests, documentation, benchmarks, and CI parity
-
-## 💻 Running The Binary
-
-The crate installs a `cdt` binary. Use it to construct an initial 1+1 CDT triangulation, optionally run the Metropolis move loop, and write analysis-friendly
-trace CSV output plus JSON summary/metadata.
-
-```bash
-cargo install causal-triangulations
-cdt --help
-
-cdt \
-  --dimension 2 \
-  --vertices-per-slice 4 \
-  --timeslices 5 \
-  --steps 100 \
-  --thermalization-steps 10 \
-  --measurement-frequency 10 \
-  --seed 105 \
-  --simulate \
-  --output-csv cdt-runs/quickstart/trace.csv \
-  --output-json cdt-runs/quickstart/summary.json
-```
-
-For a fully annotated first run, see [Quick Start](docs/QUICKSTART.md). For advanced CLI usage, topology examples, and logging/output patterns, see
-[`docs/CLI_EXAMPLES.md`](docs/CLI_EXAMPLES.md).
-
-The `examples/scripts/` directory contains ready-to-use research workflows:
-
-- **`basic_simulation.sh`** - Simple simulation command
-- **`parameter_sweep.sh`** - Temperature sweep setup
-- **`performance_test.sh`** - Construction and simulation timing across system sizes
-
-For detailed documentation, sample output, and usage instructions for each script, see [examples/scripts/README.md](examples/scripts/README.md).
+- [Roadmap](docs/roadmap.md) — near-term work, higher-dimensional topology tracks, and non-goals
+- [Scientific Basis](docs/scientific-basis.md) — CDT scope, validated invariants, current ensemble, and interpretation boundaries
 
 ## 🧩 Ecosystem
 
@@ -166,28 +145,10 @@ The design separates geometry, sampling, and CDT-specific physics. Within this c
 
 ## 📈 Benchmarking
 
-Comprehensive performance benchmarks using [Criterion]:
+Performance validation uses [Criterion] benchmark suites plus repository recipes for repeatable local and CI checks. Run `just bench-ci` for the CI benchmark
+contract and `just perf-check` for a local regression check.
 
-```bash
-# Run all benchmarks
-cargo bench
-
-# Specific benchmark categories
-cargo bench triangulation_creation
-cargo bench metropolis_simulation
-cargo bench action_calculations
-
-# CI regression benchmark contract
-just bench-ci
-
-# Performance regression testing
-just perf-check          # Check for performance regressions
-just perf-baseline       # Save performance baseline
-just perf-report         # Generate detailed performance report
-just perf-trends 7       # Analyze performance trends over 7 days
-```
-
-See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/PERFORMANCE_TESTING.md`](docs/PERFORMANCE_TESTING.md) for comprehensive
+See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/performance-testing.md`](docs/performance-testing.md) for comprehensive
 performance testing workflow documentation.
 
 ## 🛣️ Roadmap
@@ -195,60 +156,34 @@ performance testing workflow documentation.
 The high-level roadmap, including 1+1 maturity work, future 2+1 and 3+1 CDT topology tracks, observables, dual/Voronoi geometry, visualization, and non-goals,
 lives in [`docs/roadmap.md`](docs/roadmap.md).
 
-## 🤝 How to Contribute
+## 🤝 Contributing
 
-We welcome contributions. Here's a short local workflow:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full contributor guide: project layout, development workflow, code style, testing, documentation layout,
+performance/benchmarking, and release support. Community expectations live in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). AI assistants should follow
+[AGENTS.md](AGENTS.md).
 
-```bash
-# Clone and setup
-git clone https://github.com/acgetchell/causal-triangulations.git
-cd causal-triangulations
+Quick local workflow: run `just setup` once, then run `just check` before opening a pull request. For the full command list, run `just --list`.
 
-# Traditional approach
-cargo build && cargo test
+## 📚 Citation
 
-# Modern approach (recommended) - install just command runner
-cargo install just
-just setup           # Complete environment setup
-just check           # Run all linters/validators
-just fix             # Apply formatters/auto-fixes
-just --list          # See all available development commands
+If you use this software in academic work or downstream research software, cite the Zenodo DOI and include the software metadata from
+[CITATION.cff](CITATION.cff).
 
-# Run examples
-just run-example     # Basic simulation
-./examples/scripts/basic_simulation.sh      # Shell script example
-./examples/scripts/parameter_sweep.sh       # Temperature sweep setup
-./examples/scripts/performance_test.sh      # Performance benchmarking across system sizes
+- DOI: <https://doi.org/10.5281/zenodo.20513228>
+- Citation metadata: [CITATION.cff](CITATION.cff)
+
+```bibtex
+@software{getchell_causal_triangulations,
+  author = {Adam Getchell},
+  title = {causal-triangulations: A Causal Dynamical Triangulation library for quantum gravity research},
+  doi = {10.5281/zenodo.20513228},
+  url = {https://github.com/acgetchell/causal-triangulations}
+}
 ```
 
-`just setup` installs or verifies Cargo-hosted tools such as `dprint`, `rumdl`, `taplo-cli`, `typos-cli`, `cargo-nextest`, `cargo-llvm-cov`, and `zizmor`.
-It also prints a checklist for external tools such as `uv`, `actionlint`, `shfmt`, `shellcheck`, and `jq`.
+For release-specific fields such as version, release date, and ORCID, prefer [CITATION.cff](CITATION.cff).
 
-**Just Workflows:**
-
-- `just check` - Run linters/validators (non-mutating)
-- `just fix` - Apply formatters/auto-fixes (mutating)
-- `just ci` - CI parity (mirrors GitHub Actions workflow [`ci.yml`](.github/workflows/ci.yml))
-- `just commit-check` - Comprehensive pre-commit validation
-
-**Repository tooling (via `just`):**
-
-- `just changelog` - Regenerate `CHANGELOG.md`
-- `just changelog-unreleased v0.1.0` - Generate a release changelog before the final tag exists
-- `just tag v0.1.0` - Create an annotated git tag from changelog content
-- `just perf-help` - Show performance analysis commands (`perf-baseline`, `perf-check`, etc.)
-
-For comprehensive guidelines on contributing, development environment setup, testing, and code organization, please see [CONTRIBUTING.md](CONTRIBUTING.md).
-
-This includes information about:
-
-- Building and testing the library
-- Running benchmarks and performance analysis
-- Code style and standards
-- Submitting changes and pull requests
-- Code organization and development tools
-
-## 📚 References
+## 🔎 References
 
 For a comprehensive list of academic references and bibliographic citations used throughout the library, see [REFERENCES.md](REFERENCES.md).
 
@@ -259,21 +194,32 @@ This includes foundational work on:
 - Computational geometry and Delaunay triangulations
 - Discrete approaches to general relativity
 
-## 🤖 AI Agents
+## 🤖 AI-assisted Development
 
-AI coding assistants should read [AGENTS.md](AGENTS.md) before proposing or applying changes. See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup,
-testing, benchmarks, style, and pull-request guidance.
+This repository contains an [AGENTS.md](AGENTS.md) file, which defines the rules and invariants for AI coding assistants and autonomous agents working on this
+codebase.
 
-## 📝 License
+Portions of this library were developed with the assistance of AI tools including [ChatGPT], [Claude], [Codex], and [CodeRabbit].
 
-This project's license is specified in [LICENSE](LICENSE).
+All accepted code and documentation changes are reviewed, edited, and validated by the author.
+
+For tool citation metadata, see the [AI-assisted development tools](REFERENCES.md#ai-assisted-development-tools) section of [REFERENCES.md](REFERENCES.md).
+
+## 📜 License
+
+This project is licensed under the [BSD 3-Clause License](LICENSE).
 
 ---
 
 [Rust]: https://rust-lang.org
 [Delaunay triangulation]: https://crates.io/crates/delaunay
 [`markov-chain-monte-carlo`]: https://crates.io/crates/markov-chain-monte-carlo
+[Metropolis-Hastings sampling]: https://crates.io/crates/markov-chain-monte-carlo
 [Criterion]: https://github.com/bheisler/criterion.rs
+[ChatGPT]: https://openai.com/chatgpt
+[Claude]: https://www.anthropic.com/claude
+[Codex]: https://openai.com/codex
+[CodeRabbit]: https://coderabbit.ai/
 [ci-badge]: https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml/badge.svg
 [ci-workflow]: https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml
 [clippy-badge]: https://github.com/acgetchell/causal-triangulations/actions/workflows/rust-clippy.yml/badge.svg
