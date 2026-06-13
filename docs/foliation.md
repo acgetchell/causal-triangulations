@@ -59,6 +59,11 @@ The regular open-boundary strip constructor places vertices in a lightly perturb
 
 Parameters: `vertices_per_slice ≥ 4`, `num_slices ≥ 2`.
 
+`from_filtered_delaunay_strip()` is the CDT-plusplus-influenced construction path. It starts from an overcomplete labeled Delaunay triangulation, counts
+non-strict causal simplices, removes a vertex incident to an offending simplex through the backend `remove_vertex` operation, rebuilds foliation bookkeeping
+from live vertex labels, and repeats until the count converges to zero. The current pass budget is bounded, but success is defined by the CDT invariant, not by
+the number of cleanup passes used.
+
 `from_cdt_strip_profile()` places each open spatial slice according to the corresponding profile entry and delegates triangulation to the Delaunay point-data
 constructor. The returned mesh must pass the same initial-constructor contract as the regular open strip: upstream Delaunay Level 1-4 validation plus CDT
 topology, foliation, causality, and strict Up/Down simplex classification.
@@ -105,6 +110,28 @@ Simplex types are encoded as `i32` simplex data (`Up = 1`, `Down = -1`) and can 
 foliated triangulations this bulk path is strict: every face must classify as `Up` or `Down`, otherwise `classify_all_simplices()` and
 `validate_simplex_classification()` return a validation error.
 
+## Strict Causal Simplex Invariant
+
+For a current foliated triangulation, every top-dimensional simplex must be strictly causal. In the current 1+1 implementation, that means every finite
+triangle face must classify as `Up` `(2,1)` or `Down` `(1,2)`. Pure spacelike faces, all-timelike/non-spacelike faces, faces spanning more than adjacent time
+slices, malformed faces, and faces with missing time labels are all violations.
+
+This is a CDT-domain invariant. It is deliberately separate from upstream Delaunay Level 4 validation: Delaunay-ness asks whether the geometric triangulation
+satisfies an empty-circumsphere predicate, while strict causal simplex validation asks whether the foliation makes every top-dimensional cell an allowed CDT
+cell. A useful mental model is a parallel CDT validation level rather than Delaunay Level 5:
+
+- initial Delaunay-backed constructors require upstream Delaunay Level 4 and zero strict causal simplex violations;
+- evolved CDT states must remain structurally valid and keep zero strict causal simplex violations, but they are not required to preserve the Delaunay
+  empty-circumsphere property.
+
+`strict_causal_simplex_violation_count()` exposes the invariant as a count. Valid constructor output and valid post-move states must have count zero. The
+filtered constructor uses the count as its convergence condition, following the CDT-plusplus practice of repeatedly removing acausal or unclassified
+simplices/vertices until no violations remain. Unlike `validate_simplex_classification()`, this counter requires current foliation bookkeeping so that zero
+means the strict causal invariant was actually evaluated.
+
+When higher-dimensional CDT support is added, this invariant should remain dimension-neutral: every top-dimensional simplex must realize one of the allowed
+causal CDT simplex types for that dimension, such as the corresponding adjacent-slice distributions in 2+1, 3+1, and 4+1 dimensions.
+
 ## Validation
 
 Two validation methods enforce foliation correctness:
@@ -138,6 +165,14 @@ Strict simplex-classification check:
 - Succeeds vacuously when no foliation is present
 - Requires every foliated face to classify as `Up` or `Down`
 - Returns `CdtError::ValidationFailed { check: "simplex_classification", .. }` for same-slice or otherwise unclassifiable triangles
+
+### `strict_causal_simplex_violation_count()`
+
+Invariant counter:
+
+- Requires stored foliation bookkeeping, so unfoliated triangulations return `FoliationError::MissingBookkeeping`
+- Requires current foliation bookkeeping, so stale label snapshots return `FoliationError::StaleBookkeeping`
+- Returns the number of finite faces that do not satisfy the strict causal simplex invariant
 
 ## Error Handling
 

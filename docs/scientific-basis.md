@@ -84,12 +84,15 @@ foliation/topology/causality constraints, the configured action, and Metropolis-
 The predecessor implementation, [`CDT-plusplus`](https://github.com/acgetchell/CDT-plusplus), used CGAL Delaunay triangulations as a geometric substrate and
 then filtered the result through CDT causality rules. Its key reusable lesson is the separation between generic triangulation editing and CDT-domain validity:
 start from a Delaunay-built PL manifold, classify cells by stored time labels, identify acausal or unclassified cells, delete selected offending vertices
-through the geometry backend, and let the backend retriangulate the affected cavities before rechecking CDT invariants.
+through the geometry backend, and let the backend retriangulate the affected cavities before rechecking CDT invariants. In large constructions this may require
+many passes; the Rust implementation treats convergence to zero strict causal simplex violations as the acceptance condition rather than assuming one cleanup
+pass is enough.
 
 That approach is not treated as current validation evidence for this Rust crate. `CDT-plusplus` is referenced as implementation lineage and a source of design
-experience; it may become a useful independent regression oracle if modernized enough to build and run representative fixtures. The planned Rust follow-up is
-tracked as [`causal-triangulations#192`](https://github.com/acgetchell/causal-triangulations/issues/192): implement a causality-filtering Delaunay construction
-path without moving generic PL-manifold editing into the CDT layer.
+experience; it may become a useful independent regression oracle if modernized enough to build and run representative fixtures. The Rust follow-up tracked as
+[`causal-triangulations#192`](https://github.com/acgetchell/causal-triangulations/issues/192) implements a causality-filtering Delaunay construction path
+without moving generic PL-manifold editing into the CDT layer. The invariant itself is documented in [`docs/foliation.md`](foliation.md): every current foliated
+top-dimensional simplex must be strictly causal, with `strict_causal_simplex_violation_count() == 0`.
 
 ## Move And Sampler Contract
 

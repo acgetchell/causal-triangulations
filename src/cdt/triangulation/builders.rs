@@ -5,14 +5,21 @@
 use super::CdtTriangulation;
 use crate::cdt::foliation::{Foliation, FoliationError};
 use crate::config::CdtTopology;
-use crate::errors::{CdtError, CdtResult, DelaunayValidationLevel, GenerationParameterIssue};
+use crate::errors::{
+    BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
+    DelaunayValidationLevel, GenerationParameterIssue,
+};
 use crate::geometry::DelaunayBackend2D;
+use crate::geometry::backends::delaunay::DelaunayVertexHandle;
 use crate::geometry::generators::{
     DelaunayTriangulation2D, build_delaunay2_with_data, build_periodic_toroidal_delaunay2,
     generate_delaunay2,
 };
 use crate::geometry::traits::TriangulationQuery;
 use std::num::NonZeroU32;
+
+/// Default pass budget for CDT++-style causality filtering.
+const FILTERED_DELAUNAY_MAX_PASSES: u32 = 50;
 
 /// Rewrites toroidal builder failures with CDT-level generation context.
 ///
@@ -444,6 +451,30 @@ fn open_profile_vertices(profile: &[u32], total_vertices: u32) -> CdtResult<Vec<
 }
 
 impl CdtTriangulation<DelaunayBackend2D> {
+    /// Rebuilds open-boundary foliation bookkeeping from live backend labels.
+    ///
+    /// The filtered constructor mutates the backend between passes, so it cannot
+    /// reuse stored slice sizes. Rebuilding from vertex payloads preserves the
+    /// public guarantee that a zero strict-causal violation count was computed
+    /// from the current geometry rather than stale bookkeeping.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FoliationError`] when live labels are missing, out of range, or
+    /// cannot form valid open-boundary foliation bookkeeping.
+    fn rebuild_open_foliation_from_live_labels(&mut self) -> CdtResult<()> {
+        let slice_sizes = Self::live_slice_sizes_from_vertex_labels(
+            &self.geometry,
+            self.metadata.time_slices.get(),
+        )?;
+        let foliation = Foliation::from_slice_sizes(slice_sizes, self.metadata.time_slices)
+            .map_err(CdtError::from)?;
+
+        self.foliation = Some(foliation);
+        self.mark_foliation_synchronized();
+        Ok(())
+    }
+
     /// Re-reads current backend labels during validation so stale stored bookkeeping is detected.
     pub(super) fn live_slice_sizes_from_vertex_labels(
         backend: &DelaunayBackend2D,
@@ -634,14 +665,286 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 return Err(FoliationError::EmptySlice { slice }.into());
             }
         }
-        let foliation =
-            Foliation::from_slice_sizes(slice_sizes, checked_nonzero_slice_count(time_slices))
-                .map_err(CdtError::from)?;
-
         let mut tri = Self::try_new(backend, time_slices, dimension)?;
-        tri.foliation = Some(foliation);
+        tri.foliation = Some(
+            Foliation::from_slice_sizes(slice_sizes, checked_nonzero_slice_count(time_slices))
+                .map_err(CdtError::from)?,
+        );
         tri.mark_foliation_synchronized();
         tri.validate_initial_delaunay_cdt()?;
+        Ok(tri)
+    }
+
+    /// Selects a removable vertex from the first non-strict CDT simplex.
+    ///
+    /// The selector prefers extreme time labels on acausal faces and never
+    /// removes the last vertex above the caller's per-slice minimum. It is the
+    /// local policy behind [`Self::from_filtered_delaunay_strip`]'s convergence
+    /// loop, not a general move proposal for simulation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::ValidationFailed`] if the offending face cannot be
+    /// inspected or has missing vertex labels. Returns
+    /// [`CdtError::DelaunayGenerationFailed`] if every candidate slice is already
+    /// at the caller's per-slice minimum.
+    fn invalid_simplex_removal_candidate(
+        &self,
+        minimum_slice_size: usize,
+        total_vertices: u32,
+        coordinate_max: f64,
+    ) -> CdtResult<Option<DelaunayVertexHandle>> {
+        let slice_sizes = self.slice_sizes();
+
+        for face in self.geometry.faces() {
+            if self.simplex_type(&face).is_some() {
+                continue;
+            }
+
+            let vertices =
+                self.geometry
+                    .face_vertices(&face)
+                    .map_err(|err| CdtError::ValidationFailed {
+                        check: CdtValidationCheck::SimplexClassification,
+                        failure: CdtValidationFailure::FaceVerticesUnavailable {
+                            face: format!("{:?}", face.simplex_key()),
+                            detail: err.to_string(),
+                        },
+                    })?;
+            let mut labeled_vertices = Vec::with_capacity(vertices.len());
+            for vertex in vertices {
+                let label = self
+                    .geometry
+                    .vertex_data_by_key(vertex.vertex_key())
+                    .ok_or_else(|| CdtError::ValidationFailed {
+                        check: CdtValidationCheck::SimplexClassification,
+                        failure: CdtValidationFailure::MissingVertexTimeLabel {
+                            vertex: format!("{:?}", vertex.vertex_key()),
+                        },
+                    })?;
+                labeled_vertices.push((vertex, label));
+            }
+
+            let Some(min_label) = labeled_vertices.iter().map(|(_, label)| *label).min() else {
+                return Ok(None);
+            };
+            let Some(max_label) = labeled_vertices.iter().map(|(_, label)| *label).max() else {
+                return Ok(None);
+            };
+            let mut candidates: Vec<_> = if max_label.saturating_sub(min_label) > 1 {
+                labeled_vertices
+                    .iter()
+                    .filter(|(_, label)| *label == min_label || *label == max_label)
+                    .collect()
+            } else {
+                labeled_vertices.iter().collect()
+            };
+            candidates.sort_by_key(|(_, label)| {
+                let count = labeled_vertices
+                    .iter()
+                    .filter(|(_, other)| *other == *label)
+                    .count();
+                (count, *label)
+            });
+
+            for (vertex, label) in candidates {
+                let Some(&slice_size) = slice_sizes.get(*label as usize) else {
+                    continue;
+                };
+                if slice_size > minimum_slice_size {
+                    return Ok(Some((*vertex).clone()));
+                }
+            }
+
+            return Err(CdtError::DelaunayGenerationFailed {
+                vertex_count: total_vertices,
+                coordinate_range: (0.0, coordinate_max),
+                attempt: 1,
+                underlying_error: format!(
+                    "filtered Delaunay construction found non-strict face {:?}, but every offending slice is already at the minimum size {minimum_slice_size}",
+                    face.simplex_key(),
+                ),
+            });
+        }
+
+        Ok(None)
+    }
+
+    /// Removes vertices incident to non-strict CDT simplices until the violation count is zero.
+    ///
+    /// This is the bounded CDT-plusplus-style filtering loop used by
+    /// [`Self::from_filtered_delaunay_strip`]. Each pass rebuilds foliation
+    /// bookkeeping from live labels, counts non-strict simplices through
+    /// [`Self::strict_causal_simplex_violation_count`], removes one offending
+    /// vertex, and lets the Delaunay backend retriangulate the cavity.
+    ///
+    /// # Errors
+    ///
+    /// Returns foliation or validation errors from rebuilding and recounting.
+    /// Returns [`CdtError::DelaunayGenerationFailed`] if the pass budget is
+    /// exhausted or no removable offending vertex exists. Returns
+    /// [`CdtError::BackendMutationFailed`] if backend vertex removal fails.
+    fn filter_invalid_open_delaunay_simplices(
+        &mut self,
+        minimum_vertices_per_slice: usize,
+        max_passes: u32,
+        total_vertices: u32,
+        coordinate_max: f64,
+    ) -> CdtResult<()> {
+        for pass in 0..=max_passes {
+            self.rebuild_open_foliation_from_live_labels()?;
+            let violations = self.strict_causal_simplex_violation_count()?;
+            if violations == 0 {
+                return Ok(());
+            }
+            if pass == max_passes {
+                return Err(CdtError::DelaunayGenerationFailed {
+                    vertex_count: total_vertices,
+                    coordinate_range: (0.0, coordinate_max),
+                    attempt: pass + 1,
+                    underlying_error: format!(
+                        "filtered Delaunay construction exhausted {max_passes} causal-filtering passes with {violations} non-strict simplices remaining"
+                    ),
+                });
+            }
+
+            let Some(vertex) = self.invalid_simplex_removal_candidate(
+                minimum_vertices_per_slice,
+                total_vertices,
+                coordinate_max,
+            )?
+            else {
+                return Err(CdtError::DelaunayGenerationFailed {
+                    vertex_count: total_vertices,
+                    coordinate_range: (0.0, coordinate_max),
+                    attempt: pass + 1,
+                    underlying_error: format!(
+                        "filtered Delaunay construction found {violations} non-strict simplices but no removable offending vertex"
+                    ),
+                });
+            };
+
+            let target = format!("vertex {:?}", vertex.vertex_key());
+            self.remove_vertex(vertex)
+                .map_err(|err| CdtError::BackendMutationFailed {
+                    operation: BackendMutationOperation::RemoveVertex,
+                    target,
+                    detail: err.to_string(),
+                })?;
+        }
+
+        Ok(())
+    }
+
+    /// Construct a Delaunay-backed 1+1 CDT strip by filtering surplus labeled points.
+    ///
+    /// Starts from a valid Delaunay triangulation containing a regular
+    /// open-boundary CDT strip plus deterministic surplus vertices whose
+    /// coordinates are intentionally placed near the opposite temporal boundary.
+    /// The constructor repeatedly counts non-strict causal simplices through
+    /// [`Self::strict_causal_simplex_violation_count`], removes a vertex incident
+    /// to one such simplex through
+    /// [`TriangulationMut::remove_vertex`](crate::geometry::traits::TriangulationMut::remove_vertex),
+    /// lets the Delaunay backend retriangulate each cavity, and returns only
+    /// after the violation count reaches zero and the full initial CDT validation
+    /// contract passes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::InvalidGenerationParameters`] under the same
+    /// parameter bounds as [`Self::from_cdt_strip`]. Returns
+    /// [`CdtError::DelaunayGenerationFailed`] if the overcomplete Delaunay
+    /// construction fails, filtering cannot make progress without violating the
+    /// requested per-slice minimum, or the 50-pass filtering budget is exhausted.
+    /// Returns [`CdtError::BackendMutationFailed`] if backend vertex removal
+    /// fails. Returns validation errors if the filtered triangulation does not
+    /// satisfy CDT topology, foliation, causality, and simplex-classification
+    /// invariants.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_filtered_delaunay_strip(4, 3)?;
+    ///     assert_eq!(tri.slice_sizes(), &[4, 4, 4]);
+    ///     assert_eq!(tri.strict_causal_simplex_violation_count()?, 0);
+    ///     tri.validate_simplex_classification()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn from_filtered_delaunay_strip(
+        vertices_per_slice: u32,
+        num_slices: u32,
+    ) -> CdtResult<Self> {
+        if vertices_per_slice < 4 {
+            return Err(CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::InsufficientVerticesPerSlice,
+                provided_value: vertices_per_slice.to_string(),
+                expected_range: "≥ 4".to_string(),
+            });
+        }
+        if num_slices < 2 {
+            return Err(CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::InsufficientNumberOfTimeSlices,
+                provided_value: num_slices.to_string(),
+                expected_range: "≥ 2".to_string(),
+            });
+        }
+
+        let core_vertices = vertices_per_slice.checked_mul(num_slices).ok_or_else(|| {
+            CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::VertexCountOverflow,
+                provided_value: format!("{vertices_per_slice} × {num_slices}"),
+                expected_range: "product ≤ u32::MAX".to_string(),
+            }
+        })?;
+        let surplus_vertices = if num_slices > 2 { 2 } else { 0 };
+        let total_vertices = core_vertices.checked_add(surplus_vertices).ok_or_else(|| {
+            CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::VertexCountOverflow,
+                provided_value: format!("{core_vertices} + {surplus_vertices}"),
+                expected_range: "sum ≤ u32::MAX".to_string(),
+            }
+        })?;
+
+        let coordinate_max = f64::from(num_slices).max(2.0);
+        let mut vertex_specs = open_profile_vertices(
+            &vec![vertices_per_slice; num_slices as usize],
+            core_vertices,
+        )?;
+        vertex_specs.try_reserve_exact(surplus_vertices as usize).map_err(|err| {
+            strip_generation_error(
+                total_vertices,
+                coordinate_max,
+                format!(
+                    "from_filtered_delaunay_strip() failed to reserve {surplus_vertices} surplus vertex specs: {err}"
+                ),
+            )
+        })?;
+
+        if num_slices > 2 {
+            let midpoint = 0.5;
+            vertex_specs.push(([midpoint, f64::from(num_slices - 1) - 0.1], 0));
+            vertex_specs.push(([midpoint, 0.1], num_slices - 1));
+        }
+
+        let dt = build_delaunay2_with_data(&vertex_specs)
+            .map_err(|err| remap_strip_generation_error(err, total_vertices, coordinate_max))?;
+        let backend = validated_backend(dt)?;
+        let mut tri = Self::try_new(backend, num_slices, 2)?;
+        let minimum_vertices_per_slice = usize::try_from(vertices_per_slice).map_err(|err| {
+            strip_generation_error(total_vertices, coordinate_max, err.to_string())
+        })?;
+        tri.filter_invalid_open_delaunay_simplices(
+            minimum_vertices_per_slice,
+            FILTERED_DELAUNAY_MAX_PASSES,
+            total_vertices,
+            coordinate_max,
+        )?;
+        tri.validate_initial_delaunay_cdt()?;
+
         Ok(tri)
     }
 
@@ -1590,6 +1893,94 @@ mod tests {
         assert!(tri.validate_foliation().is_ok());
         assert!(tri.validate_causality_delaunay().is_ok());
         assert!(tri.validate_simplex_classification().is_ok());
+        assert_eq!(
+            tri.strict_causal_simplex_violation_count()
+                .expect("Delaunay strip should expose a current strict-causality count"),
+            0
+        );
+    }
+
+    #[test]
+    fn test_from_filtered_delaunay_strip_removes_surplus_invalid_vertices() {
+        let tri = CdtTriangulation::from_filtered_delaunay_strip(4, 3)
+            .expect("filtered Delaunay strip should build");
+
+        assert_eq!(tri.vertex_count(), 12);
+        assert_eq!(tri.slice_sizes(), &[4, 4, 4]);
+        assert!(tri.has_foliation());
+        assert!(tri.geometry().validate_delaunay().is_ok());
+        assert!(tri.validate_topology().is_ok());
+        assert!(tri.validate_foliation().is_ok());
+        assert!(tri.validate_causality_delaunay().is_ok());
+        assert!(tri.validate_simplex_classification().is_ok());
+        assert_eq!(
+            tri.strict_causal_simplex_violation_count()
+                .expect("filtered strip should expose a current strict-causality count"),
+            0
+        );
+    }
+
+    #[test]
+    fn test_from_filtered_delaunay_strip_accepts_two_slice_boundary() {
+        let tri = CdtTriangulation::from_filtered_delaunay_strip(4, 2)
+            .expect("filtered Delaunay strip should build without surplus vertices");
+
+        assert_eq!(tri.vertex_count(), 8);
+        assert_eq!(tri.face_count(), 6);
+        assert_eq!(tri.slice_sizes(), &[4, 4]);
+        assert!(tri.has_foliation());
+        assert!(tri.geometry().validate_delaunay().is_ok());
+        assert!(tri.validate_topology().is_ok());
+        assert!(tri.validate_foliation().is_ok());
+        assert!(tri.validate_causality_delaunay().is_ok());
+        assert!(tri.validate_simplex_classification().is_ok());
+        assert_eq!(
+            tri.strict_causal_simplex_violation_count()
+                .expect("two-slice filtered strip should expose a strict-causality count"),
+            0
+        );
+    }
+
+    #[test]
+    fn test_from_filtered_delaunay_strip_rejects_invalid_parameters() {
+        let few_vertices = CdtTriangulation::from_filtered_delaunay_strip(3, 3);
+        assert_matches!(
+            few_vertices,
+            Err(CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::InsufficientVerticesPerSlice,
+                ..
+            })
+        );
+
+        let few_slices = CdtTriangulation::from_filtered_delaunay_strip(4, 1);
+        assert_matches!(
+            few_slices,
+            Err(CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::InsufficientNumberOfTimeSlices,
+                ..
+            })
+        );
+
+        let product_overflow = CdtTriangulation::from_filtered_delaunay_strip(u32::MAX, 2);
+        assert_matches!(
+            product_overflow,
+            Err(CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::VertexCountOverflow,
+                ref provided_value,
+                ref expected_range,
+            }) if provided_value == "4294967295 × 2"
+                && expected_range == "product ≤ u32::MAX"
+        );
+
+        let surplus_overflow = CdtTriangulation::from_filtered_delaunay_strip(1_431_655_765, 3);
+        assert_matches!(
+            surplus_overflow,
+            Err(CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::VertexCountOverflow,
+                ref provided_value,
+                ref expected_range,
+            }) if provided_value == "4294967295 + 2" && expected_range == "sum ≤ u32::MAX"
+        );
     }
 
     #[test]

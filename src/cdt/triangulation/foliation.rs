@@ -1179,6 +1179,49 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(())
     }
 
+    /// Counts top-dimensional simplices that are not strict causal CDT simplices.
+    ///
+    /// In the current 1+1 implementation, the top-dimensional simplices are
+    /// triangle faces, and a strict causal CDT triangle must classify as `Up`
+    /// `(2,1)` or `Down` `(1,2)`. Purely spacelike faces, purely
+    /// timelike/non-spacelike faces, multi-slice faces, missing-label faces,
+    /// and malformed faces all contribute to this count. A valid foliated CDT
+    /// initial state has count zero.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FoliationError::MissingBookkeeping`] if the triangulation has
+    /// no stored foliation to classify against.
+    ///
+    /// Returns [`FoliationError::StaleBookkeeping`] if stored foliation
+    /// bookkeeping belongs to an older geometry revision.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 2)?;
+    ///     assert_eq!(tri.strict_causal_simplex_violation_count()?, 0);
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn strict_causal_simplex_violation_count(&self) -> CdtResult<usize> {
+        if self.foliation.is_none() {
+            return Err(FoliationError::MissingBookkeeping.into());
+        }
+        if !self.has_current_foliation() {
+            return Err(self.stale_foliation_error());
+        }
+
+        Ok(self
+            .geometry
+            .faces()
+            .filter(|face| self.simplex_type(face).is_none())
+            .count())
+    }
+
     /// Classifies every triangle and stores the result as simplex data.
     ///
     /// # Errors
@@ -1473,6 +1516,11 @@ mod tests {
             .expect("Delaunay strip causality should validate");
         tri.validate_simplex_classification()
             .expect("all Delaunay strip simplices should classify");
+        assert_eq!(
+            tri.strict_causal_simplex_violation_count()
+                .expect("strict strip count should succeed"),
+            0
+        );
         tri
     }
 
@@ -1841,6 +1889,10 @@ mod tests {
         assert_eq!(tri.simplex_type(&face), None);
         assert_eq!(tri.face_edge_types(&face), None);
         assert_eq!(tri.simplex_type_from_data(&face), None);
+        assert_matches!(
+            tri.strict_causal_simplex_violation_count(),
+            Err(CdtError::Foliation(FoliationError::StaleBookkeeping { .. }))
+        );
 
         for result in [
             tri.validate_foliation(),
@@ -1864,6 +1916,10 @@ mod tests {
         }
         tri.validate_simplex_classification()
             .expect("missing foliation should validate vacuously");
+        assert_matches!(
+            tri.strict_causal_simplex_violation_count(),
+            Err(CdtError::Foliation(FoliationError::MissingBookkeeping))
+        );
 
         let mut tri = strict_strip(5, 3);
         for face in tri.geometry().faces() {
@@ -1938,6 +1994,31 @@ mod tests {
                     expected: 2,
                 }
             ))
+        );
+    }
+
+    #[test]
+    fn strict_causal_simplex_violation_count_reports_non_strict_faces() {
+        let backend = labeled_triangle_backend([0, 0, 0]);
+        let mut tri = CdtTriangulation::try_new(backend, 1, 2)
+            .expect("single Delaunay triangle should satisfy bare topology");
+        tri.foliation = Some(
+            Foliation::from_slice_sizes(vec![3], slice_count(1))
+                .expect("single nonempty slice should be constructible"),
+        );
+        tri.mark_foliation_synchronized();
+
+        assert_eq!(
+            tri.strict_causal_simplex_violation_count()
+                .expect("current foliation should count non-strict faces"),
+            1
+        );
+        assert_matches!(
+            tri.validate_simplex_classification(),
+            Err(CdtError::ValidationFailed {
+                check: CdtValidationCheck::SimplexClassification,
+                failure: CdtValidationFailure::NonStrictSimplex { .. },
+            })
         );
     }
 

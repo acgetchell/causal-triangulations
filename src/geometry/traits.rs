@@ -289,7 +289,11 @@ pub trait TriangulationMut: TriangulationQuery {
         coords: &[Self::Coordinate],
     ) -> Result<Self::VertexHandle, Self::Error>;
 
-    /// Remove a vertex from the triangulation
+    /// Removes a vertex and lets the backend retriangulate the surrounding cavity.
+    ///
+    /// Returns handles for backend-reported replacement faces when the backend
+    /// exposes them. Implementations may return an empty list when the mutation
+    /// succeeds but the upstream backend does not report replacement handles.
     ///
     /// # Errors
     ///
