@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Literal
 
@@ -501,8 +502,8 @@ def lint(path: Path, options: LintOptions) -> int:
 
 def execute(path: Path, repo_root: Path, timeout: int) -> None:
     """Execute a notebook in memory without modifying it on disk."""
-    import nbclient  # noqa: PLC0415 - lint-only checks should not require notebook execution dependencies at import time.
-    import nbformat  # noqa: PLC0415 - lint-only checks should not require notebook execution dependencies at import time.
+    nbclient = import_module("nbclient")
+    nbformat = import_module("nbformat")
 
     os.environ.setdefault("MPLBACKEND", "Agg")
     with path.open(encoding="utf-8") as handle:

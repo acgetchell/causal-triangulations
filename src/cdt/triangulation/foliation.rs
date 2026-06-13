@@ -15,7 +15,7 @@ use crate::geometry::backends::delaunay::{
 use crate::geometry::traits::TriangulationQuery;
 use crate::geometry::{DelaunayBackend2D, SpacetimeCoordinate};
 use crate::util::f64_band_to_u32;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroU32;
 
 impl CdtTriangulation<DelaunayBackend2D> {
@@ -1339,17 +1339,6 @@ const OPEN_BOUNDARY_TIME_COORDINATE_EPSILON: f64 = 1e-9;
 type SlabEdge = (DelaunayVertexHandle, DelaunayVertexHandle);
 type SlabCrossing<'a> = (&'a SlabEdge, &'a SlabEdge);
 
-/// Reports whether two slab edges cross between ordered adjacent slices.
-const fn positions_cross(
-    first_lower: usize,
-    first_upper: usize,
-    second_lower: usize,
-    second_upper: usize,
-) -> bool {
-    (first_lower < second_lower && first_upper > second_upper)
-        || (first_lower > second_lower && first_upper < second_upper)
-}
-
 /// Reports whether two slab edges share either endpoint.
 fn slab_edges_share_endpoint(first: &SlabEdge, second: &SlabEdge) -> bool {
     let first_endpoints = [&first.0, &first.1];
@@ -1368,34 +1357,64 @@ fn orders_match_with_orientation(
 }
 
 /// Finds the first pair of non-incident timelike slab edges that cross.
+///
+/// Open-boundary validation calls this while enforcing that adjacent spatial
+/// intervals embed as a noncrossing slab. Edges missing position data are
+/// ignored because earlier foliation checks own missing-label diagnostics, and
+/// incident edges are allowed to meet at shared vertices. The ordered scan keeps
+/// the validation path practical for evolved triangulations with many timelike
+/// edges while preserving the crossing pair used in public diagnostics.
 fn first_slab_crossing<'a>(
     edges: &'a [SlabEdge],
     lower_positions: &HashMap<DelaunayVertexHandle, usize>,
     upper_positions: &HashMap<DelaunayVertexHandle, usize>,
 ) -> Option<SlabCrossing<'a>> {
-    for (first_index, first) in edges.iter().enumerate() {
-        for second in edges.iter().skip(first_index + 1) {
-            if slab_edges_share_endpoint(first, second) {
+    let mut positioned_edges = Vec::with_capacity(edges.len());
+    for edge in edges {
+        let Some(&lower_index) = lower_positions.get(&edge.0) else {
+            continue;
+        };
+        let Some(&upper_index) = upper_positions.get(&edge.1) else {
+            continue;
+        };
+        positioned_edges.push((lower_index, upper_index, edge));
+    }
+    positioned_edges.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+
+    let mut seen_by_upper: BTreeMap<usize, Vec<&SlabEdge>> = BTreeMap::new();
+    let mut index = 0;
+    while index < positioned_edges.len() {
+        let lower_index = positioned_edges[index].0;
+        let mut group_end = index + 1;
+        while group_end < positioned_edges.len() && positioned_edges[group_end].0 == lower_index {
+            group_end += 1;
+        }
+
+        for &(_, current_upper, current_edge) in &positioned_edges[index..group_end] {
+            let Some(first_larger_upper) = current_upper.checked_add(1) else {
+                continue;
+            };
+            let Some((&max_seen_upper, _)) = seen_by_upper.last_key_value() else {
+                continue;
+            };
+            if current_upper >= max_seen_upper {
                 continue;
             }
-
-            let Some(&first_lower) = lower_positions.get(&first.0) else {
-                continue;
-            };
-            let Some(&first_upper) = upper_positions.get(&first.1) else {
-                continue;
-            };
-            let Some(&second_lower) = lower_positions.get(&second.0) else {
-                continue;
-            };
-            let Some(&second_upper) = upper_positions.get(&second.1) else {
-                continue;
-            };
-
-            if positions_cross(first_lower, first_upper, second_lower, second_upper) {
-                return Some((first, second));
+            for (_, earlier_edges) in seen_by_upper.range(first_larger_upper..) {
+                if let Some(earlier_edge) = earlier_edges
+                    .iter()
+                    .copied()
+                    .find(|earlier_edge| !slab_edges_share_endpoint(earlier_edge, current_edge))
+                {
+                    return Some((earlier_edge, current_edge));
+                }
             }
         }
+
+        for &(_, upper_index, edge) in &positioned_edges[index..group_end] {
+            seen_by_upper.entry(upper_index).or_default().push(edge);
+        }
+        index = group_end;
     }
     None
 }
@@ -1455,30 +1474,6 @@ mod tests {
         tri.validate_simplex_classification()
             .expect("all Delaunay strip simplices should classify");
         tri
-    }
-
-    #[test]
-    fn slab_position_crossing_predicate_detects_only_inversions() {
-        assert!(
-            positions_cross(0, 2, 1, 1),
-            "lower order 0<1 paired with upper order 2>1 should cross"
-        );
-        assert!(
-            positions_cross(3, 0, 1, 2),
-            "lower order 3>1 paired with upper order 0<2 should cross"
-        );
-        assert!(
-            !positions_cross(0, 0, 1, 1),
-            "matching lower and upper order should not cross"
-        );
-        assert!(
-            !positions_cross(1, 2, 1, 0),
-            "shared lower endpoint should be handled as incident, not crossing"
-        );
-        assert!(
-            !positions_cross(0, 1, 2, 1),
-            "shared upper endpoint should be handled as incident, not crossing"
-        );
     }
 
     #[test]
@@ -1558,6 +1553,53 @@ mod tests {
         };
         assert_eq!(first, &crossing_edges[0]);
         assert_eq!(second, &crossing_edges[1]);
+    }
+
+    #[test]
+    fn slab_crossing_skips_missing_positions_and_ties() {
+        let tri = strict_strip(4, 2);
+        let lower = tri.vertices_at_time(0);
+        let upper = tri.vertices_at_time(1);
+        let mut lower_positions = lower
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, vertex)| (vertex, index))
+            .collect::<HashMap<_, _>>();
+        let mut upper_positions = upper
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, vertex)| (vertex, index))
+            .collect::<HashMap<_, _>>();
+        let crossing_edges = [
+            (lower[0].clone(), upper[3].clone()),
+            (lower[1].clone(), upper[1].clone()),
+        ];
+
+        assert!(
+            first_slab_crossing(&crossing_edges, &lower_positions, &upper_positions).is_some(),
+            "fixture should contain an inverted non-incident pair before position data is removed"
+        );
+
+        lower_positions.remove(&lower[1]);
+        assert!(
+            first_slab_crossing(&crossing_edges, &lower_positions, &upper_positions).is_none(),
+            "edges missing lower position data should be skipped rather than reported"
+        );
+
+        lower_positions.insert(lower[1].clone(), 0);
+        assert!(
+            first_slab_crossing(&crossing_edges, &lower_positions, &upper_positions).is_none(),
+            "edges with the same lower rank are not ordered crossings"
+        );
+
+        lower_positions.insert(lower[1].clone(), 1);
+        upper_positions.remove(&upper[3]);
+        assert!(
+            first_slab_crossing(&crossing_edges, &lower_positions, &upper_positions).is_none(),
+            "edges missing upper position data should be skipped rather than reported"
+        );
     }
 
     #[test]

@@ -1352,6 +1352,11 @@ struct AggregateSummary {
     volume_fluctuations: Vec<f64>,
 }
 
+/// Serializable final-triangulation section for summary JSON output.
+///
+/// The scalar counts keep the existing summary shape, while `mesh` carries the
+/// coordinate and connectivity payload added for notebook visualization and
+/// downstream analysis consumers.
 #[derive(Serialize)]
 struct TriangulationSummary {
     vertices: usize,
@@ -1362,6 +1367,12 @@ struct TriangulationSummary {
     mesh: TriangulationMeshSummary,
 }
 
+/// Serializable mesh payload embedded in summary JSON output.
+///
+/// The payload is intentionally backend-handle-free: vertices are assigned
+/// stable zero-based indices, and triangle records reference those indices so
+/// notebook and visualization consumers can reconstruct the final triangulation
+/// without depending on backend handle formatting or allocation order.
 #[derive(Serialize)]
 struct TriangulationMeshSummary {
     /// Coordinate column names matching each vertex coordinate vector.
@@ -1372,6 +1383,11 @@ struct TriangulationMeshSummary {
     triangles: Vec<[usize; 3]>,
 }
 
+/// Serializable vertex row used by [`TriangulationMeshSummary`].
+///
+/// Each row preserves the validated spacetime coordinate and optional CDT time
+/// label for one final-state vertex. The separate `index` field is the stable
+/// value referenced by triangle triples in summary JSON.
 #[derive(Serialize)]
 struct TriangulationVertexSummary {
     /// Stable zero-based index used by triangle references.
@@ -2205,9 +2221,6 @@ impl SimulationResultsBackend {
         path: impl AsRef<Path>,
     ) -> CdtResult<()> {
         let path = path.as_ref();
-        ensure_parent_directory(path, OutputFormat::Json)?;
-        let file = File::create(path).map_err(|err| output_error(path, OutputFormat::Json, err))?;
-        let mut writer = BufWriter::new(file);
         let summary = SimulationSummary {
             config: config.config(),
             metropolis_config: &self.config,
@@ -2235,6 +2248,9 @@ impl SimulationResultsBackend {
             measurements: &self.measurements,
         };
 
+        ensure_parent_directory(path, OutputFormat::Json)?;
+        let file = File::create(path).map_err(|err| output_error(path, OutputFormat::Json, err))?;
+        let mut writer = BufWriter::new(file);
         to_writer_pretty(&mut writer, &summary)
             .map_err(|err| output_error(path, OutputFormat::Json, err))?;
         writeln!(writer).map_err(|err| output_error(path, OutputFormat::Json, err))?;

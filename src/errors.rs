@@ -1607,6 +1607,44 @@ pub enum CdtError {
     },
 }
 
+impl CdtError {
+    /// Returns whether this error represents a shape-invalid local proposal
+    /// that should be treated as an ordinary geometric rejection after a
+    /// successful backend mutation.
+    ///
+    /// This is the top-level policy used by CDT move finalization after
+    /// evolved-CDT validation rejects a candidate. The same topology and
+    /// foliation invariants are visible through
+    /// [`CdtTriangulation::validate`](crate::cdt::triangulation::CdtTriangulation::validate).
+    /// Topology mismatches and foliation shape errors are recoverable candidate
+    /// rejections; backend mutation failures, stale foliation bookkeeping, and
+    /// unrelated validation failures remain hard errors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::errors::{CdtError, FoliationError};
+    ///
+    /// let err = CdtError::Foliation(FoliationError::SpacelikeNonOpenInterval {
+    ///     slice: 0,
+    ///     walked: 3,
+    ///     expected: 4,
+    /// });
+    /// assert!(err.is_post_mutation_candidate_rejection());
+    ///
+    /// let hard = CdtError::Foliation(FoliationError::MissingVertexLabel { vertex: 7 });
+    /// assert!(!hard.is_post_mutation_candidate_rejection());
+    /// ```
+    #[must_use]
+    pub const fn is_post_mutation_candidate_rejection(&self) -> bool {
+        match self {
+            Self::TopologyMismatch { .. } => true,
+            Self::Foliation(error) => error.is_post_mutation_candidate_rejection(),
+            _ => false,
+        }
+    }
+}
+
 /// Keeps causality error formatting centralized so open and toroidal distances stay consistent.
 fn format_causality_violation(time_0: u32, time_1: u32, step_distance: u32) -> String {
     let raw = time_0.abs_diff(time_1);

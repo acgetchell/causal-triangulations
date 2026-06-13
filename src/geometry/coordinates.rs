@@ -45,6 +45,18 @@ impl SpacetimeCoordinate {
     ///
     /// Returns [`SpacetimeCoordinateError::NonFiniteComponent`] when either
     /// component is `NaN` or infinite.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::{
+    ///     SpacetimeCoordinate, SpacetimeCoordinateError,
+    /// };
+    ///
+    /// let coordinate = SpacetimeCoordinate::try_new(0.25, 3.0)?;
+    /// assert_eq!(coordinate.to_array(), [0.25, 3.0]);
+    /// # Ok::<(), SpacetimeCoordinateError>(())
+    /// ```
     pub fn try_new(space: f64, time: f64) -> Result<Self, SpacetimeCoordinateError> {
         validate_component(SpacetimeCoordinateComponent::Space, space)?;
         validate_component(SpacetimeCoordinateComponent::Time, time)?;
@@ -182,6 +194,18 @@ impl Serialize for SpacetimeCoordinate {
 }
 
 /// Component names for spacetime coordinate validation errors.
+///
+/// These names appear in [`SpacetimeCoordinateError`] diagnostics and in CDT
+/// validation failures that report invalid backend coordinate payloads.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::geometry::SpacetimeCoordinateComponent;
+///
+/// assert_eq!(SpacetimeCoordinateComponent::Space.to_string(), "space");
+/// assert_eq!(SpacetimeCoordinateComponent::Time.to_string(), "time");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SpacetimeCoordinateComponent {
@@ -201,6 +225,23 @@ impl fmt::Display for SpacetimeCoordinateComponent {
 }
 
 /// Failure to parse raw coordinates into a [`SpacetimeCoordinate`].
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::geometry::{
+///     SpacetimeCoordinate, SpacetimeCoordinateError,
+/// };
+/// use std::assert_matches;
+///
+/// assert_matches!(
+///     SpacetimeCoordinate::try_from_space_time_slice(&[1.0, 2.0, 3.0]),
+///     Err(SpacetimeCoordinateError::Dimension {
+///         actual: 3,
+///         expected: 2,
+///     })
+/// );
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum SpacetimeCoordinateError {
@@ -239,6 +280,11 @@ impl fmt::Display for SpacetimeCoordinateError {
 
 impl StdError for SpacetimeCoordinateError {}
 
+/// Validates one raw coordinate component before it enters the public coordinate type.
+///
+/// Keeping this check shared by every constructor ensures callers cannot create
+/// a [`SpacetimeCoordinate`] that later serializes `NaN` or infinity into JSON
+/// output consumed by notebooks and downstream analysis tools.
 const fn validate_component(
     component: SpacetimeCoordinateComponent,
     value: f64,
@@ -312,6 +358,39 @@ mod tests {
                 } if component == expected_component && !value.is_finite()
             );
         }
+    }
+
+    #[test]
+    fn public_try_from_impls_match_constructor_contracts() {
+        let from_array = SpacetimeCoordinate::try_from([3.5, 7.0])
+            .expect("finite array should parse as a spacetime coordinate");
+
+        assert_relative_eq!(from_array.space(), 3.5);
+        assert_relative_eq!(from_array.time(), 7.0);
+
+        let raw = [2.0, 5.0];
+        let from_slice = SpacetimeCoordinate::try_from(raw.as_slice())
+            .expect("finite slice should parse as a spacetime coordinate");
+
+        let [space, time] = from_slice.to_array();
+        assert_relative_eq!(space, 2.0);
+        assert_relative_eq!(time, 5.0);
+
+        assert_matches!(
+            SpacetimeCoordinate::try_from([f64::NEG_INFINITY, 0.0]),
+            Err(SpacetimeCoordinateError::NonFiniteComponent {
+                component: SpacetimeCoordinateComponent::Space,
+                value,
+            }) if value.is_infinite() && value.is_sign_negative()
+        );
+
+        assert_matches!(
+            SpacetimeCoordinate::try_from([1.0].as_slice()),
+            Err(SpacetimeCoordinateError::Dimension {
+                actual: 1,
+                expected: 2,
+            })
+        );
     }
 
     #[test]

@@ -181,6 +181,13 @@ filtering, and benchmark-comparison machinery remained deferred from that pass
 because CDT needed a different benchmark contract and has no configured Codacy
 workflow.
 
+Codecov status thresholds now match Delaunay's stricter coverage policy:
+project coverage targets 90% with a 1% threshold, and patch coverage targets
+70%. CDT keeps its existing `src/main.rs` ignore because the crate has a binary
+entry point, and also ignores `src/lib.rs` like Delaunay because the crate root
+is primarily module wiring and public re-exports rather than behavior-bearing
+implementation code.
+
 The follow-up benchmark alignment introduced a CDT-specific
 `ci_performance_suite` rather than copying Delaunay's dimensional construction
 contract. CDT's suite covers generated open-boundary and toroidal

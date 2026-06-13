@@ -8,7 +8,6 @@
 //! - (3,1) moves: collapse a degree-3 vertex back to one triangle
 //! - edge flips: retained as an API-compatible alias for the 2D (2,2) move
 
-use crate::cdt::foliation::FoliationError;
 use crate::config::CdtTopology;
 use crate::errors::{BackendMutationOperation, CdtError, CdtResult, CheckpointResumeFailure};
 use crate::geometry::CdtTriangulation2D;
@@ -1362,7 +1361,7 @@ impl ErgodicsSystem {
             return MoveResult::HardFailure(err);
         }
         if let Err(err) = triangulation.validate_evolved_cdt() {
-            if is_post_mutation_candidate_rejection(&err) {
+            if err.is_post_mutation_candidate_rejection() {
                 return MoveResult::GeometricViolation;
             }
             return MoveResult::HardFailure(err);
@@ -1437,31 +1436,6 @@ fn reject_backend(
         target,
         detail: err.to_string(),
     })
-}
-
-/// Classifies shape-invalid local proposals as ordinary geometric rejections.
-///
-/// Backend mutation failures, stale foliation bookkeeping, and unexpected
-/// validation failures remain hard failures. The variants here describe
-/// candidates that produced a structurally valid backend mesh but not a CDT
-/// state with the requested spatial topology.
-const fn is_post_mutation_candidate_rejection(err: &CdtError) -> bool {
-    matches!(
-        err,
-        CdtError::TopologyMismatch { .. }
-            | CdtError::Foliation(
-                FoliationError::SpacelikeSubgraphSizeMismatch { .. }
-                    | FoliationError::SpacelikeDegreeViolation { .. }
-                    | FoliationError::SpacelikeNonClosedRing { .. }
-                    | FoliationError::SpacelikeOpenSliceEndpointCount { .. }
-                    | FoliationError::SpacelikeOpenSliceDegreeViolation { .. }
-                    | FoliationError::SpacelikeNonOpenInterval { .. }
-                    | FoliationError::OpenBoundarySlabEdgeCrossing { .. }
-                    | FoliationError::OpenBoundarySpatialOrderMismatch { .. }
-                    | FoliationError::OpenBoundaryTimeCoordinateMismatch { .. }
-                    | FoliationError::MissingTemporalWrapAround { .. },
-            )
-    )
 }
 
 /// Computes topology-aware time distance between two slice labels.
@@ -2157,6 +2131,7 @@ fn is_toroidal_foliated(triangulation: &CdtTriangulation2D) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cdt::foliation::FoliationError;
     use crate::errors::{CdtValidationCheck, CdtValidationFailure, DelaunayValidationLevel};
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
@@ -2646,7 +2621,7 @@ mod tests {
 
         for err in shape_errors {
             assert!(
-                is_post_mutation_candidate_rejection(&err),
+                err.is_post_mutation_candidate_rejection(),
                 "shape-invalid post-mutation candidate should be an ordinary rejection: {err}"
             );
         }
@@ -2676,7 +2651,7 @@ mod tests {
 
         for err in hard_errors {
             assert!(
-                !is_post_mutation_candidate_rejection(&err),
+                !err.is_post_mutation_candidate_rejection(),
                 "unexpected post-mutation validation failure should remain hard: {err}"
             );
         }

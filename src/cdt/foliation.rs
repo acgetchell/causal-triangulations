@@ -325,6 +325,53 @@ pub enum FoliationError {
     },
 }
 
+impl FoliationError {
+    /// Returns whether this validation error describes a shape-invalid local
+    /// proposal that should be treated as an ordinary geometric rejection after
+    /// a successful backend mutation.
+    ///
+    /// Move kernels use this classification after a backend edit has already
+    /// produced a structurally valid mesh, but evolved-CDT validation rejects
+    /// the candidate because it no longer has the requested spatial topology or
+    /// foliation shape. Stale bookkeeping, missing labels, and other unexpected
+    /// validation failures remain hard errors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::errors::FoliationError;
+    ///
+    /// let shape_error = FoliationError::SpacelikeOpenSliceEndpointCount {
+    ///     slice: 2,
+    ///     observed: 3,
+    ///     expected: 2,
+    /// };
+    /// assert!(shape_error.is_post_mutation_candidate_rejection());
+    ///
+    /// let stale = FoliationError::StaleBookkeeping {
+    ///     synced_at_modification: Some(4),
+    ///     current_modification_count: 5,
+    /// };
+    /// assert!(!stale.is_post_mutation_candidate_rejection());
+    /// ```
+    #[must_use]
+    pub const fn is_post_mutation_candidate_rejection(&self) -> bool {
+        matches!(
+            self,
+            Self::SpacelikeSubgraphSizeMismatch { .. }
+                | Self::SpacelikeDegreeViolation { .. }
+                | Self::SpacelikeNonClosedRing { .. }
+                | Self::SpacelikeOpenSliceEndpointCount { .. }
+                | Self::SpacelikeOpenSliceDegreeViolation { .. }
+                | Self::SpacelikeNonOpenInterval { .. }
+                | Self::OpenBoundarySlabEdgeCrossing { .. }
+                | Self::OpenBoundarySpatialOrderMismatch { .. }
+                | Self::OpenBoundaryTimeCoordinateMismatch { .. }
+                | Self::MissingTemporalWrapAround { .. }
+        )
+    }
+}
+
 impl fmt::Display for FoliationError {
     #[expect(
         clippy::too_many_lines,
