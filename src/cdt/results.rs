@@ -1489,7 +1489,7 @@ fn triangulation_mesh_summary(
             };
             triangle[position] = *index;
         }
-        triangles.push(triangle);
+        triangles.push(canonical_triangle_indices(triangle));
     }
     triangles.sort_unstable();
 
@@ -1498,6 +1498,31 @@ fn triangulation_mesh_summary(
         vertices: vertex_summaries,
         triangles,
     })
+}
+
+/// Returns the stable representative of one triangle index triple.
+///
+/// Mesh exporters may observe the same face with different cyclic or mirrored
+/// vertex orderings depending on backend traversal. Canonicalizing each triple
+/// before global sorting keeps summary JSON deterministic for notebooks and
+/// downstream snapshot consumers.
+fn canonical_triangle_indices(triangle: [usize; 3]) -> [usize; 3] {
+    let [first, second, third] = triangle;
+    let rotations = [
+        [first, second, third],
+        [second, third, first],
+        [third, first, second],
+        [first, third, second],
+        [third, second, first],
+        [second, first, third],
+    ];
+    let mut canonical_triangle = rotations[0];
+    for candidate in rotations.into_iter().skip(1) {
+        if candidate < canonical_triangle {
+            canonical_triangle = candidate;
+        }
+    }
+    canonical_triangle
 }
 
 impl SimulationResultsBackend {
@@ -2221,6 +2246,15 @@ impl SimulationResultsBackend {
         path: impl AsRef<Path>,
     ) -> CdtResult<()> {
         let path = path.as_ref();
+        let mesh = triangulation_mesh_summary(&self.triangulation).map_err(|err| {
+            output_error(
+                path,
+                OutputFormat::Json,
+                format!(
+                    "triangulation_mesh_summary failed while building SimulationSummary in write_summary_json: {err}"
+                ),
+            )
+        })?;
         let summary = SimulationSummary {
             config: config.config(),
             metropolis_config: &self.config,
@@ -2242,7 +2276,7 @@ impl SimulationResultsBackend {
                 triangles: self.triangulation.face_count(),
                 time_slices: self.triangulation.time_slices().get(),
                 topology: self.triangulation.metadata().topology(),
-                mesh: triangulation_mesh_summary(&self.triangulation)?,
+                mesh,
             },
             steps: &self.steps,
             measurements: &self.measurements,

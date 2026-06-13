@@ -574,7 +574,7 @@ notebook-lint: _ensure-uv
     found=0
     while IFS= read -r notebook; do
         found=1
-        uv run notebook-check --lint "$notebook" --repo-root .
+        uv run --group notebooks notebook-check --lint "$notebook" --repo-root .
     done < <(find notebooks -type f -name '*.ipynb' | sort)
     if [ "$found" -eq 0 ]; then
         echo "No notebooks found to lint."
