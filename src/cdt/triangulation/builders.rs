@@ -1407,7 +1407,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cdt::foliation::{EdgeType, FoliationError, SimplexType};
+    use crate::cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType};
     use crate::errors::TriangulationMetadataField;
     use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
     use approx::assert_relative_eq;
@@ -1422,6 +1422,17 @@ mod tests {
         ])
         .expect("Should build labeled triangle");
         DelaunayBackend2D::from_triangulation(dt).expect("test Delaunay triangle should validate")
+    }
+
+    fn same_slice_non_strict_triangle() -> CdtTriangulation<DelaunayBackend2D> {
+        let mut tri = CdtTriangulation::try_new(labeled_triangle_backend([0, 0, 0]), 1, 2)
+            .expect("single Delaunay triangle should satisfy bare topology");
+        tri.foliation = Some(
+            Foliation::from_slice_sizes(vec![3], checked_nonzero_slice_count(1))
+                .expect("single nonempty slice should form foliation bookkeeping"),
+        );
+        tri.mark_foliation_synchronized();
+        tri
     }
 
     /// Builds a Delaunay strip and verifies it is a strict CDT mesh.
@@ -1938,6 +1949,90 @@ mod tests {
             tri.strict_causal_simplex_violation_count()
                 .expect("two-slice filtered strip should expose a strict-causality count"),
             0
+        );
+    }
+
+    #[test]
+    fn test_invalid_simplex_removal_candidate_allows_surplus_same_slice_vertex() {
+        let tri = same_slice_non_strict_triangle();
+
+        let candidate = tri
+            .invalid_simplex_removal_candidate(2, 3, 2.0)
+            .expect("surplus same-slice face should be inspectable")
+            .expect("same-slice face should yield a removable vertex");
+
+        assert_eq!(
+            tri.geometry().vertex_data_by_key(candidate.vertex_key()),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn test_invalid_simplex_removal_candidate_respects_minimum_slice_size() {
+        let tri = same_slice_non_strict_triangle();
+
+        let err = tri
+            .invalid_simplex_removal_candidate(3, 3, 2.0)
+            .expect_err("minimum slice size should prevent removal");
+
+        assert_matches!(
+            err,
+            CdtError::DelaunayGenerationFailed {
+                vertex_count: 3,
+                coordinate_range: (0.0, 2.0),
+                attempt: 1,
+                ref underlying_error,
+            } if underlying_error.contains("minimum size 3")
+        );
+    }
+
+    #[test]
+    fn test_invalid_simplex_removal_candidate_returns_none_for_strict_strip() {
+        let tri = strict_strip(4, 2);
+
+        assert!(
+            tri.invalid_simplex_removal_candidate(4, 8, 2.0)
+                .expect("strict strip should be inspectable")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_filter_invalid_open_delaunay_simplices_rejects_missing_live_label() {
+        let mut tri = same_slice_non_strict_triangle();
+        let vertex = tri
+            .geometry()
+            .vertices()
+            .next()
+            .expect("test triangle should contain a vertex");
+        tri.set_vertex_data(&vertex, None)
+            .expect("test vertex should accept clearing its label");
+
+        assert_matches!(
+            tri.filter_invalid_open_delaunay_simplices(2, 1, 3, 2.0),
+            Err(CdtError::Foliation(FoliationError::MissingVertexLabel {
+                vertex: 0
+            }))
+        );
+    }
+
+    #[test]
+    fn test_filter_invalid_open_delaunay_simplices_reports_pass_budget_exhaustion() {
+        let mut tri = same_slice_non_strict_triangle();
+
+        let err = tri
+            .filter_invalid_open_delaunay_simplices(2, 0, 3, 2.0)
+            .expect_err("zero-pass budget should report remaining violations");
+
+        assert_matches!(
+            err,
+            CdtError::DelaunayGenerationFailed {
+                vertex_count: 3,
+                coordinate_range: (0.0, 2.0),
+                attempt: 1,
+                ref underlying_error,
+            } if underlying_error.contains("exhausted 0 causal-filtering passes")
+                && underlying_error.contains("1 non-strict simplices remaining")
         );
     }
 
