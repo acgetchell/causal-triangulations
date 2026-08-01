@@ -213,6 +213,9 @@ and Dependabot review/merge sequence. Registry and Homebrew metadata confirm the
   warning flags because they enforce separate lint and documentation surfaces.
 - Shared Python tooling aligns with `la-stack` at pytest 9.1.1, Ruff 0.16.1, Semgrep 1.172.0, and Ty 0.0.65. Notebook and build dependencies take the newer
   applicable sibling minimums without changing this repository's Python 3.13 support baseline.
+- Semgrep 1.172.0 still pins the MCP Python SDK to vulnerable version 1.23.3. Until Semgrep publishes its pending 1.28.1 dependency bump, uv overrides that
+  transitive pin to MCP 1.28.1, matching Semgrep's upstream remediation and clearing all three affected transport and task-handler advisories. Remove the
+  override when a released Semgrep version carries the fixed pin directly.
 - The stronger `delaunay` Dependabot workflow explicitly waits for a CodeRabbit approval on the triggering head SHA and for all required checks before merging
   that exact approved head. Live ruleset alignment uses its one-approval, resolved-thread, and CodeRabbit-app binding policy while preserving this repository's
   deletion/non-fast-forward rules, bypass actor, merge methods, strict checking, and complete required-check set.
