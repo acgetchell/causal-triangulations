@@ -23,30 +23,40 @@ jobs:
   clippy-sarif:
     name: Clippy SARIF Analysis
     runs-on: ubuntu-latest
-    env:
-      CLIPPY_SARIF_VERSION: "0.8.0"
-      SARIF_FMT_VERSION: "0.8.0"
     steps:
       - name: Checkout code
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: true
+          cache-bin: false
           # toolchain, components, etc. are specified in rust-toolchain.toml
+
+      - name: Set up just
+        uses: ./.github/actions/setup-just
+
+      - name: Export SARIF tool versions
+        id: tool_versions
+        shell: bash
+        run: |
+          {
+            echo "CLIPPY_SARIF_VERSION=$(just --evaluate clippy_sarif_version)"
+            echo "SARIF_FMT_VERSION=$(just --evaluate sarif_fmt_version)"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Install clippy-sarif
         uses: taiki-e/cache-cargo-install-action@417450f3c33ee20393705369577571770643d4c7 # v3.0.7
         with:
-          tool: clippy-sarif@${{ env.CLIPPY_SARIF_VERSION }}
+          tool: clippy-sarif@${{ steps.tool_versions.outputs.CLIPPY_SARIF_VERSION }}
 
       - name: Install sarif-fmt
         uses: taiki-e/cache-cargo-install-action@417450f3c33ee20393705369577571770643d4c7 # v3.0.7
         with:
-          tool: sarif-fmt@${{ env.SARIF_FMT_VERSION }}
+          tool: sarif-fmt@${{ steps.tool_versions.outputs.SARIF_FMT_VERSION }}
 
       - name: Run clippy with SARIF output
         run: |
@@ -70,7 +80,7 @@ jobs:
             github.event_name != 'pull_request'
             || github.event.pull_request.head.repo.full_name == github.repository
           )
-        uses: github/codeql-action/upload-sarif@87557b9c84dde89fdd9b10e88954ac2f4248e463 # v4.36.1
+        uses: github/codeql-action/upload-sarif@f205ea1c3313d32999d8d6a48b4f6530d4437b38 # v4.37.4
         with:
           sarif_file: rust-clippy-results.sarif
           category: "clippy"

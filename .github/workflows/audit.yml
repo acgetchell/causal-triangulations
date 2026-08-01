@@ -4,12 +4,16 @@ on:
     paths:
       # Run if workflow changes
       - .github/workflows/audit.yml
+      - .github/actions/setup-just/action.yml
+      - justfile
       # Run on changed dependencies
       - "**/Cargo.toml"
       - "**/Cargo.lock"
   pull_request:
     paths:
       - .github/workflows/audit.yml
+      - .github/actions/setup-just/action.yml
+      - justfile
       - "**/Cargo.toml"
       - "**/Cargo.lock"
   # Rerun periodically to pick up new advisories (weekly instead of daily)
@@ -25,25 +29,41 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
-    env:
-      CARGO_AUDIT_VERSION: "0.22.1"
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: true
+          cache-bin: false
           # toolchain, components, etc. are specified in rust-toolchain.toml
+
+      - name: Set up just
+        uses: ./.github/actions/setup-just
+
+      - name: Resolve cargo-audit version
+        id: cargo_audit_version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(just --evaluate cargo_audit_version)"
+          if [[ -z "$version" ]]; then
+            echo "::error::Could not resolve cargo_audit_version from justfile"
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Compute week key
         id: date
         run: echo "week=$(date -u +%Y-W%V)" >> "$GITHUB_OUTPUT"
 
       - name: Cache audit database
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/advisory-db
           key: advisory-db-${{ runner.os }}-v1-${{ steps.date.outputs.week }}
@@ -52,7 +72,7 @@ jobs:
       - name: Install cargo-audit
         uses: taiki-e/cache-cargo-install-action@417450f3c33ee20393705369577571770643d4c7 # v3.0.7
         with:
-          tool: cargo-audit@${{ env.CARGO_AUDIT_VERSION }}
+          tool: cargo-audit@${{ steps.cargo_audit_version.outputs.version }}
 
       - name: Run cargo audit
         run: |

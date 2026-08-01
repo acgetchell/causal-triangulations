@@ -6,14 +6,20 @@
 # Use bash with strict error handling for all recipes
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+cargo_audit_version := "0.22.2"
 cargo_llvm_cov_version := "0.8.7"
-cargo_nextest_version := "0.9.137"
-dprint_version := "0.54.0"
+cargo_machete_version := "0.9.2"
+cargo_nextest_version := "0.9.140"
+clippy_sarif_version := "0.8.0"
+dprint_version := "0.55.2"
 git_cliff_version := "2.13.1"
-rumdl_version := "0.2.14"
+just_version := "1.57.0"
+rumdl_version := "0.2.47"
+sarif_fmt_version := "0.8.0"
 taplo_version := "0.10.0"
-typos_version := "1.47.2"
-zizmor_version := "1.25.2"
+typos_version := "1.48.0"
+uv_version := "0.12.0"
+zizmor_version := "1.28.0"
 
 # Common cargo-llvm-cov arguments for all coverage runs.
 # Excludes benches/examples from reports while allowing integration tests to
@@ -36,18 +42,22 @@ _ensure-cargo-llvm-cov:
     if command -v cargo-llvm-cov >/dev/null; then
         installed_version="$(cargo llvm-cov --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
-    if [[ "$installed_version" != "{{cargo_llvm_cov_version}}" ]]; then
-        echo "❌ 'cargo-llvm-cov' {{cargo_llvm_cov_version}} not found. See 'just setup-tools' or install:"
-        echo "   cargo install --locked cargo-llvm-cov --version {{cargo_llvm_cov_version}}"
+    if [[ "$installed_version" != "{{ cargo_llvm_cov_version }}" ]]; then
+        echo "❌ 'cargo-llvm-cov' {{ cargo_llvm_cov_version }} not found. See 'just setup-tools' or install:"
+        echo "   cargo install --locked cargo-llvm-cov --version {{ cargo_llvm_cov_version }}"
         exit 1
     fi
 
 _ensure-cargo-machete:
     #!/usr/bin/env bash
     set -euo pipefail
-    if ! cargo machete --version >/dev/null 2>&1; then
-        echo "❌ 'cargo-machete' not found. Install with:"
-        echo "   cargo install --locked cargo-machete"
+    installed_version=""
+    if cargo machete --version >/dev/null 2>&1; then
+        installed_version="$(cargo machete --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+    fi
+    if [[ "$installed_version" != "{{ cargo_machete_version }}" ]]; then
+        echo "❌ 'cargo-machete' {{ cargo_machete_version }} not found. Install with:"
+        echo "   cargo install --locked cargo-machete --version {{ cargo_machete_version }}"
         exit 1
     fi
 
@@ -58,9 +68,9 @@ _ensure-cargo-nextest:
     if cargo nextest --version >/dev/null 2>&1; then
         installed_version="$(cargo nextest --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
-    if [[ "$installed_version" != "{{cargo_nextest_version}}" ]]; then
-        echo "❌ 'cargo-nextest' {{cargo_nextest_version}} not found. See 'just setup-tools' or install:"
-        echo "   cargo install --locked cargo-nextest --version {{cargo_nextest_version}}"
+    if [[ "$installed_version" != "{{ cargo_nextest_version }}" ]]; then
+        echo "❌ 'cargo-nextest' {{ cargo_nextest_version }} not found. See 'just setup-tools' or install:"
+        echo "   cargo install --locked cargo-nextest --version {{ cargo_nextest_version }}"
         exit 1
     fi
 
@@ -71,9 +81,9 @@ _ensure-dprint:
     if command -v dprint >/dev/null; then
         installed_version="$(dprint --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
-    if [[ "$installed_version" != "{{dprint_version}}" ]]; then
-        echo "❌ 'dprint' {{dprint_version}} not found. See 'just setup-tools' or install:"
-        echo "   cargo install --locked dprint --version {{dprint_version}}"
+    if [[ "$installed_version" != "{{ dprint_version }}" ]]; then
+        echo "❌ 'dprint' {{ dprint_version }} not found. See 'just setup-tools' or install:"
+        echo "   cargo install --locked dprint --version {{ dprint_version }}"
         exit 1
     fi
 
@@ -84,9 +94,9 @@ _ensure-git-cliff:
     if command -v git-cliff >/dev/null; then
         installed_version="$(git-cliff --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
-    if [[ "$installed_version" != "{{git_cliff_version}}" ]]; then
-        echo "❌ 'git-cliff' {{git_cliff_version}} not found. Install with:"
-        echo "   cargo install --locked git-cliff --version {{git_cliff_version}}"
+    if [[ "$installed_version" != "{{ git_cliff_version }}" ]]; then
+        echo "❌ 'git-cliff' {{ git_cliff_version }} not found. Install with:"
+        echo "   cargo install --locked git-cliff --version {{ git_cliff_version }}"
         exit 1
     fi
 
@@ -102,9 +112,9 @@ _ensure-rumdl:
     if command -v rumdl >/dev/null; then
         installed_version="$(rumdl --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
-    if [[ "$installed_version" != "{{rumdl_version}}" ]]; then
-        echo "❌ 'rumdl' {{rumdl_version}} not found. See 'just setup-tools' or install:"
-        echo "   cargo install --locked rumdl --version {{rumdl_version}}"
+    if [[ "$installed_version" != "{{ rumdl_version }}" ]]; then
+        echo "❌ 'rumdl' {{ rumdl_version }} not found. See 'just setup-tools' or install:"
+        echo "   cargo install --locked rumdl --version {{ rumdl_version }}"
         exit 1
     fi
 
@@ -128,9 +138,9 @@ _ensure-taplo:
     if command -v taplo >/dev/null; then
         installed_version="$(taplo --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
-    if [[ "$installed_version" != "{{taplo_version}}" ]]; then
-        echo "❌ 'taplo' {{taplo_version}} not found. See 'just setup-tools' or install:"
-        echo "   cargo install --locked taplo-cli --version {{taplo_version}}"
+    if [[ "$installed_version" != "{{ taplo_version }}" ]]; then
+        echo "❌ 'taplo' {{ taplo_version }} not found. See 'just setup-tools' or install:"
+        echo "   cargo install --locked taplo-cli --version {{ taplo_version }}"
         exit 1
     fi
 
@@ -142,9 +152,9 @@ _ensure-typos:
     if command -v typos >/dev/null; then
         installed_version="$(typos --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
-    if [[ "$installed_version" != "{{typos_version}}" ]]; then
-        echo "❌ 'typos' {{typos_version}} not found. See 'just setup-tools' or install:"
-        echo "   cargo install --locked typos-cli --version {{typos_version}}"
+    if [[ "$installed_version" != "{{ typos_version }}" ]]; then
+        echo "❌ 'typos' {{ typos_version }} not found. See 'just setup-tools' or install:"
+        echo "   cargo install --locked typos-cli --version {{ typos_version }}"
         exit 1
     fi
 
@@ -152,7 +162,15 @@ _ensure-typos:
 _ensure-uv:
     #!/usr/bin/env bash
     set -euo pipefail
-    command -v uv >/dev/null || { echo "❌ 'uv' not found. See 'just setup' or https://github.com/astral-sh/uv"; exit 1; }
+    installed_version=""
+    if command -v uv >/dev/null; then
+        installed_version="$(uv --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+    fi
+    if [[ "$installed_version" != "{{ uv_version }}" ]]; then
+        echo "❌ 'uv' {{ uv_version }} not found. Install the pinned version and re-run: just setup-tools"
+        echo "   https://docs.astral.sh/uv/getting-started/installation/"
+        exit 1
+    fi
 
 _ensure-yamllint:
     #!/usr/bin/env bash
@@ -167,9 +185,9 @@ _ensure-zizmor:
     if command -v zizmor >/dev/null; then
         installed_version="$(zizmor --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
     fi
-    if [[ "$installed_version" != "{{zizmor_version}}" ]]; then
-        echo "❌ 'zizmor' {{zizmor_version}} not found. See 'just setup-tools' or install:"
-        echo "   cargo install --locked zizmor --version {{zizmor_version}}"
+    if [[ "$installed_version" != "{{ zizmor_version }}" ]]; then
+        echo "❌ 'zizmor' {{ zizmor_version }} not found. See 'just setup-tools' or install:"
+        echo "   cargo install --locked zizmor --version {{ zizmor_version }}"
         exit 1
     fi
 
@@ -198,7 +216,7 @@ bench-ci:
 # This catches bench/release-profile-only warnings (e.g. debug_assertions-gated unused vars)
 # that won't show up in normal debug-profile `cargo test` / `cargo clippy` runs.
 bench-compile:
-    RUSTFLAGS='-D warnings' cargo bench --workspace --no-run
+    CARGO_BUILD_WARNINGS=deny cargo bench --workspace --no-run
 
 # Smoke-test benchmark harnesses with minimal samples; not for performance data.
 bench-smoke:
@@ -236,12 +254,12 @@ changelog: _ensure-git-cliff _ensure-rumdl python-sync
     fi
 
 changelog-tag version:
-    just tag {{version}}
+    just tag {{ version }}
 
 changelog-unreleased version: _ensure-git-cliff _ensure-rumdl python-sync
     #!/usr/bin/env bash
     set -euo pipefail
-    GIT_CLIFF_OFFLINE=true git-cliff --tag {{version}} -o CHANGELOG.md
+    GIT_CLIFF_OFFLINE=true git-cliff --tag {{ version }} -o CHANGELOG.md
     uv run postprocess-changelog
     uv run archive-changelog
     archive_files=()
@@ -278,7 +296,7 @@ ci: check bench-compile test-all examples-validate notebook-check
 # CI with performance baseline
 ci-baseline tag="ci":
     just ci
-    just perf-baseline {{tag}}
+    just perf-baseline {{ tag }}
 
 # CI + feature-gated slow/stress tests.
 ci-slow: ci test-slow
@@ -306,16 +324,16 @@ commit-check: check test-all test-release bench-compile
 # Coverage analysis for local development (HTML output)
 coverage: _ensure-cargo-llvm-cov
     mkdir -p target/llvm-cov
-    cargo llvm-cov {{_coverage_base_args}} --html --output-dir target/llvm-cov
+    cargo llvm-cov {{ _coverage_base_args }} --html --output-dir target/llvm-cov
     @echo "📊 Coverage report generated: target/llvm-cov/html/index.html"
 
 # Coverage analysis for CI (Cobertura XML output for codecov/codacy)
 coverage-ci: _ensure-cargo-llvm-cov
     mkdir -p coverage
-    cargo llvm-cov {{_coverage_base_args}} --cobertura --output-path coverage/cobertura.xml
+    cargo llvm-cov {{ _coverage_base_args }} --cobertura --output-path coverage/cobertura.xml
 
 coverage-report *args: _ensure-uv
-    uv run coverage_report {{args}}
+    uv run coverage_report {{ args }}
 
 debug-large-scale-1p1 vertices="512" timeslices="16" sweeps="10" max_secs="1800" seed="0xCD710139": _ensure-cargo-nextest
     CDT_LARGE_DEBUG_VERTICES_1P1={{ vertices }} CDT_LARGE_DEBUG_TIMESLICES_1P1={{ timeslices }} CDT_LARGE_DEBUG_SWEEPS_1P1={{ sweeps }} CDT_LARGE_DEBUG_SEED_1P1={{ seed }} CDT_LARGE_DEBUG_MAX_RUNTIME_SECS={{ max_secs }} cargo nextest run --cargo-profile perf --features slow-tests --test large_scale_debug debug_large_scale_1p1 -- --exact --nocapture
@@ -494,7 +512,7 @@ notebook notebook="notebooks/00_quickstart.ipynb": _ensure-uv
     set -euo pipefail
     notebook_cache="$(pwd)/target/notebooks"
     mkdir -p "$notebook_cache/.ipython" "$notebook_cache/.matplotlib"
-    MPLBACKEND=Agg IPYTHONDIR="$notebook_cache/.ipython" MPLCONFIGDIR="$notebook_cache/.matplotlib" uv run --group notebooks jupyter lab --ServerApp.open_browser=True --LabApp.open_browser=True "{{notebook}}"
+    MPLBACKEND=Agg IPYTHONDIR="$notebook_cache/.ipython" MPLCONFIGDIR="$notebook_cache/.matplotlib" uv run --group notebooks jupyter lab --ServerApp.open_browser=True --LabApp.open_browser=True "{{ notebook }}"
 
 notebook-check: notebook-lint notebook-execute-fast
     @echo "📓 Notebook checks complete!"
@@ -503,7 +521,7 @@ notebook-check-slow: notebook-check notebook-execute-slow
     @echo "📓 Slow notebook checks complete!"
 
 notebook-clear-outputs notebook="notebooks/00_quickstart.ipynb": _ensure-uv
-    uv run --group notebooks jupyter nbconvert --clear-output --inplace "{{notebook}}"
+    uv run --group notebooks jupyter nbconvert --clear-output --inplace "{{ notebook }}"
 
 notebook-clear-outputs-all: _ensure-uv
     #!/usr/bin/env bash
@@ -515,19 +533,19 @@ notebook-clear-outputs-all: _ensure-uv
 notebook-execute notebook="notebooks/00_quickstart.ipynb" output_dir="target/notebooks": _ensure-uv
     #!/usr/bin/env bash
     set -euo pipefail
-    output_path="$(pwd)/{{output_dir}}"
+    output_path="$(pwd)/{{ output_dir }}"
     mkdir -p "$output_path/.ipython" "$output_path/.matplotlib"
-    MPLBACKEND=Agg IPYTHONDIR="$output_path/.ipython" MPLCONFIGDIR="$output_path/.matplotlib" uv run --group notebooks jupyter nbconvert --execute --ExecutePreprocessor.timeout=600 --ExecutePreprocessor.shutdown_kernel=immediate --to notebook --output-dir "{{output_dir}}" "{{notebook}}"
+    MPLBACKEND=Agg IPYTHONDIR="$output_path/.ipython" MPLCONFIGDIR="$output_path/.matplotlib" uv run --group notebooks jupyter nbconvert --execute --ExecutePreprocessor.timeout=600 --ExecutePreprocessor.shutdown_kernel=immediate --to notebook --output-dir "{{ output_dir }}" "{{ notebook }}"
 
 notebook-execute-all output_dir="target/notebooks": _ensure-uv
     #!/usr/bin/env bash
     set -euo pipefail
-    output_path="$(pwd)/{{output_dir}}"
+    output_path="$(pwd)/{{ output_dir }}"
     mkdir -p "$output_path/.ipython" "$output_path/.matplotlib"
     found=0
     while IFS= read -r notebook; do
         found=1
-        MPLBACKEND=Agg IPYTHONDIR="$output_path/.ipython" MPLCONFIGDIR="$output_path/.matplotlib" uv run --group notebooks jupyter nbconvert --execute --ExecutePreprocessor.timeout=600 --ExecutePreprocessor.shutdown_kernel=immediate --to notebook --output-dir "{{output_dir}}" "$notebook"
+        MPLBACKEND=Agg IPYTHONDIR="$output_path/.ipython" MPLCONFIGDIR="$output_path/.matplotlib" uv run --group notebooks jupyter nbconvert --execute --ExecutePreprocessor.timeout=600 --ExecutePreprocessor.shutdown_kernel=immediate --to notebook --output-dir "{{ output_dir }}" "$notebook"
     done < <(find notebooks -type f -name '*.ipynb' | sort)
     if [ "$found" -eq 0 ]; then
         echo "No notebooks found to execute."
@@ -536,18 +554,18 @@ notebook-execute-all output_dir="target/notebooks": _ensure-uv
 notebook-execute-fast output_dir="target/notebooks": _ensure-uv
     #!/usr/bin/env bash
     set -euo pipefail
-    output_path="$(pwd)/{{output_dir}}"
+    output_path="$(pwd)/{{ output_dir }}"
     mkdir -p "$output_path/.ipython" "$output_path/.matplotlib"
     for notebook in notebooks/00_quickstart.ipynb notebooks/01_spacetime_visualization.ipynb; do
-        MPLBACKEND=Agg IPYTHONDIR="$output_path/.ipython" MPLCONFIGDIR="$output_path/.matplotlib" uv run --group notebooks jupyter nbconvert --execute --ExecutePreprocessor.timeout=600 --ExecutePreprocessor.shutdown_kernel=immediate --to notebook --output-dir "{{output_dir}}" "$notebook"
+        MPLBACKEND=Agg IPYTHONDIR="$output_path/.ipython" MPLCONFIGDIR="$output_path/.matplotlib" uv run --group notebooks jupyter nbconvert --execute --ExecutePreprocessor.timeout=600 --ExecutePreprocessor.shutdown_kernel=immediate --to notebook --output-dir "{{ output_dir }}" "$notebook"
     done
 
 notebook-execute-slow output_dir="target/notebooks": _ensure-uv
     #!/usr/bin/env bash
     set -euo pipefail
-    output_path="$(pwd)/{{output_dir}}"
+    output_path="$(pwd)/{{ output_dir }}"
     mkdir -p "$output_path/.ipython" "$output_path/.matplotlib"
-    MPLBACKEND=Agg IPYTHONDIR="$output_path/.ipython" MPLCONFIGDIR="$output_path/.matplotlib" uv run --group notebooks jupyter nbconvert --execute --ExecutePreprocessor.timeout=1800 --ExecutePreprocessor.shutdown_kernel=immediate --to notebook --output-dir "{{output_dir}}" notebooks/02_analysis_caches.ipynb
+    MPLBACKEND=Agg IPYTHONDIR="$output_path/.ipython" MPLCONFIGDIR="$output_path/.matplotlib" uv run --group notebooks jupyter nbconvert --execute --ExecutePreprocessor.timeout=1800 --ExecutePreprocessor.shutdown_kernel=immediate --to notebook --output-dir "{{ output_dir }}" notebooks/02_analysis_caches.ipynb
 
 notebook-output-check: _ensure-jq
     #!/usr/bin/env bash
@@ -586,7 +604,7 @@ notebook-setup: _ensure-uv
 perf-baseline tag="": _ensure-uv
     #!/usr/bin/env bash
     set -euo pipefail
-    tag_value="{{tag}}"
+    tag_value="{{ tag }}"
     if [ -n "$tag_value" ]; then
         uv run performance-analysis --save-baseline --tag "$tag_value"
     else
@@ -594,10 +612,10 @@ perf-baseline tag="": _ensure-uv
     fi
 
 perf-check threshold="10.0": _ensure-uv
-    uv run performance-analysis --threshold {{threshold}}
+    uv run performance-analysis --threshold {{ threshold }}
 
 perf-compare file: _ensure-uv
-    uv run performance-analysis --compare "{{file}}"
+    uv run performance-analysis --compare "{{ file }}"
 
 perf-help:
     @echo "Performance Analysis Commands:"
@@ -620,7 +638,7 @@ perf-large-scale-debug max_secs="1800":
 perf-report file="": _ensure-uv
     #!/usr/bin/env bash
     set -euo pipefail
-    file_value="{{file}}"
+    file_value="{{ file }}"
     if [ -n "$file_value" ]; then
         uv run performance-analysis --report "$file_value"
     else
@@ -630,7 +648,7 @@ perf-report file="": _ensure-uv
     fi
 
 perf-trends days="7": _ensure-uv
-    uv run performance-analysis --trends {{days}}
+    uv run performance-analysis --trends {{ days }}
 
 publish-check: _ensure-jq
     #!/usr/bin/env bash
@@ -710,13 +728,13 @@ python-typecheck: _ensure-uv
 
 # Running the binary
 run *args:
-    cargo run --bin cdt {{args}}
+    cargo run --bin cdt {{ args }}
 
 run-example:
     cargo run --bin cdt -- -v 32 -t 3
 
 run-release *args:
-    cargo run --release --bin cdt {{args}}
+    cargo run --release --bin cdt {{ args }}
 
 # Run example simulation script
 run-simulation:
@@ -779,6 +797,11 @@ setup-tools:
         echo "   https://docs.astral.sh/uv/getting-started/installation/"
         exit 1
     fi
+    uv_version="{{ uv_version }}"
+    if [[ "$(uv --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$uv_version" ]]; then
+        echo "❌ 'uv' ${uv_version} is required. Update uv and re-run: just setup-tools"
+        exit 1
+    fi
 
     echo "Ensuring Rust toolchain + components..."
     if ! have rustup; then
@@ -790,7 +813,15 @@ setup-tools:
     echo ""
 
     echo "Ensuring cargo tools..."
-    dprint_version="{{dprint_version}}"
+    just_version="{{ just_version }}"
+    if ! have just || [[ "$(just --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$just_version" ]]; then
+        echo "  ⏳ Installing just ${just_version} (cargo)..."
+        cargo install --locked just --version "${just_version}"
+    else
+        echo "  ✓ just ${just_version}"
+    fi
+
+    dprint_version="{{ dprint_version }}"
     if ! have dprint || [[ "$(dprint --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$dprint_version" ]]; then
         echo "  ⏳ Installing dprint ${dprint_version} (cargo)..."
         cargo install --locked dprint --version "${dprint_version}"
@@ -798,7 +829,7 @@ setup-tools:
         echo "  ✓ dprint ${dprint_version}"
     fi
 
-    rumdl_version="{{rumdl_version}}"
+    rumdl_version="{{ rumdl_version }}"
     if ! have rumdl || [[ "$(rumdl --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$rumdl_version" ]]; then
         echo "  ⏳ Installing rumdl ${rumdl_version} (cargo)..."
         cargo install --locked rumdl --version "${rumdl_version}"
@@ -806,7 +837,7 @@ setup-tools:
         echo "  ✓ rumdl ${rumdl_version}"
     fi
 
-    taplo_version="{{taplo_version}}"
+    taplo_version="{{ taplo_version }}"
     if ! have taplo || [[ "$(taplo --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$taplo_version" ]]; then
         echo "  ⏳ Installing taplo-cli ${taplo_version} (cargo)..."
         cargo install --locked taplo-cli --version "${taplo_version}"
@@ -814,7 +845,7 @@ setup-tools:
         echo "  ✓ taplo ${taplo_version}"
     fi
 
-    typos_version="{{typos_version}}"
+    typos_version="{{ typos_version }}"
     if ! have typos || [[ "$(typos --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$typos_version" ]]; then
         echo "  ⏳ Installing typos-cli ${typos_version} (cargo)..."
         cargo install --locked typos-cli --version "${typos_version}"
@@ -822,7 +853,7 @@ setup-tools:
         echo "  ✓ typos ${typos_version}"
     fi
 
-    git_cliff_version="{{git_cliff_version}}"
+    git_cliff_version="{{ git_cliff_version }}"
     if ! have git-cliff || [[ "$(git-cliff --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$git_cliff_version" ]]; then
         echo "  ⏳ Installing git-cliff ${git_cliff_version} (cargo)..."
         cargo install --locked git-cliff --version "${git_cliff_version}"
@@ -830,7 +861,7 @@ setup-tools:
         echo "  ✓ git-cliff ${git_cliff_version}"
     fi
 
-    cargo_llvm_cov_version="{{cargo_llvm_cov_version}}"
+    cargo_llvm_cov_version="{{ cargo_llvm_cov_version }}"
     if ! have cargo-llvm-cov || [[ "$(cargo-llvm-cov --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$cargo_llvm_cov_version" ]]; then
         echo "  ⏳ Installing cargo-llvm-cov ${cargo_llvm_cov_version} (cargo)..."
         cargo install --locked cargo-llvm-cov --version "${cargo_llvm_cov_version}"
@@ -838,7 +869,7 @@ setup-tools:
         echo "  ✓ cargo-llvm-cov ${cargo_llvm_cov_version}"
     fi
 
-    cargo_nextest_version="{{cargo_nextest_version}}"
+    cargo_nextest_version="{{ cargo_nextest_version }}"
     if ! cargo nextest --version >/dev/null 2>&1 || [[ "$(cargo nextest --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$cargo_nextest_version" ]]; then
         echo "  ⏳ Installing cargo-nextest ${cargo_nextest_version} (cargo)..."
         cargo install --locked cargo-nextest --version "${cargo_nextest_version}"
@@ -846,14 +877,15 @@ setup-tools:
         echo "  ✓ cargo-nextest ${cargo_nextest_version}"
     fi
 
-    if ! cargo machete --version >/dev/null 2>&1; then
-        echo "  ⏳ Installing cargo-machete (cargo)..."
-        cargo install --locked cargo-machete
+    cargo_machete_version="{{ cargo_machete_version }}"
+    if ! cargo machete --version >/dev/null 2>&1 || [[ "$(cargo machete --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$cargo_machete_version" ]]; then
+        echo "  ⏳ Installing cargo-machete ${cargo_machete_version} (cargo)..."
+        cargo install --locked cargo-machete --version "${cargo_machete_version}"
     else
-        echo "  ✓ cargo-machete"
+        echo "  ✓ cargo-machete ${cargo_machete_version}"
     fi
 
-    zizmor_version="{{zizmor_version}}"
+    zizmor_version="{{ zizmor_version }}"
     if ! have zizmor || [[ "$(zizmor --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$zizmor_version" ]]; then
         echo "  ⏳ Installing zizmor ${zizmor_version} (cargo)..."
         cargo install --locked zizmor --version "${zizmor_version}"
@@ -869,7 +901,7 @@ setup-tools:
     echo "Verifying required commands are available..."
     missing=0
 
-    cmds=(uv jq taplo dprint rumdl git-cliff typos cargo-llvm-cov zizmor)
+    cmds=(uv jq just taplo dprint rumdl git-cliff typos cargo-llvm-cov zizmor)
     for cmd in "${cmds[@]}"; do
         if have "$cmd"; then
             echo "  ✓ $cmd"
@@ -974,10 +1006,10 @@ spell-check: _ensure-typos
     fi
 
 tag version: python-sync
-    uv run tag-release {{version}}
+    uv run tag-release {{ version }}
 
 tag-force version: python-sync
-    uv run tag-release {{version}} --force
+    uv run tag-release {{ version }} --force
 
 # Testing: fast tests (lib via nextest + rustdoc doctests via cargo test)
 test: test-lib test-doc

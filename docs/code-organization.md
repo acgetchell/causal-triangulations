@@ -18,11 +18,15 @@ This document lists the files checked into the repository and summarizes the arc
 ```text
 causal-triangulations/
 ├── .github/
+│   ├── actions/
+│   │   └── setup-just/
+│   │       └── action.yml
 │   ├── workflows/
 │   │   ├── audit.yml
 │   │   ├── ci.yml
 │   │   ├── codecov.yml
 │   │   ├── codeql.yml
+│   │   ├── dependabot-auto-merge.yml
 │   │   ├── performance.yml
 │   │   ├── rust-clippy.yml
 │   │   ├── semgrep-sarif.yml
@@ -334,7 +338,7 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
 - `build_delaunay2_with_data` — builds from coordinate + vertex-data pairs
 - `build_delaunay2_from_simplices` / `build_delaunay2_with_topology` — builds from explicit simplex connectivity (no Delaunay point insertion); the latter
   also accepts `TopologyGuarantee` and `GlobalTopology` metadata for supported explicit topologies
-- `build_toroidal_delaunay2` — API-compatibility wrapper for explicit toroidal meshes; with `delaunay` v0.7.8 it validates the domain and reports the upstream
+- `build_toroidal_delaunay2` — API-compatibility wrapper for explicit toroidal meshes; with `delaunay` v0.8 it validates the domain and reports the upstream
   explicit-toroidal topology limitation
 - `build_periodic_toroidal_delaunay2` — builds true periodic toroidal Delaunay meshes through the upstream image-point constructor
 - `random_delaunay2`, `seeded_delaunay2` — convenience wrappers
@@ -366,7 +370,7 @@ Notebook files live in `notebooks/` and should wrap the CLI or consume generated
 
 ## Key Dependencies
 
-- `delaunay` (v0.7.8) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
+- `delaunay` (v0.8) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
   `set_vertex_data_by_key` for O(1) label mutation)
 - `markov-chain-monte-carlo` (v0.4) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, `Target`)
 - `num-traits` — `ToPrimitive` and `NumCast` for checked or saturating numeric conversions

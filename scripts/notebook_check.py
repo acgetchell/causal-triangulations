@@ -15,7 +15,7 @@ import tempfile
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, override
 
 from subprocess_utils import run_safe_command
 
@@ -210,6 +210,7 @@ class NotebookVisitor(ast.NodeVisitor):
         self.cell = cell
         self.diagnostics: list[Diagnostic] = []
 
+    @override
     def visit_Import(self, node: ast.Import) -> None:
         for alias in node.names:
             if alias.name == "pandas":
@@ -218,6 +219,7 @@ class NotebookVisitor(ast.NodeVisitor):
                 self.diagnostics.append(Diagnostic("warning", self.cell, "imports csv; prefer Polars for dataframe-shaped CSV analysis"))
         self.generic_visit(node)
 
+    @override
     def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
         if node.module == "pandas":
             self.diagnostics.append(Diagnostic("warning", self.cell, "imports pandas; prefer Polars unless pandas is required"))
@@ -225,14 +227,17 @@ class NotebookVisitor(ast.NodeVisitor):
             self.diagnostics.append(Diagnostic("warning", self.cell, "imports csv; prefer Polars for dataframe-shaped CSV analysis"))
         self.generic_visit(node)
 
+    @override
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._check_function_annotations(node)
         self.generic_visit(node)
 
+    @override
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._check_function_annotations(node)
         self.generic_visit(node)
 
+    @override
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
         if node.type is None:
             self.diagnostics.append(Diagnostic("warning", self.cell, "uses bare except; catch specific exceptions"))
@@ -240,6 +245,7 @@ class NotebookVisitor(ast.NodeVisitor):
             self.diagnostics.append(Diagnostic("warning", self.cell, f"catches broad {node.type.id}; catch specific recoverable errors"))
         self.generic_visit(node)
 
+    @override
     def visit_Call(self, node: ast.Call) -> None:
         call_name = dotted_name(node.func)
         if call_name in {"subprocess.run", "subprocess.Popen"}:

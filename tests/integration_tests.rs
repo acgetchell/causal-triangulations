@@ -57,8 +57,8 @@ mod integration_tests {
                 .triangulation()
                 .geometry()
                 .triangulation()
-                .tds()
-                .is_valid()
+                .as_triangulation()
+                .is_valid_structure()
                 .is_ok(),
             "final triangulation should remain structurally valid"
         );

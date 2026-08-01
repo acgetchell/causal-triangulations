@@ -47,7 +47,8 @@ path integral over causally triangulated spacetimes and evaluating it using Mark
 - Notebook-first quickstart for physicists, AI/ML users, and Rust contributors
 - Proposal-before-mutation Metropolis-Hastings simulation with rollback on failed accepted moves
 - Regge action calculation with configurable coupling constants
-- Resumable serde-backed CDT/MCMC checkpoints for durable chain continuation
+- Resumable serde-backed CDT/MCMC checkpoints for continuation within a compatible build; serialized checkpoint files are
+  [version-bound](docs/metropolis.md#serialized-checkpoint-compatibility)
 - Trace CSV simulation output for external analysis workflows; JSON summary/metadata for CLI/config export
 - Volume-profile, Hausdorff-dimension, and spectral-dimension observables for CDT analysis
 
@@ -71,7 +72,7 @@ parameters, outputs, and small first experiments.
 
 ### Requirements
 
-- Rust 1.96.0 or newer (pinned by `Cargo.toml` and `rust-toolchain.toml`)
+- Rust 1.97.1 or newer (pinned by `Cargo.toml` and `rust-toolchain.toml`)
 - `uv` for the notebook environment and repository-managed Python tooling
 
 Rust keeps the simulation engine memory-safe and fast while preserving validation tooling for tests, documentation, benchmarks, and CI parity.
