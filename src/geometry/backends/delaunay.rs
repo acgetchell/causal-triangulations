@@ -162,7 +162,8 @@ impl SerializableGlobalTopology {
                         )));
                     }
                 }
-                GlobalTopology::try_toroidal(domain, mode.into()).map_err(E::custom)
+                let mode = mode.into_toroidal_construction_mode()?;
+                GlobalTopology::try_toroidal(domain, mode).map_err(E::custom)
             }
             Self::Spherical => Ok(GlobalTopology::Spherical),
             Self::Hyperbolic => Ok(GlobalTopology::Hyperbolic),
@@ -179,12 +180,14 @@ impl From<ToroidalConstructionMode> for SerializableToroidalConstructionMode {
     }
 }
 
-impl From<SerializableToroidalConstructionMode> for ToroidalConstructionMode {
-    fn from(mode: SerializableToroidalConstructionMode) -> Self {
-        match mode {
-            SerializableToroidalConstructionMode::Canonicalized
-            | SerializableToroidalConstructionMode::PeriodicImagePoint => Self::PeriodicImagePoint,
-            SerializableToroidalConstructionMode::Explicit => Self::Explicit,
+impl SerializableToroidalConstructionMode {
+    fn into_toroidal_construction_mode<E: DeError>(self) -> Result<ToroidalConstructionMode, E> {
+        match self {
+            Self::Canonicalized => Err(E::custom(
+                "legacy toroidal construction mode `Canonicalized` is not supported because it is not semantically equivalent to `PeriodicImagePoint`",
+            )),
+            Self::PeriodicImagePoint => Ok(ToroidalConstructionMode::PeriodicImagePoint),
+            Self::Explicit => Ok(ToroidalConstructionMode::Explicit),
         }
     }
 }
@@ -1702,6 +1705,7 @@ mod tests {
         DelaunayTriangulation2D, build_delaunay2_from_simplices, build_delaunay2_with_data,
         generate_delaunay2, random_delaunay2, seeded_delaunay2,
     };
+    use delaunay::DelaunayRepairPolicy;
     use serde_json::{Value, error::Category};
     use slotmap::KeyData;
     use std::assert_matches;
@@ -1859,6 +1863,27 @@ mod tests {
         assert_value_deserialization_error(
             &error,
             &["toroidal domain length mismatch", "got 1", "expected 2"],
+        );
+    }
+
+    #[test]
+    fn toroidal_topology_deserialization_rejects_legacy_canonicalized_mode() {
+        let topology = SerializableGlobalTopology::Toroidal {
+            domain: vec![1.0, 1.0],
+            mode: SerializableToroidalConstructionMode::Canonicalized,
+        };
+
+        let error = topology
+            .into_global_topology::<2, serde::de::value::Error>()
+            .expect_err("legacy canonicalized topology must fail deserialization");
+
+        assert_value_deserialization_error(
+            &error,
+            &[
+                "Canonicalized",
+                "not semantically equivalent",
+                "PeriodicImagePoint",
+            ],
         );
     }
 
@@ -2667,6 +2692,52 @@ mod tests {
             Err(DelaunayError::NonFlippableEdge { reason, .. })
                 if reason == NonFlippableEdgeReason::NotInteriorFacet,
         );
+    }
+
+    #[test]
+    fn failed_vertex_removal_restores_backend_snapshot() {
+        let dt = build_delaunay2_with_data(&[
+            ([0.0, 0.0], 0),
+            ([1.0, 0.0], 0),
+            ([0.0, 1.0], 0),
+            ([1.0, 1.0], 0),
+            ([0.18, 0.42], 1),
+            ([0.52, 0.18], 1),
+            ([0.64, 0.72], 1),
+        ])
+        .expect("deletion rollback fixture should build");
+        let mut backend = validated_backend(dt);
+        backend
+            .dt
+            .set_delaunay_repair_policy(DelaunayRepairPolicy::Never);
+
+        let vertex = backend
+            .vertices()
+            .find(|vertex| {
+                backend
+                    .vertex_coordinates(vertex)
+                    .is_ok_and(|coordinates| coordinates == [0.18, 0.42])
+            })
+            .expect("rollback fixture vertex should be present");
+        let serialized_before = serde_json::to_value(&backend).expect("backend should serialize");
+        let facets_before = backend.interior_facets_by_edge.clone();
+
+        let error = backend
+            .remove_vertex(vertex)
+            .expect_err("disabled repair should reject this deletion");
+
+        assert_matches!(
+            error,
+            DelaunayError::RemovalFailed {
+                operation: DelaunayOperation::RemoveVertex,
+                ..
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&backend).expect("restored backend should serialize"),
+            serialized_before
+        );
+        assert_eq!(backend.interior_facets_by_edge, facets_before);
     }
 
     #[test]

@@ -379,25 +379,25 @@ fn first_valid_toroidal_candidate<T>(
 /// their unequal slice spacing does not have the regular seed's inverse-site
 /// contract. Every candidate preserves slice labels and remains far below the
 /// unit lattice spacing.
-fn toroidal_vertex_offset(slice: u32, index: u32, num_slices: u32, attempt: u8) -> [f64; 2] {
+fn toroidal_vertex_offset(slice: u32, index: u32, num_slices: u32, candidate: u8) -> [f64; 2] {
     let phase = std::f64::consts::TAU * f64::from(slice) / f64::from(num_slices);
-    if attempt == 0 {
+    if candidate == 0 {
         let x_hash = (17 * u64::from(index) + 34 * u64::from(slice) + 35) % 97;
         let y_hash = (48 * u64::from(index) + 11 * u64::from(slice) + 15) % 89;
         let centered_x = f64::from(u32::try_from(x_hash).unwrap_or(0)) / 97.0 - 0.5;
         let centered_y = f64::from(u32::try_from(y_hash).unwrap_or(0)) / 89.0 - 0.5;
         return [centered_x / 16.0, centered_y / 16.0];
     }
-    if attempt == 1 {
+    if candidate == 1 {
         return [phase.sin() / 32.0, 0.0];
     }
 
-    let seed = u64::from(attempt - 1);
+    let seed = u64::from(candidate - 1);
     let x_hash = (17 * u64::from(index) + (29 + seed) * u64::from(slice) + 7 * seed) % 97;
     let y_hash = ((43 + seed) * u64::from(index) + 11 * u64::from(slice) + 3 * seed) % 89;
     let centered_x = f64::from(u32::try_from(x_hash).unwrap_or(0)) / 97.0 - 0.5;
     let centered_y = f64::from(u32::try_from(y_hash).unwrap_or(0)) / 89.0 - 0.5;
-    let amplitude = f64::from(u32::from(attempt % 3) + 1) / 32.0;
+    let amplitude = f64::from(u32::from(candidate % 3) + 1) / 32.0;
     [
         phase.sin() / 16.0 + centered_x * amplitude,
         centered_y * amplitude,
