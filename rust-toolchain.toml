@@ -1,25 +1,13 @@
 [toolchain]
 # Pin to MSRV as specified in Cargo.toml
-channel = "1.96.0"
+channel = "1.97.1"
 
 # Essential components for development
 components = [
-    "cargo", # Package manager
     "clippy", # Linting (you use strict pedantic mode)
     "rustfmt", # Code formatting (you use cargo fmt --all)
-    "rust-docs", # Local documentation
-    "rust-std", # Standard library
-    "rust-src", # Source code (helpful for IDEs)
-    "rust-analyzer", # Language server for IDE support
-]
-
-# Target the platforms you support (adjust as needed)
-targets = [
-    "x86_64-apple-darwin", # macOS Intel
-    "aarch64-apple-darwin", # macOS Apple Silicon
-    "x86_64-unknown-linux-gnu", # Linux
-    "x86_64-pc-windows-msvc", # Windows
+    "rust-src", # Source code for IDEs and local diagnostics
 ]
 
 # Set this toolchain as the profile default
-profile = "default"
+profile = "minimal"

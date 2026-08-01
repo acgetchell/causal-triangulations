@@ -12,7 +12,7 @@ verify, reproduce, or extend.
 
 Prerequisites:
 
-- Rust 1.96.0, pinned by `rust-toolchain.toml`; `Cargo.toml` also specifies `rust-version = "1.96.0"` as the required toolchain
+- Rust 1.97.1, pinned by `rust-toolchain.toml`; `Cargo.toml` also specifies `rust-version = "1.97.1"` as the required toolchain
 - Git
 - [Just] command runner: `cargo install just`
 - `uv` for Python support tooling
@@ -95,7 +95,7 @@ Before opening a PR:
 Rust code uses:
 
 - Rust 2024 edition
-- MSRV 1.96.0
+- MSRV 1.97.1
 - `#![forbid(unsafe_code)]`
 - `rustfmt` and strict Clippy
 - narrow `CdtError` variants and `CdtResult<T>` for production errors

@@ -1,5 +1,5 @@
 [build-system]
-requires = [ "setuptools>=65.0.0", "wheel" ]
+requires = [ "setuptools>=83.0.0", "wheel" ]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,14 +8,13 @@ version = "0.1.0"
 description = "Python utility scripts for the causal-triangulations Rust library"
 readme = "README.md"
 requires-python = ">=3.13"
-license = { text = "BSD-3-Clause" }
+license = "BSD-3-Clause"
 authors = [ { name = "Adam Getchell", email = "adam@adamgetchell.org" } ]
 keywords = [ "cdt", "triangulation", "benchmarking", "utilities" ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: BSD License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.13",
@@ -25,7 +24,7 @@ classifiers = [
 ]
 
 # Project dependencies
-dependencies = [ "packaging" ]
+dependencies = [ "packaging>=26.2" ]
 
 [project.urls]
 "Homepage" = "https://github.com/acgetchell/causal-triangulations"
@@ -183,19 +182,19 @@ package = true
 [dependency-groups]
 dev = [
     "actionlint-py==1.7.12.24",
-    "pytest==9.0.3",
-    "ruff==0.15.14",
-    "semgrep==1.164.0",
+    "pytest==9.1.1",
+    "ruff==0.16.1",
+    "semgrep==1.172.0",
     "shellcheck-py==0.11.0.1",
     "shfmt-py==4.0.0",
-    "ty==0.0.40",
+    "ty==0.0.65",
     "yamllint==1.38.0",
 ]
 notebooks = [
-    "ipykernel>=7.1.0",
+    "ipykernel>=7.3.0",
     "nbconvert>=7.17.1",
-    "jupyterlab>=4.5.1",
-    "matplotlib>=3.10.8",
-    "plotly>=6.5.0",
-    "polars>=1.36.1",
+    "jupyterlab>=4.6.2",
+    "matplotlib>=3.11.1",
+    "plotly>=6.9.0",
+    "polars>=1.43.0",
 ]

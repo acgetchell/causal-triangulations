@@ -67,7 +67,7 @@ impl CheckpointAction {
 /// Resumable checkpoint for a CDT Metropolis-Hastings run.
 ///
 /// The embedded [`ChainCheckpoint`] stores the current triangulation and
-/// accepted/rejected chain counters using the shared MCMC crate's portable
+/// accepted/rejected chain counters using the shared MCMC crate's
 /// checkpoint type. CDT adds the domain-specific runtime state needed for
 /// scientific continuation: action/config metadata, accumulated telemetry,
 /// both RNG streams, and the ergodic move system.
@@ -78,6 +78,14 @@ impl CheckpointAction {
 /// checkpoint position.
 /// Deserialized checkpoints also validate that their stored action is finite
 /// and matches the action recomputed from the restored triangulation.
+///
+/// # Serialization compatibility
+///
+/// The Serde representation is version-bound and includes internal state from
+/// this crate, `delaunay`, and `markov-chain-monte-carlo`. Serialized checkpoint
+/// files are supported only when read by the same build that wrote them or by a
+/// release that explicitly documents checkpoint compatibility. In-memory
+/// continuation and same-build serialization round trips remain supported.
 ///
 /// # Examples
 ///

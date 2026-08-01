@@ -2421,8 +2421,8 @@ mod tests {
             triangulation
                 .geometry()
                 .triangulation()
-                .tds()
-                .is_valid()
+                .as_triangulation()
+                .is_valid_structure()
                 .is_ok()
         );
         assert!(triangulation.validate_causality().is_ok());
@@ -2481,8 +2481,8 @@ mod tests {
             triangulation
                 .geometry()
                 .triangulation()
-                .tds()
-                .is_valid()
+                .as_triangulation()
+                .is_valid_structure()
                 .is_ok()
         );
         assert!(triangulation.validate_causality().is_ok());
@@ -3133,8 +3133,8 @@ mod tests {
             triangulation
                 .geometry()
                 .triangulation()
-                .tds()
-                .is_valid()
+                .as_triangulation()
+                .is_valid_structure()
                 .is_ok()
         );
         assert!(triangulation.validate_causality().is_ok());

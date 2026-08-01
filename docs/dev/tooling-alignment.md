@@ -53,7 +53,7 @@ Some differences remain because CDT has different workflows and project invarian
   `CODACY_PROJECT_TOKEN` setup and would duplicate the existing repository-rule SARIF signal until Codacy is configured for this repository.
 - CDT Semgrep rules include geometry-backend isolation, foliation/topology validation, focused prelude imports, doctest assertion-idiom enforcement,
   Python support-script discipline, and typed error policies. These are repository-specific and should not be weakened while porting generic rules. The
-  `prefer-assert-matches-in-doctests` rule keeps public `///` examples on `std::assert_matches` (Rust 1.96.0) so documentation teaches the diagnostic-friendly
+  `prefer-assert-matches-in-doctests` rule keeps public `///` examples on `std::assert_matches` (Rust 1.97.1) so documentation teaches the diagnostic-friendly
   idiom rather than `assert!(matches!(...))`.
 - CDT requires Python `>=3.13` for repository-managed support tooling, matching the local `.python-version`, Ruff target, Ty environment, and CI setup.
 
@@ -118,7 +118,7 @@ The useful `justfile` updates ported from `delaunay` are:
 - The planned-step sampler-state sync rule now anchors `record_planned_step(...)` to call statements so it continues to catch missing
   `sampler.replace_state(...)` after recorded planned steps without false-positive matches on the helper function declaration when that helper contains fallible
   telemetry construction.
-- The Markdown and spelling tool pins now use `rumdl` 0.2.14 and `typos-cli` 1.47.2 in both the justfile and `.github/workflows/ci.yml`, matching the
+- The Markdown and spelling tool pins now use `rumdl` 0.2.47 and `typos-cli` 1.48.0 in the justfile, matching the
   current Cargo-installed sibling-repository tools while preserving the existing `rumdl.toml`, `typos.toml`, and raw 160-column guard.
 - The Cargo manifest description changed from `Causal Dynamical Triangulations in d-dimensions` to
   `Validated 1+1 Causal Dynamical Triangulations for quantum gravity`. This mirrors a config/manifest change per the repository guideline and records why the
@@ -139,8 +139,8 @@ Issue #162 refreshed the CI and security baseline against `markov-chain-monte-ca
   `taiki-e/install-action`.
 - Repository-owned Semgrep rules now also guard checkout credential persistence, `pull_request_target`, direct `github-script` expression interpolation,
   unlocked workflow `uv sync`, direct Python `subprocess.run` bypasses, and direct MCMC imports outside the CDT Metropolis adapter boundary.
-- Tool versions are pinned in workflow `env` blocks and mirrored in `justfile` constants for `cargo-nextest`, `dprint`, `rumdl`, `taplo`, `typos-cli`,
-  `zizmor`, `cargo-llvm-cov`, and `git-cliff`.
+- Tool versions are pinned in `justfile` constants for `cargo-nextest`, `dprint`, `rumdl`, `taplo`, `typos-cli`, `zizmor`, `cargo-llvm-cov`, and `git-cliff`;
+  workflows resolve them with `just --evaluate` after the repository-local bootstrap action installs the pinned `just` version.
 - Local validation includes `just zizmor` through `lint-config`, while `.github/workflows/zizmor.yml` uploads the GitHub Actions security signal in CI.
 - `SECURITY.md` documents private vulnerability reporting and the repository security check set.
 
@@ -195,6 +195,55 @@ triangulations, validation, individual ergodic move attempts, ten-sweep
 random-move workloads, and ten-sweep Metropolis runs. The suite uses a local
 `perf` profile and feeds the existing performance-analysis scripts, while the
 larger Delaunay profiling and same-machine comparison helpers remain deferred.
+
+## July 2026 Tool And Dependency Refresh
+
+The July 2026 refresh compares the shared command, dependency, and workflow surfaces against both `delaunay` and `la-stack`. The newest available release wins
+when the sibling repositories differ: `la-stack` supplies the newer `rumdl`, `uv`, and Python-tool pins, while `delaunay` supplies the newer workflow bootstrap
+and Dependabot review/merge sequence. Registry and Homebrew metadata confirm the selected managed CLI versions.
+
+- The `justfile` is the single source of truth for cargo-audit, cargo-llvm-cov, cargo-machete, cargo-nextest, dprint, git-cliff, just, rumdl, sarif tooling,
+  Taplo, typos-cli, uv, and zizmor. Workflows bootstrap `just` through the repository-local composite action, then resolve every remaining tool version with
+  `just --evaluate` instead of duplicating workflow `env` pins.
+- Shared Rust dependencies move to their current stable releases, including `delaunay` 0.8.0, Clap 4.6.5, rand 0.10.2, serde 1.0.229, serde_json 1.0.151,
+  thiserror 2.0.19, env_logger 0.11.11, and log 0.4.33. The `delaunay` upgrade requires Rust 1.97.1, so `Cargo.toml`, `rust-toolchain.toml`, and current MSRV
+  documentation move together; historical release notes remain unchanged.
+- The benchmark compile gate uses Cargo 1.97's `CARGO_BUILD_WARNINGS=deny` setting instead of `RUSTFLAGS='-D warnings'`. This keeps warnings fatal for local
+  benchmark targets without changing compiler flags and invalidating otherwise reusable Cargo build artifacts; Clippy and rustdoc retain their dedicated
+  warning flags because they enforce separate lint and documentation surfaces.
+- Shared Python tooling aligns with `la-stack` at pytest 9.1.1, Ruff 0.16.1, Semgrep 1.172.0, and Ty 0.0.65. Notebook and build dependencies take the newer
+  applicable sibling minimums without changing this repository's Python 3.13 support baseline.
+- The stronger `delaunay` Dependabot workflow explicitly waits for a CodeRabbit approval on the triggering head SHA and for all required checks before merging
+  that exact approved head. Live ruleset alignment uses its one-approval, resolved-thread, and CodeRabbit-app binding policy while preserving this repository's
+  deletion/non-fast-forward rules, bypass actor, merge methods, strict checking, and complete required-check set.
+
+The 31 July Delaunay follow-up is also portable to CDT. Shared workflows use setup-uv 9.0.0 with cache pruning, CodeQL Action 4.37.4, and zizmor-action 0.6.1,
+while Dependabot adds grouped uv updates. CodeRabbit keeps review progress disabled and uses the legacy commit-status surface proven by Delaunay's unattended
+Dependabot merges. The live Actions policy mirrors Delaunay's selected-action allowlist because it covers
+every third-party action used by CDT while keeping GitHub-owned actions available. Delaunay's main-branch review rules remain the policy target, including
+binding `CodeRabbit` to the CodeRabbit GitHub App, but issue #216 deliberately applies them only after the checked-in Dependabot automation reaches `main`;
+until then, CDT preserves its existing live ruleset.
+
+## Issue #216 Dependabot Review And Auto-Merge
+
+Issue #216 adds repository-specific Dependabot automation without allowing GitHub Actions to approve pull requests. This keeps CodeRabbit as the independent
+reviewer required by the `main` ruleset instead of copying automation patterns that self-approve dependency updates.
+
+- CodeRabbit's failing review state is promoted to a failing commit status so a skipped, failed, or change-requesting review cannot satisfy
+  the protected-branch gate.
+- GitHub Actions updates are grouped like the existing Cargo updates, reducing review and workflow noise while preserving the separate ecosystem labels.
+- A `pull_request` workflow runs only for Dependabot-authored pull requests in this repository, requests CodeRabbit through an owner-scoped fine-grained PAT,
+  waits for CodeRabbit to approve the triggering head SHA, waits for every required check, and squash-merges only that exact approved head.
+- CodeRabbit's submitted `APPROVED` review satisfies the ruleset's single required approval; GitHub Actions does not approve the pull request, and no maintainer
+  approval is required for a qualifying grouped Dependabot update.
+- Review requests are deduplicated only by an exact head-SHA marker authored by `acgetchell`, so a synchronized Dependabot branch receives a fresh review while
+  overlapping runs for the same pull request are canceled.
+- The workflow checks out no pull-request content and invokes no external actions. Its explicit `contents: write` and `pull-requests: write` permissions are
+  limited to observing the protected-branch gates and performing the guarded squash merge; the owner PAT is used only for the review-request comment.
+
+The `CODERABBIT_REVIEW_TOKEN` Dependabot secret and the post-merge `main` ruleset update remain live repository settings rather than checked-in configuration.
+Actions review approval stays disabled; the ruleset must continue to preserve strict status checks, existing bypasses and required checks, and the CodeRabbit
+requirement while adding one required approval and review-thread resolution.
 
 ## Deferred Updates
 

@@ -24,7 +24,7 @@ constraint, but their topology metadata and boundary expectations differ.
 Foliation is CDT domain logic. The implementation stores labels in the Delaunay-backed geometry through crate-owned wrapper APIs, but direct interaction with
 upstream `delaunay::` types remains confined to the `src/geometry/` backend interface layer.
 
-Time labels are stored **directly as vertex data** in the Delaunay triangulation, using the `Vertex<f64, u32, 2>` type parameter. This mirrors CGAL's
+Time labels are stored **directly as vertex data** in the Delaunay triangulation, using the upstream `Vertex<u32, 2>` type. This mirrors CGAL's
 `vertex->info()` used in CDT-plusplus. The `Foliation` struct tracks only aggregate bookkeeping.
 
 ```text
@@ -37,9 +37,9 @@ CdtTriangulation<B>
     └── num_slices: u32
 ```
 
-Vertex data is set at construction time via `VertexBuilder::data(t)`. For post-construction labeling (e.g., `assign_foliation_by_y`), labels are written
-in-place through CDT-owned helper paths — an O(1) operation per vertex that does not affect geometry or topology. Public callers do not receive mutable
-backend access; CDT mutation paths are narrow so cache and foliation synchronization state are invalidated consistently.
+Vertex data is set at construction time via `Vertex::try_new_with_data(coordinates, t)`. For post-construction labeling (e.g.,
+`assign_foliation_by_y`), labels are written in-place through CDT-owned helper paths — an O(1) operation per vertex that does not affect geometry or topology.
+Public callers do not receive mutable backend access; CDT mutation paths are narrow so cache and foliation synchronization state are invalidated consistently.
 
 ## Time Label Assignment
 
@@ -68,8 +68,9 @@ the number of cleanup passes used.
 constructor. The returned mesh must pass the same initial-constructor contract as the regular open strip: upstream Delaunay Level 1-4 validation plus CDT
 topology, foliation, causality, and strict Up/Down simplex classification.
 
-The toroidal constructor places vertices on a unit lattice in an `N × T` periodic domain and uses the upstream periodic image-point Delaunay constructor. It
-then checks the requested `V = N·T`, `E = 3·N·T`, `F = 2·N·T` toroidal counts and strict CDT classification.
+The toroidal constructor starts from an `N × T` lattice in a periodic domain, applies bounded deterministic offsets to put cocircular lattice points in
+generic position, and retries a fixed sequence of candidate embeddings through the upstream periodic image-point Delaunay constructor. It then checks the
+requested `V = N·T`, `E = 3·N·T`, `F = 2·N·T` toroidal counts and strict CDT classification.
 
 `from_toroidal_cdt_profile()` places each closed S¹ slice according to the corresponding profile entry and uses the periodic image-point constructor directly.
 It preserves closed spatial slices, periodic time, χ = 0, and strict CDT simplex classification for the returned initial torus.

@@ -229,10 +229,10 @@ Before proposing patches agents should run:
 just ci
 ```
 
-The `ci` recipe runs `check bench-compile test-all examples-validate`, which enforces:
+The `ci` recipe runs `check bench-compile test-all examples-validate notebook-check`, which enforces:
 
 - **check** (via `lint`): formatting, clippy, documentation builds, markdown, spelling, config validation (JSON, TOML, YAML, GitHub Actions)
-- **bench-compile**: benchmarks compile without warnings under `-D warnings`
+- **bench-compile**: benchmarks compile without local-package warnings under Cargo's `build.warnings = "deny"` policy
 - **test-all**: unit tests and integration tests via nextest, rustdoc doctests via `cargo test --doc`, and Python tests via pytest
 - **notebook-check**: Jupyter notebooks are output-clean, pass extracted-code Ruff and ty checks, and execute headlessly through the uv-managed notebook
   environment

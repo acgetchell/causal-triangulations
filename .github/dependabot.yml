@@ -11,6 +11,10 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
 
   # Enable version updates for Rust dependencies
   - package-ecosystem: "cargo"
@@ -24,6 +28,22 @@ updates:
       - "dependencies"
       - "rust"
     # Group all updates together
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+
+  # Enable version updates for Python development dependencies locked by uv
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    cooldown:
+      default-days: 7
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
     groups:
       dependencies:
         patterns:

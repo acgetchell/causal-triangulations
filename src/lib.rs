@@ -504,7 +504,7 @@ pub mod prelude {
     ///     assert!(backend.is_valid());
     ///
     ///     let topology: GlobalTopology<2> = GlobalTopology::Toroidal {
-    ///         domain: [1.0, 1.0],
+    ///         domain: ToroidalDomain::unit(),
     ///         mode: ToroidalConstructionMode::Explicit,
     ///     };
     ///     assert_matches!(topology, GlobalTopology::Toroidal { .. });
@@ -520,7 +520,7 @@ pub mod prelude {
             DelaunayBackend, DelaunayError, DelaunayOperation, NonFlippableEdgeReason,
         };
         pub use crate::geometry::generators::{
-            GlobalTopology, TopologyGuarantee, ToroidalConstructionMode,
+            GlobalTopology, TopologyGuarantee, ToroidalConstructionMode, ToroidalDomain,
             build_delaunay2_from_simplices, build_delaunay2_with_data,
             build_delaunay2_with_topology, build_periodic_toroidal_delaunay2,
             build_toroidal_delaunay2, generate_delaunay2,

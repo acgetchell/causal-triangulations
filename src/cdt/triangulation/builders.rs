@@ -25,8 +25,12 @@ const FILTERED_DELAUNAY_MAX_PASSES: u32 = 50;
 ///
 /// The lower geometry builder reports failures in terms of its input shape; this
 /// helper preserves the underlying diagnostic while normalizing the public error
-/// fields to the toroidal CDT constructor's vertex count and first attempt.
-pub(super) fn remap_toroidal_generation_error(error: CdtError, total_vertices: u32) -> CdtError {
+/// fields to the toroidal CDT constructor's vertex count and retry ordinal.
+pub(super) fn remap_toroidal_generation_error(
+    error: CdtError,
+    total_vertices: u32,
+    attempt: u32,
+) -> CdtError {
     match error {
         CdtError::DelaunayGenerationFailed {
             coordinate_range,
@@ -35,7 +39,7 @@ pub(super) fn remap_toroidal_generation_error(error: CdtError, total_vertices: u
         } => CdtError::DelaunayGenerationFailed {
             vertex_count: total_vertices,
             coordinate_range,
-            attempt: 1,
+            attempt,
             underlying_error,
         },
         other => other,
@@ -204,12 +208,13 @@ fn validate_profile_strip_counts(
 const fn toroidal_generation_error(
     total_vertices: u32,
     coordinate_range: (f64, f64),
+    attempt: u32,
     underlying_error: String,
 ) -> CdtError {
     CdtError::DelaunayGenerationFailed {
         vertex_count: total_vertices,
         coordinate_range,
-        attempt: 1,
+        attempt,
         underlying_error,
     }
 }
@@ -221,11 +226,13 @@ pub(super) fn validate_toroidal_counts(
     expected_vertices: usize,
     expected_faces: usize,
     coordinate_range: (f64, f64),
+    attempt: u32,
 ) -> CdtResult<()> {
     if backend.vertex_count() != expected_vertices || backend.face_count() != expected_faces {
         return Err(toroidal_generation_error(
             total_vertices,
             coordinate_range,
+            attempt,
             format!(
                 "periodic toroidal builder produced {} vertices and {} faces, expected {} vertices and {} faces",
                 backend.vertex_count(),
@@ -237,6 +244,30 @@ pub(super) fn validate_toroidal_counts(
     }
 
     Ok(())
+}
+
+/// Builds and fully validates one periodic toroidal coordinate candidate.
+fn build_validated_toroidal_backend(
+    vertex_specs: &[([f64; 2], u32)],
+    domain: [f64; 2],
+    total_vertices: u32,
+    expected_vertices: usize,
+    expected_faces: usize,
+    coordinate_range: (f64, f64),
+    attempt: u32,
+) -> CdtResult<DelaunayBackend2D> {
+    let dt = build_periodic_toroidal_delaunay2(vertex_specs, domain)
+        .map_err(|error| remap_toroidal_generation_error(error, total_vertices, attempt))?;
+    let backend = validated_backend(dt)?;
+    validate_toroidal_counts(
+        &backend,
+        total_vertices,
+        expected_vertices,
+        expected_faces,
+        coordinate_range,
+        attempt,
+    )?;
+    Ok(backend)
 }
 
 /// Validates an explicit per-slice spatial volume profile.
@@ -311,13 +342,79 @@ const fn checked_nonzero_slice_count(num_slices: u32) -> NonZeroU32 {
     NonZeroU32::new(num_slices).expect("validated CDT slice count should be nonzero")
 }
 
+/// Maximum number of deterministic generic-position embeddings tried per torus.
+const TOROIDAL_EMBEDDING_ATTEMPTS: u8 = 14;
+
+/// Returns the first valid deterministic toroidal candidate.
+///
+/// Candidate identifiers select coordinate perturbations, while the public attempt number is
+/// the one-based ordinal of the candidate actually tried. On exhaustion, the final failure is
+/// returned with that ordinal intact.
+fn first_valid_toroidal_candidate<T>(
+    candidates: impl IntoIterator<Item = u8>,
+    mut build: impl FnMut(u8, u32) -> CdtResult<T>,
+    no_candidates: impl FnOnce() -> CdtError,
+) -> CdtResult<T> {
+    let mut attempt = 0_u32;
+    let mut last_error = None;
+    for candidate in candidates {
+        attempt = attempt.saturating_add(1);
+        match build(candidate, attempt) {
+            Ok(value) => return Ok(value),
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    Err(last_error.unwrap_or_else(no_candidates))
+}
+
+/// Returns a small periodic offset that puts a toroidal lattice in generic position.
+///
+/// Exact rectangular lattices have cocircular point sets. Delaunay 0.8 rejects
+/// some quotient selections from that degenerate input during exhaustive
+/// realization validation. Uniform constructors first try a deterministic
+/// hash perturbation that retains the inverse-move sites used by the regular
+/// CDT seed, then fall back to a smooth slice shear and a bounded sequence of
+/// combined perturbations. Profile constructors use the latter embeddings because
+/// their unequal slice spacing does not have the regular seed's inverse-site
+/// contract. Every candidate preserves slice labels and remains far below the
+/// unit lattice spacing.
+fn toroidal_vertex_offset(slice: u32, index: u32, num_slices: u32, attempt: u8) -> [f64; 2] {
+    let phase = std::f64::consts::TAU * f64::from(slice) / f64::from(num_slices);
+    if attempt == 0 {
+        let x_hash = (17 * u64::from(index) + 34 * u64::from(slice) + 35) % 97;
+        let y_hash = (48 * u64::from(index) + 11 * u64::from(slice) + 15) % 89;
+        let centered_x = f64::from(u32::try_from(x_hash).unwrap_or(0)) / 97.0 - 0.5;
+        let centered_y = f64::from(u32::try_from(y_hash).unwrap_or(0)) / 89.0 - 0.5;
+        return [centered_x / 16.0, centered_y / 16.0];
+    }
+    if attempt == 1 {
+        return [phase.sin() / 32.0, 0.0];
+    }
+
+    let seed = u64::from(attempt - 1);
+    let x_hash = (17 * u64::from(index) + (29 + seed) * u64::from(slice) + 7 * seed) % 97;
+    let y_hash = ((43 + seed) * u64::from(index) + 11 * u64::from(slice) + 3 * seed) % 89;
+    let centered_x = f64::from(u32::try_from(x_hash).unwrap_or(0)) / 97.0 - 0.5;
+    let centered_y = f64::from(u32::try_from(y_hash).unwrap_or(0)) / 89.0 - 0.5;
+    let amplitude = f64::from(u32::from(attempt % 3) + 1) / 32.0;
+    [
+        phase.sin() / 16.0 + centered_x * amplitude,
+        centered_y * amplitude,
+    ]
+}
+
 /// Builds labeled periodic coordinates for a toroidal CDT profile.
 fn toroidal_profile_vertices(
     profile: &[u32],
     total_vertices: u32,
+    num_slices: u32,
+    candidate: u8,
+    attempt: u32,
 ) -> CdtResult<Vec<([f64; 2], u32)>> {
-    let expected_vertices = usize::try_from(total_vertices)
-        .map_err(|err| toroidal_generation_error(total_vertices, (0.0, 0.0), err.to_string()))?;
+    let expected_vertices = usize::try_from(total_vertices).map_err(|err| {
+        toroidal_generation_error(total_vertices, (0.0, 0.0), attempt, err.to_string())
+    })?;
     let max_slice_volume = profile.iter().copied().max().unwrap_or(1);
     let domain_x = f64::from(max_slice_volume);
     let mut vertex_specs = Vec::new();
@@ -325,6 +422,7 @@ fn toroidal_profile_vertices(
         toroidal_generation_error(
             total_vertices,
             (0.0, domain_x),
+            attempt,
             format!(
                 "from_toroidal_cdt_profile() failed to reserve {expected_vertices} vertex specs: {err}"
             ),
@@ -333,12 +431,15 @@ fn toroidal_profile_vertices(
 
     for (slice, &vertices) in profile.iter().enumerate() {
         let label = u32::try_from(slice).map_err(|err| {
-            toroidal_generation_error(total_vertices, (0.0, domain_x), err.to_string())
+            toroidal_generation_error(total_vertices, (0.0, domain_x), attempt, err.to_string())
         })?;
         let spacing = domain_x / f64::from(vertices);
         for index in 0..vertices {
-            let x = f64::from(index) * spacing;
-            let y = f64::from(label);
+            let [x_offset, y_offset] = toroidal_vertex_offset(label, index, num_slices, candidate);
+            let x = f64::from(index)
+                .mul_add(spacing, x_offset)
+                .rem_euclid(domain_x);
+            let y = (f64::from(label) + y_offset).rem_euclid(f64::from(num_slices));
             vertex_specs.push(([x, y], label));
         }
     }
@@ -1254,20 +1355,25 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     expected_range: "product ≤ u32::MAX".to_string(),
                 })?;
 
-        let generation_failed = |underlying_error: String| {
+        let generation_failed = |attempt: u32, underlying_error: String| {
             let coordinate_max = f64::from(vertices_per_slice.max(num_slices) - 1);
-            toroidal_generation_error(total_vertices, (0.0, coordinate_max), underlying_error)
+            toroidal_generation_error(
+                total_vertices,
+                (0.0, coordinate_max),
+                attempt,
+                underlying_error,
+            )
         };
 
         let expected_vertices =
-            usize::try_from(total_vertices).map_err(|err| generation_failed(err.to_string()))?;
-        let expected_faces =
-            usize::try_from(total_simplices).map_err(|err| generation_failed(err.to_string()))?;
+            usize::try_from(total_vertices).map_err(|err| generation_failed(1, err.to_string()))?;
+        let expected_faces = usize::try_from(total_simplices)
+            .map_err(|err| generation_failed(1, err.to_string()))?;
 
         let n = usize::try_from(vertices_per_slice)
-            .map_err(|err| generation_failed(err.to_string()))?;
+            .map_err(|err| generation_failed(1, err.to_string()))?;
         let t_count =
-            usize::try_from(num_slices).map_err(|err| generation_failed(err.to_string()))?;
+            usize::try_from(num_slices).map_err(|err| generation_failed(1, err.to_string()))?;
 
         // --- Vertex coordinates (S¹ × S¹) ---
         //
@@ -1281,29 +1387,45 @@ impl CdtTriangulation<DelaunayBackend2D> {
         vertex_specs
             .try_reserve_exact(expected_vertices)
             .map_err(|err| {
-                generation_failed(format!(
-                    "from_toroidal_cdt() failed to reserve {expected_vertices} vertex specs for vertices_per_slice={vertices_per_slice}, num_slices={num_slices}: {err}"
-                ))
+                generation_failed(
+                    1,
+                    format!(
+                        "from_toroidal_cdt() failed to reserve {expected_vertices} vertex specs for vertices_per_slice={vertices_per_slice}, num_slices={num_slices}: {err}"
+                    ),
+                )
             })?;
-        for t in 0..num_slices {
-            for i in 0..vertices_per_slice {
-                let x = f64::from(i);
-                let y = f64::from(t);
-                vertex_specs.push(([x, y], t));
-            }
-        }
-
         let domain = [n_f, t_f];
-        let dt = build_periodic_toroidal_delaunay2(&vertex_specs, domain)
-            .map_err(|e| remap_toroidal_generation_error(e, total_vertices))?;
+        let coordinate_range = (0.0, n_f.max(t_f) - 1.0);
+        let backend = first_valid_toroidal_candidate(
+            0..TOROIDAL_EMBEDDING_ATTEMPTS,
+            |candidate, attempt| {
+                vertex_specs.clear();
+                for t in 0..num_slices {
+                    for i in 0..vertices_per_slice {
+                        let [x_offset, y_offset] =
+                            toroidal_vertex_offset(t, i, num_slices, candidate);
+                        let x = (f64::from(i) + x_offset).rem_euclid(n_f);
+                        let y = (f64::from(t) + y_offset).rem_euclid(t_f);
+                        vertex_specs.push(([x, y], t));
+                    }
+                }
 
-        let backend = validated_backend(dt)?;
-        validate_toroidal_counts(
-            &backend,
-            total_vertices,
-            expected_vertices,
-            expected_faces,
-            (0.0, n_f.max(t_f) - 1.0),
+                build_validated_toroidal_backend(
+                    &vertex_specs,
+                    domain,
+                    total_vertices,
+                    expected_vertices,
+                    expected_faces,
+                    coordinate_range,
+                    attempt,
+                )
+            },
+            || {
+                generation_failed(
+                    0,
+                    "no deterministic toroidal embedding candidates were attempted".to_string(),
+                )
+            },
         )?;
 
         let slice_sizes = vec![n; t_count];
@@ -1366,31 +1488,47 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     expected_range: "product ≤ u32::MAX".to_string(),
                 })?;
         let expected_vertices = usize::try_from(total_vertices).map_err(|err| {
-            toroidal_generation_error(total_vertices, (0.0, 0.0), err.to_string())
+            toroidal_generation_error(total_vertices, (0.0, 0.0), 1, err.to_string())
         })?;
         let expected_faces = usize::try_from(total_simplices).map_err(|err| {
-            toroidal_generation_error(total_vertices, (0.0, 0.0), err.to_string())
+            toroidal_generation_error(total_vertices, (0.0, 0.0), 1, err.to_string())
         })?;
         let max_slice_volume = volume_profile.iter().copied().max().unwrap_or(1);
         let domain = [f64::from(max_slice_volume), f64::from(num_slices)];
         let coordinate_range = (0.0, domain[0].max(domain[1]) - 1.0);
-        let generation_failed = |underlying_error: String| {
-            toroidal_generation_error(total_vertices, coordinate_range, underlying_error)
+        let generation_failed = |attempt: u32, underlying_error: String| {
+            toroidal_generation_error(total_vertices, coordinate_range, attempt, underlying_error)
         };
 
-        let vertex_specs = toroidal_profile_vertices(volume_profile, total_vertices)?;
-        let dt = build_periodic_toroidal_delaunay2(&vertex_specs, domain)
-            .map_err(|e| remap_toroidal_generation_error(e, total_vertices))?;
-        let backend = validated_backend(dt)?;
-        validate_toroidal_counts(
-            &backend,
-            total_vertices,
-            expected_vertices,
-            expected_faces,
-            coordinate_range,
+        let backend = first_valid_toroidal_candidate(
+            1..TOROIDAL_EMBEDDING_ATTEMPTS,
+            |candidate, attempt| {
+                let vertex_specs = toroidal_profile_vertices(
+                    volume_profile,
+                    total_vertices,
+                    num_slices,
+                    candidate,
+                    attempt,
+                )?;
+                build_validated_toroidal_backend(
+                    &vertex_specs,
+                    domain,
+                    total_vertices,
+                    expected_vertices,
+                    expected_faces,
+                    coordinate_range,
+                    attempt,
+                )
+            },
+            || {
+                generation_failed(
+                    0,
+                    "no deterministic toroidal embedding candidates were attempted".to_string(),
+                )
+            },
         )?;
 
-        let slice_sizes = profile_slice_sizes(volume_profile, generation_failed)?;
+        let slice_sizes = profile_slice_sizes(volume_profile, |error| generation_failed(1, error))?;
         let foliation =
             Foliation::from_slice_sizes(slice_sizes, checked_nonzero_slice_count(num_slices))
                 .map_err(CdtError::from)?;
@@ -1482,6 +1620,7 @@ mod tests {
                 underlying_error: "builder failed".to_string(),
             },
             12,
+            4,
         );
 
         assert_matches!(
@@ -1489,7 +1628,7 @@ mod tests {
             CdtError::DelaunayGenerationFailed {
                 vertex_count: 12,
                 coordinate_range: (-1.0, 1.0),
-                attempt: 1,
+                attempt: 4,
                 ref underlying_error,
             } if underlying_error == "builder failed"
         );
@@ -1503,8 +1642,60 @@ mod tests {
             expected_range: "y".to_string(),
         };
         assert_eq!(
-            remap_toroidal_generation_error(original.clone(), 12),
+            remap_toroidal_generation_error(original.clone(), 12, 4),
             original
+        );
+    }
+
+    #[test]
+    fn toroidal_candidate_retry_returns_first_success_with_actual_attempt() {
+        let mut attempted = Vec::new();
+        let result = first_valid_toroidal_candidate(
+            4..8,
+            |candidate, attempt| {
+                attempted.push((candidate, attempt));
+                if attempt < 3 {
+                    Err(toroidal_generation_error(
+                        12,
+                        (0.0, 3.0),
+                        attempt,
+                        format!("candidate {candidate} failed"),
+                    ))
+                } else {
+                    Ok((candidate, attempt))
+                }
+            },
+            || unreachable!("nonempty candidate range should be attempted"),
+        )
+        .expect("third candidate should succeed");
+
+        assert_eq!(result, (6, 3));
+        assert_eq!(attempted, vec![(4, 1), (5, 2), (6, 3)]);
+    }
+
+    #[test]
+    fn toroidal_candidate_exhaustion_preserves_final_attempt_and_cause() {
+        let error = first_valid_toroidal_candidate(
+            4..7,
+            |candidate, attempt| {
+                Err::<(), _>(toroidal_generation_error(
+                    12,
+                    (0.0, 3.0),
+                    attempt,
+                    format!("candidate {candidate} failed"),
+                ))
+            },
+            || unreachable!("nonempty candidate range should be attempted"),
+        )
+        .expect_err("all candidates should fail");
+
+        assert_matches!(
+            error,
+            CdtError::DelaunayGenerationFailed {
+                attempt: 3,
+                ref underlying_error,
+                ..
+            } if underlying_error == "candidate 6 failed"
         );
     }
 
@@ -2215,7 +2406,7 @@ mod tests {
     #[test]
     fn test_from_toroidal_cdt_basic() {
         let tri = CdtTriangulation::from_toroidal_cdt(4, 3)
-            .expect("toroidal CDT should build with delaunay v0.7.8");
+            .expect("toroidal CDT should build with delaunay v0.8");
 
         // V = N*T = 12, F = 2*N*T = 24, E = 3*N*T = 36, χ = 0.
         assert_eq!(tri.vertex_count(), 12);
@@ -2373,14 +2564,14 @@ mod tests {
     #[test]
     fn test_periodic_toroidal_count_validation_rejects_face_mismatch() {
         let tri = CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
-        let result = validate_toroidal_counts(tri.geometry(), 12, 12, 23, (0.0, 3.0));
+        let result = validate_toroidal_counts(tri.geometry(), 12, 12, 23, (0.0, 3.0), 5);
 
         assert_matches!(
             result,
             Err(CdtError::DelaunayGenerationFailed {
                 vertex_count: 12,
                 coordinate_range: (0.0, 3.0),
-                attempt: 1,
+                attempt: 5,
                 ref underlying_error,
             }) if underlying_error.contains("periodic toroidal builder")
                 && underlying_error.contains("produced 12 vertices and 24 faces")
