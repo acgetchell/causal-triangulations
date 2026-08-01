@@ -178,6 +178,8 @@ python_functions = [ "test_*" ]
 
 [tool.uv]
 package = true
+# Remove after Semgrep publishes its pending MCP 1.28.1 security bump.
+override-dependencies = [ "mcp==1.28.1" ]
 
 [dependency-groups]
 dev = [
