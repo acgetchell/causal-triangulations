@@ -10,11 +10,9 @@
 use crate::errors::{CdtError, CdtResult, GenerationParameterIssue};
 pub use delaunay::TopologyGuarantee;
 use delaunay::geometry::kernel::AdaptiveKernel;
-use delaunay::geometry::point::Point;
-use delaunay::geometry::traits::coordinate::Coordinate;
-use delaunay::geometry::util::{generate_random_points, generate_random_points_seeded};
-use delaunay::prelude::VertexBuilder;
-pub use delaunay::topology::traits::{GlobalTopology, ToroidalConstructionMode};
+use delaunay::geometry::util::{try_generate_random_points, try_generate_random_points_seeded};
+use delaunay::prelude::Vertex;
+pub use delaunay::topology::traits::{GlobalTopology, ToroidalConstructionMode, ToroidalDomain};
 use delaunay::{DelaunayTriangulation, DelaunayTriangulationBuilder};
 
 /// Type alias for the 2D Delaunay triangulation returned by this crate's generators.
@@ -93,9 +91,9 @@ fn validate_toroidal_domain(domain: [f64; 2]) -> CdtResult<()> {
 
 /// Generates a Delaunay triangulation with optional seed for deterministic testing.
 ///
-/// Uses [`DelaunayTriangulationBuilder`] (introduced in delaunay v0.7.2) for
-/// construction, which provides deterministic tie-breaking and coherent orientation
-/// as first-class invariants.
+/// Uses the canonical [`DelaunayTriangulationBuilder`] workflow from Delaunay
+/// v0.8, which provides deterministic tie-breaking and coherent orientation as
+/// first-class invariants.
 ///
 /// # Errors
 ///
@@ -137,8 +135,8 @@ pub fn generate_delaunay2(
     let n = number_of_vertices as usize;
     let points = seed
         .map_or_else(
-            || generate_random_points::<f64, 2>(n, coordinate_range),
-            |s| generate_random_points_seeded::<f64, 2>(n, coordinate_range, s),
+            || try_generate_random_points::<2>(n, coordinate_range),
+            |s| try_generate_random_points_seeded::<2>(n, coordinate_range, s),
         )
         .map_err(|e| CdtError::DelaunayGenerationFailed {
             vertex_count: number_of_vertices,
@@ -147,16 +145,17 @@ pub fn generate_delaunay2(
             underlying_error: format!("Point generation failed: {e}"),
         })?;
 
-    // Explicitly type the builder as Vertex<f64, u32, 2> so the triangulation
+    // Explicitly type the vertices as Vertex<u32, 2> so the triangulation
     // has u32 vertex data available for time-slice labels (even if unset here).
     let vertices: Vec<_> = points
         .into_iter()
-        .map(|point| VertexBuilder::<f64, u32, 2>::default().point(point).build())
+        .map(|point| Vertex::<u32, 2>::try_new(*point.coords()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| generate_delaunay2_vertex_build_error(number_of_vertices, e.to_string()))?;
 
-    let dt = DelaunayTriangulationBuilder::from_vertices(&vertices)
-        .build::<i32>()
+    let dt = DelaunayTriangulationBuilder::new(&vertices)
+        .simplex_data_type::<i32>()
+        .build()
         .map_err(|e| CdtError::DelaunayGenerationFailed {
             vertex_count: number_of_vertices,
             coordinate_range,
@@ -205,15 +204,12 @@ pub fn build_delaunay2_with_data(
         .iter()
         .enumerate()
         .map(|(i, (coord, data))| {
-            let point = Point::<f64, 2>::new(*coord);
-            VertexBuilder::<f64, u32, 2>::default()
-                .point(point)
-                .data(*data)
-                .build()
-                .map_err(|e| CdtError::VertexBuildFailed {
+            Vertex::<u32, 2>::try_new_with_data(*coord, *data).map_err(|e| {
+                CdtError::VertexBuildFailed {
                     context: format!("vertex {i}"),
                     underlying_error: e.to_string(),
-                })
+                }
+            })
         })
         .collect::<CdtResult<Vec<_>>>()?;
 
@@ -224,8 +220,9 @@ pub fn build_delaunay2_with_data(
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
             (lo.min(v), hi.max(v))
         });
-    DelaunayTriangulationBuilder::from_vertices(&vertices)
-        .build::<i32>()
+    DelaunayTriangulationBuilder::new(&vertices)
+        .simplex_data_type::<i32>()
+        .build()
         .map_err(|e| CdtError::DelaunayGenerationFailed {
             vertex_count,
             coordinate_range,
@@ -245,11 +242,11 @@ pub fn build_delaunay2_with_data(
 /// topology metadata, use [`build_delaunay2_with_topology`].  For toroidal CDT
 /// meshes, prefer [`build_periodic_toroidal_delaunay2`] or
 /// [`CdtTriangulation::from_toroidal_cdt`](crate::CdtTriangulation::from_toroidal_cdt):
-/// `delaunay` v0.7.8 rejects explicit non-Euclidean connectivity for toroidal
+/// `delaunay` v0.8 rejects explicit non-Euclidean connectivity for toroidal
 /// construction.
 ///
 /// This is one of the only call sites for
-/// [`DelaunayTriangulationBuilder::from_vertices_and_simplices`], maintaining
+/// [`DelaunayTriangulationBuilder::try_from_vertices_and_simplices`], maintaining
 /// geometry backend isolation.
 ///
 /// # Errors
@@ -296,7 +293,7 @@ pub fn build_delaunay2_from_simplices(
 /// Euler characteristic differs from the default closed-sphere expectation, and
 /// pair it with the matching [`GlobalTopology`] so the builder validates against
 /// the correct expected χ.  For toroidal CDT meshes, use
-/// [`build_periodic_toroidal_delaunay2`]; `delaunay` v0.7.8 rejects
+/// [`build_periodic_toroidal_delaunay2`]; `delaunay` v0.8 rejects
 /// [`GlobalTopology::Toroidal`] explicit simplex connectivity pending upstream
 /// quotient-validation support.
 ///
@@ -342,15 +339,12 @@ pub fn build_delaunay2_with_topology(
         .iter()
         .enumerate()
         .map(|(i, (coord, data))| {
-            let point = Point::<f64, 2>::new(*coord);
-            VertexBuilder::<f64, u32, 2>::default()
-                .point(point)
-                .data(*data)
-                .build()
-                .map_err(|e| CdtError::VertexBuildFailed {
+            Vertex::<u32, 2>::try_new_with_data(*coord, *data).map_err(|e| {
+                CdtError::VertexBuildFailed {
                     context: format!("vertex {i}"),
                     underlying_error: e.to_string(),
-                })
+                }
+            })
         })
         .collect::<CdtResult<Vec<_>>>()?;
 
@@ -361,10 +355,17 @@ pub fn build_delaunay2_with_topology(
         .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
             (lo.min(v), hi.max(v))
         });
-    DelaunayTriangulationBuilder::from_vertices_and_simplices(&vertices, simplices)
+    DelaunayTriangulationBuilder::try_from_vertices_and_simplices(&vertices, simplices)
+        .map_err(|e| CdtError::DelaunayGenerationFailed {
+            vertex_count,
+            coordinate_range,
+            attempt: 1,
+            underlying_error: e.to_string(),
+        })?
+        .simplex_data_type::<i32>()
         .topology_guarantee(topology_guarantee)
         .global_topology(global_topology)
-        .build::<i32>()
+        .build()
         .map_err(|e| CdtError::DelaunayGenerationFailed {
             vertex_count,
             coordinate_range,
@@ -380,7 +381,7 @@ pub fn build_delaunay2_with_topology(
 /// so the builder validates the mesh against χ = 0 instead of the default
 /// closed-sphere expectation.
 ///
-/// `delaunay` v0.7.8 rejects explicit non-Euclidean connectivity for toroidal
+/// `delaunay` v0.8 rejects explicit non-Euclidean connectivity for toroidal
 /// topology before quotient validation can run.  This helper remains as the
 /// stable explicit-topology entry point, but callers that need an actual
 /// toroidal CDT mesh should use [`build_periodic_toroidal_delaunay2`] or the
@@ -451,10 +452,13 @@ pub fn build_toroidal_delaunay2(
         coords_with_data,
         simplices,
         TopologyGuarantee::Pseudomanifold,
-        GlobalTopology::Toroidal {
-            domain,
-            mode: ToroidalConstructionMode::Explicit,
-        },
+        GlobalTopology::try_toroidal(domain, ToroidalConstructionMode::Explicit).map_err(|e| {
+            invalid_generation_parameters(
+                GenerationParameterIssue::InvalidToroidalDomain,
+                format!("{domain:?}: {e}"),
+                "finite and positive periods",
+            )
+        })?,
     )
 }
 
@@ -491,9 +495,14 @@ pub fn build_toroidal_delaunay2(
 ///     let mut vertices: Vec<([f64; 2], u32)> = Vec::with_capacity(N * T);
 ///
 ///     for (t, label) in LABELS.into_iter().enumerate() {
+///         let phase = std::f64::consts::TAU * t as f64 / T as f64;
+///         let slice_offset = phase.sin() / 32.0;
 ///         for i in 0..N {
 ///             #[allow(clippy::cast_precision_loss)]
-///             let coord = [i as f64, t as f64];
+///             let coord = [
+///                 (i as f64 + slice_offset).rem_euclid(N as f64),
+///                 t as f64,
+///             ];
 ///             vertices.push((coord, label));
 ///         }
 ///     }
@@ -526,15 +535,12 @@ pub fn build_periodic_toroidal_delaunay2(
         .iter()
         .enumerate()
         .map(|(i, (coord, data))| {
-            let point = Point::<f64, 2>::new(*coord);
-            VertexBuilder::<f64, u32, 2>::default()
-                .point(point)
-                .data(*data)
-                .build()
-                .map_err(|e| CdtError::VertexBuildFailed {
+            Vertex::<u32, 2>::try_new_with_data(*coord, *data).map_err(|e| {
+                CdtError::VertexBuildFailed {
                     context: format!("periodic toroidal vertex {i}"),
                     underlying_error: e.to_string(),
-                })
+                }
+            })
         })
         .collect::<CdtResult<Vec<_>>>()?;
 
@@ -546,10 +552,17 @@ pub fn build_periodic_toroidal_delaunay2(
             (lo.min(v), hi.max(v))
         });
 
-    DelaunayTriangulationBuilder::from_vertices(&vertices)
-        .toroidal_periodic(domain)
+    DelaunayTriangulationBuilder::new(&vertices)
+        .simplex_data_type::<i32>()
+        .try_toroidal(domain)
+        .map_err(|e| CdtError::DelaunayGenerationFailed {
+            vertex_count,
+            coordinate_range,
+            attempt: 1,
+            underlying_error: e.to_string(),
+        })?
         .topology_guarantee(TopologyGuarantee::PLManifold)
-        .build::<i32>()
+        .build()
         .map_err(|e| CdtError::DelaunayGenerationFailed {
             vertex_count,
             coordinate_range,
@@ -743,12 +756,18 @@ mod tests {
         const DOMAIN: [f64; 2] = [3.0, 3.0];
         let mut vertices: Vec<([f64; 2], u32)> = Vec::with_capacity(N * T);
         for t in 0..T {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "small deterministic test indices are converted to f64 phases"
+            )]
+            let phase = std::f64::consts::TAU * t as f64 / T as f64;
+            let slice_offset = phase.sin() / 32.0;
             for i in 0..N {
                 #[expect(
                     clippy::cast_precision_loss,
                     reason = "small deterministic test indices are converted to f64 lattice coordinates"
                 )]
-                let coord = [i as f64, t as f64];
+                let coord = [(i as f64 + slice_offset).rem_euclid(N as f64), t as f64];
                 let label = u32::try_from(t).expect("slice index fits in u32");
                 vertices.push((coord, label));
             }

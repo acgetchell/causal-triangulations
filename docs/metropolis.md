@@ -72,6 +72,16 @@ volume-fixing follow-up should cite the higher-dimensional CDT simulation litera
 checkpoint. This keeps the checkpointed triangulation, Metropolis acceptance RNG, ergodic proposal RNG, counters, measurements, and elapsed-time telemetry
 together between chunks.
 
+### Serialized Checkpoint Compatibility
+
+In-memory continuation and Serde round trips produced and consumed by the same build are supported. Serialized checkpoint files are otherwise version-bound:
+their representation includes internal state from `causal-triangulations`, `delaunay`, and `markov-chain-monte-carlo`, and compatibility is not guaranteed
+across crate or dependency upgrades. Read a serialized checkpoint with the same build that wrote it, or with a release that explicitly documents checkpoint
+compatibility. In particular, checkpoints written through Delaunay 0.7 cannot be deserialized after the Delaunay 0.8 upgrade.
+
+Use trace CSV and JSON summary exports for durable cross-version analysis artifacts. A future CDT-owned, versioned checkpoint wire format is tracked in
+[`causal-triangulations#218`](https://github.com/acgetchell/causal-triangulations/issues/218).
+
 Chunk execution is implemented through `markov-chain-monte-carlo::Sampler::step_delayed` on the CDT proposal-plan adapter. The upstream sampler owns the
 Metropolis-Hastings accept/reject draw, log-probability cache, chain counters, and checkpoint-compatible continuation view. CDT keeps domain-specific state
 outside that generic sampler: action and schedule metadata, proposal telemetry, move statistics, measurements, elapsed time, and the serialized ergodic proposal

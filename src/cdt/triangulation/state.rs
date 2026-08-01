@@ -2097,15 +2097,20 @@ mod tests {
     }
 
     #[test]
-    fn toroidal_checkpoint_restore_rejects_missing_periodic_offsets() {
+    fn toroidal_checkpoint_roundtrip_preserves_periodic_offsets() {
         let triangulation =
             CdtTriangulation::from_toroidal_cdt(4, 3).expect("periodic torus should build");
 
         let json = to_string(&triangulation).expect("checkpoint should serialize");
-        let error = from_str::<CdtTriangulation<DelaunayBackend2D>>(&json)
-            .expect_err("strict checkpoint validation should reject toroidal serde gaps");
+        let restored = from_str::<CdtTriangulation<DelaunayBackend2D>>(&json)
+            .expect("Delaunay 0.8 should preserve periodic simplex offsets");
 
-        assert_checkpoint_data_error(&error, &["Negative geometric orientation"]);
+        restored
+            .validate_checkpoint_invariants()
+            .expect("restored toroidal checkpoint should retain its periodic realization");
+        assert_eq!(restored.vertex_count(), triangulation.vertex_count());
+        assert_eq!(restored.edge_count(), triangulation.edge_count());
+        assert_eq!(restored.face_count(), triangulation.face_count());
     }
 
     #[test]

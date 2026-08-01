@@ -20,21 +20,36 @@ jobs:
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
-    env:
-      CARGO_LLVM_COV_VERSION: "0.8.7"
-      JUST_VERSION: "1.51.0"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # Needed for codecov to analyze diff
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@46268bd060767258de96ed93c1251119784f2ab6 # v1.16.1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: true
+          cache-bin: false
           # toolchain, components, etc. are specified in rust-toolchain.toml
+
+      - name: Set up just
+        uses: ./.github/actions/setup-just
+
+      - name: Resolve cargo-llvm-cov version
+        id: cargo_llvm_cov_version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(just --evaluate cargo_llvm_cov_version)"
+          if [[ -z "$version" ]]; then
+            echo "::error::Could not resolve cargo_llvm_cov_version from justfile"
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Install LLVM coverage tools
         run: rustup component add llvm-tools-preview
@@ -42,12 +57,7 @@ jobs:
       - name: Install cargo-llvm-cov
         uses: taiki-e/cache-cargo-install-action@417450f3c33ee20393705369577571770643d4c7 # v3.0.7
         with:
-          tool: cargo-llvm-cov@${{ env.CARGO_LLVM_COV_VERSION }}
-
-      - name: Install just
-        uses: taiki-e/cache-cargo-install-action@417450f3c33ee20393705369577571770643d4c7 # v3.0.7
-        with:
-          tool: just@${{ env.JUST_VERSION }}
+          tool: cargo-llvm-cov@${{ steps.cargo_llvm_cov_version.outputs.version }}
 
       - name: Run coverage
         run: |

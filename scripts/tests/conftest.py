@@ -36,7 +36,7 @@ def temp_chdir():
     """
 
     @contextmanager
-    def _temp_chdir_context(path: os.PathLike | str):
+    def _temp_chdir_context(path: os.PathLike[str] | str):
         """Context manager for temporarily changing working directory."""
         original_cwd = Path.cwd()
         target = Path(path)
