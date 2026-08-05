@@ -135,6 +135,19 @@ pub enum MockError {
     #[error("Invalid face handle: {0}")]
     Face(usize),
 
+    /// A vertex exists, but still participates in stored topology.
+    #[error(
+        "Vertex {vertex} cannot be removed while incident topology remains: {incident_edges} edges, {incident_faces} faces"
+    )]
+    NonIsolatedVertex {
+        /// Vertex handle that was requested.
+        vertex: usize,
+        /// Number of stored edges incident to the vertex.
+        incident_edges: usize,
+        /// Number of stored faces incident to the vertex.
+        incident_faces: usize,
+    },
+
     /// Storage reservation failed.
     #[error("Reservation failed for {operation} requesting {requested_capacity} slots: {detail}")]
     ReservationFailed {
@@ -560,9 +573,29 @@ impl TriangulationMut for MockBackend {
     }
 
     fn remove_vertex(&mut self, vertex: Self::VertexHandle) -> Result<(), Self::Error> {
-        self.vertices
-            .remove(&vertex.0)
-            .ok_or(MockError::Vertex(vertex.0))?;
+        if !self.vertices.contains_key(&vertex.0) {
+            return Err(MockError::Vertex(vertex.0));
+        }
+
+        let incident_edges = self
+            .edges
+            .values()
+            .filter(|&&(v0, v1)| v0 == vertex.0 || v1 == vertex.0)
+            .count();
+        let incident_faces = self
+            .faces
+            .values()
+            .filter(|vertices| vertices.contains(&vertex.0))
+            .count();
+        if incident_edges != 0 || incident_faces != 0 {
+            return Err(MockError::NonIsolatedVertex {
+                vertex: vertex.0,
+                incident_edges,
+                incident_faces,
+            });
+        }
+
+        self.vertices.remove(&vertex.0);
         Ok(())
     }
 
@@ -951,6 +984,40 @@ mod tests {
         assert_eq!(backend.vertices().count(), 0);
         assert_eq!(backend.edges().count(), 0);
         assert_eq!(backend.faces().count(), 0);
+    }
+
+    #[test]
+    fn test_mock_backend_rejects_non_isolated_vertex_removal_without_mutation() {
+        let mut backend = MockBackend::create_triangle();
+        let vertex = MockVertexHandle(0);
+
+        assert_matches!(
+            backend.remove_vertex(vertex.clone()),
+            Err(MockError::NonIsolatedVertex {
+                vertex: 0,
+                incident_edges: 2,
+                incident_faces: 1,
+            })
+        );
+
+        assert_eq!(backend.vertex_count(), 3);
+        assert_eq!(backend.edge_count(), 3);
+        assert_eq!(backend.face_count(), 1);
+        assert_eq!(
+            backend
+                .incident_edges(&vertex)
+                .expect("rejected removal should preserve incident edges")
+                .len(),
+            2
+        );
+        assert_eq!(
+            backend
+                .adjacent_faces(&vertex)
+                .expect("rejected removal should preserve adjacent faces")
+                .len(),
+            1
+        );
+        assert!(backend.is_valid());
     }
 
     #[test]
