@@ -192,7 +192,8 @@ Run:
 just spell-check
 ```
 
-The `typos` binary is provided by the Cargo crate `typos-cli`. `just setup-tools` installs the pinned version, or you can install it directly:
+The `typos` binary is provided by the Cargo crate `typos-cli`. `just setup-tools` installs the pinned version. To install it directly while still using the
+repository pin, first ensure `just` is installed because this command resolves `typos_version` with `just --evaluate`:
 
 ```bash
 cargo install --locked typos-cli --version "$(just --evaluate typos_version)"

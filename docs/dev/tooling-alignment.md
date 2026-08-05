@@ -276,7 +276,8 @@ was upgraded from 0.2.50 to 0.2.51 before reconciling the repository pin.
 
 Issue #223 completes the uv alignment by making actionlint reuse the shared exact-version guard instead of checking only for an executable named `uv`. The
 notebook JSON boundary now also requires every cell `metadata` field to be an object and parses `nbformat` as an actual JSON integer equal to 4, so values such
-as `4.0` and booleans cannot enter the trusted notebook model through Python's numeric equality and subclass behavior.
+as `4.0` and booleans cannot enter the trusted notebook model through Python's numeric equality and subclass behavior. Notebook discovery is captured before
+linting so `find` failures remain fatal while a successful empty discovery still reports that no notebooks were found.
 
 ## Deferred Updates
 

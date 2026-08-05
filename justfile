@@ -569,14 +569,14 @@ notebook-execute-slow output_dir="target/notebooks": _ensure-uv
 notebook-lint: _ensure-uv
     #!/usr/bin/env bash
     set -euo pipefail
-    found=0
-    while IFS= read -r notebook; do
-        found=1
-        uv run --group notebooks notebook-check --lint "$notebook" --repo-root .
-    done < <(find notebooks -type f -name '*.ipynb' | sort)
-    if [ "$found" -eq 0 ]; then
+    notebooks="$(find notebooks -type f -name '*.ipynb' | sort)"
+    if [ -z "$notebooks" ]; then
         echo "No notebooks found to lint."
+        exit 0
     fi
+    while IFS= read -r notebook; do
+        uv run --group notebooks notebook-check --lint "$notebook" --repo-root .
+    done <<< "$notebooks"
 
 notebook-output-check: _ensure-jq
     #!/usr/bin/env bash
