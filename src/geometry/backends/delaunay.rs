@@ -1469,10 +1469,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
         Ok(DelaunayVertexHandle { key })
     }
 
-    fn remove_vertex(
-        &mut self,
-        vertex: Self::VertexHandle,
-    ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
+    fn remove_vertex(&mut self, vertex: Self::VertexHandle) -> Result<(), Self::Error> {
         if !self.dt.contains_vertex_key(vertex.key) {
             return Err(DelaunayError::InvalidVertex { key: vertex.key });
         }
@@ -1517,7 +1514,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             },
             format!("vertex {:?}", vertex.key),
         )?;
-        Ok(Vec::new())
+        Ok(())
     }
 
     fn move_vertex(
@@ -2632,7 +2629,7 @@ mod tests {
         assert_eq!(backend.face_count(), original_face_count + 2);
         assert!(backend.is_valid());
 
-        backend
+        let (): () = backend
             .remove_vertex(subdivide.new_vertex)
             .expect("degree-3 inserted vertex should be removable");
         assert_eq!(backend.vertex_count(), original_vertex_count);
@@ -2738,6 +2735,41 @@ mod tests {
             serialized_before
         );
         assert_eq!(backend.interior_facets_by_edge, facets_before);
+    }
+
+    #[test]
+    fn generic_vertex_removal_retriangulates_cavity() {
+        let dt = build_delaunay2_with_data(&[
+            ([0.0, 0.0], 0),
+            ([1.0, 0.0], 0),
+            ([0.0, 1.0], 0),
+            ([1.0, 1.0], 0),
+            ([0.18, 0.42], 1),
+            ([0.52, 0.18], 1),
+            ([0.64, 0.72], 1),
+        ])
+        .expect("generic deletion fixture should build");
+        let mut backend = validated_backend(dt);
+        let vertex = backend
+            .vertices()
+            .find(|vertex| {
+                backend
+                    .vertex_coordinates(vertex)
+                    .is_ok_and(|coordinates| coordinates == [0.18, 0.42])
+            })
+            .expect("generic deletion fixture vertex should be present");
+        assert!(
+            backend.dt.can_flip_k1_remove(vertex.key).is_err(),
+            "fixture must exercise generic cavity deletion"
+        );
+        let original_vertex_count = backend.vertex_count();
+        let original_face_count = backend.face_count();
+
+        assert_matches!(backend.remove_vertex(vertex), Ok(()));
+
+        assert_eq!(backend.vertex_count(), original_vertex_count - 1);
+        assert_eq!(backend.face_count(), original_face_count - 2);
+        assert!(backend.is_valid());
     }
 
     #[test]

@@ -291,19 +291,18 @@ pub trait TriangulationMut: TriangulationQuery {
 
     /// Removes a vertex and lets the backend retriangulate the surrounding cavity.
     ///
-    /// Returns handles for backend-reported replacement faces when the backend
-    /// exposes them. Implementations may return an empty list when the mutation
-    /// succeeds but the upstream backend does not report replacement handles.
+    /// This generic lifecycle operation reports only success or failure. A backend
+    /// may implement it with a specialized inverse k=1 move when applicable, but
+    /// callers must query and validate the resulting topology instead of assuming
+    /// replacement-face or cavity metadata. If callers need such evidence in the
+    /// future, it should be exposed through a dedicated structured result type.
     ///
     /// # Errors
     ///
     /// Returns the backend error when the vertex handle is invalid, local
     /// topology is not removable, or the removal would violate backend
     /// invariants.
-    fn remove_vertex(
-        &mut self,
-        vertex: Self::VertexHandle,
-    ) -> Result<Vec<Self::FaceHandle>, Self::Error>;
+    fn remove_vertex(&mut self, vertex: Self::VertexHandle) -> Result<(), Self::Error>;
 
     /// Move a vertex to new coordinates
     ///

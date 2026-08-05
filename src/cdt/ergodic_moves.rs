@@ -1305,7 +1305,7 @@ impl ErgodicsSystem {
 
     /// Applies a selected open-boundary vertex-removal site.
     ///
-    /// The candidate was already screened for causal and replacement-face
+    /// The candidate was already screened for causal and replacement-triangle
     /// preconditions; this function owns the backend edit, validation, and
     /// rollback boundary.
     fn apply_vertex_removal_site(
@@ -1318,7 +1318,7 @@ impl ErgodicsSystem {
         let removal = triangulation.remove_vertex(vertex);
 
         let result = match removal {
-            Ok(_) => self.finish_mutated_move(triangulation, MoveType::Move31Remove),
+            Ok(()) => self.finish_mutated_move(triangulation, MoveType::Move31Remove),
             Err(err) => {
                 reject_backend(BackendMutationOperation::RemoveVertex, removal_target, &err)
             }
@@ -1343,7 +1343,7 @@ impl ErgodicsSystem {
         let removal_target = format!("vertex {:?}", candidate.vertex.vertex_key());
         let removal = triangulation.remove_vertex(candidate.vertex);
         let result = match removal {
-            Ok(_) => self.finish_mutated_move(triangulation, MoveType::Move31Remove),
+            Ok(()) => self.finish_mutated_move(triangulation, MoveType::Move31Remove),
             Err(err) => {
                 reject_backend(BackendMutationOperation::RemoveVertex, removal_target, &err)
             }
