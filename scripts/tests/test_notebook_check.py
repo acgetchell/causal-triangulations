@@ -74,6 +74,26 @@ def test_load_notebook_rejects_wrong_nbformat(tmp_path: Path) -> None:
         load_notebook(notebook)
 
 
+@pytest.mark.parametrize("invalid_nbformat", [4.0, True])
+def test_load_notebook_rejects_non_integer_nbformat(tmp_path: Path, invalid_nbformat: object) -> None:
+    notebook = tmp_path / "invalid-nbformat-type.ipynb"
+    notebook.write_text(
+        json.dumps({"cells": [], "nbformat": invalid_nbformat, "nbformat_minor": 5, "metadata": {}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(TypeError, match="expected nbformat to be the integer 4"):
+        load_notebook(notebook)
+
+
+def test_load_notebook_rejects_non_object_cell_metadata(tmp_path: Path) -> None:
+    notebook = tmp_path / "bad-cell-metadata.ipynb"
+    write_notebook(notebook, [{**code_cell("x = 1"), "metadata": []}])
+
+    with pytest.raises(TypeError, match="cell 1: metadata must be an object"):
+        load_notebook(notebook)
+
+
 def test_load_notebook_rejects_bad_cell_source(tmp_path: Path) -> None:
     notebook = tmp_path / "bad-source.ipynb"
     write_notebook(notebook, [code_cell(["valid", 5])])

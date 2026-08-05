@@ -681,9 +681,9 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "markov-chain-monte-carlo"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d00d59c60c04dd1225aa5758207755b2bc673472241c356dc52dc77f1636bed6"
+checksum = "ffdc51077610657c94e902101fca2d7e4a90059daaa0701775c30974c3313a5e"
 dependencies = [
  "rand 0.10.2",
  "serde",

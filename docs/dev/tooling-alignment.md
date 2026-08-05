@@ -118,8 +118,8 @@ The useful `justfile` updates ported from `delaunay` are:
 - The planned-step sampler-state sync rule now anchors `record_planned_step(...)` to call statements so it continues to catch missing
   `sampler.replace_state(...)` after recorded planned steps without false-positive matches on the helper function declaration when that helper contains fallible
   telemetry construction.
-- The Markdown and spelling tool pins now use `rumdl` 0.2.47 and `typos-cli` 1.48.0 in the justfile, matching the
-  current Cargo-installed sibling-repository tools while preserving the existing `rumdl.toml`, `typos.toml`, and raw 160-column guard.
+- The Markdown and spelling tool pins in the justfile match the current Cargo-installed sibling-repository tools while preserving the existing
+  `rumdl.toml`, `typos.toml`, and raw 160-column guard.
 - The Cargo manifest description changed from `Causal Dynamical Triangulations in d-dimensions` to
   `Validated 1+1 Causal Dynamical Triangulations for quantum gravity`. This mirrors a config/manifest change per the repository guideline and records why the
   new wording was chosen: it makes the validated 1+1 scope and quantum-gravity domain explicit in package metadata. This update fulfills the
@@ -204,7 +204,8 @@ and Dependabot review/merge sequence. Registry and Homebrew metadata confirm the
 
 - The `justfile` is the single source of truth for cargo-audit, cargo-llvm-cov, cargo-machete, cargo-nextest, dprint, git-cliff, just, rumdl, sarif tooling,
   Taplo, typos-cli, uv, and zizmor. Workflows bootstrap `just` through the repository-local composite action, then resolve every remaining tool version with
-  `just --evaluate` instead of duplicating workflow `env` pins.
+  `just --evaluate` instead of duplicating workflow `env` pins. Multi-version exports validate every lookup before writing any step outputs, preventing failed
+  or empty evaluations from being masked by successful `echo` commands.
 - Shared Rust dependencies move to their current stable releases, including `delaunay` 0.8.0, Clap 4.6.5, rand 0.10.2, serde 1.0.229, serde_json 1.0.151,
   thiserror 2.0.19, env_logger 0.11.11, and log 0.4.33. The `delaunay` upgrade requires Rust 1.97.1, so `Cargo.toml`, `rust-toolchain.toml`, and current MSRV
   documentation move together; historical release notes remain unchanged.
@@ -243,10 +244,40 @@ reviewer required by the `main` ruleset instead of copying automation patterns t
   overlapping runs for the same pull request are canceled.
 - The workflow checks out no pull-request content and invokes no external actions. Its explicit `contents: write` and `pull-requests: write` permissions are
   limited to observing the protected-branch gates and performing the guarded squash merge; the owner PAT is used only for the review-request comment.
+- Routine GitHub Actions, Cargo, and uv version updates are grouped and staggered at 03:00, 04:00, and 05:00 America/Los_Angeles time each Thursday so this
+  repository does not contend with the sibling repositories' CodeRabbit and CI update windows.
+- Each ecosystem keeps wildcard version and security groups separate because Dependabot otherwise defaults groups to version updates and opens individual
+  security-update pull requests.
 
 The `CODERABBIT_REVIEW_TOKEN` Dependabot secret and the post-merge `main` ruleset update remain live repository settings rather than checked-in configuration.
 Actions review approval stays disabled; the ruleset must continue to preserve strict status checks, existing bypasses and required checks, and the CodeRabbit
 requirement while adding one required approval and review-thread resolution.
+
+## August 2026 Dependency And Rust Refresh
+
+The August refresh verified the published dependency boundary against crates.io and the upstream release notes. `delaunay` 0.8.0 remains the newest release,
+while `markov-chain-monte-carlo` moves from 0.4.0 to 0.4.1. The MCMC release raises its MSRV to Rust 1.97.1 and makes `Step<Info>` telemetry fields private, so
+the CDT adapter now reads proposal metadata, outcomes, and cached log probabilities through the upstream invariant-preserving accessors.
+
+`Cargo.toml`, `rust-toolchain.toml`, contributor documentation, and the installed validation toolchain remain synchronized on Rust 1.97.1. The repository keeps
+using Rust 1.97.0's Cargo-owned `build.warnings` control for warning-denying benchmark compilation and uses the already-stable, diagnostic-friendly
+`assert_matches!` API consistently throughout tests and public examples. The new Rust 1.97 integer bit-isolation and bit-width APIs were audited, but CDT has
+no manual highest/lowest-bit scans to simplify; adding a contrived use would not improve the numerical or topology code. Rust 1.97.1 itself is a compiler
+correctness point release fixing an LLVM miscompilation rather than a source-language feature release.
+
+Benchmark fixture failures now use one shared postfix `OrAbort` trait with harness-local typed `SetupOperation` enums. Keeping only the genuinely shared
+behavior in the support module avoids compiling one union enum whose harness-specific variants are dead in the other benchmark binary. Both Criterion
+harnesses retain fail-fast setup semantics while avoiding nested prefix helpers and duplicated unwrap behavior.
+
+The command-layer pins were also refreshed from installed tools and package-manager metadata: uv 0.12.1, cargo-nextest 0.9.143, rumdl 0.2.51, and zizmor
+1.29.0. The `justfile` remains the single source of truth for these versions, and GitHub Actions continues to resolve them with `just --evaluate` rather than
+carrying duplicate workflow literals. Local Homebrew uv and Cargo-installed cargo-nextest and zizmor were already current; the Cargo-installed rumdl binary
+was upgraded from 0.2.50 to 0.2.51 before reconciling the repository pin.
+
+Issue #223 completes the uv alignment by making actionlint reuse the shared exact-version guard instead of checking only for an executable named `uv`. The
+notebook JSON boundary now also requires every cell `metadata` field to be an object and parses `nbformat` as an actual JSON integer equal to 4, so values such
+as `4.0` and booleans cannot enter the trusted notebook model through Python's numeric equality and subclass behavior. Notebook discovery is captured before
+linting so `find` failures remain fatal while a successful empty discovery still reports that no notebooks were found.
 
 ## Deferred Updates
 

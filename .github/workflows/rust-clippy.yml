@@ -43,9 +43,30 @@ jobs:
         id: tool_versions
         shell: bash
         run: |
+          set -euo pipefail
+
+          resolve_version() {
+            local name="$1"
+            local value
+
+            if ! value="$(just --evaluate "$name")"; then
+              echo "::error::Failed to resolve $name from justfile" >&2
+              return 1
+            fi
+            if [[ -z "$value" ]]; then
+              echo "::error::Resolved empty $name from justfile" >&2
+              return 1
+            fi
+
+            printf '%s\n' "$value"
+          }
+
+          clippy_sarif_version="$(resolve_version clippy_sarif_version)"
+          sarif_fmt_version="$(resolve_version sarif_fmt_version)"
+
           {
-            echo "CLIPPY_SARIF_VERSION=$(just --evaluate clippy_sarif_version)"
-            echo "SARIF_FMT_VERSION=$(just --evaluate sarif_fmt_version)"
+            echo "CLIPPY_SARIF_VERSION=$clippy_sarif_version"
+            echo "SARIF_FMT_VERSION=$sarif_fmt_version"
           } >> "$GITHUB_OUTPUT"
 
       - name: Install clippy-sarif

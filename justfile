@@ -9,17 +9,17 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 cargo_audit_version := "0.22.2"
 cargo_llvm_cov_version := "0.8.7"
 cargo_machete_version := "0.9.2"
-cargo_nextest_version := "0.9.140"
+cargo_nextest_version := "0.9.143"
 clippy_sarif_version := "0.8.0"
 dprint_version := "0.55.2"
 git_cliff_version := "2.13.1"
-just_version := "1.57.0"
-rumdl_version := "0.2.47"
+just_version := "1.58.0"
+rumdl_version := "0.2.51"
 sarif_fmt_version := "0.8.0"
 taplo_version := "0.10.0"
-typos_version := "1.48.0"
-uv_version := "0.12.0"
-zizmor_version := "1.28.0"
+typos_version := "1.49.0"
+uv_version := "0.12.1"
+zizmor_version := "1.29.0"
 
 # Common cargo-llvm-cov arguments for all coverage runs.
 # Excludes benches/examples from reports while allowing integration tests to
@@ -29,10 +29,9 @@ _coverage_base_args := '''--ignore-filename-regex '(^|/)(benches|examples)/' \
   --verbose'''
 
 # Internal helpers: ensure external tooling is installed
-_ensure-actionlint:
+_ensure-actionlint: _ensure-uv
     #!/usr/bin/env bash
     set -euo pipefail
-    command -v uv >/dev/null || { echo "❌ 'uv' not found. See 'just setup' or https://github.com/astral-sh/uv"; exit 1; }
     uv run actionlint -version >/dev/null
 
 _ensure-cargo-llvm-cov:
@@ -567,6 +566,18 @@ notebook-execute-slow output_dir="target/notebooks": _ensure-uv
     mkdir -p "$output_path/.ipython" "$output_path/.matplotlib"
     MPLBACKEND=Agg IPYTHONDIR="$output_path/.ipython" MPLCONFIGDIR="$output_path/.matplotlib" uv run --group notebooks jupyter nbconvert --execute --ExecutePreprocessor.timeout=1800 --ExecutePreprocessor.shutdown_kernel=immediate --to notebook --output-dir "{{ output_dir }}" notebooks/02_analysis_caches.ipynb
 
+notebook-lint: _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    notebooks="$(find notebooks -type f -name '*.ipynb' | sort)"
+    if [ -z "$notebooks" ]; then
+        echo "No notebooks found to lint."
+        exit 0
+    fi
+    while IFS= read -r notebook; do
+        uv run --group notebooks notebook-check --lint "$notebook" --repo-root .
+    done <<< "$notebooks"
+
 notebook-output-check: _ensure-jq
     #!/usr/bin/env bash
     set -euo pipefail
@@ -585,18 +596,6 @@ notebook-output-check: _ensure-jq
         echo "No notebooks found to check."
     fi
     exit "$violations"
-
-notebook-lint: _ensure-uv
-    #!/usr/bin/env bash
-    set -euo pipefail
-    found=0
-    while IFS= read -r notebook; do
-        found=1
-        uv run --group notebooks notebook-check --lint "$notebook" --repo-root .
-    done < <(find notebooks -type f -name '*.ipynb' | sort)
-    if [ "$found" -eq 0 ]; then
-        echo "No notebooks found to lint."
-    fi
 
 notebook-setup: _ensure-uv
     uv sync --group notebooks

@@ -1,9 +1,9 @@
 # causal-triangulations
 
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.20513228.svg)](https://doi.org/10.5281/zenodo.20513228)
-[![Crates.io](https://img.shields.io/crates/v/causal-triangulations.svg)](https://crates.io/crates/causal-triangulations)
-[![Downloads](https://img.shields.io/crates/d/causal-triangulations.svg)](https://crates.io/crates/causal-triangulations)
-[![License](https://img.shields.io/crates/l/causal-triangulations.svg)](LICENSE)
+[![Crates.io](https://badgen.net/crates/v/causal-triangulations)](https://crates.io/crates/causal-triangulations)
+[![Downloads](https://badgen.net/crates/d/causal-triangulations)](https://crates.io/crates/causal-triangulations)
+[![License](https://badgen.net/github/license/acgetchell/causal-triangulations)](LICENSE)
 [![Docs.rs](https://docs.rs/causal-triangulations/badge.svg)](https://docs.rs/causal-triangulations)
 [![CI][ci-badge]][ci-workflow]
 [![rust-clippy analyze][clippy-badge]][clippy-workflow]
