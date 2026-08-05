@@ -815,7 +815,7 @@ impl MetropolisAlgorithm {
                 };
                 debug_assert_eq!(
                     sampler.proposal_ref().last_step_info(),
-                    planned_step.info,
+                    planned_step.info().copied(),
                     "CDT proposal telemetry cache should mirror the upstream planned-step info"
                 );
                 record_planned_step(
@@ -824,7 +824,8 @@ impl MetropolisAlgorithm {
                     step,
                     &planned_step,
                     planned_step
-                        .info
+                        .info()
+                        .copied()
                         .ok_or_else(|| missing_planned_step_info(step.get()))?,
                     sampler.proposal_ref().last_proposal_stats(),
                     sampler.chain_ref().state(),
@@ -942,8 +943,8 @@ fn record_planned_step(
         state,
         step,
         PlannedStepRecord {
-            outcome: planned_step.outcome,
-            log_prob_after: planned_step.log_prob_after,
+            outcome: planned_step.outcome(),
+            log_prob_after: planned_step.log_prob_after(),
             info,
             proposal_stats,
             triangulation,
@@ -3655,13 +3656,14 @@ mod tests {
             .expect("ordinary no-site outcomes must be planned-step rejections, not errors");
 
         let info = step
-            .info
+            .info()
+            .copied()
             .expect("planned CDT steps should report proposal info");
         assert_eq!(proposal.last_step_info(), Some(info));
         assert_eq!(proposal.last_proposal_stats().move_family_proposals(), 1);
         assert_eq!(proposal.last_proposal_stats().accepted_transitions(), 0);
         assert_eq!(proposal.last_proposal_stats().metropolis_rejections(), 0);
-        assert!(!step.outcome.is_accepted() || step.log_prob_after.is_some());
+        assert!(!step.outcome().is_accepted() || step.log_prob_after().is_some());
     }
 
     #[test]

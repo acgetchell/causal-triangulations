@@ -15,6 +15,9 @@
 //! 6. Public proposal-site iteration paths used by move attempts and one-step
 //!    Metropolis proposal planning.
 
+#[path = "support/or_abort.rs"]
+mod benchmark_support;
+
 use causal_triangulations::prelude::action::ActionConfig;
 use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveStatistics, MoveType};
 use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
@@ -23,6 +26,8 @@ use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, 
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::hint::black_box;
 use std::time::Duration;
+
+use benchmark_support::OrAbort;
 
 const SWEEP_COUNT: u32 = 10;
 const BENCH_SEED: u64 = 0xCDA7_2026;
@@ -158,22 +163,6 @@ const PROPOSAL_FIXTURES: &[CdtFixture] = &[
     },
 ];
 
-/// Fails fast when benchmark fixture setup cannot satisfy its invariant.
-fn require_result<T>(result: Result<T, impl Display>, operation: SetupOperation) -> T {
-    match result {
-        Ok(value) => value,
-        Err(error) => panic!("{operation}: {error}"),
-    }
-}
-
-/// Fails fast when benchmark fixture setup cannot produce a required value.
-fn require_option<T>(value: Option<T>, operation: SetupOperation) -> T {
-    let Some(value) = value else {
-        panic!("{operation}");
-    };
-    value
-}
-
 impl CdtFixture {
     /// Builds the requested CDT topology for a benchmark fixture.
     fn build(self) -> CdtTriangulation2D {
@@ -185,7 +174,7 @@ impl CdtFixture {
                 CdtTriangulation2D::from_toroidal_cdt(self.vertices_per_slice, self.time_slices)
             }
         };
-        require_result(result, SetupOperation::BuildCdtFixture)
+        result.or_abort(SetupOperation::BuildCdtFixture)
     }
 }
 
@@ -219,41 +208,31 @@ fn prepare_fixture(fixture: CdtFixture) -> PreparedFixture {
 
 /// Runs one Metropolis proposal step through the public simulation driver.
 fn run_single_metropolis_proposal(triangulation: CdtTriangulation2D) {
-    let config = require_result(
-        MetropolisConfig::new(1.0, 1, 0, 1),
-        SetupOperation::RunSingleMetropolisProposal,
-    )
-    .with_seed(BENCH_SEED);
-    let results = require_result(
-        MetropolisAlgorithm::new(config, ActionConfig::default()).run(triangulation),
-        SetupOperation::RunSingleMetropolisProposal,
-    );
+    let config = MetropolisConfig::new(1.0, 1, 0, 1)
+        .or_abort(SetupOperation::RunSingleMetropolisProposal)
+        .with_seed(BENCH_SEED);
+    let results = MetropolisAlgorithm::new(config, ActionConfig::default())
+        .run(triangulation)
+        .or_abort(SetupOperation::RunSingleMetropolisProposal);
     black_box(results.proposal_stats());
 }
 
 /// Converts Criterion throughput element counts without silently truncating.
 fn usize_to_u64(value: usize) -> u64 {
-    require_result(u64::try_from(value), SetupOperation::ConvertBenchmarkSize)
+    u64::try_from(value).or_abort(SetupOperation::ConvertBenchmarkSize)
 }
 
 /// Computes the Metropolis step budget for the ten-sweep CI workload.
 fn ten_sweep_step_count(simplices: usize) -> u32 {
-    require_result(
-        u32::try_from(sweep_attempt_count(simplices)),
-        SetupOperation::ConvertSweepStepCount,
-    )
+    u32::try_from(sweep_attempt_count(simplices)).or_abort(SetupOperation::ConvertSweepStepCount)
 }
 
 /// Encodes the CDT convention that one sweep attempts one move per simplex.
 fn sweep_attempt_count(simplices: usize) -> usize {
-    let sweeps = require_result(
-        usize::try_from(SWEEP_COUNT),
-        SetupOperation::ConvertSweepCount,
-    );
-    require_option(
-        simplices.checked_mul(sweeps),
-        SetupOperation::ComputeSweepStepCount,
-    )
+    let sweeps = usize::try_from(SWEEP_COUNT).or_abort(SetupOperation::ConvertSweepCount);
+    simplices
+        .checked_mul(sweeps)
+        .or_abort(SetupOperation::ComputeSweepStepCount)
 }
 
 /// Runs ten random-move sweeps and validates the evolved triangulation.
@@ -268,10 +247,9 @@ fn run_random_move_sweeps(mut triangulation: CdtTriangulation2D, seed: u64) -> M
         }
     }
 
-    require_result(
-        triangulation.validate(),
-        SetupOperation::ValidateRandomSweepWorkload,
-    );
+    triangulation
+        .validate()
+        .or_abort(SetupOperation::ValidateRandomSweepWorkload);
     black_box(triangulation.face_count());
     ergodics.stats().clone()
 }
@@ -279,15 +257,12 @@ fn run_random_move_sweeps(mut triangulation: CdtTriangulation2D, seed: u64) -> M
 /// Runs a short Metropolis simulation sized to match the ten-sweep workload.
 fn run_metropolis_ten_sweeps(triangulation: CdtTriangulation2D, simplices: usize) -> usize {
     let steps = ten_sweep_step_count(simplices);
-    let config = require_result(
-        MetropolisConfig::new(1.0, steps, 0, steps),
-        SetupOperation::RunTenSweepMetropolis,
-    )
-    .with_seed(BENCH_SEED);
-    let results = require_result(
-        MetropolisAlgorithm::new(config, ActionConfig::default()).run(triangulation),
-        SetupOperation::RunTenSweepMetropolis,
-    );
+    let config = MetropolisConfig::new(1.0, steps, 0, steps)
+        .or_abort(SetupOperation::RunTenSweepMetropolis)
+        .with_seed(BENCH_SEED);
+    let results = MetropolisAlgorithm::new(config, ActionConfig::default())
+        .run(triangulation)
+        .or_abort(SetupOperation::RunTenSweepMetropolis);
     black_box(results.acceptance_rate());
     results.steps().len()
 }

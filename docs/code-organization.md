@@ -34,6 +34,8 @@ causal-triangulations/
 │   ├── CODEOWNERS
 │   └── dependabot.yml
 ├── benches/
+│   ├── support/
+│   │   └── or_abort.rs
 │   ├── README.md
 │   ├── cdt_benchmarks.rs
 │   └── ci_performance_suite.rs
@@ -214,7 +216,7 @@ against new CDT-local generic acceptance draws or manual accepted/rejected sampl
 - `notebooks/` — notebook front ends and analysis consumers for CLI-generated artifacts such as trace CSV and JSON summary files. Notebook code may run the
   binary for tutorials, but simulation logic stays in Rust.
 - `tests/` — CLI, integration, physics, property-based, regression, slow-debug, and project-rule tests.
-- `benches/` — Criterion benchmark harnesses and CI performance suites.
+- `benches/` — Criterion benchmark harnesses and CI performance suites, with shared fail-fast fixture setup support under `benches/support/`.
 - `docs/` — user guides, architecture notes, development rules, and release/testing/performance documentation.
 - `scripts/` — Python and shell support tooling for benchmarks, coverage, changelog/release work, examples, and validation.
 
@@ -372,5 +374,5 @@ Notebook files live in `notebooks/` and should wrap the CLI or consume generated
 
 - `delaunay` (v0.8) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
   `set_vertex_data_by_key` for O(1) label mutation)
-- `markov-chain-monte-carlo` (v0.4) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, `Target`)
+- `markov-chain-monte-carlo` (v0.4.1) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, invariant-bearing `Step<Info>` telemetry, `Target`)
 - `num-traits` — `ToPrimitive` and `NumCast` for checked or saturating numeric conversions

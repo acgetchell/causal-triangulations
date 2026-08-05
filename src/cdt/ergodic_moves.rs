@@ -711,7 +711,7 @@ pub(crate) enum InsertionLabel {
 ///
 /// The candidate keeps both backend operations together: subdivide the chosen
 /// face at `point`, label the new vertex, then flip the original spacelike edge.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ToroidalInsertionCandidate {
     edge: DelaunayEdgeHandle,
     face: DelaunayFaceHandle,
@@ -723,7 +723,7 @@ pub(crate) struct ToroidalInsertionCandidate {
 ///
 /// The vertex cannot be collapsed directly in periodic CDT; the stored edge is
 /// flipped first to expose the inverse local volume move.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ToroidalRemovalCandidate {
     vertex: DelaunayVertexHandle,
     flip_edge: DelaunayEdgeHandle,
@@ -734,7 +734,7 @@ pub(crate) struct ToroidalRemovalCandidate {
 /// Metropolis planning samples one of these after counting the same site
 /// universe used in the Hastings correction, so selection and denominator
 /// semantics remain aligned.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum ProposalSite {
     EdgeFlip(DelaunayEdgeHandle),
     FaceSubdivision {
@@ -2974,7 +2974,7 @@ mod tests {
         let Some(toroidal_site) = toroidal_selection.site else {
             panic!("toroidal fixture should expose insertion sites");
         };
-        assert!(matches!(toroidal_site, ProposalSite::ToroidalInsertion(_)));
+        assert_matches!(toroidal_site, ProposalSite::ToroidalInsertion(_));
 
         let strip_selection = system.select_proposal_site(&strip, MoveType::Move13Add);
         assert_eq!(
@@ -2988,7 +2988,7 @@ mod tests {
         let Some(strip_site) = strip_selection.site else {
             panic!("open-boundary strip fixture should expose insertion sites");
         };
-        assert!(matches!(strip_site, ProposalSite::FaceSubdivision { .. }));
+        assert_matches!(strip_site, ProposalSite::FaceSubdivision { .. });
     }
 
     #[test]
