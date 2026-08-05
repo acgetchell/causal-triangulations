@@ -125,6 +125,25 @@ cdt \
 The CSV trace records one row per completed Metropolis step. The JSON file records configuration, summary statistics, move/proposal statistics, scheduled
 measurements, and the final triangulation state.
 
+#### Final Mesh Interchange
+
+`final_triangulation.mesh` is Delaunay's stable simplicial-complex export, not a CDT-specific compact-index schema. External tools should first require
+`metadata.schema == "delaunay.simplicial_complex"` and a supported integer `metadata.schema_version` (currently `1`). The metadata also records the producer,
+dimension, counts, topology kind, and topology guarantee.
+
+Treat entity IDs as the format's identity boundary:
+
+- Build the vertex table from `mesh.vertices`, keyed by each vertex UUID in `id`; `coordinates` are ordered by triangulation dimension.
+- Build maximal simplices from `mesh.simplices`, keyed by simplex `id`, and resolve each `vertex_ids` UUID through the vertex table. Do not interpret record
+  positions as vertex or simplex identities.
+- Use `mesh.adjacency` when facet-neighbor relationships are needed. Each row identifies a source `simplex_id`, local `facet_index`, and optional
+  `neighbor_simplex_id`; `null` denotes a boundary facet.
+- Join CDT foliation data from `final_triangulation.vertex_time_labels` to the vertex table by `vertex_id`. This sidecar is deliberately outside the upstream
+  mesh value so Delaunay-aware consumers can deserialize and validate `mesh` directly.
+
+Consumers should reject unsupported schema versions before interpreting connectivity, and should regenerate an export after any triangulation mutation because
+the JSON value is a detached snapshot.
+
 ### Logging
 
 ```bash
