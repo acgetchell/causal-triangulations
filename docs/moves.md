@@ -91,6 +91,11 @@ bistellar moves. The `delaunay` crate exposes the geometric 2D operations this c
 - `flip_k1_insert` — local vertex insertion, the geometric substrate for a `(1,3)` subdivision;
 - `flip_k1_remove` — local vertex removal, the geometric substrate for a `(3,1)` collapse.
 
+The backend-neutral `TriangulationMut::remove_vertex` lifecycle operation is broader than the focused inverse k=1 move. It may select that fast path for a
+compatible local configuration or perform generic cavity retriangulation, and its `Result<()>` reports only whether the validated mutation committed. CDT
+callers rebuild foliation and query the resulting topology after success; they do not infer replacement faces from the return value. If a future workflow
+requires cavity metadata, the backend interface should expose a dedicated structured result rather than fabricate replacement handles.
+
 CDT cannot apply arbitrary geometric k-flips directly. A CDT move must also preserve the discrete time foliation, keep every simplex classified as causal
 (`Up` or `Down` in 1+1), obey topology-specific slice-size constraints, and pass topology/causality validation after the edit. The implementation therefore
 maps Delaunay's local edit primitives into foliation-preserving CDT proposals:

@@ -35,10 +35,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
     pub(crate) fn remove_vertex(
         &mut self,
         vertex: DelaunayVertexHandle,
-    ) -> Result<Vec<DelaunayFaceHandle>, DelaunayError> {
-        let result = self.geometry.remove_vertex(vertex)?;
+    ) -> Result<(), DelaunayError> {
+        self.geometry.remove_vertex(vertex)?;
         self.bump_modification_count();
-        Ok(result)
+        Ok(())
     }
 
     /// Updates a vertex time label and marks CDT-derived state stale on success.
@@ -161,7 +161,8 @@ mod tests {
         assert!(tri.cache.edge_count.is_some());
         let after_subdivision_count = tri.metadata().modification_count;
 
-        tri.remove_vertex(subdivision.new_vertex.clone())
+        let (): () = tri
+            .remove_vertex(subdivision.new_vertex.clone())
             .expect("new subdivision vertex should be removable");
 
         assert_eq!(tri.vertex_count(), initial_vertices);

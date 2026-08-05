@@ -1469,10 +1469,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
         Ok(DelaunayVertexHandle { key })
     }
 
-    fn remove_vertex(
-        &mut self,
-        vertex: Self::VertexHandle,
-    ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
+    fn remove_vertex(&mut self, vertex: Self::VertexHandle) -> Result<(), Self::Error> {
         if !self.dt.contains_vertex_key(vertex.key) {
             return Err(DelaunayError::InvalidVertex { key: vertex.key });
         }
@@ -1517,7 +1514,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             },
             format!("vertex {:?}", vertex.key),
         )?;
-        Ok(Vec::new())
+        Ok(())
     }
 
     fn move_vertex(
@@ -2632,7 +2629,7 @@ mod tests {
         assert_eq!(backend.face_count(), original_face_count + 2);
         assert!(backend.is_valid());
 
-        backend
+        let (): () = backend
             .remove_vertex(subdivide.new_vertex)
             .expect("degree-3 inserted vertex should be removable");
         assert_eq!(backend.vertex_count(), original_vertex_count);

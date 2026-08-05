@@ -559,14 +559,11 @@ impl TriangulationMut for MockBackend {
         Ok(MockVertexHandle(id))
     }
 
-    fn remove_vertex(
-        &mut self,
-        vertex: Self::VertexHandle,
-    ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
+    fn remove_vertex(&mut self, vertex: Self::VertexHandle) -> Result<(), Self::Error> {
         self.vertices
             .remove(&vertex.0)
             .ok_or(MockError::Vertex(vertex.0))?;
-        Ok(Vec::new())
+        Ok(())
     }
 
     fn move_vertex(
@@ -942,10 +939,9 @@ mod tests {
         assert_eq!(backend.vertex_count(), 5);
         assert_eq!(backend.face_count(), 3);
 
-        let removed_faces = backend
+        let (): () = backend
             .remove_vertex(vertex)
             .expect("mock vertex removal should succeed");
-        assert!(removed_faces.is_empty());
 
         backend.clear().expect("mock backend should clear storage");
         assert_eq!(backend.vertex_count(), 0);
