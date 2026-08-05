@@ -17,6 +17,7 @@ use crate::geometry::traits::{
 use delaunay::flips::BistellarFlips;
 use delaunay::geometry::kernel::AdaptiveKernel;
 use delaunay::prelude::DataType;
+use delaunay::prelude::export::{MeshExport, MeshExportError};
 use delaunay::tds::{EdgeKey, FacetHandle, SimplexKey, Tds, Vertex, VertexKey};
 use delaunay::topology::traits::{GlobalTopology, TopologyKind, ToroidalConstructionMode};
 use delaunay::{DelaunayCheckPolicy, DelaunayTriangulation, TopologyGuarantee};
@@ -30,6 +31,8 @@ type DelaunayKernel = AdaptiveKernel<f64>;
 type RawTriangulation<VertexData, SimplexData, const D: usize> =
     DelaunayTriangulation<DelaunayKernel, VertexData, SimplexData, D>;
 type RawVertex<VertexData, const D: usize> = Vertex<VertexData, D>;
+/// Upstream stable mesh-interchange value used by CDT summary exports.
+pub(crate) type DelaunayMeshExport<const D: usize> = MeshExport<D>;
 type MutationSnapshot<VertexData, SimplexData, const D: usize> = (
     RawTriangulation<VertexData, SimplexData, D>,
     HashMap<EdgeKey, FacetHandle>,
@@ -980,6 +983,22 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
                 None
             }
         }
+    }
+
+    /// Returns Delaunay's stable, detached mesh-interchange export.
+    pub(crate) fn mesh_export(&self) -> Result<DelaunayMeshExport<D>, MeshExportError> {
+        self.dt.to_mesh_export()
+    }
+
+    /// Returns the stable Delaunay UUID used for a vertex in mesh exports.
+    pub(crate) fn vertex_export_id(
+        &self,
+        vertex: &DelaunayVertexHandle,
+    ) -> Result<String, DelaunayError> {
+        self.dt
+            .vertex(vertex.key)
+            .map(|vertex| vertex.uuid().to_string())
+            .ok_or(DelaunayError::InvalidVertex { key: vertex.key })
     }
 
     /// Returns the vertex payload for `key`, if present.

@@ -22,14 +22,14 @@ use crate::errors::{
     CheckpointResumeFailure, MeasurementCountField, OutputFormat, ProposalTelemetryCounter,
     ScalarTraceField,
 };
+use crate::geometry::CdtTriangulation2D;
+use crate::geometry::backends::delaunay::DelaunayMeshExport;
 use crate::geometry::traits::TriangulationQuery;
-use crate::geometry::{CdtTriangulation2D, SpacetimeCoordinate};
 use crate::util::usize_to_f64;
 use serde::de::Error as DeError;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::to_writer_pretty;
-use std::collections::HashMap;
 use std::fmt::Display;
 use std::fs::{File, create_dir_all};
 use std::io::{BufWriter, Write};
@@ -1354,9 +1354,9 @@ struct AggregateSummary {
 
 /// Serializable final-triangulation section for summary JSON output.
 ///
-/// The scalar counts keep the existing summary shape, while `mesh` carries the
-/// coordinate and connectivity payload added for notebook visualization and
-/// downstream analysis consumers.
+/// The scalar counts keep the existing summary shape, while `mesh` passes
+/// through Delaunay's stable simplicial-complex export. CDT time labels remain
+/// a separate UUID-keyed sidecar so the upstream mesh schema stays reusable.
 #[derive(Serialize)]
 struct TriangulationSummary {
     vertices: usize,
@@ -1364,165 +1364,45 @@ struct TriangulationSummary {
     triangles: usize,
     time_slices: u32,
     topology: CdtTopology,
-    mesh: TriangulationMeshSummary,
+    mesh: DelaunayMeshExport<2>,
+    vertex_time_labels: Vec<TriangulationVertexTimeLabel>,
 }
 
-/// Serializable mesh payload embedded in summary JSON output.
-///
-/// The payload is intentionally backend-handle-free: vertices are assigned
-/// stable zero-based indices, and triangle records reference those indices so
-/// notebook and visualization consumers can reconstruct the final triangulation
-/// without depending on backend handle formatting or allocation order.
+/// CDT foliation label associated with one stable Delaunay vertex id.
 #[derive(Serialize)]
-struct TriangulationMeshSummary {
-    /// Coordinate column names matching each vertex coordinate vector.
-    coordinate_columns: [&'static str; 2],
-    /// Stable vertex table used by triangle index triples.
-    vertices: Vec<TriangulationVertexSummary>,
-    /// Triangle vertex indices into [`Self::vertices`].
-    triangles: Vec<[usize; 3]>,
-}
-
-/// Serializable vertex row used by [`TriangulationMeshSummary`].
-///
-/// Each row preserves the validated spacetime coordinate and optional CDT time
-/// label for one final-state vertex. The separate `index` field is the stable
-/// value referenced by triangle triples in summary JSON.
-#[derive(Serialize)]
-struct TriangulationVertexSummary {
-    /// Stable zero-based index used by triangle references.
-    index: usize,
-    /// Backend spacetime coordinates for external visualization and mesh consumers.
-    coordinates: SpacetimeCoordinate,
+struct TriangulationVertexTimeLabel {
+    /// Stable Delaunay vertex UUID serialized by the upstream mesh schema.
+    vertex_id: String,
     /// Optional CDT time label stored on the vertex.
     time: Option<u32>,
 }
 
-/// Builds a stable final-triangulation mesh payload for summary JSON output.
+/// Builds the CDT foliation sidecar for Delaunay's stable mesh export.
 ///
-/// The vertex table is sorted by CDT time label and backend coordinates so
-/// downstream notebooks can consume the summary without depending on backend
-/// handle allocation order.
-fn triangulation_mesh_summary(
+/// Rows are sorted by stable UUID so external tools can join them to
+/// `mesh.vertices` without depending on backend handle or traversal order.
+fn triangulation_vertex_time_labels(
     triangulation: &CdtTriangulation2D,
-) -> CdtResult<TriangulationMeshSummary> {
+) -> CdtResult<Vec<TriangulationVertexTimeLabel>> {
     let geometry = triangulation.geometry();
-    let mut vertices = Vec::with_capacity(geometry.vertex_count());
+    let mut labels = Vec::with_capacity(geometry.vertex_count());
     for handle in geometry.vertices() {
-        let coordinates =
+        let vertex_id =
             geometry
-                .vertex_coordinates(&handle)
+                .vertex_export_id(&handle)
                 .map_err(|err| CdtError::ValidationFailed {
                     check: CdtValidationCheck::Geometry,
-                    failure: CdtValidationFailure::VertexCoordinateReadFailed {
-                        vertex: format!("{handle:?}"),
-                        detail: err.to_string(),
-                    },
-                })?;
-        let coordinate =
-            SpacetimeCoordinate::try_from_space_time_slice(&coordinates).map_err(|err| {
-                CdtError::ValidationFailed {
-                    check: CdtValidationCheck::Geometry,
-                    failure: CdtValidationFailure::from_spacetime_coordinate_error(
-                        format!("{handle:?}"),
-                        err,
-                    ),
-                }
-            })?;
-        let time = triangulation.time_label(&handle);
-        vertices.push((handle, coordinate, time));
-    }
-
-    vertices.sort_by(|left, right| {
-        left.2
-            .cmp(&right.2)
-            .then_with(|| left.1.time().total_cmp(&right.1.time()))
-            .then_with(|| left.1.space().total_cmp(&right.1.space()))
-    });
-
-    let mut vertex_indices = HashMap::with_capacity(vertices.len());
-    let mut vertex_summaries = Vec::with_capacity(vertices.len());
-    for (index, (handle, coordinates, time)) in vertices.into_iter().enumerate() {
-        vertex_indices.insert(handle, index);
-        vertex_summaries.push(TriangulationVertexSummary {
-            index,
-            coordinates,
-            time,
-        });
-    }
-
-    let mut triangles = Vec::with_capacity(geometry.face_count());
-    for face in geometry.faces() {
-        let face_vertices =
-            geometry
-                .face_vertices(&face)
-                .map_err(|err| CdtError::ValidationFailed {
-                    check: CdtValidationCheck::Geometry,
-                    failure: CdtValidationFailure::FaceVerticesUnavailable {
-                        face: format!("{face:?}"),
-                        detail: err.to_string(),
-                    },
-                })?;
-        if face_vertices.len() != 3 {
-            return Err(CdtError::ValidationFailed {
-                check: CdtValidationCheck::Geometry,
-                failure: CdtValidationFailure::FaceVertexCount {
-                    face: format!("{face:?}"),
-                    actual: face_vertices.len(),
-                    expected: 3,
-                },
-            });
-        }
-
-        let mut triangle = [0_usize; 3];
-        for (position, vertex) in face_vertices.iter().enumerate() {
-            let Some(index) = vertex_indices.get(vertex) else {
-                return Err(CdtError::ValidationFailed {
-                    check: CdtValidationCheck::Geometry,
-                    failure: CdtValidationFailure::FaceVerticesUnavailable {
-                        face: format!("{face:?}"),
+                    failure: CdtValidationFailure::BackendGeometry {
                         detail: format!(
-                            "face references vertex {vertex:?}, but it is absent from the vertex table"
+                            "failed to resolve stable mesh-export id for vertex {handle:?}: {err}"
                         ),
                     },
-                });
-            };
-            triangle[position] = *index;
-        }
-        triangles.push(canonical_triangle_indices(triangle));
+                })?;
+        let time = triangulation.time_label(&handle);
+        labels.push(TriangulationVertexTimeLabel { vertex_id, time });
     }
-    triangles.sort_unstable();
-
-    Ok(TriangulationMeshSummary {
-        coordinate_columns: SpacetimeCoordinate::coordinate_columns(),
-        vertices: vertex_summaries,
-        triangles,
-    })
-}
-
-/// Returns the stable representative of one triangle index triple.
-///
-/// Mesh exporters may observe the same face with different cyclic or mirrored
-/// vertex orderings depending on backend traversal. Canonicalizing each triple
-/// before global sorting keeps summary JSON deterministic for notebooks and
-/// downstream snapshot consumers.
-fn canonical_triangle_indices(triangle: [usize; 3]) -> [usize; 3] {
-    let [first, second, third] = triangle;
-    let rotations = [
-        [first, second, third],
-        [second, third, first],
-        [third, first, second],
-        [first, third, second],
-        [third, second, first],
-        [second, first, third],
-    ];
-    let mut canonical_triangle = rotations[0];
-    for candidate in rotations.into_iter().skip(1) {
-        if candidate < canonical_triangle {
-            canonical_triangle = candidate;
-        }
-    }
-    canonical_triangle
+    labels.sort_by(|left, right| left.vertex_id.cmp(&right.vertex_id));
+    Ok(labels)
 }
 
 impl SimulationResultsBackend {
@@ -2206,7 +2086,8 @@ impl SimulationResultsBackend {
     ///
     /// The summary stores the validated top-level CLI/configuration parameters,
     /// action and Metropolis configuration, aggregate statistics, final
-    /// triangulation counts and mesh indices, Monte Carlo step telemetry, and
+    /// triangulation counts, Delaunay mesh entity ids/connectivity, CDT foliation
+    /// labels, Monte Carlo step telemetry, and
     /// all measurements. The aggregate `average_action` is computed from
     /// [`Self::equilibrium_measurements`] so it excludes the initial snapshot and
     /// thermalization window.
@@ -2246,15 +2127,23 @@ impl SimulationResultsBackend {
         path: impl AsRef<Path>,
     ) -> CdtResult<()> {
         let path = path.as_ref();
-        let mesh = triangulation_mesh_summary(&self.triangulation).map_err(|err| {
+        let mesh = self.triangulation.geometry().mesh_export().map_err(|err| {
             output_error(
                 path,
                 OutputFormat::Json,
-                format!(
-                    "triangulation_mesh_summary failed while building SimulationSummary in write_summary_json: {err}"
-                ),
+                format!("Delaunay mesh export failed while building simulation summary: {err}"),
             )
         })?;
+        let vertex_time_labels =
+            triangulation_vertex_time_labels(&self.triangulation).map_err(|err| {
+                output_error(
+                    path,
+                    OutputFormat::Json,
+                    format!(
+                        "CDT mesh-label export failed while building simulation summary: {err}"
+                    ),
+                )
+            })?;
         let summary = SimulationSummary {
             config: config.config(),
             metropolis_config: &self.config,
@@ -2277,6 +2166,7 @@ impl SimulationResultsBackend {
                 time_slices: self.triangulation.time_slices().get(),
                 topology: self.triangulation.metadata().topology(),
                 mesh,
+                vertex_time_labels,
             },
             steps: &self.steps,
             measurements: &self.measurements,
@@ -2342,8 +2232,9 @@ mod tests {
     use crate::errors::{ConfigurationSetting, MeasurementCountField};
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
-    use serde_json::{Value, from_str, to_value};
+    use serde_json::{Value, from_str, from_value, to_value};
     use std::assert_matches;
+    use std::collections::HashSet;
     use std::env;
     use std::fs;
     use std::num::NonZeroU32;
@@ -3843,53 +3734,58 @@ mod tests {
         assert_eq!(parsed["aggregate"]["step_count"], 1);
         assert_eq!(parsed["final_triangulation"]["time_slices"], 3);
         let mesh = &parsed["final_triangulation"]["mesh"];
-        let coordinate_columns = mesh["coordinate_columns"]
-            .as_array()
-            .expect("mesh coordinate columns should serialize as an array");
-        assert_eq!(coordinate_columns.len(), 2);
-        assert_eq!(coordinate_columns[0].as_str(), Some("x"));
-        assert_eq!(coordinate_columns[1].as_str(), Some("y"));
-        let vertices = mesh["vertices"]
-            .as_array()
-            .expect("mesh vertices should serialize as an array");
-        assert_eq!(vertices.len(), 12);
-        for (expected_index, vertex) in vertices.iter().enumerate() {
-            assert_eq!(
-                vertex["index"], expected_index,
-                "mesh vertices should use stable zero-based indices"
-            );
+        let mesh_export: DelaunayMeshExport<2> =
+            from_value(mesh.clone()).expect("summary mesh should use Delaunay's export schema");
+        mesh_export
+            .validate()
+            .expect("summary mesh should satisfy Delaunay's export invariants");
+        assert_eq!(mesh_export.metadata.schema, "delaunay.simplicial_complex");
+        assert_eq!(mesh_export.metadata.schema_version, 1);
+        assert_eq!(mesh_export.metadata.dimension, 2);
+        assert_eq!(mesh_export.metadata.vertex_count, 12);
+        assert_eq!(mesh_export.metadata.simplex_count, 12);
+
+        let vertex_ids: HashSet<_> = mesh_export
+            .vertices
+            .iter()
+            .map(|vertex| vertex.id.to_string())
+            .collect();
+        assert_eq!(vertex_ids.len(), 12);
+        for vertex in &mesh_export.vertices {
+            assert_eq!(vertex.coordinates.len(), 2);
             assert!(
-                vertex["time"].as_u64().is_some_and(|time| time < 3),
-                "mesh vertex should include a valid foliation time label: {vertex}"
-            );
-            let coordinates = vertex["coordinates"]
-                .as_array()
-                .expect("mesh vertex coordinates should serialize as an array");
-            assert_eq!(coordinates.len(), 2);
-            assert!(
-                coordinates
+                vertex
+                    .coordinates
                     .iter()
-                    .all(|coordinate| coordinate.as_f64().is_some_and(f64::is_finite)),
-                "mesh vertex coordinates should be finite x/y values: {vertex}"
+                    .all(|coordinate| coordinate.is_finite())
             );
         }
-        let triangles = mesh["triangles"]
+        for simplex in &mesh_export.simplices {
+            assert_eq!(simplex.vertex_ids.len(), 3);
+            assert!(
+                simplex
+                    .vertex_ids
+                    .iter()
+                    .all(|vertex_id| vertex_ids.contains(&vertex_id.to_string())),
+                "simplex connectivity should use exported stable vertex ids: {simplex:?}"
+            );
+        }
+
+        let time_labels = parsed["final_triangulation"]["vertex_time_labels"]
             .as_array()
-            .expect("mesh triangles should serialize as an array");
-        assert_eq!(triangles.len(), 12);
-        for triangle in triangles {
-            let indices = triangle
-                .as_array()
-                .expect("mesh triangles should serialize as index arrays");
-            assert_eq!(indices.len(), 3);
-            for index in indices {
-                assert!(
-                    index
-                        .as_u64()
-                        .is_some_and(|index| index < vertices.len() as u64),
-                    "triangle index should refer to a serialized vertex: {triangle}"
-                );
-            }
+            .expect("CDT vertex time labels should serialize as rows");
+        assert_eq!(time_labels.len(), vertex_ids.len());
+        for label in time_labels {
+            assert!(
+                label["vertex_id"]
+                    .as_str()
+                    .is_some_and(|vertex_id| vertex_ids.contains(vertex_id)),
+                "CDT time labels should join to mesh vertices by stable id: {label}"
+            );
+            assert!(
+                label["time"].as_u64().is_some_and(|time| time < 3),
+                "CDT time labels should preserve the final foliation: {label}"
+            );
         }
         assert_eq!(parsed["measurements"][0]["step"], 1);
     }
