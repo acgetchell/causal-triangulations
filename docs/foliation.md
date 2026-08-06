@@ -65,7 +65,7 @@ from live vertex labels, and repeats until the count converges to zero. The curr
 the number of cleanup passes used.
 
 `from_cdt_strip_profile()` places each open spatial slice according to the corresponding profile entry and delegates triangulation to the Delaunay point-data
-constructor. The returned mesh must pass the same initial-constructor contract as the regular open strip: upstream Delaunay Level 1-4 validation plus CDT
+constructor. The returned mesh must pass the same initial-constructor contract as the regular open strip: upstream Delaunay Level 1-5 validation plus CDT
 topology, foliation, causality, and strict Up/Down simplex classification.
 
 The toroidal constructor starts from an `N × T` lattice in a periodic domain, applies bounded deterministic offsets to put cocircular lattice points in
@@ -77,16 +77,23 @@ It preserves closed spatial slices, periodic time, χ = 0, and strict CDT simple
 
 ## Initialization vs Evolution Validation
 
-Initial CDT constructors are stricter than post-move validation:
+The upstream validation hierarchy separates the properties needed by CDT evolution:
+
+- **Levels 1-3 — structure and topology**: storage consistency, simplex connectivity, and pseudomanifold constraints.
+- **Level 4 — embedding/realization**: every maximal simplex is nondegenerate, and distinct simplices intersect only in their shared face. This is the
+  straight-line-embedding property needed to rule out folded or overlapping geometry.
+- **Level 5 — Delaunay**: the realized triangulation also satisfies the empty-circumsphere predicate.
+
+Initial CDT constructors are therefore stricter than post-move validation:
 
 - **Initialization**: regular `from_cdt_strip()`, profiled `from_cdt_strip_profile()`, regular `from_toroidal_cdt()`, and
-  `from_toroidal_cdt_profile()` must pass upstream Delaunay Level 1-4 validation before returning. This certifies those starting meshes as valid,
-  well-behaved PL-manifold Delaunay triangulations.
-- **After ergodic moves / simulation completion**: `CdtTriangulation::validate()` requires upstream structural validity plus CDT topology, foliation, causality,
-  and simplex-classification invariants. It intentionally does not require Level 4 Delaunay-ness, because the CDT move kernels are not expected to preserve the
+  `from_toroidal_cdt_profile()` must pass upstream Level 1-5 validation before returning. This certifies those starting meshes as valid embedded
+  PL-manifold Delaunay triangulations.
+- **After ergodic moves / simulation completion**: `CdtTriangulation::validate()` requires upstream Level 1-4 embedding validity plus CDT topology,
+  foliation, causality, and simplex-classification invariants. It intentionally omits Level 5 because the CDT move kernels are not expected to preserve the
   Delaunay empty-circumsphere predicate.
 
-If the move set is ever changed to preserve Delaunay-ness, final-state validation should be tightened to include Level 4 as well.
+Call `triangulation.geometry().validate_delaunay()` when a workflow needs the optional stricter Level 1-5 check on an evolved state.
 
 ## Edge Classification
 
@@ -117,13 +124,13 @@ For a current foliated triangulation, every top-dimensional simplex must be stri
 triangle face must classify as `Up` `(2,1)` or `Down` `(1,2)`. Pure spacelike faces, all-timelike/non-spacelike faces, faces spanning more than adjacent time
 slices, malformed faces, and faces with missing time labels are all violations.
 
-This is a CDT-domain invariant. It is deliberately separate from upstream Delaunay Level 4 validation: Delaunay-ness asks whether the geometric triangulation
-satisfies an empty-circumsphere predicate, while strict causal simplex validation asks whether the foliation makes every top-dimensional cell an allowed CDT
-cell. A useful mental model is a parallel CDT validation level rather than Delaunay Level 5:
+This is a CDT-domain invariant, separate from both upstream geometric checks. Level 4 asks whether simplices form a nondegenerate, non-overlapping embedding;
+Level 5 asks whether that embedding satisfies the Delaunay empty-circumsphere predicate; strict causal simplex validation asks whether the foliation makes
+every top-dimensional cell an allowed CDT cell.
 
-- initial Delaunay-backed constructors require upstream Delaunay Level 4 and zero strict causal simplex violations;
-- evolved CDT states must remain structurally valid and keep zero strict causal simplex violations, but they are not required to preserve the Delaunay
-  empty-circumsphere property.
+- initial Delaunay-backed constructors require upstream Levels 1-5 and zero strict causal simplex violations;
+- evolved CDT states must preserve the Level 1-4 embedding and keep zero strict causal simplex violations, but they are not required to preserve the Level 5
+  Delaunay property.
 
 `strict_causal_simplex_violation_count()` exposes the invariant as a count. Valid constructor output and valid post-move states must have count zero. The
 filtered constructor uses the count as its convergence condition, following the CDT-plusplus practice of repeatedly removing acausal or unclassified
@@ -149,7 +156,10 @@ Structural checks:
 5. For toroidal topology, timelike edges connect each slice to both neighboring time slices modulo `T`
 
 Ergodic moves resynchronize foliation bookkeeping from live vertex labels after mutation. On toroidal triangulations, the move kernel immediately reruns
-`validate_topology()` and `validate_foliation()` before recording success; failures are rolled back and returned as ordinary local-site rejections.
+`validate_topology()` and `validate_foliation()` before recording success; failures are rolled back and returned as ordinary local-site rejections. The
+upstream bistellar-edit transaction validates the affected result against the Level 1-4 realization contract before it returns success, so CDT move
+finalization does not repeat the global embedding scan. Explicit `validate()` calls, configured cadence checks, and final result construction still recheck the
+whole evolved-state contract.
 
 ### `validate_causality_delaunay()`
 

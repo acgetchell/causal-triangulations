@@ -22,6 +22,8 @@ pub enum DelaunayValidationLevel {
     Three,
     /// Validate Levels 1 through 4.
     Four,
+    /// Validate Levels 1 through 5.
+    Five,
 }
 
 impl fmt::Display for DelaunayValidationLevel {
@@ -31,6 +33,7 @@ impl fmt::Display for DelaunayValidationLevel {
             Self::Two => formatter.write_str("Level 1-2"),
             Self::Three => formatter.write_str("Level 1-3"),
             Self::Four => formatter.write_str("Level 1-4"),
+            Self::Five => formatter.write_str("Level 1-5"),
         }
     }
 }
@@ -1734,13 +1737,13 @@ mod tests {
     #[test]
     fn test_delaunay_validation_failed_error() {
         let error = CdtError::DelaunayValidationFailed {
-            level: DelaunayValidationLevel::Four,
+            level: DelaunayValidationLevel::Five,
             detail: "upstream validation failed".to_string(),
         };
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Delaunay validation failed [Level 1-4]: upstream validation failed"
+            "Delaunay validation failed [Level 1-5]: upstream validation failed"
         );
     }
 
@@ -1750,6 +1753,7 @@ mod tests {
         assert_eq!(DelaunayValidationLevel::Two.to_string(), "Level 1-2");
         assert_eq!(DelaunayValidationLevel::Three.to_string(), "Level 1-3");
         assert_eq!(DelaunayValidationLevel::Four.to_string(), "Level 1-4");
+        assert_eq!(DelaunayValidationLevel::Five.to_string(), "Level 1-5");
     }
 
     #[test]

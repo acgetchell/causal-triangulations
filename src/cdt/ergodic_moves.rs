@@ -945,7 +945,7 @@ impl ErgodicsSystem {
     ///     )?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -996,7 +996,7 @@ impl ErgodicsSystem {
     ///     ])?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -1058,7 +1058,7 @@ impl ErgodicsSystem {
     ///     ])?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -1116,7 +1116,7 @@ impl ErgodicsSystem {
     ///     )?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -1156,7 +1156,7 @@ impl ErgodicsSystem {
     ///     ])?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -1360,7 +1360,7 @@ impl ErgodicsSystem {
         if let Err(err) = triangulation.synchronize_foliation_from_live_labels() {
             return MoveResult::HardFailure(err);
         }
-        if let Err(err) = triangulation.validate_evolved_cdt() {
+        if let Err(err) = triangulation.validate_after_realized_mutation() {
             if err.is_post_mutation_candidate_rejection() {
                 return MoveResult::GeometricViolation;
             }
@@ -2134,6 +2134,7 @@ mod tests {
     use crate::cdt::foliation::FoliationError;
     use crate::errors::{CdtValidationCheck, CdtValidationFailure, DelaunayValidationLevel};
     use crate::geometry::DelaunayBackend2D;
+    use crate::geometry::backends::delaunay::DelaunayError;
     use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
     use approx::assert_relative_eq;
     use std::assert_matches;
@@ -2330,6 +2331,28 @@ mod tests {
     }
 
     #[test]
+    fn backend_embedding_failure_remains_a_recoverable_rejection() {
+        let result = reject_backend(
+            BackendMutationOperation::FlipEdge,
+            "candidate edge".to_string(),
+            DelaunayError::ValidationFailed {
+                level: DelaunayValidationLevel::Four,
+                detail: "simplices intersect outside their shared face".to_string(),
+            },
+        );
+
+        assert_matches!(
+            result,
+            MoveResult::Rejected(CdtError::BackendMutationFailed {
+                operation: BackendMutationOperation::FlipEdge,
+                target,
+                detail,
+            }) if target == "candidate edge"
+                && detail.contains("simplices intersect outside their shared face")
+        );
+    }
+
+    #[test]
     fn move_statistics_defaults_hard_failures_for_legacy_payloads() {
         let stats: MoveStatistics = serde_json::from_str(
             r#"{
@@ -2426,6 +2449,9 @@ mod tests {
                 .is_ok()
         );
         assert!(triangulation.validate_causality().is_ok());
+        triangulation
+            .validate()
+            .expect("accepted k=2 move should preserve full evolved CDT invariants");
     }
 
     #[test]

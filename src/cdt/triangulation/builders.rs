@@ -49,7 +49,7 @@ pub(super) fn remap_toroidal_generation_error(
 /// Validates a generated Delaunay triangulation before wrapping it in CDT state.
 fn validated_backend(dt: DelaunayTriangulation2D) -> CdtResult<DelaunayBackend2D> {
     DelaunayBackend2D::from_triangulation(dt).map_err(|err| CdtError::DelaunayValidationFailed {
-        level: DelaunayValidationLevel::Four,
+        level: DelaunayValidationLevel::Five,
         detail: err.to_string(),
     })
 }
@@ -720,7 +720,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Returns [`CdtError::ValidationFailed`] if any vertex is unlabeled or
     /// has a time label outside `0..time_slices`, or if any time slice is empty.
     /// Returns [`CdtError::DelaunayValidationFailed`] if the backend fails the
-    /// upstream Level 1-4 Delaunay validator. Returns topology, foliation,
+    /// upstream Level 1-5 Delaunay validator. Returns topology, foliation,
     /// causality, or classification errors if the labels do not form a strict
     /// CDT mesh.
     ///
@@ -739,7 +739,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///     ])?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -1064,7 +1064,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// be reserved, if the underlying Delaunay builder rejects the points, if
     /// `build_delaunay2_with_data()` returns a vertex or face count that does not
     /// match the requested strip. Returns [`CdtError::DelaunayValidationFailed`]
-    /// if the constructed backend does not satisfy the Level 1-4 Delaunay
+    /// if the constructed backend does not satisfy the Level 1-5 Delaunay
     /// validator. Returns [`CdtError::Foliation`],
     /// [`CdtError::CausalityViolation`], or [`CdtError::ValidationFailed`] if the
     /// constructed strip fails CDT validation.
@@ -1212,7 +1212,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// or if the generated backend vertex or face count does not match the
     /// requested profile.
     /// Returns [`CdtError::DelaunayValidationFailed`] if the constructed backend
-    /// fails the Level 1-4 Delaunay validator. Returns [`CdtError::TopologyMismatch`],
+    /// fails the Level 1-5 Delaunay validator. Returns [`CdtError::TopologyMismatch`],
     /// [`CdtError::Foliation`], [`CdtError::CausalityViolation`], or
     /// [`CdtError::ValidationFailed`] if the constructed mesh violates CDT
     /// invariants.
@@ -1275,7 +1275,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// The triangulation is built through
     /// [`crate::geometry::generators::build_periodic_toroidal_delaunay2`],
     /// which uses the upstream periodic image-point constructor and then
-    /// requires full Delaunay Level 1-4 validation before the CDT wrapper is
+    /// requires full Delaunay Level 1-5 validation before the CDT wrapper is
     /// returned.
     ///
     /// # Mesh structure
@@ -1459,7 +1459,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// be reserved, if the periodic Delaunay constructor rejects the profiled point
     /// data, or if the resulting vertex or face counts do not match the requested
     /// profile. Returns [`CdtError::DelaunayValidationFailed`] if the constructed
-    /// backend fails the Level 1-4 Delaunay validator. Returns
+    /// backend fails the Level 1-5 Delaunay validator. Returns
     /// [`CdtError::TopologyMismatch`], [`CdtError::Foliation`],
     /// [`CdtError::CausalityViolation`], or [`CdtError::ValidationFailed`] if the
     /// constructed mesh violates CDT invariants.
@@ -1600,7 +1600,7 @@ mod tests {
             .expect("Delaunay strip topology should validate");
         tri.geometry()
             .validate_delaunay()
-            .expect("Delaunay strip should pass upstream Level 1-4 validation");
+            .expect("Delaunay strip should pass upstream Level 1-5 validation");
         tri.validate_simplex_classification()
             .expect("all Delaunay strip simplices should classify");
         for face in tri.geometry().faces() {
@@ -2498,7 +2498,7 @@ mod tests {
         assert_eq!(tri.geometry().periodic_domain(), Some([4.0, 3.0]));
         tri.geometry()
             .validate_delaunay()
-            .expect("initial toroidal CDT must pass upstream Level 1-4 validation");
+            .expect("initial toroidal CDT must pass upstream Level 1-5 validation");
         tri.validate_topology()
             .expect("initial toroidal CDT must satisfy torus topology");
         tri.validate_foliation()

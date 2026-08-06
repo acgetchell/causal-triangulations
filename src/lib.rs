@@ -497,7 +497,7 @@ pub mod prelude {
     ///
     ///     let mut backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;

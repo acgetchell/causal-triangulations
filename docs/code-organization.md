@@ -245,20 +245,20 @@ through to upstream `delaunay::` APIs directly.
 - `CdtSimplexCounts` carries the CDT-domain proof that constructed triangulations have positive vertex, edge, and triangle counts as `NonZeroUsize`, while
   raw geometry queries remain `usize` so backend construction, clearing, and collection-style count APIs can represent zero
 - `from_cdt_strip(vertices_per_slice, num_slices)` — Delaunay-built open-boundary 1+1 CDT strip with strict Up/Down simplex classification and upstream Level
-  1–4 Delaunay validation before wrapping
+  1–5 Delaunay validation before wrapping
 - `from_filtered_delaunay_strip(vertices_per_slice, num_slices)` — open-boundary 1+1 CDT initial-state constructor that starts from surplus labeled Delaunay
   points, removes vertices incident to non-strict CDT simplices through the backend `remove_vertex` path, and returns only after the strict causal simplex
   violation count converges to zero and full initial validation passes
 - `from_cdt_strip_profile(volume_profile)` — open-boundary 1+1 CDT strip from explicit nonuniform per-slice vertex counts; builds labeled point data and
   delegates triangulation to the Delaunay constructor before strict initial validation
-- `from_toroidal_cdt(vertices_per_slice, num_slices)` — periodic Delaunay S¹×S¹ toroidal CDT (χ = 0) with upstream Level 1–4 validation before wrapping;
+- `from_toroidal_cdt(vertices_per_slice, num_slices)` — periodic Delaunay S¹×S¹ toroidal CDT (χ = 0) with upstream Level 1–5 validation before wrapping;
   requires `vertices_per_slice ≥ 3` and `num_slices ≥ 3`
 - `from_toroidal_cdt_profile(volume_profile)` — periodic S¹×S¹ toroidal CDT from explicit per-slice vertex counts, preserving closed spatial slices and
   periodic time
 - `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`, `strict_causal_simplex_violation_count`
-- Validation: constructors require upstream Delaunay Level 1–4 validation for initial meshes; `validate()` is the post-move/final-state contract and requires
-  upstream structural validity plus CDT topology, foliation, causality, and strict Up/Down simplex classification
+- Validation: constructors require upstream Level 1–5 Delaunay validation for initial meshes; `validate()` is the post-move/final-state contract and requires
+  upstream Level 1–4 embedding validity plus CDT topology, foliation, causality, and strict Up/Down simplex classification
 - Mutable backend access is not exposed. CDT code mutates Delaunay state only through narrow crate-internal operations (`flip_edge`, `subdivide_face`,
   `remove_vertex`, `set_vertex_data`) that invalidate cached counts and foliation synchronization bookkeeping on success.
 
@@ -335,6 +335,7 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
 - Wraps the upstream `delaunay` triangulation in `DelaunayBackend`
 - Defines crate-owned opaque handles (`DelaunayVertexHandle`, `DelaunayEdgeHandle`, `DelaunayFaceHandle`) so CDT code does not depend on upstream key types
 - Translates upstream Delaunay operations and errors into this crate's trait contracts
+- Exposes named validation adapters for Level 1–3 structure, Level 1–4 embedding/realization, and Level 1–5 Delaunay validity
 - Together with `geometry/generators.rs`, this is the only place that directly imports from the `delaunay` crate
 
 ### `geometry/generators.rs` — Delaunay triangulation generators
