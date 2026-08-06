@@ -416,16 +416,16 @@ fn bench_cache_operations(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark triangulation validation
+/// Benchmark embedding validation for an unfoliated geometry fixture.
 fn bench_validation(c: &mut Criterion) {
     let triangulation = CdtTriangulation2D::from_random_points(30, 1, 2)
         .or_abort(SetupOperation::CreateTriangulation);
 
     let mut group = c.benchmark_group("validation");
 
-    group.bench_function("validate", |b| {
+    group.bench_function("validate_embedding", |b| {
         b.iter(|| {
-            let result = triangulation.validate();
+            let result = triangulation.geometry().validate_embedding();
             black_box(result)
         });
     });

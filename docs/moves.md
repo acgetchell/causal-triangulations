@@ -63,8 +63,10 @@ Owns a `MoveStatistics` instance and a thread-local RNG. Public API:
 - `attempt_random_move(&mut CdtTriangulation2D) -> MoveResult` — delegates to one of the above
 
 Accepted moves mutate the triangulation through narrow CDT-owned edit operations, then rebuild CDT foliation bookkeeping from live vertex labels and refresh
-simplex classifications. On toroidal triangulations, move finalization also rechecks χ = 0 and the closed-S¹ per-slice foliation invariant before recording
-success. The raw mutable backend is not exposed as part of the CDT API.
+simplex classifications. Foliated move finalization uses the evolved CDT validation profile, carrying forward the backend transaction's successful embedding
+check while rechecking CDT-domain invariants. On toroidal triangulations, it also rechecks χ = 0 and the closed-S¹ per-slice foliation invariant before
+recording success. Unfoliated geometry experiments retain a separate geometry/topology-only finalization contract and do not claim CDT causal validity. The raw
+mutable backend is not exposed as part of the CDT API.
 
 ## Architecture
 

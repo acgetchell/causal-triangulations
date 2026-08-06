@@ -257,8 +257,10 @@ through to upstream `delaunay::` APIs directly.
   periodic time
 - `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`, `strict_causal_simplex_violation_count`
-- Validation: constructors require upstream Level 1–5 Delaunay validation for initial meshes; `validate()` is the post-move/final-state contract and requires
-  upstream Level 1–4 embedding validity plus CDT topology, foliation, causality, and strict Up/Down simplex classification
+- Validation: `CdtValidationProfile` names initial-Delaunay, evolved, and optional strict-Delaunay contracts. Constructors require Level 1–5 for initial
+  meshes; `validate()` selects the evolved profile with Level 1–4 embedding validity plus CDT topology, foliation, causality, and strict Up/Down simplex
+  classification; `validate_with_profile()` exposes explicit lifecycle and strict-mode selection. Named profiles reject missing foliation rather than
+  treating the mandatory causal checks as vacuously successful; raw unfoliated geometry experiments use a separate internal geometry/topology contract.
 - Mutable backend access is not exposed. CDT code mutates Delaunay state only through narrow crate-internal operations (`flip_edge`, `subdivide_face`,
   `remove_vertex`, `set_vertex_data`) that invalidate cached counts and foliation synchronization bookkeeping on success.
 
@@ -269,7 +271,7 @@ The implementation lives under `src/cdt/triangulation/` and is wired from `src/l
 - `moves.rs` — narrow crate-internal Delaunay mutation hooks used by ergodic moves
 - `state.rs` — module entry point, `CdtTriangulation`, `CdtMetadata`, `SimulationEvent`, serialization, cached geometry accessors, and backend-agnostic
   state methods
-- `validation.rs` — full CDT validation and Delaunay-backed causality checks
+- `validation.rs` — named CDT validation profiles, whole-state validation, and Delaunay-backed causality checks
 
 ### `config.rs` — `CdtTopology` enum
 

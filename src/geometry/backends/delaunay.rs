@@ -650,24 +650,33 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
         operation: DelaunayOperation,
         target: impl Display,
     ) -> Result<(), DelaunayError> {
-        if let Err(err) = self.validate_embedding() {
-            self.restore_mutation_snapshot(dt_before, facets_before);
-            return Err(match err {
-                DelaunayError::ValidationFailed { level, detail } => {
-                    DelaunayError::ValidationFailed {
-                        level,
-                        detail: format!(
-                            "{operation} produced invalid geometry for {target}: {detail}"
-                        ),
-                    }
-                }
-                other => DelaunayError::ValidationFailed {
-                    level: DelaunayValidationLevel::Four,
-                    detail: format!("{operation} produced invalid geometry for {target}: {other}"),
-                },
-            });
-        }
-        Ok(())
+        let validation = self.validate_embedding();
+        self.restore_if_embedding_invalid(validation, dt_before, facets_before, operation, target)
+    }
+
+    /// Completes embedding validation, restoring a rejected mutation on failure.
+    fn restore_if_embedding_invalid(
+        &mut self,
+        validation: Result<(), DelaunayError>,
+        dt_before: RawTriangulation<VertexData, SimplexData, D>,
+        facets_before: HashMap<EdgeKey, FacetHandle>,
+        operation: DelaunayOperation,
+        target: impl Display,
+    ) -> Result<(), DelaunayError> {
+        let Err(error) = validation else {
+            return Ok(());
+        };
+        self.restore_mutation_snapshot(dt_before, facets_before);
+        Err(match error {
+            DelaunayError::ValidationFailed { level, detail } => DelaunayError::ValidationFailed {
+                level,
+                detail: format!("{operation} produced invalid geometry for {target}: {detail}"),
+            },
+            other => DelaunayError::ValidationFailed {
+                level: DelaunayValidationLevel::Four,
+                detail: format!("{operation} produced invalid geometry for {target}: {other}"),
+            },
+        })
     }
 
     /// Returns whether the keyed edge is present in the triangulation.
@@ -1742,18 +1751,19 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::CdtTriangulation;
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{
         DelaunayTriangulation2D, build_delaunay2_from_simplices, build_delaunay2_with_data,
         generate_delaunay2, random_delaunay2, seeded_delaunay2,
     };
+    use crate::{CdtTriangulation, CdtValidationProfile};
     use delaunay::DelaunayRepairPolicy;
     use delaunay::prelude::construction::{ConstructionOptions, DelaunayTriangulationBuilder};
     use serde_json::{Value, error::Category};
     use slotmap::KeyData;
     use std::assert_matches;
     use std::collections::HashSet;
+    use std::num::NonZeroU32;
 
     /// Wraps generated test fixtures through the public checked constructor.
     fn validated_backend(dt: DelaunayTriangulation2D) -> DelaunayBackend2D {
@@ -1766,8 +1776,8 @@ mod tests {
         let vertices = [
             Vertex::try_new_with_data([0.0, 0.0], 0_u32).expect("valid vertex"),
             Vertex::try_new_with_data([4.0, 0.0], 0).expect("valid vertex"),
-            Vertex::try_new_with_data([4.0, 2.0], 1).expect("valid vertex"),
-            Vertex::try_new_with_data([1.0, 2.0], 1).expect("valid vertex"),
+            Vertex::try_new_with_data([4.0, 1.0], 1).expect("valid vertex"),
+            Vertex::try_new_with_data([1.0, 1.0], 1).expect("valid vertex"),
         ];
         let simplices = vec![vec![0, 1, 2], vec![0, 2, 3]];
         let dt =
@@ -2113,11 +2123,91 @@ mod tests {
             })
         );
 
-        let triangulation = CdtTriangulation::try_new(backend, 2, 2)
+        let mut initial_triangulation = CdtTriangulation::try_new(backend.clone(), 2, 2)
+            .expect("embedding-valid quad should enter unfoliated CDT state");
+        initial_triangulation
+            .assign_foliation_by_y(NonZeroU32::new(2).expect("fixture has two slices"))
+            .expect("quad labels should form a strict causal foliation");
+        assert_matches!(
+            initial_triangulation.validate_initial_delaunay_cdt(),
+            Err(crate::CdtError::DelaunayValidationFailed {
+                level: DelaunayValidationLevel::Five,
+                ..
+            })
+        );
+
+        let mut triangulation = CdtTriangulation::try_new(backend, 2, 2)
             .expect("embedding-valid quad should enter unfoliated CDT state");
         triangulation
+            .assign_foliation_by_y(NonZeroU32::new(2).expect("fixture has two slices"))
+            .expect("quad labels should form a strict causal foliation");
+        triangulation
             .validate()
+            .expect("default validation should use the evolved profile");
+        triangulation
+            .validate_with_profile(CdtValidationProfile::Evolved)
             .expect("evolved CDT validation should not require Level 5 Delaunay-ness");
+        assert_matches!(
+            triangulation.validate_with_profile(CdtValidationProfile::StrictDelaunay),
+            Err(crate::CdtError::DelaunayValidationFailed {
+                level: DelaunayValidationLevel::Five,
+                ..
+            })
+        );
+    }
+
+    #[test]
+    fn embedding_validation_failure_restores_mutation_snapshot() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 0)])
+            .expect("triangle should build");
+        let mut backend = validated_backend(dt);
+        let serialized_before = serde_json::to_value(&backend).expect("backend should serialize");
+        let dt_before = backend.dt.clone();
+        let facets_before = backend.interior_facets_by_edge.clone();
+        let expected_facets = facets_before.clone();
+        backend
+            .insert_vertex(&[0.25, 0.25])
+            .expect("inside-point insertion should commit");
+
+        backend
+            .validate_structural()
+            .expect("inside-point insertion should preserve structural validity");
+        backend
+            .validate_embedding()
+            .expect("inside-point insertion should preserve the embedding");
+        assert_ne!(
+            serde_json::to_value(&backend).expect("mutated backend should serialize"),
+            serialized_before,
+            "test setup should mutate the triangulation before injecting failure"
+        );
+
+        let error = backend
+            .restore_if_embedding_invalid(
+                Err(DelaunayError::ValidationFailed {
+                    level: DelaunayValidationLevel::Four,
+                    detail: "non-adjacent simplices intersect".to_string(),
+                }),
+                dt_before,
+                facets_before,
+                DelaunayOperation::InsertVertex,
+                "[0.25, 0.25]",
+            )
+            .expect_err("failed embedding validation should reject the mutation");
+
+        assert_matches!(
+            error,
+            DelaunayError::ValidationFailed {
+                level: DelaunayValidationLevel::Four,
+                detail,
+            } if detail.contains(
+                "insert_vertex produced invalid geometry for [0.25, 0.25]: non-adjacent simplices intersect"
+            )
+        );
+        assert_eq!(
+            serde_json::to_value(&backend).expect("restored backend should serialize"),
+            serialized_before
+        );
+        assert_eq!(backend.interior_facets_by_edge, expected_facets);
     }
 
     #[test]
