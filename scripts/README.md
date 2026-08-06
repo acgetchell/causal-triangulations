@@ -5,7 +5,7 @@ This directory contains Python and shell tooling used by the CDT repository. Whe
 
 ## Prerequisites
 
-- Python 3.13+
+- Python 3.14+
 - `uv`
 
 Install dev dependencies:

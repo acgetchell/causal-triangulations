@@ -104,7 +104,7 @@ class HardwareInfo:
                 for line in lscpu_output.split("\n"):
                     if "Model name:" in line or "Model:" in line:
                         return line.split(":", 1)[1].strip()
-            except (subprocess.CalledProcessError, IndexError):
+            except (subprocess.CalledProcessError, IndexError):  # fmt: skip
                 pass
 
         # Fallback to /proc/cpuinfo
@@ -113,7 +113,7 @@ class HardwareInfo:
                 for line in f:
                     if line.startswith(("model name", "Processor")):
                         return line.split(":", 1)[1].strip()
-        except (FileNotFoundError, PermissionError):
+        except (FileNotFoundError, PermissionError):  # fmt: skip
             pass
 
         return "Unknown"
@@ -128,7 +128,7 @@ class HardwareInfo:
         if shutil.which("lscpu"):
             try:
                 cpu_cores = self._get_linux_cpu_cores_from_lscpu()
-            except (OSError, RuntimeError, subprocess.SubprocessError, TypeError, ValueError, IndexError):
+            except (OSError, RuntimeError, subprocess.SubprocessError, TypeError, ValueError, IndexError):  # fmt: skip
                 logger.debug("Failed to parse Linux CPU cores from lscpu", exc_info=True)
             else:
                 if cpu_cores != "Unknown":
@@ -157,7 +157,7 @@ class HardwareInfo:
                         physical_id = core_id = None
             if physical_cores:
                 return str(len(physical_cores))
-        except (FileNotFoundError, PermissionError, ValueError):
+        except (FileNotFoundError, PermissionError, ValueError):  # fmt: skip
             return "Unknown"
 
         return "Unknown"
@@ -182,7 +182,7 @@ class HardwareInfo:
 
             if cores_per_socket is not None and sockets is not None:
                 return str(cores_per_socket * sockets)
-        except (subprocess.CalledProcessError, ValueError, IndexError):
+        except (subprocess.CalledProcessError, ValueError, IndexError):  # fmt: skip
             return "Unknown"
 
         return "Unknown"
@@ -209,7 +209,7 @@ class HardwareInfo:
             with open("/proc/cpuinfo", encoding="utf-8") as f:
                 processor_count = sum(1 for line in f if line.startswith("processor"))
                 return str(processor_count)
-        except (FileNotFoundError, PermissionError):
+        except (FileNotFoundError, PermissionError):  # fmt: skip
             pass
 
         return "Unknown"
@@ -329,7 +329,7 @@ class HardwareInfo:
                                 memory_gb = mem_kb / (1024 * 1024)
                                 memory = f"{memory_gb:.1f} GB"
                                 break
-                except (FileNotFoundError, PermissionError, ValueError):
+                except (FileNotFoundError, PermissionError, ValueError):  # fmt: skip
                     pass
 
             elif self.os_type == "Windows":
@@ -655,7 +655,7 @@ class HardwareComparator:
             match = re.search(r"([0-9]+(?:\.[0-9]+)?)", memory_clean)
             if match:
                 return float(match.group(1))
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError):  # fmt: skip
             pass
         return None
 

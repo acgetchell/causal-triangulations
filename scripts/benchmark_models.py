@@ -49,7 +49,7 @@ class BenchmarkData:
             return f"=== Unsized Workload ({self.dimension}) ==="
         return f"=== {self.points} Points ({self.dimension}) ==="
 
-    def with_timing(self, low: float, mean: float, high: float, unit: str) -> "BenchmarkData":
+    def with_timing(self, low: float, mean: float, high: float, unit: str) -> BenchmarkData:
         """Set timing data (fluent interface)."""
         self.time_low = low
         self.time_mean = mean
@@ -57,7 +57,7 @@ class BenchmarkData:
         self.time_unit = unit
         return self
 
-    def with_throughput(self, low: float, mean: float, high: float, unit: str) -> "BenchmarkData":
+    def with_throughput(self, low: float, mean: float, high: float, unit: str) -> BenchmarkData:
         """Set throughput data (fluent interface)."""
         self.throughput_low = low
         self.throughput_mean = mean
@@ -65,7 +65,7 @@ class BenchmarkData:
         self.throughput_unit = unit
         return self
 
-    def with_simplices(self, count: int | None) -> "BenchmarkData":
+    def with_simplices(self, count: int | None) -> BenchmarkData:
         """Set the number of generated maximal simplices."""
         self.simplices = count
         return self

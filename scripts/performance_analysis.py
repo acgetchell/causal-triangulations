@@ -3,7 +3,7 @@
 
 Provides detailed statistics, trend analysis, and regression detection.
 
-Requires Python 3.13+.
+Requires Python 3.14+.
 """
 
 import argparse
@@ -334,7 +334,7 @@ class PerformanceAnalyzer:
         try:
             latest_link.unlink(missing_ok=True)
             latest_link.symlink_to(filename)
-        except (OSError, NotImplementedError):
+        except (OSError, NotImplementedError):  # fmt: skip
             # Fallback for Windows or systems without symlink support
             # Use file copy instead of symlink to ensure cross-platform compatibility
             if latest_link.exists():

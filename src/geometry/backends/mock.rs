@@ -642,6 +642,27 @@ impl TriangulationMut for MockBackend {
             .is_ok()
     }
 
+    fn can_subdivide_face(&self, face: &Self::FaceHandle, point: &[Self::Coordinate]) -> bool {
+        self.validate_coordinate_dimension(MockOperation::SubdivideFace, point)
+            .is_ok()
+            && self
+                .faces
+                .get(&face.0)
+                .is_some_and(|vertices| vertices.len() == 3)
+    }
+
+    fn can_collapse_vertex(&self, vertex: &Self::VertexHandle) -> bool {
+        self.vertices.contains_key(&vertex.0)
+            && self
+                .edges
+                .values()
+                .all(|&(v0, v1)| v0 != vertex.0 && v1 != vertex.0)
+            && self
+                .faces
+                .values()
+                .all(|vertices| !vertices.contains(&vertex.0))
+    }
+
     fn subdivide_face(
         &mut self,
         face: Self::FaceHandle,

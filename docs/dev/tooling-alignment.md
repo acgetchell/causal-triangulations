@@ -55,7 +55,7 @@ Some differences remain because CDT has different workflows and project invarian
   Python support-script discipline, and typed error policies. These are repository-specific and should not be weakened while porting generic rules. The
   `prefer-assert-matches-in-doctests` rule keeps public `///` examples on `std::assert_matches` (Rust 1.97.1) so documentation teaches the diagnostic-friendly
   idiom rather than `assert!(matches!(...))`.
-- CDT requires Python `>=3.13` for repository-managed support tooling, matching the local `.python-version`, Ruff target, Ty environment, and CI setup.
+- CDT requires Python `>=3.14` for repository-managed support tooling, matching the local `.python-version`, Ruff target, Ty environment, and CI setup.
 
 ## Ported Updates
 
@@ -124,9 +124,9 @@ The useful `justfile` updates ported from `delaunay` are:
   `Validated 1+1 Causal Dynamical Triangulations for quantum gravity`. This mirrors a config/manifest change per the repository guideline and records why the
   new wording was chosen: it makes the validated 1+1 scope and quantum-gravity domain explicit in package metadata. This update fulfills the
   `{.github/**/*,*.yml,*.yaml,*.toml,*.json}` tooling-alignment requirement for the `Cargo.toml` description edit.
-- Python support tooling now targets Python 3.13 across `.python-version`, `pyproject.toml`, `ty.toml`, and CI, and `just python-typecheck` runs
+- Python support tooling now targets Python 3.14 across `.python-version`, `pyproject.toml`, `ty.toml`, and CI, and `just python-typecheck` runs
   `uv run ty check scripts/ --error all`. This closes the issue #182 follow-up by making strict Ty checking the default local and CI contract while keeping
-  Python tooling aligned with sibling repositories that already use a 3.13 baseline.
+  every declared Python-version surface aligned with the repository minimum.
 
 ## Issue #162 CI And Security Alignment
 
@@ -213,7 +213,7 @@ and Dependabot review/merge sequence. Registry and Homebrew metadata confirm the
   benchmark targets without changing compiler flags and invalidating otherwise reusable Cargo build artifacts; Clippy and rustdoc retain their dedicated
   warning flags because they enforce separate lint and documentation surfaces.
 - Shared Python tooling aligns with `la-stack` at pytest 9.1.1, Ruff 0.16.1, Semgrep 1.172.0, and Ty 0.0.65. Notebook and build dependencies take the newer
-  applicable sibling minimums without changing this repository's Python 3.13 support baseline.
+  applicable sibling minimums without independently changing this repository's Python support baseline; the 6 August follow-up below raises that baseline.
 - Semgrep 1.172.0 still pins the MCP Python SDK to vulnerable version 1.23.3. Until Semgrep publishes its pending 1.28.1 dependency bump, uv overrides that
   transitive pin to MCP 1.28.1, matching Semgrep's upstream remediation and clearing all three affected transport and task-handler advisories. Remove the
   override when a released Semgrep version carries the fixed pin directly.
@@ -278,6 +278,17 @@ Issue #223 completes the uv alignment by making actionlint reuse the shared exac
 notebook JSON boundary now also requires every cell `metadata` field to be an object and parses `nbformat` as an actual JSON integer equal to 4, so values such
 as `4.0` and booleans cannot enter the trusted notebook model through Python's numeric equality and subclass behavior. Notebook discovery is captured before
 linting so `find` failures remain fatal while a successful empty discovery still reports that no notebooks were found.
+
+The 6 August follow-up reconciles the command layer with the installed Homebrew uv 0.12.2 release, raises the repository's Python minimum to 3.14, and refreshes
+the repository-managed Python environment from live uv package metadata. `.python-version`, package metadata and classifiers, Ruff, Ty, CI's shared interpreter
+file, script-facing documentation, and the uv lock all encode the same 3.14 baseline. The direct dependency updates are Packaging 26.3, Ty 0.0.69, and Polars
+1.43.2; the remaining direct development and notebook requirements were already current. The Semgrep 1.172.0 override remains on MCP 1.28.1 because Semgrep
+still has not published a compatible dependency update, while MCP 2.0.0 is a separate incompatible major release rather than a safe lockfile refresh. The
+`justfile` remains the single uv version source consumed by workflows. Ruff's 3.14 target also normalizes deferred annotations in support scripts and tests.
+Semgrep 1.172.0 cannot yet parse Python 3.14's optional parenthesis-free multi-exception handlers, so those handlers retain the valid parenthesized spelling
+with narrow `# fmt: skip` pragmas; this keeps strict Semgrep scans complete without lowering the declared Python baseline or excluding source files. A same-day
+Cargo tool refresh raises the repository's rumdl pin from 0.2.51 to the installed 0.2.52 release. CI continues to consume that single `justfile` variable
+through the shared version resolver, so no workflow-local rumdl literal changes.
 
 ## Issue #205 Orthogonal CI And Notebook Checker Alignment
 

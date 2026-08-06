@@ -1564,9 +1564,13 @@ fn insertion_label(
     causal_insertion_label(triangulation, face)
 }
 
-/// Checks coordinate-level backend preconditions for face subdivision.
-fn insertion_candidate_is_sampleable(point: &[f64; 2]) -> bool {
-    point.iter().all(|coordinate| coordinate.is_finite())
+/// Checks exact backend preconditions for face subdivision.
+fn insertion_candidate_is_sampleable(
+    triangulation: &CdtTriangulation2D,
+    face: &DelaunayFaceHandle,
+    point: &[f64; 2],
+) -> bool {
+    triangulation.geometry().can_subdivide_face(face, point)
 }
 
 /// Returns the previous and next labels around the toroidal time circle.
@@ -1644,12 +1648,14 @@ fn toroidal_insertion_candidate(
     })
 }
 
-/// Checks backend-local preconditions for the toroidal spacelike-link split.
-fn toroidal_insertion_candidate_is_sampleable(candidate: &ToroidalInsertionCandidate) -> bool {
-    candidate
-        .point
-        .iter()
-        .all(|coordinate| coordinate.is_finite())
+/// Checks exact backend preconditions for the first toroidal insertion edit.
+fn toroidal_insertion_candidate_is_sampleable(
+    triangulation: &CdtTriangulation2D,
+    candidate: &ToroidalInsertionCandidate,
+) -> bool {
+    triangulation
+        .geometry()
+        .can_subdivide_face(&candidate.face, &candidate.point)
 }
 
 /// Finds a CDT-valid inserted vertex label without topology-specific guards.
@@ -1825,9 +1831,11 @@ fn toroidal_removal_candidate(
 /// Checks whether collapsing a degree-3 vertex would duplicate an existing face.
 fn removal_candidate_is_sampleable(
     triangulation: &CdtTriangulation2D,
+    vertex: &DelaunayVertexHandle,
     neighbors: &[DelaunayVertexHandle; 3],
 ) -> bool {
     !face_exists_with_vertices(triangulation, neighbors)
+        && triangulation.geometry().can_collapse_vertex(vertex)
 }
 
 /// Checks backend-local preconditions for the toroidal flip-then-collapse move.
@@ -1982,7 +1990,7 @@ fn insertion_sites(
             continue;
         };
 
-        if insertion_candidate_is_sampleable(&point) {
+        if insertion_candidate_is_sampleable(triangulation, &face, &point) {
             visit(ProposalSite::FaceSubdivision { face, point, label });
         }
     }
@@ -2007,7 +2015,7 @@ fn toroidal_insertion_sites(
         let Some(insert) = toroidal_insertion_candidate(triangulation, edge, &adjacent) else {
             continue;
         };
-        if toroidal_insertion_candidate_is_sampleable(&insert) {
+        if toroidal_insertion_candidate_is_sampleable(triangulation, &insert) {
             visit(ProposalSite::ToroidalInsertion(insert));
         }
     }
@@ -2040,7 +2048,7 @@ fn removal_sites(triangulation: &CdtTriangulation2D, visit: &mut impl FnMut(Prop
         };
         geometric_candidate_seen = true;
         if removal_candidate_is_causal(triangulation, &vertex, &neighbors)
-            && removal_candidate_is_sampleable(triangulation, &neighbors)
+            && removal_candidate_is_sampleable(triangulation, &vertex, &neighbors)
         {
             visit(ProposalSite::VertexRemoval(vertex));
         }
@@ -2090,6 +2098,71 @@ mod tests {
         let backend = DelaunayBackend2D::from_triangulation(dt)
             .expect("test Delaunay square should validate");
         CdtTriangulation2D::from_labeled_delaunay(backend, 2, 2).expect("wrap square CDT")
+    }
+
+    /// Checks the exact immutable backend preflight used by one proposal site.
+    fn counted_site_is_backend_feasible(
+        triangulation: &CdtTriangulation2D,
+        site: &ProposalSite,
+    ) -> bool {
+        match site {
+            ProposalSite::EdgeFlip(edge) => triangulation.geometry().can_flip_edge(edge),
+            ProposalSite::FaceSubdivision { face, point, .. } => {
+                triangulation.geometry().can_subdivide_face(face, point)
+            }
+            ProposalSite::ToroidalInsertion(insert) => triangulation
+                .geometry()
+                .can_subdivide_face(&insert.face, &insert.point),
+            ProposalSite::VertexRemoval(vertex) => {
+                triangulation.geometry().can_collapse_vertex(vertex)
+            }
+            ProposalSite::ToroidalRemoval(remove) => {
+                triangulation.geometry().can_flip_edge(&remove.flip_edge)
+            }
+        }
+    }
+
+    /// Checks count/sampling identity and immutable backend feasibility on one fixture.
+    fn assert_counted_sites_match_backend_feasibility(triangulation: &CdtTriangulation2D) {
+        let mut system = ErgodicsSystem::with_seed(0x146);
+        let mut total_sites = 0;
+        for move_type in [
+            MoveType::Move22,
+            MoveType::Move13Add,
+            MoveType::Move31Remove,
+            MoveType::EdgeFlip,
+        ] {
+            let family = MoveSiteCache::collect_family(
+                triangulation,
+                move_type,
+                triangulation.instance_id(),
+                triangulation.metadata().modification_count(),
+            );
+            let counted = proposal_site_count(triangulation, move_type);
+            let sampled = system.select_proposal_site(triangulation, move_type);
+
+            assert_eq!(counted, family.sites.len(), "count drift for {move_type:?}");
+            assert_eq!(
+                sampled.site_count, counted,
+                "sampling drift for {move_type:?}"
+            );
+            assert_eq!(
+                sampled.site.is_some(),
+                counted > 0,
+                "sample presence drift for {move_type:?}"
+            );
+            for site in &family.sites {
+                assert!(
+                    counted_site_is_backend_feasible(triangulation, site),
+                    "counted {move_type:?} site {site:?} failed its immutable backend preflight"
+                );
+            }
+            total_sites += counted;
+        }
+        assert!(
+            total_sites > 0,
+            "representative fixture exposed no proposal sites"
+        );
     }
 
     #[test]
@@ -2661,6 +2734,63 @@ mod tests {
     }
 
     #[test]
+    fn exact_proposal_counts_match_backend_feasibility_on_open_and_toroidal_fixtures() {
+        let open = CdtTriangulation2D::from_cdt_strip(4, 3)
+            .expect("representative open-boundary CDT should build");
+        assert_counted_sites_match_backend_feasibility(&open);
+
+        let toroidal = CdtTriangulation2D::from_toroidal_cdt(4, 4)
+            .expect("representative toroidal CDT should build");
+        assert_counted_sites_match_backend_feasibility(&toroidal);
+    }
+
+    #[test]
+    fn exact_proposal_preflights_reject_coarse_but_infeasible_sites() {
+        let insertion = single_triangle();
+        let face = insertion
+            .geometry()
+            .faces()
+            .next()
+            .expect("triangle fixture should have one face");
+        let degenerate_point = [0.5_f64, 0.0];
+        assert!(
+            degenerate_point
+                .iter()
+                .all(|coordinate| coordinate.is_finite())
+        );
+        assert!(!insertion_candidate_is_sampleable(
+            &insertion,
+            &face,
+            &degenerate_point
+        ));
+
+        let removal = square_two_triangles();
+        let vertices: Vec<_> = removal.geometry().vertices().collect();
+        let vertex = vertices
+            .iter()
+            .find(|candidate| {
+                removal
+                    .geometry()
+                    .incident_edges(candidate)
+                    .is_ok_and(|edges| edges.len() == 3)
+            })
+            .expect("square fixture should have a diagonal endpoint");
+        let neighbors: Vec<_> = vertices
+            .iter()
+            .filter(|candidate| *candidate != vertex)
+            .cloned()
+            .collect();
+        let [neighbor_0, neighbor_1, neighbor_2] = neighbors.as_slice() else {
+            panic!("square fixture should have three alternate vertices");
+        };
+        let neighbors = [neighbor_0.clone(), neighbor_1.clone(), neighbor_2.clone()];
+        assert!(!face_exists_with_vertices(&removal, &neighbors));
+        assert!(!removal_candidate_is_sampleable(
+            &removal, vertex, &neighbors
+        ));
+    }
+
+    #[test]
     fn proposal_site_cache_records_no_site_self_loops_without_mutating() {
         let mut system = ErgodicsSystem::with_seed(11);
         let triangulation = single_triangle();
@@ -3027,6 +3157,7 @@ mod tests {
         ));
         assert!(!removal_candidate_is_sampleable(
             &triangulation,
+            v0,
             &replacement_vertices
         ));
     }

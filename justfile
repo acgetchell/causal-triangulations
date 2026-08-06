@@ -14,11 +14,11 @@ clippy_sarif_version := "0.8.0"
 dprint_version := "0.55.2"
 git_cliff_version := "2.13.1"
 just_version := "1.58.0"
-rumdl_version := "0.2.51"
+rumdl_version := "0.2.52"
 sarif_fmt_version := "0.8.0"
 taplo_version := "0.10.0"
 typos_version := "1.49.0"
-uv_version := "0.12.1"
+uv_version := "0.12.2"
 zizmor_version := "1.29.0"
 
 # Common cargo-llvm-cov arguments for all coverage runs.

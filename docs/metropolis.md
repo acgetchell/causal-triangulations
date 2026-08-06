@@ -148,6 +148,11 @@ Forward counts are therefore the cached set length, and forward sampling is unif
 triangulation, causing the next proposal to rebuild before sampling stale handles. Proposed-state reverse counts are computed from a fresh cache for the cloned
 proposed state using that same `(instance_id, modification_count)` validity check.
 
+Before a site enters that cache, the geometry adapter runs Delaunay 0.8's immutable k=1/k=2 feasibility validator for every primitive that can be checked on the
+current state. These exact deterministic preflights come from
+[`delaunay#419`](https://github.com/acgetchell/delaunay/issues/419) and avoid clone-and-try scans. They do not replace CDT's causal or topology checks, nor do
+they promise that the later primitive in a composite toroidal move or post-mutation CDT finalization cannot produce an ordinary self-loop rejection.
+
 This is the ordinary Metropolis-Hastings proposal-ratio correction: it uses the actual proposal kernel, not empirical acceptance counts from the run. Hastings'
 original Markov-chain sampling paper gives the general acceptance rule, and Brunekreef, Görlich, and Loll describe CDT Monte Carlo moves together with their
 detailed-balance equations. See [REFERENCES.md](../REFERENCES.md) for the full citations.

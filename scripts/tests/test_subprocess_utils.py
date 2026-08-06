@@ -9,11 +9,13 @@ their secure-by-default behavior while providing flexibility through kwargs.
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # Add scripts directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))

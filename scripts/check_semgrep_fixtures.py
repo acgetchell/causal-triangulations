@@ -1,7 +1,5 @@
 """Validate repository-owned Semgrep fixture annotations."""
 
-from __future__ import annotations
-
 import collections
 import json
 import os

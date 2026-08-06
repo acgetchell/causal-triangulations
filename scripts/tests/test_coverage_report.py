@@ -1,11 +1,14 @@
 """Tests for coverage_report.py XML loading diagnostics."""
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
 
 import pytest
 
 from coverage_report import coverage_entries, load_report
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_load_report_parse_error_includes_xml_diagnostic(tmp_path: Path) -> None:

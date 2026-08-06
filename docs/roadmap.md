@@ -58,9 +58,10 @@ polish that are useful but not required for the first DOI-backed foundation rele
 - Redesign public error shapes for ergonomic typed diagnostics
   ([#149](https://github.com/acgetchell/causal-triangulations/issues/149)). This should build on the current typed category enums by evaluating richer observed
   values, constraints, and matching patterns without blocking the v0.1.0 correctness work.
-- Use exact Delaunay flip-feasibility validators for proposal-site accounting once `delaunay#419` ships
-  ([#146](https://github.com/acgetchell/causal-triangulations/issues/146)). v0.1.0 should prove CDT's counted proposal sites match the sites sampled by the
-  proposal kernel; backend-provided immutable feasibility checks are post-release dependency-gated tightening that avoids duplicating Delaunay dry-run policy.
+- [x] Use exact Delaunay flip-feasibility validators for proposal-site accounting after `delaunay#419` shipped
+  ([#146](https://github.com/acgetchell/causal-triangulations/issues/146)). Representative open-boundary and toroidal regressions compare counted proposal
+  sites with the sampler denominator, while finite-but-degenerate insertion and non-collapsible removal fixtures verify that immutable backend preflights reject
+  candidates without adding clone-and-try work to production scans.
 
 ## Later Distribution Ergonomics
 
