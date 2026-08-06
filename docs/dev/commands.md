@@ -103,15 +103,15 @@ just ci
 
 This runs:
 
-- formatting checks
-- lint checks
-- repository-owned Semgrep rules
-- unit tests
-- integration tests
-- documentation builds
-- notebook output hygiene and headless execution
-- validated example runs
-- benchmark compilation
+- GitHub Actions, Markdown, JSON, TOML, YAML/CFF, Python, shell, and repository-owned Semgrep checks
+- production library/binary formatting, Clippy, and documentation builds
+- one release-profile nextest pass for library unit tests and integration-test crates
+- a separate rustdoc doctest bucket
+- notebook output hygiene, extracted-code checks, and fast headless execution
+- benchmark harness compilation and validated example runs
+
+The `ci` recipe is a flat union of these focused validators. It does not depend on broad `check`, `lint`, or `test-all` bundles. Each target class is compiled
+by the bucket that owns its validation.
 
 For heavier stabilization work, run the slow-test wrapper:
 
@@ -121,6 +121,15 @@ just ci-slow
 
 This runs the normal CI command and then feature-gated slow/stress tests through the repository `perf` Cargo profile. The slow suite includes large-scale
 toroidal debug probes, so optimized builds are part of the validation contract rather than an optional speed tweak.
+
+## Fast Validation Cycle
+
+Start with the smallest test selection that covers the change: a filtered library unit test, one rustdoc doctest filter, or one integration-test crate. Use
+the focused `test-unit`, `test-doc`, and `test-integration` recipes when the whole changed surface is the useful boundary.
+
+For final validation of non-core changes, compose each applicable bucket once, such as `just markdown-check`, `just python-check test-python`, or
+`just notebook-check`. For core Rust changes or an exact local simulation of GitHub validation, run `just ci` directly instead of first running overlapping
+broad bundles that `ci` will repeat.
 
 ## Semgrep
 
@@ -436,8 +445,10 @@ just publish-check
 | --------------------- | ------------------------ |
 | Run lints             | `just check`             |
 | Format code           | `just fix`               |
-| Run unit tests        | `just test`              |
+| Run unit tests        | `just test-unit`         |
+| Run unit + doctests   | `just test`              |
 | Run integration tests | `just test-integration`  |
+| Run broad Rust tests  | `just test-rust`         |
 | Run slow tests        | `just test-slow`         |
 | Run all tests         | `just test-all`          |
 | Run Python tests      | `just test-python`       |
@@ -453,12 +464,13 @@ just publish-check
 
 | Changed files | Command                                |
 | ------------- | -------------------------------------- |
-| `tests/`      | `just test-integration` (or `just ci`) |
-| `examples/`   | `just examples-validate`               |
-| `benches/`    | `just bench-compile`                   |
-| `src/`        | `just test`                            |
-| `scripts/`    | `just test-python`                     |
-| Any Rust      | `just doc-check`                       |
+| `tests/`      | `just test-integration` (or `just ci`)       |
+| `examples/`   | `just examples-validate`                     |
+| `benches/`    | `just bench-compile`                         |
+| `src/`        | `just test-unit test-doc` (or `just ci`)     |
+| `scripts/`    | `just python-check test-python`              |
+| `notebooks/`  | `just notebook-check`                        |
+| Any Rust      | `just doc-check`                             |
 
 ---
 

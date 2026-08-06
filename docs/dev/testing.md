@@ -164,6 +164,12 @@ Run standard tests:
 just test
 ```
 
+This composes the focused library-unit and rustdoc-doctest buckets. Run only library unit tests with:
+
+```bash
+just test-unit
+```
+
 Run integration tests:
 
 ```bash
@@ -183,6 +189,14 @@ Run all tests:
 
 ```bash
 just test-all
+```
+
+`test-all` uses `test-rust` for broad Rust correctness and then runs the Python support-script suite. Broad runnable Rust tests use one release-profile nextest
+pass for library unit tests plus integration-test crates; rustdoc doctests remain separate:
+
+```bash
+just test-rust-ci
+just test-doc
 ```
 
 Run Python tests:
@@ -229,14 +243,18 @@ Before proposing patches agents should run:
 just ci
 ```
 
-The `ci` recipe runs `check bench-compile test-all examples-validate notebook-check`, which enforces:
+The `ci` recipe directly composes the GitHub-equivalent leaf validators instead of depending on `check`, `lint`, or `test-all`. It enforces:
 
-- **check** (via `lint`): formatting, clippy, documentation builds, markdown, spelling, config validation (JSON, TOML, YAML, GitHub Actions)
-- **bench-compile**: benchmarks compile without local-package warnings under Cargo's `build.warnings = "deny"` policy
-- **test-all**: unit tests and integration tests via nextest, rustdoc doctests via `cargo test --doc`, and Python tests via pytest
-- **notebook-check**: Jupyter notebooks are output-clean, pass extracted-code Ruff and ty checks, and execute headlessly through the uv-managed notebook
+- **repository and configuration checks**: GitHub Actions, Markdown, spelling, JSON, TOML, YAML/CFF, Python, shell, and repository-owned Semgrep rules
+- **core Rust checks**: formatting, production library/binary Clippy, and documentation builds
+- **Rust correctness**: library unit tests and integration-test crates in one release-profile `test-rust-ci` nextest pass, plus separate rustdoc doctests
+- **Python correctness**: pytest over support scripts, including the reusable notebook checker
+- **notebooks**: source notebooks are output-clean, extracted code passes Ruff and ty, and the fast notebook set executes headlessly through the uv-managed
   environment
-- **examples-validate**: Cargo examples build once, then the compiled binaries run successfully with stable output markers
+- **benchmarks and examples**: benchmark harnesses compile without warnings, and Cargo examples build once before running with stable output markers
+
+For non-core changes, run the smallest relevant test or integration crate first and compose each focused final bucket once. For core Rust changes or exact
+GitHub-equivalent evidence, run `just ci` directly rather than pre-running broad bundles that select the same tests.
 
 ---
 
