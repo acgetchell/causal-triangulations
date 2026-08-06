@@ -6,6 +6,7 @@ use super::helpers::{action_for, proposed_delta_action, simplex_counts, validate
 use super::telemetry::{CdtProposalSiteRejection, ProposalStatistics};
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType, proposal_site_count};
+use crate::cdt::proposal_policy::CdtProposalPolicyView;
 use crate::errors::{CdtError, CdtResult, MetropolisMoveApplicationFailure};
 use crate::geometry::CdtTriangulation2D;
 use markov_chain_monte_carlo::{
@@ -442,6 +443,37 @@ impl CdtProposal {
         }
     }
 
+    /// Returns CDT's canonical borrowed policy view for one move family.
+    ///
+    /// This is the public inspection boundary for conventional and external
+    /// family policies. The returned view borrows `state` and this proposal's
+    /// versioned site cache, exposes no mutable geometry, and does not clone the
+    /// triangulation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtProposal, CdtResult, CdtTriangulation, MoveType,
+    /// };
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let state = CdtTriangulation::from_cdt_strip(4, 3)?;
+    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let view = proposal.policy_view(&state, MoveType::Move13Add);
+    /// assert_eq!(view.reverse_family(), MoveType::Move31Remove);
+    /// assert_eq!(view.offered_sites().len(), view.offered_site_count());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn policy_view<'a>(
+        &'a mut self,
+        state: &'a CdtTriangulation2D,
+        family: MoveType,
+    ) -> CdtProposalPolicyView<'a> {
+        self.moves.proposal_policy_view(state, family)
+    }
+
     /// Rebuilds a proposal planner from checkpointed ergodic-move state.
     ///
     /// Resumed simulations use this to hand the upstream sampler the exact
@@ -650,7 +682,7 @@ pub(crate) fn propose_concrete_plan(
         }
     };
     let delta_action = action_after - action_before;
-    let reverse_site_count = proposal_site_count(&proposed_state, reverse_move_type(move_type));
+    let reverse_site_count = proposal_site_count(&proposed_state, move_type.reverse());
 
     Ok(Some(CdtProposalPlan {
         move_type,
@@ -687,14 +719,4 @@ pub(crate) fn restore_checkpoint_state(
     target: &CdtTarget,
 ) -> Result<CdtTriangulation2D, McmcError> {
     Chain::from_checkpoint(checkpoint, target).map(Chain::into_state)
-}
-
-/// Returns the inverse CDT move family used for reverse proposal accounting.
-const fn reverse_move_type(move_type: MoveType) -> MoveType {
-    match move_type {
-        MoveType::Move22 => MoveType::Move22,
-        MoveType::Move13Add => MoveType::Move31Remove,
-        MoveType::Move31Remove => MoveType::Move13Add,
-        MoveType::EdgeFlip => MoveType::EdgeFlip,
-    }
 }

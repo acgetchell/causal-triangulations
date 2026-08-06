@@ -170,6 +170,51 @@ A CDT proposal is represented by an explicit local site selected from the curren
 4. Treat ordinary local or backend rejections as self-loop proposals, not hard failures.
 5. Score successful transitions with the Metropolis-Hastings proposal ratio for the actual proposal kernel.
 
+### Borrowed Proposal-Policy View
+
+`CdtProposal::policy_view()` and `ErgodicsSystem::proposal_policy_view()` expose the canonical offered-site universe without exposing Delaunay handles or a
+mutable triangulation. Each `CdtProposalPolicyView` is scoped to one move family so the conventional sampler can inspect only the selected family; an external
+policy can iterate `MoveType::REVERSIBLE_1P1` to inspect every family through the same boundary.
+
+The policy view and opaque site-ID types are available from `prelude::simulation`; `prelude::moves` remains focused on local move kernels, move families, and
+move statistics. `MoveType` intentionally appears in both scoped preludes because it identifies both kernel operations and simulation proposal families. The
+stable family order and identifiers are:
+
+| Family | Identifier | Reverse family |
+| ------ | ---------- | -------------- |
+| `Move22` | `move-2-2` | `Move22` |
+| `Move13Add` | `move-1-3-add` | `Move31Remove` |
+| `Move31Remove` | `move-3-1-remove` | `Move13Add` |
+| `EdgeFlip` | `edge-flip` | `EdgeFlip` |
+
+`Move22` and `EdgeFlip` remain distinct policy identifiers for compatibility with the conventional four-family distribution, although both use the same 2D
+k=2 flip kernel and therefore expose the same site universe.
+
+The view exposes the selected and reverse families, CDT topology, invariant-bearing simplex counts, borrowed slice sizes, the offered-site count, and an
+exact-size iterator of opaque `CdtProposalSiteId` values. Empty families return count zero and an empty iterator. IDs use deterministic ascending ordinals for
+an unchanged triangulation version; the ordinal is not a persistent geometry key and no private backend handle is part of the public contract.
+
+The view borrows both the triangulation and the versioned family cache, so Rust prevents state or cache mutation while inspection is active. Creating a view
+does not clone `CdtTriangulation2D`. Synchronizing an uncached family may allocate its canonical site vector, while subsequent counting and ID iteration
+allocate nothing. A detached site ID records triangulation identity and modification version: callers must validate it against a fresh view before reuse, and
+receive a typed foreign-state, stale-state, family-mismatch, or ordinal error when it is no longer valid. Accepted mutations make earlier IDs stale for that
+state; clones, deserialized values, and replacement triangulations have a different identity and reject those IDs as foreign.
+
+The conventional sampler now reads counts and selected private site descriptors through this view over `MoveSiteCache`; there is no second site-enumeration
+implementation for policy consumers.
+
+#### Offered Sites Versus Eligible Sites
+
+- An **offered site** passed the deterministic pre-mutation guards, can be sampled by the checked planner, and contributes to the proposal denominator below.
+  A later composite backend edit, allocation failure, or post-mutation CDT validation may still reject it as ordinary self-loop probability, as described
+  under [Ordinary Rejections](#ordinary-rejections).
+- An **eligible site**, also called an executable site, would satisfy a stronger contract: for an unchanged state, all deterministic backend mutation
+  preconditions and CDT postconditions needed by the move are known before sampling. This would support an executable-only action mask, although it still
+  could not guarantee resource availability.
+
+The current policy view exposes offered sites, not eligible sites. Proposal policies, including future learned policies, must therefore use its IDs and counts
+as the actual proposal support and must not interpret them as a guarantee that execution will succeed.
+
 For state `x`, move family `m`, and a sampleable site set `S_m(x)`, a uniformly sampled site contributes:
 
 ```text

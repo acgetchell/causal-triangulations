@@ -175,6 +175,8 @@ pub mod cdt {
     }
     /// User-facing CDT observable estimators.
     pub mod observables;
+    /// Borrowed proposal-policy inspection for validated 1+1 CDT states.
+    pub mod proposal_policy;
     /// Simulation result containers and measurement summaries.
     pub mod results;
     /// CDT triangulation state.
@@ -197,6 +199,9 @@ pub use cdt::metropolis::{
     MonteCarloStepOutcome, ProposalStatistics, RejectedProposalStepTelemetry, StepOutcome,
 };
 pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
+pub use cdt::proposal_policy::{
+    CdtProposalPolicyView, CdtProposalSiteId, CdtProposalSiteIdError, CdtProposalSiteIds,
+};
 pub use cdt::results::{Measurement, SimulationResultsBackend};
 pub use cdt::triangulation::{
     CdtMetadata, CdtSimplexCounts, CdtTriangulation, CdtValidationProfile, SimulationEvent,
@@ -377,7 +382,8 @@ pub mod prelude {
     ///
     /// This prelude intentionally contains only the move API. Combine it with
     /// `prelude::triangulation::*` and, for explicit Delaunay fixtures,
-    /// `prelude::geometry::*`.
+    /// `prelude::geometry::*`. Proposal-policy inspection types belong to
+    /// [`crate::prelude::simulation`].
     ///
     /// ```
     /// use causal_triangulations::prelude::moves::*;
@@ -436,6 +442,9 @@ pub mod prelude {
             CdtProposalInfo, CdtProposalPlan, CdtTarget, MetropolisAlgorithm, MetropolisConfig,
             MonteCarloStep, MonteCarloStepOutcome, ProposalStatistics,
             RejectedProposalStepTelemetry,
+        };
+        pub use crate::cdt::proposal_policy::{
+            CdtProposalPolicyView, CdtProposalSiteId, CdtProposalSiteIdError, CdtProposalSiteIds,
         };
         pub use crate::cdt::results::{Measurement, SimulationResultsBackend};
         pub use crate::cdt::triangulation::SimulationEvent;
