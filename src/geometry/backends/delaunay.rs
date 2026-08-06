@@ -3042,21 +3042,24 @@ mod tests {
             backend.subdivide_face(DelaunayFaceHandle { key: bogus_face }, &[0.25, 0.25]),
             Err(DelaunayError::InvalidFace { key }) if key == bogus_face,
         );
+    }
 
+    #[test]
+    fn boundary_edits_fail_exact_preflights() {
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
             .expect("labeled triangle should build");
-        let mut boundary_backend = validated_backend(dt);
-        let boundary_vertex = boundary_backend
+        let mut backend = validated_backend(dt);
+        let vertex = backend
             .vertices()
             .next()
             .expect("single triangle has boundary vertices");
-        assert!(!boundary_backend.can_collapse_vertex(&boundary_vertex));
-        let boundary_edge = boundary_backend
+        assert!(!backend.can_collapse_vertex(&vertex));
+        let edge = backend
             .edges()
             .next()
             .expect("single triangle has boundary edges");
         assert_matches!(
-            boundary_backend.flip_edge(boundary_edge),
+            backend.flip_edge(edge),
             Err(DelaunayError::NonFlippableEdge { reason, .. })
                 if reason == NonFlippableEdgeReason::NotInteriorFacet,
         );

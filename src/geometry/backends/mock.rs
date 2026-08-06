@@ -652,15 +652,12 @@ impl TriangulationMut for MockBackend {
     }
 
     fn can_collapse_vertex(&self, vertex: &Self::VertexHandle) -> bool {
-        self.vertices.contains_key(&vertex.0)
-            && self
-                .edges
-                .values()
-                .all(|&(v0, v1)| v0 != vertex.0 && v1 != vertex.0)
-            && self
-                .faces
-                .values()
-                .all(|vertices| !vertices.contains(&vertex.0))
+        if !self.vertices.contains_key(&vertex.0) {
+            return false;
+        }
+
+        // Mock removal only models isolated deletion, not an exact inverse k=1 collapse.
+        false
     }
 
     fn subdivide_face(
@@ -959,6 +956,7 @@ mod tests {
                 .expect("moved vertex should be queryable"),
             vec![4.0, 5.0]
         );
+        assert!(!backend.can_collapse_vertex(&vertex));
 
         let edge = backend
             .edges()

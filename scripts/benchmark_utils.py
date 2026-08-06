@@ -38,6 +38,8 @@ DEFAULT_REGRESSION_THRESHOLD = 7.5
 TRUSTED_BENCH_PROFILE = "perf"
 
 if TYPE_CHECKING:
+    _ArgumentParserSubparsers = argparse._SubParsersAction[argparse.ArgumentParser]  # noqa: SLF001
+
     from benchmark_models import (
         BenchmarkData,
         CircumspherePerformanceData,
@@ -57,6 +59,8 @@ if TYPE_CHECKING:
         run_safe_command,
     )
 else:
+    _ArgumentParserSubparsers = argparse._SubParsersAction  # noqa: SLF001
+
     try:
         # When executed as a script from scripts/
         from benchmark_models import (
@@ -2812,7 +2816,7 @@ class GitHubBaselineFetcher:
             raise RuntimeError(msg) from e
 
 
-def _add_benchmark_subcommands(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_benchmark_subcommands(subparsers: _ArgumentParserSubparsers) -> None:
     """Add benchmark-running subcommands."""
     gen_parser = subparsers.add_parser("generate-baseline", help="Generate performance baseline")
     gen_parser.add_argument("--dev", action="store_true", help="Use development mode with faster benchmark settings")
@@ -2847,7 +2851,7 @@ def _add_benchmark_subcommands(subparsers: argparse._SubParsersAction[argparse.A
     cmp_parser.set_defaults(validate_bench_timeout=True)
 
 
-def _add_local_baseline_subcommands(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_local_baseline_subcommands(subparsers: _ArgumentParserSubparsers) -> None:
     """Add subcommands that operate on existing baseline artifacts/files."""
     bb_parser = subparsers.add_parser("compare-baselines", help="Compare two baseline files (no benchmarks)")
     bb_parser.add_argument("--old", dest="old_baseline", type=Path, required=True, help="Path to the older baseline file")
@@ -2915,7 +2919,7 @@ def _add_local_baseline_subcommands(subparsers: argparse._SubParsersAction[argpa
     tags_parser.add_argument("--project-root", type=Path, help="Project root containing the git repo (directory containing Cargo.toml)")
 
 
-def _add_workflow_helper_subcommands(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_workflow_helper_subcommands(subparsers: _ArgumentParserSubparsers) -> None:
     """Add subcommands used by GitHub Actions workflows."""
     subparsers.add_parser("determine-tag", help="Determine tag name for baseline generation")
 
@@ -2930,7 +2934,7 @@ def _add_workflow_helper_subcommands(subparsers: argparse._SubParsersAction[argp
     artifact_parser.add_argument("--tag", type=str, required=True, help="Tag name to sanitize")
 
 
-def _add_regression_subcommands(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_regression_subcommands(subparsers: _ArgumentParserSubparsers) -> None:
     """Add regression-testing helper subcommands."""
     prepare_parser = subparsers.add_parser("prepare-baseline", help="Prepare baseline for regression testing")
     prepare_parser.add_argument("--baseline-dir", type=Path, default=Path("baseline-artifact"), help="Baseline artifact directory")
@@ -2967,7 +2971,7 @@ def _add_regression_subcommands(subparsers: argparse._SubParsersAction[argparse.
     subparsers.add_parser("regression-summary", help="Generate regression testing summary")
 
 
-def _add_performance_summary_subcommands(subparsers: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+def _add_performance_summary_subcommands(subparsers: _ArgumentParserSubparsers) -> None:
     """Add performance summary generation subcommands."""
     perf_summary_parser = subparsers.add_parser("generate-summary", help="Generate performance summary markdown")
     perf_summary_parser.add_argument("--output", type=Path, help="Output file path (defaults to benches/PERFORMANCE_RESULTS.md)")
