@@ -1635,7 +1635,7 @@ fn toroidal_insertion_candidate(
     }
 
     let face = adjacent.faces.0.clone();
-    let point = centroid(triangulation, &face)?;
+    let point = triangulation.geometry().face_barycenter(&face).ok()?;
     Some(ToroidalInsertionCandidate {
         edge,
         face,
@@ -1680,80 +1680,6 @@ fn causal_insertion_label(
         }
     }
     None
-}
-
-/// Reads a 2D vertex coordinate from the backend.
-fn vertex_point_2d(
-    triangulation: &CdtTriangulation2D,
-    vertex: &DelaunayVertexHandle,
-) -> Option<[f64; 2]> {
-    let coords = triangulation.geometry().vertex_coordinates(vertex).ok()?;
-    let [x, y] = coords.as_slice() else {
-        return None;
-    };
-    Some([*x, *y])
-}
-
-/// Computes a 2D face centroid for the `(1,3)` insertion point.
-///
-/// Returning `None` keeps malformed or non-triangular faces out of the mutation
-/// path instead of relying on the backend to reject them later.
-///
-/// TODO(acgetchell/delaunay#420): replace this local point-selection policy
-/// with a backend-owned simplex subdivision API once upstream Delaunay exposes
-/// one.
-fn centroid(triangulation: &CdtTriangulation2D, face: &DelaunayFaceHandle) -> Option<[f64; 2]> {
-    let vertices = triangulation.geometry().face_vertices(face).ok()?;
-    let [v0, v1, v2] = vertices.as_slice() else {
-        return None;
-    };
-    let coords = [
-        vertex_point_2d(triangulation, v0)?,
-        vertex_point_2d(triangulation, v1)?,
-        vertex_point_2d(triangulation, v2)?,
-    ];
-
-    if matches!(triangulation.metadata().topology(), CdtTopology::Toroidal) {
-        return toroidal_centroid(&coords, triangulation.geometry().periodic_domain()?);
-    }
-
-    Some([
-        (coords[0][0] + coords[1][0] + coords[2][0]) / 3.0,
-        (coords[0][1] + coords[1][1] + coords[2][1]) / 3.0,
-    ])
-}
-
-/// Computes a centroid in one periodic image, then wraps it back into the domain.
-fn toroidal_centroid(coords: &[[f64; 2]], domain: [f64; 2]) -> Option<[f64; 2]> {
-    let [reference, coord_1, coord_2] = coords else {
-        return None;
-    };
-    if domain
-        .iter()
-        .any(|period| !period.is_finite() || *period <= 0.0)
-    {
-        return None;
-    }
-
-    let mut centroid = *reference;
-    for coord in [coord_1, coord_2] {
-        for axis in 0..2 {
-            let period = domain[axis];
-            let mut unwrapped = coord[axis];
-            let delta = unwrapped - reference[axis];
-            if delta > period / 2.0 {
-                unwrapped -= period;
-            } else if delta < -period / 2.0 {
-                unwrapped += period;
-            }
-            centroid[axis] += unwrapped;
-        }
-    }
-
-    for axis in 0..2 {
-        centroid[axis] = (centroid[axis] / 3.0).rem_euclid(domain[axis]);
-    }
-    Some(centroid)
 }
 
 /// Returns the other endpoint of an edge if `vertex` is incident to it.
@@ -2048,7 +1974,7 @@ fn insertion_sites(
 
     let mut geometric_candidate_seen = false;
     for face in triangulation.geometry().faces() {
-        let Some(point) = centroid(triangulation, &face) else {
+        let Ok(point) = triangulation.geometry().face_barycenter(&face) else {
             continue;
         };
         geometric_candidate_seen = true;
@@ -2531,7 +2457,10 @@ mod tests {
             .faces()
             .next()
             .expect("triangle face");
-        let point = centroid(&triangulation, &face).expect("triangle centroid");
+        let point = triangulation
+            .geometry()
+            .face_barycenter(&face)
+            .expect("triangle barycenter");
         triangulation
             .subdivide_face(face, &point)
             .expect("subdivide fixture face");
@@ -2559,33 +2488,6 @@ mod tests {
             counts_before
         );
         assert!(triangulation.validate().is_ok());
-    }
-
-    #[test]
-    fn unwraps_toroidal_centroid() {
-        let point = toroidal_centroid(&[[0.0, 0.0], [3.0, 0.0], [3.0, 1.0]], [4.0, 3.0])
-            .expect("toroidal centroid");
-
-        assert_relative_eq!(point[0], 10.0 / 3.0, epsilon = 1e-12);
-        assert_relative_eq!(point[1], 1.0 / 3.0, epsilon = 1e-12);
-    }
-
-    #[test]
-    fn toroidal_centroid_wraps_across_both_periodic_seams() {
-        let point = toroidal_centroid(&[[3.9, 2.9], [0.1, 2.8], [0.2, 0.1]], [4.0, 3.0])
-            .expect("toroidal centroid across both seams");
-
-        assert_relative_eq!(point[0], 0.066_666_666_666_666_43, epsilon = 1e-12);
-        assert_relative_eq!(point[1], 2.933_333_333_333_333, epsilon = 1e-12);
-    }
-
-    #[test]
-    fn toroidal_centroid_handles_half_period_ties_deterministically() {
-        let point = toroidal_centroid(&[[0.0, 0.0], [2.0, 0.0], [2.0, 1.5]], [4.0, 3.0])
-            .expect("half-period centroid should remain defined");
-
-        assert_relative_eq!(point[0], 4.0 / 3.0, epsilon = 1e-12);
-        assert_relative_eq!(point[1], 0.5, epsilon = 1e-12);
     }
 
     #[test]
