@@ -63,7 +63,20 @@ uv run coverage_report --help
 ```
 
 `coverage-report` summarizes the Cobertura XML produced by `just coverage-ci`.
-`notebook-check` inspects `.ipynb` files, rejects committed outputs, and runs Ruff and ty over extracted code cells.
+
+The notebook checker discovers `notebooks/**/*.ipynb` when no paths are supplied, validates notebook JSON, compiles code cells with cell-aware diagnostics,
+rejects committed outputs/execution counts, and runs Ruff and ty over extracted code:
+
+```bash
+just notebook-lint
+just notebook-check
+just notebook-check-slow
+just notebook-output-check
+uv run --group notebooks notebook-check --summary --repo-root .
+```
+
+`just notebook-check` executes only the fast notebook set and writes executed notebooks/artifacts under `target/notebooks`; the slow recipe adds the heavier
+analysis-cache notebook. `notebook-output-check` reuses the same JSON and output-hygiene implementation while skipping extracted-code tools.
 
 ## Shell helpers
 

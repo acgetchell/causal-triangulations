@@ -107,6 +107,15 @@ def parse_positive_int(value: str) -> int:
     return parsed
 
 
+def resolve_repo_root(path: Path) -> Path:
+    """Resolve and validate the repository root path."""
+    repo_root = path.resolve()
+    if not repo_root.is_dir():
+        msg = f"repository root does not exist or is not a directory: {repo_root}"
+        raise FileNotFoundError(msg)
+    return repo_root
+
+
 def parse_cell_source(source: Any, *, path: Path, index: int) -> str:
     """Parse a notebook cell source as joined text."""
     if isinstance(source, list):
@@ -134,9 +143,9 @@ def parse_execution_count(value: Any, *, path: Path, index: int) -> int | None:
     """Parse a notebook code-cell execution count."""
     if value is None:
         return None
-    if isinstance(value, int):
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
         return value
-    msg = f"{path}: cell {index}: execution_count must be an integer or null"
+    msg = f"{path}: cell {index}: execution_count must be a nonnegative integer or null"
     raise TypeError(msg)
 
 
@@ -199,6 +208,14 @@ def load_notebook(path: Path) -> NotebookDocument:
         nbformat_minor=nbformat_minor,
         cells=tuple(parse_notebook_cell(cell, path=path, index=index) for index, cell in enumerate(cells, start=1)),
     )
+
+
+def discover_notebooks(repo_root: Path) -> list[Path]:
+    """Return source notebooks under the conventional notebooks directory."""
+    notebook_root = repo_root / "notebooks"
+    if not notebook_root.is_dir():
+        return []
+    return sorted(path for path in notebook_root.glob("**/*.ipynb") if ".ipynb_checkpoints" not in path.parts)
 
 
 def code_cells(notebook: NotebookDocument) -> list[NotebookCell]:
@@ -355,7 +372,7 @@ def extract_code(notebook: NotebookDocument) -> CodeSnapshot:
     return CodeSnapshot(source="".join(chunks), line_to_cell=line_to_cell)
 
 
-def ruff_lint_diagnostics(path: Path, notebook: NotebookDocument) -> list[Diagnostic]:
+def ruff_lint_diagnostics(path: Path, notebook: NotebookDocument, project_root: Path) -> list[Diagnostic]:
     """Run Ruff lint checks on extracted notebook code when Ruff is available."""
     snapshot = extract_code(notebook)
     command = [
@@ -371,6 +388,7 @@ def ruff_lint_diagnostics(path: Path, notebook: NotebookDocument) -> list[Diagno
         result = run_safe_command(
             command[0],
             command[1:],
+            cwd=project_root,
             input=snapshot.source,
             timeout=30,
             check=False,
@@ -399,7 +417,7 @@ def ruff_lint_diagnostics(path: Path, notebook: NotebookDocument) -> list[Diagno
     return diagnostics
 
 
-def ruff_format_diagnostics(path: Path, notebook: NotebookDocument) -> list[Diagnostic]:
+def ruff_format_diagnostics(path: Path, notebook: NotebookDocument, project_root: Path) -> list[Diagnostic]:
     """Run Ruff format check on extracted notebook code when Ruff is available."""
     snapshot = extract_code(notebook)
     command = ["ruff", "format", "--check", "--stdin-filename", f"{path.stem}_notebook.py", "-"]
@@ -407,6 +425,7 @@ def ruff_format_diagnostics(path: Path, notebook: NotebookDocument) -> list[Diag
         result = run_safe_command(
             command[0],
             command[1:],
+            cwd=project_root,
             input=snapshot.source,
             timeout=30,
             check=False,
@@ -441,6 +460,7 @@ def ty_diagnostics(path: Path, notebook: NotebookDocument, project_root: Path) -
             result = run_safe_command(
                 command[0],
                 command[1:],
+                cwd=project_root,
                 timeout=30,
                 check=False,
             )
@@ -488,19 +508,20 @@ def code_cell_diagnostics(path: Path, notebook: NotebookDocument, options: LintO
 def external_tool_diagnostics(path: Path, notebook: NotebookDocument, options: LintOptions) -> list[Diagnostic]:
     """Return diagnostics from Ruff and ty checks over extracted notebook code."""
     diagnostics: list[Diagnostic] = []
+    project_root = options.project_root or Path.cwd()
     if options.run_ruff or options.run_format:
         if shutil.which("ruff") is None:
             diagnostics.append(Diagnostic("error", 0, "ruff is required for notebook linting; run through `uv run` or install Ruff"))
         else:
             if options.run_ruff:
-                diagnostics.extend(ruff_lint_diagnostics(path, notebook))
+                diagnostics.extend(ruff_lint_diagnostics(path, notebook, project_root))
             if options.run_format:
-                diagnostics.extend(ruff_format_diagnostics(path, notebook))
+                diagnostics.extend(ruff_format_diagnostics(path, notebook, project_root))
     if options.run_ty:
         if shutil.which("ty") is None:
             diagnostics.append(Diagnostic("error", 0, "ty is required for notebook linting; run through `uv run` or install ty"))
         else:
-            diagnostics.extend(ty_diagnostics(path, notebook, options.project_root or Path.cwd()))
+            diagnostics.extend(ty_diagnostics(path, notebook, project_root))
     return diagnostics
 
 
@@ -542,6 +563,35 @@ def execute(path: Path, repo_root: Path, timeout: int) -> None:
     print(f"OK executed {path}")
 
 
+def lint_notebooks(paths: list[Path], options: LintOptions) -> int:
+    """Lint every notebook and preserve diagnostics for later paths after a failure."""
+    status = 0
+    for path in paths:
+        try:
+            result = lint(path, options)
+        except (OSError, TypeError, ValueError) as error:
+            print(f"{path}: notebook: error: {error}", file=sys.stderr)
+            status = 1
+            continue
+        status = max(status, result)
+        if result == 0:
+            print(f"OK linted {path}")
+    return status
+
+
+def execute_notebooks(paths: list[Path], repo_root: Path, timeout: int) -> None:
+    """Execute every selected notebook in order."""
+    for path in paths:
+        execute(path, repo_root, timeout)
+
+
+def selected_notebooks(paths: list[Path], repo_root: Path) -> list[Path]:
+    """Return explicit notebook paths or discover all source notebooks."""
+    if paths:
+        return [path if path.is_absolute() else repo_root / path for path in paths]
+    return discover_notebooks(repo_root)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -553,35 +603,41 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="validate JSON, compile code cells, run Ruff and ty when available, and report common notebook issues",
     )
     mode.add_argument("--execute", action="store_true", help="execute the notebook in memory")
-    parser.add_argument("notebook", type=Path)
+    parser.add_argument("notebooks", nargs="*", type=Path, help="notebooks to check; defaults to notebooks/**/*.ipynb")
     parser.add_argument("--allow-outputs", action="store_true", help="do not fail lint when code cells contain outputs or execution counts")
     parser.add_argument("--strict", action="store_true", help="treat warning diagnostics as lint failures")
     parser.add_argument("--no-ruff", action="store_true", help="skip Ruff lint checks for extracted notebook code")
     parser.add_argument("--no-format", action="store_true", help="skip Ruff format checks for extracted notebook code")
     parser.add_argument("--no-ty", action="store_true", help="skip ty checks for extracted notebook code")
-    parser.add_argument("--repo-root", type=Path, default=Path.cwd(), help="working directory for execution")
+    parser.add_argument("--repo-root", type=Path, default=Path.cwd(), help="repository root for discovery and execution")
     parser.add_argument("--timeout", type=parse_positive_int, default=120, help="per-cell execution timeout in seconds")
     return parser.parse_args(argv)
 
 
 def run(args: argparse.Namespace) -> int:
     """Run notebook checker actions for parsed arguments."""
+    repo_root = resolve_repo_root(args.repo_root)
+    paths = selected_notebooks(args.notebooks, repo_root)
+    if not paths:
+        print("No notebooks found.")
+        return 0
     if args.summary:
-        summarize(args.notebook)
+        for path in paths:
+            summarize(path)
         return 0
     if args.lint:
-        return lint(
-            args.notebook,
+        return lint_notebooks(
+            paths,
             LintOptions(
                 allow_outputs=args.allow_outputs,
                 strict=args.strict,
                 run_ruff=not args.no_ruff,
                 run_format=not args.no_format,
                 run_ty=not args.no_ty,
-                project_root=args.repo_root,
+                project_root=repo_root,
             ),
         )
-    execute(args.notebook, args.repo_root, args.timeout)
+    execute_notebooks(paths, repo_root, args.timeout)
     return 0
 
 

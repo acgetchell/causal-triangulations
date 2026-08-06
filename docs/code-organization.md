@@ -17,6 +17,8 @@ This document lists the files checked into the repository and summarizes the arc
 
 ```text
 causal-triangulations/
+├── .config/
+│   └── nextest.toml
 ├── .github/
 │   ├── actions/
 │   │   └── setup-just/
@@ -86,6 +88,7 @@ causal-triangulations/
 │   │   ├── test_benchmark_utils.py
 │   │   ├── test_coverage_report.py
 │   │   ├── test_hardware_utils.py
+│   │   ├── test_notebook_check.py
 │   │   ├── test_postprocess_changelog.py
 │   │   ├── test_subprocess_utils.py
 │   │   └── test_tag_release.py

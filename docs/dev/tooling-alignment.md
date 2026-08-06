@@ -279,6 +279,28 @@ notebook JSON boundary now also requires every cell `metadata` field to be an ob
 as `4.0` and booleans cannot enter the trusted notebook model through Python's numeric equality and subclass behavior. Notebook discovery is captured before
 linting so `find` failures remain fatal while a successful empty discovery still reports that no notebooks were found.
 
+## Issue #205 Orthogonal CI And Notebook Checker Alignment
+
+Issue #205 compares CDT's validation shape with the completed `markov-chain-monte-carlo` issue #95 implementation while preserving CDT's stronger notebook
+execution policy. The shared pieces are the flat GitHub-equivalent CI union, a release-profile nextest bucket for runnable Rust tests, focused changed-surface
+recipes, and a reusable notebook parser/linter. Delaunay's current notebook bucket remains intentionally lint-only, whereas CDT continues to execute the
+quickstart and visualization notebooks in routine CI and reserves the analysis-cache notebook for `notebook-check-slow`.
+
+- `just ci` names each distinct validator directly instead of reaching them through `check`, `lint`, or `test-all`. This keeps Markdown, configuration,
+  Python, notebooks, production Rust, runnable Rust tests, doctests, benchmarks, and examples independently selectable and avoids hidden target-class overlap.
+- `test-rust-ci` runs library unit tests and integration-test crates together with
+  `cargo nextest run --release --profile ci --lib --tests --verbose`; `test-rust` adds the separate rustdoc bucket because nextest does not execute doctests.
+  `test-unit`, `test-doc`, and `test-integration` remain debug-profile focused recipes for changed-surface work, with `test-lib` retained as a compatibility
+  alias. `.config/nextest.toml` defines the named CI profile with no retries, non-fail-fast execution, immediate final failure output, and a bounded slow-test
+  timeout so the command behaves consistently on every platform.
+- Default Clippy validation now covers production library and binary targets. The former all-target sweep remains available as `clippy-all-targets`, outside
+  `just ci`, because tests, examples, and benchmarks already have focused validators that compile their own target classes.
+- `scripts/notebook_check.py` now owns notebook discovery, JSON parsing, cell compilation, output hygiene, extracted-code Ruff/ty diagnostics, and multi-file
+  failure reporting. `notebook-output-check` calls the same checker with external-code checks disabled instead of maintaining a second `jq` implementation.
+  Just continues to own launch behavior, the fast/slow execution sets, output placement under `target/notebooks`, and explicit source-output cleanup.
+- No workflow or tool-version changes are needed: the existing platform matrix already delegates to `just ci`, and the pinned cargo-nextest/uv environment
+  provides every command used by the standardized buckets. The new nextest file supplies repository-owned profile policy rather than changing a tool pin.
+
 ## Deferred Updates
 
 These were evaluated but not ported in this pass:

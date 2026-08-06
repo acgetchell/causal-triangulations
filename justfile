@@ -286,10 +286,10 @@ check: lint
 check-fast:
     cargo check
 
-# CI simulation: comprehensive validation (matches .github/workflows/ci.yml).
-# Rust unit/integration tests use nextest; doctests remain on cargo test because
-# nextest does not execute rustdoc doctests.
-ci: check bench-compile test-all examples-validate notebook-check
+# CI simulation: flat union of GitHub-equivalent focused validators.
+# Runnable Rust unit and integration tests share one release-profile nextest pass;
+# rustdoc doctests remain separate because nextest does not execute them.
+ci: action-lint zizmor markdown-check spell-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check test-python notebook-check shell-check semgrep semgrep-test fmt-check clippy doc-check test-rust-ci test-doc bench-compile examples-validate
     @echo "🎯 CI checks complete!"
 
 # CI with performance baseline
@@ -312,8 +312,12 @@ clean:
     rm -rf coverage_report
     rm -rf coverage
 
-# Code quality and formatting
+# Core production Rust linting used by default validation gates.
 clippy:
+    cargo clippy --workspace --all-features --lib --bins -- -D warnings -W clippy::pedantic -W clippy::nursery -W clippy::cargo
+
+# Optional broad Clippy sweep; focused CI buckets compile tests, examples, and benches.
+clippy-all-targets:
     cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic -W clippy::nursery -W clippy::cargo
 
 # Pre-commit workflow: comprehensive validation (checks + tests + release + benches)
@@ -383,14 +387,17 @@ help-workflows:
     @echo "  just coverage-ci       # Generate coverage for CI (XML)"
     @echo "  just examples          # Run all example scripts"
     @echo "  just examples-validate # Run examples and validate stable output markers"
-    @echo "  just test              # Lib and doc tests only (fast, used by CI)"
-    @echo "  just test-all          # All tests (lib + doc + integration + Python)"
+    @echo "  just test              # Focused unit and doctest buckets"
+    @echo "  just test-all          # Broad Rust and Python tooling tests"
     @echo "  just test-cli          # CLI integration tests only"
     @echo "  just test-examples     # Compile all examples as tests"
     @echo "  just test-integration  # Integration tests (tests/)"
     @echo "  just test-python       # Python tests only (pytest)"
     @echo "  just test-release      # All tests in release mode"
+    @echo "  just test-rust         # Broad release Rust tests plus doctests"
+    @echo "  just test-rust-ci      # Release unit and integration tests in one nextest pass"
     @echo "  just test-slow         # Feature-gated slow integration tests"
+    @echo "  just test-unit         # Focused library unit tests"
     @echo ""
     @echo "Quality Check Groups:"
     @echo "  just lint          # All linting (code + docs + config)"
@@ -429,7 +436,9 @@ help-workflows:
     @echo ""
     @echo "Running:"
     @echo "  just notebook         # Launch the quickstart notebook with uv-managed dependencies"
-    @echo "  just notebook-check   # Lint, check output hygiene, and execute notebooks headlessly"
+    @echo "  just notebook-lint    # Validate JSON, output hygiene, and extracted Python"
+    @echo "  just notebook-check   # Lint all notebooks and execute the fast notebook set"
+    @echo "  just notebook-check-slow # Include the explicitly configured heavy notebook"
     @echo "  just notebook-clear-outputs     # Clear outputs from the quickstart notebook"
     @echo "  just notebook-clear-outputs-all # Clear outputs from every notebook"
     @echo "  just notebook-execute # Execute the quickstart notebook headlessly for CI/HPC"
@@ -567,35 +576,10 @@ notebook-execute-slow output_dir="target/notebooks": _ensure-uv
     MPLBACKEND=Agg IPYTHONDIR="$output_path/.ipython" MPLCONFIGDIR="$output_path/.matplotlib" uv run --group notebooks jupyter nbconvert --execute --ExecutePreprocessor.timeout=1800 --ExecutePreprocessor.shutdown_kernel=immediate --to notebook --output-dir "{{ output_dir }}" notebooks/02_analysis_caches.ipynb
 
 notebook-lint: _ensure-uv
-    #!/usr/bin/env bash
-    set -euo pipefail
-    notebooks="$(find notebooks -type f -name '*.ipynb' | sort)"
-    if [ -z "$notebooks" ]; then
-        echo "No notebooks found to lint."
-        exit 0
-    fi
-    while IFS= read -r notebook; do
-        uv run --group notebooks notebook-check --lint "$notebook" --repo-root .
-    done <<< "$notebooks"
+    uv run --group notebooks notebook-check --lint --repo-root .
 
-notebook-output-check: _ensure-jq
-    #!/usr/bin/env bash
-    set -euo pipefail
-    found=0
-    violations=0
-    while IFS= read -r notebook; do
-        found=1
-        jq empty "$notebook"
-        dirty_cells="$(jq '[.cells[] | select(.cell_type == "code") | select((.execution_count != null) or (((.outputs // []) | length) > 0))] | length' "$notebook")"
-        if [ "$dirty_cells" -gt 0 ]; then
-            printf '%s: %s code cell(s) have outputs or execution counts\n' "$notebook" "$dirty_cells" >&2
-            violations=1
-        fi
-    done < <(find notebooks -type f -name '*.ipynb' | sort)
-    if [ "$found" -eq 0 ]; then
-        echo "No notebooks found to check."
-    fi
-    exit "$violations"
+notebook-output-check: _ensure-uv
+    uv run --group notebooks notebook-check --lint --repo-root . --no-ruff --no-format --no-ty
 
 notebook-setup: _ensure-uv
     uv sync --group notebooks
@@ -1010,11 +994,11 @@ tag version: python-sync
 tag-force version: python-sync
     uv run tag-release {{ version }} --force
 
-# Testing: fast tests (lib via nextest + rustdoc doctests via cargo test)
-test: test-lib test-doc
+# Focused local Rust buckets: unit tests plus rustdoc doctests.
+test: test-unit test-doc
 
-# Testing: comprehensive suite (Rust runnable tests via nextest + doctests + Python)
-test-all: test test-integration test-python
+# Broad Rust correctness plus Python tooling tests.
+test-all: test-rust test-python
     @echo "✅ All tests passed!"
 
 test-cli: _ensure-cargo-nextest
@@ -1030,7 +1014,19 @@ test-examples: _ensure-cargo-nextest
 test-integration: _ensure-cargo-nextest
     cargo nextest run --tests --verbose
 
-test-lib: _ensure-cargo-nextest
+# Backward-compatible alias for the former recipe name.
+test-lib: test-unit
+
+# Broad Rust test workflow; doctests remain a separate cargo-test bucket.
+test-rust: test-rust-ci test-doc
+    @echo "✅ Rust tests passed!"
+
+# Broad release-profile Rust CI bucket: lib unit and integration tests together.
+test-rust-ci: _ensure-cargo-nextest
+    cargo nextest run --release --profile ci --lib --tests --verbose
+
+# Focused library unit tests for changed-surface validation.
+test-unit: _ensure-cargo-nextest
     cargo nextest run --lib --verbose
 
 test-python: _ensure-uv
