@@ -892,7 +892,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///     ])?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -920,7 +920,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///     ])?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -958,7 +958,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///     ])?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;

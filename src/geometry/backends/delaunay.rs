@@ -33,10 +33,6 @@ type RawTriangulation<VertexData, SimplexData, const D: usize> =
 type RawVertex<VertexData, const D: usize> = Vertex<VertexData, D>;
 /// Upstream stable mesh-interchange value used by CDT summary exports.
 pub(crate) type DelaunayMeshExport<const D: usize> = MeshExport<D>;
-type MutationSnapshot<VertexData, SimplexData, const D: usize> = (
-    RawTriangulation<VertexData, SimplexData, D>,
-    HashMap<EdgeKey, FacetHandle>,
-);
 
 /// Delaunay backend wrapping the delaunay crate's triangulation (f64 coordinates).
 ///
@@ -615,9 +611,9 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
         v1: VertexKey,
         dt_before: RawTriangulation<VertexData, SimplexData, D>,
         facets_before: HashMap<EdgeKey, FacetHandle>,
-    ) -> Result<(EdgeKey, MutationSnapshot<VertexData, SimplexData, D>), DelaunayError> {
+    ) -> Result<EdgeKey, DelaunayError> {
         match self.dt.edge_key(v0, v1) {
-            Ok(key) => Ok((key, (dt_before, facets_before))),
+            Ok(key) => Ok(key),
             Err(err) => {
                 self.restore_mutation_snapshot(dt_before, facets_before);
                 Err(DelaunayError::UnexpectedFlipOutput {
@@ -641,33 +637,33 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
             })
     }
 
-    /// Validates a completed backend mutation and restores the previous snapshot on failure.
+    /// Validates embedding after a mutation without an upstream realization postcondition.
     ///
-    /// This keeps local edit APIs from publishing geometry that violates the evolved-state
-    /// Level 1-3 structural contract.
-    fn validate_mutation_or_restore(
+    /// High-level upstream bistellar flips already run cumulative Level 1-4
+    /// realization validation transactionally and therefore do not call this
+    /// helper. Other mutation paths are checked here so every successful backend
+    /// edit has the same postcondition without duplicating whole-mesh scans.
+    fn validate_embedding_or_restore(
         &mut self,
         dt_before: RawTriangulation<VertexData, SimplexData, D>,
         facets_before: HashMap<EdgeKey, FacetHandle>,
         operation: DelaunayOperation,
         target: impl Display,
     ) -> Result<(), DelaunayError> {
-        if let Err(err) = self.validate_structural() {
+        if let Err(err) = self.validate_embedding() {
             self.restore_mutation_snapshot(dt_before, facets_before);
             return Err(match err {
                 DelaunayError::ValidationFailed { level, detail } => {
                     DelaunayError::ValidationFailed {
                         level,
                         detail: format!(
-                            "{operation} produced invalid structural geometry for {target}: {detail}"
+                            "{operation} produced invalid geometry for {target}: {detail}"
                         ),
                     }
                 }
                 other => DelaunayError::ValidationFailed {
-                    level: DelaunayValidationLevel::Three,
-                    detail: format!(
-                        "{operation} produced invalid structural geometry for {target}: {other}"
-                    ),
+                    level: DelaunayValidationLevel::Four,
+                    detail: format!("{operation} produced invalid geometry for {target}: {other}"),
                 },
             });
         }
@@ -688,7 +684,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
 
     /// Creates a Delaunay backend from an existing validated Delaunay triangulation.
     ///
-    /// The input is validated with the upstream Level 1-4 Delaunay validator before
+    /// The input is validated with the upstream Level 1-5 Delaunay validator before
     /// the backend is returned, so public callers cannot wrap malformed or
     /// non-Delaunay connectivity.
     ///
@@ -709,7 +705,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///         ([0.5, 1.0], 1),
     ///     ])
     ///     .map_err(|err| DelaunayError::ValidationFailed {
-    ///         level: DelaunayValidationLevel::Four,
+    ///         level: DelaunayValidationLevel::Five,
     ///         detail: err.to_string(),
     ///     })?;
     ///
@@ -744,7 +740,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///         ([0.5, 1.0], 1),
     ///     ])
     ///     .map_err(|err| DelaunayError::ValidationFailed {
-    ///         level: DelaunayValidationLevel::Four,
+    ///         level: DelaunayValidationLevel::Five,
     ///         detail: err.to_string(),
     ///     })?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt)?;
@@ -762,8 +758,9 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// Check if the triangulation is valid and satisfies the Delaunay property.
     ///
     /// Uses the upstream cumulative validation (`DelaunayTriangulation::validate`) which
-    /// checks neighbor pointer consistency, Euler characteristic, coherent orientation
-    /// (Levels 1–3) and the Delaunay in-sphere property (Level 4).
+    /// checks structural and topological validity (Levels 1–3), straight-line
+    /// embedding validity (Level 4), and the Delaunay empty-circumsphere property
+    /// (Level 5).
     ///
     /// # Examples
     ///
@@ -777,7 +774,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///         ([0.5, 1.0], 1),
     ///     ])
     ///     .map_err(|err| DelaunayError::ValidationFailed {
-    ///         level: DelaunayValidationLevel::Four,
+    ///         level: DelaunayValidationLevel::Five,
     ///         detail: err.to_string(),
     ///     })?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt)?;
@@ -793,14 +790,14 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// Validates the triangulation with the upstream full Delaunay validator.
     ///
     /// This delegates to [`DelaunayTriangulation::validate`], which performs
-    /// the cumulative Level 1-4 checks: neighbor pointer consistency, Euler
-    /// characteristic, coherent orientation, and the Delaunay in-sphere
+    /// the cumulative Level 1-5 checks: structural and topological validity,
+    /// straight-line embedding validity, and the Delaunay empty-circumsphere
     /// predicate.
     ///
     /// # Errors
     ///
     /// Returns [`DelaunayError::ValidationFailed`] with the upstream diagnostic
-    /// when any Level 1-4 validation check fails.
+    /// when any Level 1-5 validation check fails.
     ///
     /// # Examples
     ///
@@ -814,7 +811,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///         ([0.5, 1.0], 1),
     ///     ])
     ///     .map_err(|err| DelaunayError::ValidationFailed {
-    ///         level: DelaunayValidationLevel::Four,
+    ///         level: DelaunayValidationLevel::Five,
     ///         detail: err.to_string(),
     ///     })?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt)?;
@@ -826,6 +823,49 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
         self.dt
             .validate()
             .map_err(|err| DelaunayError::ValidationFailed {
+                level: DelaunayValidationLevel::Five,
+                detail: err.to_string(),
+            })
+    }
+
+    /// Validates the straight-line embedding without requiring Delaunay-ness.
+    ///
+    /// This delegates to the upstream cumulative Level 1-4 realization validator.
+    /// It checks structural and topological validity, rejects degenerate maximal
+    /// simplices, and rejects intersections outside shared faces. It deliberately
+    /// omits the Level 5 empty-circumsphere predicate so evolved CDT states can be
+    /// geometrically safe without remaining Delaunay.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DelaunayError::ValidationFailed`] with the upstream diagnostic
+    /// when any Level 1-4 embedding validation check fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::*;
+    ///
+    /// fn main() -> Result<(), DelaunayError> {
+    ///     let dt = build_delaunay2_with_data(&[
+    ///         ([0.0, 0.0], 0_u32),
+    ///         ([1.0, 0.0], 0),
+    ///         ([0.5, 1.0], 1),
+    ///     ])
+    ///     .map_err(|err| DelaunayError::ValidationFailed {
+    ///         level: DelaunayValidationLevel::Five,
+    ///         detail: err.to_string(),
+    ///     })?;
+    ///     let backend = DelaunayBackend2D::from_triangulation(dt)?;
+    ///     backend.validate_embedding()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn validate_embedding(&self) -> Result<(), DelaunayError> {
+        self.dt
+            .as_triangulation()
+            .validate_realization()
+            .map_err(|err| DelaunayError::ValidationFailed {
                 level: DelaunayValidationLevel::Four,
                 detail: err.to_string(),
             })
@@ -835,11 +875,9 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///
     /// This delegates to the upstream triangulation validator, which performs
     /// cumulative Level 1-3 TDS, topology, and manifold checks without
-    /// requiring the Level 4 empty-circumsphere predicate. CDT layers its own
-    /// topology, foliation, causality, and classification checks above this
-    /// structural backend check for evolved states, because ergodic CDT moves
-    /// are not expected to preserve Delaunay-ness. Use
-    /// [`Self::validate_delaunay`] for initialization-grade Level 1-4
+    /// requiring Level 4 embedding validity or the Level 5 empty-circumsphere
+    /// predicate. Use [`Self::validate_embedding`] for evolved-state geometric
+    /// safety and [`Self::validate_delaunay`] for initialization-grade Level 1-5
     /// validation.
     ///
     /// # Errors
@@ -861,7 +899,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///     ])?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -902,7 +940,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///     ])?;
     ///     let mut backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -948,7 +986,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///     ])?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -1017,7 +1055,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///     ])?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -1057,7 +1095,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///     ])?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -1105,7 +1143,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///     ])?;
     ///     let mut backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -1166,7 +1204,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///     ])?;
     ///     let mut backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -1451,8 +1489,8 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationQ
 
         // Use structural/topological validation via the
         // Triangulation layer (neighbor pointers, Euler characteristic, coherent
-        // orientation) WITHOUT the Level 4 Delaunay property check.
-        // Use is_delaunay() for the full Levels 1–4 check.
+        // orientation) without Level 4 embedding or Level 5 Delaunay checks.
+        // Use validate_embedding() for Levels 1–4 and is_delaunay() for Levels 1–5.
         self.dt.as_triangulation().validate().is_ok()
     }
 }
@@ -1479,7 +1517,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             }
         };
         self.rebuild_interior_facet_index();
-        self.validate_mutation_or_restore(
+        self.validate_embedding_or_restore(
             dt_before,
             facets_before,
             DelaunayOperation::InsertVertex,
@@ -1523,16 +1561,14 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             }
         }
         self.rebuild_interior_facet_index();
-        self.validate_mutation_or_restore(
-            dt_before,
-            facets_before,
-            if inverse_k1 {
-                DelaunayOperation::FlipK1Remove
-            } else {
-                DelaunayOperation::RemoveVertex
-            },
-            format!("vertex {:?}", vertex.key),
-        )?;
+        if !inverse_k1 {
+            self.validate_embedding_or_restore(
+                dt_before,
+                facets_before,
+                DelaunayOperation::RemoveVertex,
+                format!("vertex {:?}", vertex.key),
+            )?;
+        }
         Ok(())
     }
 
@@ -1612,15 +1648,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
                 actual: format!("{actual} inserted-face vertices including unexpected {extra:?}"),
             });
         }
-        let (replacement_edge, (dt_before, facets_before)) =
+        let replacement_edge =
             self.replacement_edge_key_or_restore(v0, v1, dt_before, facets_before)?;
         self.rebuild_interior_facet_index();
-        self.validate_mutation_or_restore(
-            dt_before,
-            facets_before,
-            DelaunayOperation::FlipK2,
-            format!("edge {:?} -- {:?}", edge.key.v0(), edge.key.v1()),
-        )?;
+        // `flip_k2` commits only after upstream cumulative realization validation.
         let affected_faces = info
             .new_simplices
             .iter()
@@ -1683,12 +1714,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             });
         }
         self.rebuild_interior_facet_index();
-        self.validate_mutation_or_restore(
-            dt_before,
-            facets_before,
-            DelaunayOperation::FlipK1Insert,
-            format!("face {:?} at point {:?}", face.key, point),
-        )?;
+        // `flip_k1_insert` commits only after upstream cumulative realization validation.
         Ok(SubdivisionResult::new(
             DelaunayVertexHandle { key: new_vertex },
             info.new_simplices
@@ -1716,12 +1742,14 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CdtTriangulation;
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{
         DelaunayTriangulation2D, build_delaunay2_from_simplices, build_delaunay2_with_data,
         generate_delaunay2, random_delaunay2, seeded_delaunay2,
     };
     use delaunay::DelaunayRepairPolicy;
+    use delaunay::prelude::construction::{ConstructionOptions, DelaunayTriangulationBuilder};
     use serde_json::{Value, error::Category};
     use slotmap::KeyData;
     use std::assert_matches;
@@ -1731,6 +1759,31 @@ mod tests {
     fn validated_backend(dt: DelaunayTriangulation2D) -> DelaunayBackend2D {
         DelaunayBackend2D::from_triangulation(dt)
             .expect("test Delaunay triangulation should validate")
+    }
+
+    /// Builds an embedding-valid explicit quad whose chosen diagonal is not Delaunay.
+    fn embedded_non_delaunay_backend() -> DelaunayBackend2D {
+        let vertices = [
+            Vertex::try_new_with_data([0.0, 0.0], 0_u32).expect("valid vertex"),
+            Vertex::try_new_with_data([4.0, 0.0], 0).expect("valid vertex"),
+            Vertex::try_new_with_data([4.0, 2.0], 1).expect("valid vertex"),
+            Vertex::try_new_with_data([1.0, 2.0], 1).expect("valid vertex"),
+        ];
+        let simplices = vec![vec![0, 1, 2], vec![0, 2, 3]];
+        let dt =
+            DelaunayTriangulationBuilder::try_from_vertices_and_simplices(&vertices, &simplices)
+                .expect("valid explicit simplex indices")
+                .simplex_data_type::<i32>()
+                .construction_options(
+                    ConstructionOptions::default().without_final_delaunay_enforcement(),
+                )
+                .build()
+                .expect("non-Delaunay quad should pass Levels 1-4 embedding validation");
+        let interior_facets_by_edge = DelaunayBackend2D::build_interior_facets_by_edge(&dt);
+        DelaunayBackend {
+            dt,
+            interior_facets_by_edge,
+        }
     }
 
     /// `serde_json` wraps custom visitor failures as data errors; assert that
@@ -2027,18 +2080,44 @@ mod tests {
 
     #[test]
     fn test_is_valid_and_is_delaunay_consistency() {
-        // is_delaunay (Levels 1–4) implies is_valid (Levels 1–3)
+        // is_delaunay (Levels 1–5) implies embedding validity (Levels 1–4)
+        // and structural validity (Levels 1–3).
         let dt = random_delaunay2(5, (0.0, 10.0));
         let backend = validated_backend(dt);
 
         assert!(backend.is_valid(), "Triangulation should be valid");
         backend
             .validate_delaunay()
-            .expect("full upstream Level 1-4 validation should pass");
+            .expect("full upstream Level 1-5 validation should pass");
         assert!(
             backend.is_delaunay(),
             "Valid Delaunay triangulation should pass is_delaunay"
         );
+    }
+
+    #[test]
+    fn embedding_validation_accepts_non_delaunay_straight_line_realization() {
+        let backend = embedded_non_delaunay_backend();
+
+        backend
+            .validate_structural()
+            .expect("explicit quad should pass Levels 1-3 structural validation");
+        backend
+            .validate_embedding()
+            .expect("explicit quad should pass Level 4 embedding validation");
+        assert_matches!(
+            backend.validate_delaunay(),
+            Err(DelaunayError::ValidationFailed {
+                level: DelaunayValidationLevel::Five,
+                ..
+            })
+        );
+
+        let triangulation = CdtTriangulation::try_new(backend, 2, 2)
+            .expect("embedding-valid quad should enter unfoliated CDT state");
+        triangulation
+            .validate()
+            .expect("evolved CDT validation should not require Level 5 Delaunay-ness");
     }
 
     #[test]
@@ -2591,8 +2670,8 @@ mod tests {
 
     #[test]
     fn test_is_valid_runs_structural_validation() {
-        // is_valid() runs Levels 1–3 (structural/topological) via as_triangulation().validate();
-        // is_delaunay() runs Levels 1–4 (including the Delaunay property).
+        // is_valid() runs Levels 1–3, validate_embedding() runs Levels 1–4,
+        // and is_delaunay() runs Levels 1–5.
         // For a well-formed Delaunay triangulation both should pass.
         let dt = seeded_delaunay2(8, (0.0, 10.0), 99);
         let backend = validated_backend(dt);
@@ -2605,7 +2684,7 @@ mod tests {
             delaunay,
             "Seeded triangulation should satisfy Delaunay property"
         );
-        // is_delaunay() (Levels 1–4) implies is_valid() (Levels 1–3)
+        // is_delaunay() (Levels 1–5) implies is_valid() (Levels 1–3)
         assert!(delaunay && valid, "is_delaunay() should imply is_valid()");
     }
 

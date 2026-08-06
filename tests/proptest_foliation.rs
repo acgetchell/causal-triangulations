@@ -70,7 +70,7 @@ fn cdt_strip_builds_delaunay_mesh() {
     assert_eq!(tri.face_count(), 16);
     tri.geometry()
         .validate_delaunay()
-        .expect("Delaunay CDT strip should pass upstream Level 1-4 validation");
+        .expect("Delaunay CDT strip should pass upstream Level 1-5 validation");
     tri.validate_topology()
         .expect("Delaunay CDT strip topology should validate");
     tri.validate_foliation()
@@ -145,7 +145,7 @@ proptest! {
         let expected_slice_sizes = vec![vertices_per_slice as usize; num_slices as usize];
         prop_assert_eq!(tri.slice_sizes(), expected_slice_sizes.as_slice());
         prop_assert!(tri.geometry().validate_delaunay().is_ok(),
-            "toroidal CDT must pass upstream Level 1-4 Delaunay validation");
+            "toroidal CDT must pass upstream Level 1-5 Delaunay validation");
         prop_assert!(tri.validate_topology().is_ok());
         prop_assert!(tri.validate_foliation().is_ok());
         prop_assert!(tri.validate_causality().is_ok());
@@ -178,7 +178,7 @@ proptest! {
         // Must have foliation
         prop_assert!(tri.has_foliation(), "CDT strip must have foliation");
         prop_assert!(tri.geometry().validate_delaunay().is_ok(),
-            "CDT strip must pass upstream Level 1-4 Delaunay validation");
+            "CDT strip must pass upstream Level 1-5 Delaunay validation");
 
         // Every slice has the right count
         let sizes = tri.slice_sizes();

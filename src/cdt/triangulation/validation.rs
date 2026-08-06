@@ -15,18 +15,18 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Validate post-construction CDT properties.
     ///
     /// This is the invariant set required after ergodic moves and completed
-    /// simulations: upstream structural geometry validity plus CDT topology,
+    /// simulations: upstream straight-line embedding validity plus CDT topology,
     /// foliation, causality, and simplex-classification checks. It intentionally
-    /// does not require the Level 4 Delaunay empty-circumsphere predicate,
+    /// does not require the Level 5 Delaunay empty-circumsphere predicate,
     /// because local CDT moves are not expected to preserve Delaunay-ness.
     ///
     /// Constructors that create initial simulation meshes perform the stricter
-    /// Level 1-4 Delaunay validation before returning.
+    /// Level 1-5 Delaunay validation before returning.
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::DelaunayValidationFailed`] if backend structural
-    /// geometry fails upstream validation. Returns
+    /// Returns [`CdtError::DelaunayValidationFailed`] if the backend fails
+    /// upstream Level 1-4 embedding validation. Returns
     /// [`CdtError::ValidationFailed`] if causality or simplex-classification checks
     /// fail, and returns topology or foliation errors from the corresponding
     /// validators when those invariants are violated.
@@ -70,9 +70,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Validates the post-move/final CDT invariant contract.
     pub(crate) fn validate_evolved_cdt(&self) -> CdtResult<()> {
         self.geometry
-            .validate_structural()
+            .validate_embedding()
             .map_err(|err| CdtError::DelaunayValidationFailed {
-                level: DelaunayValidationLevel::Three,
+                level: DelaunayValidationLevel::Four,
                 detail: format!(
                     "{}; triangulation counts: V={}, E={}, F={}",
                     validation_detail(err),
@@ -81,6 +81,23 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     self.geometry.face_count(),
                 ),
             })?;
+        self.validate_evolved_cdt_domain()
+    }
+
+    /// Validates CDT-owned invariants after a realized backend mutation succeeds.
+    ///
+    /// The Delaunay backend's mutation boundary guarantees structural and
+    /// straight-line realization validity before returning success. Repeating
+    /// the global Level 4 scan here would make every proposal pay for the same
+    /// whole-mesh predicate twice, so move finalization checks only the
+    /// CDT-owned topology, foliation, causality, and simplex-classification
+    /// contract.
+    pub(crate) fn validate_after_realized_mutation(&self) -> CdtResult<()> {
+        self.validate_evolved_cdt_domain()
+    }
+
+    /// Validates invariants owned by the CDT domain layer.
+    fn validate_evolved_cdt_domain(&self) -> CdtResult<()> {
         self.validate_topology()?;
         self.validate_foliation()?;
         self.validate_causality()?;
@@ -98,7 +115,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         self.geometry
             .validate_delaunay()
             .map_err(|err| CdtError::DelaunayValidationFailed {
-                level: DelaunayValidationLevel::Four,
+                level: DelaunayValidationLevel::Five,
                 detail: validation_detail(err),
             })?;
         self.validate_topology()?;
@@ -136,7 +153,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///     ])?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;
@@ -183,7 +200,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///     ])?;
     ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
     ///         CdtError::DelaunayValidationFailed {
-    ///             level: DelaunayValidationLevel::Four,
+    ///             level: DelaunayValidationLevel::Five,
     ///             detail: err.to_string(),
     ///         }
     ///     })?;

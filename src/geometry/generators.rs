@@ -466,7 +466,7 @@ pub fn build_toroidal_delaunay2(
 ///
 /// This uses the upstream periodic image-point constructor rather than explicit
 /// simplex assembly. The builder requests [`TopologyGuarantee::PLManifold`], so
-/// the resulting toroidal mesh is suitable for the full Delaunay Level 1-4
+/// the resulting toroidal mesh is suitable for the full Delaunay Level 1-5
 /// validation path exposed by
 /// [`DelaunayBackend::validate_delaunay`](crate::geometry::backends::delaunay::DelaunayBackend::validate_delaunay).
 ///
@@ -482,7 +482,7 @@ pub fn build_toroidal_delaunay2(
 ///
 /// Build the minimal 3 × 3 periodic toroidal lattice used by
 /// [`CdtTriangulation::from_toroidal_cdt`](crate::CdtTriangulation::from_toroidal_cdt)
-/// and validate it with the upstream Level 1-4 checks:
+/// and validate it with the upstream Level 1-5 checks:
 ///
 /// ```
 /// use causal_triangulations::{CdtError, CdtResult, DelaunayValidationLevel};
@@ -513,12 +513,12 @@ pub fn build_toroidal_delaunay2(
 ///
 ///     let backend = DelaunayBackend2D::from_triangulation(dt).map_err(|err| {
 ///         CdtError::DelaunayValidationFailed {
-///             level: DelaunayValidationLevel::Four,
+///             level: DelaunayValidationLevel::Five,
 ///             detail: err.to_string(),
 ///         }
 ///     })?;
 ///     backend.validate_delaunay().map_err(|err| CdtError::DelaunayValidationFailed {
-///         level: DelaunayValidationLevel::Four,
+///         level: DelaunayValidationLevel::Five,
 ///         detail: err.to_string(),
 ///     })?;
 ///     Ok(())
@@ -677,6 +677,75 @@ mod tests {
     }
 
     #[test]
+    fn explicit_non_overlapping_faces_pass_embedding_validation() {
+        let vertices = [
+            ([0.0, 0.0], 0_u32),
+            ([1.0, 0.0], 0),
+            ([0.0, 1.0], 1),
+            ([1.0, 1.0], 1),
+        ];
+        let simplices = vec![vec![0, 1, 2], vec![1, 3, 2]];
+
+        let dt = build_delaunay2_from_simplices(&vertices, &simplices)
+            .expect("non-overlapping explicit faces should build");
+
+        dt.as_triangulation()
+            .validate_realization()
+            .expect("non-overlapping explicit faces should pass Levels 1-4");
+    }
+
+    #[test]
+    fn explicit_crossing_edges_fail_embedding_validation() {
+        let vertices = [
+            ([1.850_341_970_997_476_4, 3.808_736_162_215_642_4], 0_u32),
+            ([-1.705_108_018_057_679, 3.541_228_835_829_82], 0),
+            ([-1.151_312_061_387_885_3, 0.227_299_663_756_810_77], 0),
+            ([0.478_746_443_632_698_25, 2.055_189_799_064_582], 0),
+            ([-1.383_321_070_900_029, -1.797_028_018_114_396_3], 0),
+            ([3.030_089_610_961_752_6, 2.181_406_554_808_236_6], 0),
+        ];
+        let simplices = vec![
+            vec![0, 2, 3],
+            vec![5, 3, 2],
+            vec![4, 3, 1],
+            vec![3, 4, 0],
+            vec![3, 5, 1],
+        ];
+
+        let error = build_delaunay2_from_simplices(&vertices, &simplices)
+            .expect_err("crossing non-adjacent edges must fail embedding validation");
+        let CdtError::DelaunayGenerationFailed {
+            underlying_error, ..
+        } = error
+        else {
+            panic!("expected a Delaunay generation failure");
+        };
+        assert!(
+            underlying_error.contains("intersect outside their shared face"),
+            "unexpected crossing-edge diagnostic: {underlying_error}"
+        );
+    }
+
+    #[test]
+    fn explicit_degenerate_triangle_fails_embedding_validation() {
+        let vertices = [([0.0, 0.0], 0_u32), ([1.0, 0.0], 0), ([2.0, 0.0], 1)];
+        let simplices = vec![vec![0, 1, 2]];
+
+        let error = build_delaunay2_from_simplices(&vertices, &simplices)
+            .expect_err("collinear triangle must fail embedding validation");
+        let CdtError::DelaunayGenerationFailed {
+            underlying_error, ..
+        } = error
+        else {
+            panic!("expected a Delaunay generation failure");
+        };
+        assert!(
+            underlying_error.to_ascii_lowercase().contains("degenerate"),
+            "unexpected degenerate-triangle diagnostic: {underlying_error}"
+        );
+    }
+
+    #[test]
     fn test_build_delaunay2_from_simplices_rejects_bad_index() {
         // Simplex references vertex 3 which doesn't exist (only indices 0..3 are valid).
         let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
@@ -750,7 +819,7 @@ mod tests {
     }
 
     #[test]
-    fn test_build_periodic_toroidal_delaunay2_3x3_validates_level_1_to_4() {
+    fn test_build_periodic_toroidal_delaunay2_3x3_validates_level_1_to_5() {
         const N: usize = 3;
         const T: usize = 3;
         const DOMAIN: [f64; 2] = [3.0, 3.0];
@@ -782,7 +851,7 @@ mod tests {
             .expect("periodic toroidal mesh should validate");
         backend
             .validate_delaunay()
-            .expect("periodic toroidal mesh must pass upstream Level 1-4 validation");
+            .expect("periodic toroidal mesh must pass upstream Level 1-5 validation");
     }
 
     #[test]
