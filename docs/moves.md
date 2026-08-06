@@ -93,6 +93,11 @@ bistellar moves. The `delaunay` crate exposes the geometric 2D operations this c
 - `flip_k1_insert` — local vertex insertion, the geometric substrate for a `(1,3)` subdivision;
 - `flip_k1_remove` — local vertex removal, the geometric substrate for a `(3,1)` collapse.
 
+Proposal-site scans call the matching immutable Delaunay 0.8 feasibility validators through `TriangulationMut`: `can_flip_edge` delegates to `can_flip_k2`,
+`can_subdivide_face` delegates to `can_flip_k1_insert`, and `can_collapse_vertex` delegates to `can_flip_k1_remove`. These validators were introduced by
+[`delaunay#419`](https://github.com/acgetchell/delaunay/issues/419) and share deterministic pre-mutation checks with the mutating edits. CDT still applies its
+own causal, foliation, and topology predicates, and composite toroidal moves retain rollback because later primitive edits and final CDT validation can fail.
+
 The backend-neutral `TriangulationMut::remove_vertex` lifecycle operation is broader than the focused inverse k=1 move. It may select that fast path for a
 compatible local configuration or perform generic cavity retriangulation, and its `Result<()>` reports only whether the validated mutation committed. CDT
 callers rebuild foliation and query the resulting topology after success; they do not infer replacement faces from the return value. If a future workflow

@@ -328,8 +328,32 @@ pub trait TriangulationMut: TriangulationQuery {
         edge: Self::EdgeHandle,
     ) -> Result<FlipResult<Self::EdgeHandle, Self::FaceHandle>, Self::Error>;
 
-    /// Check if an edge can be flipped
+    /// Checks whether an edge passes the backend's deterministic flip preflight.
+    ///
+    /// A `true` result means the corresponding [`Self::flip_edge`] call will not
+    /// fail for deterministic structural or topological reasons on the same
+    /// triangulation state. Allocation or failures outside that preflight may
+    /// still prevent the mutation from committing.
     fn can_flip_edge(&self, edge: &Self::EdgeHandle) -> bool;
+
+    /// Checks whether a face subdivision passes the backend's deterministic preflight.
+    ///
+    /// Backends without an immutable subdivision validator may conservatively
+    /// return `false`. A `true` result has the same preflight relationship to
+    /// [`Self::subdivide_face`] as [`Self::can_flip_edge`] has to
+    /// [`Self::flip_edge`].
+    fn can_subdivide_face(&self, _face: &Self::FaceHandle, _point: &[Self::Coordinate]) -> bool {
+        false
+    }
+
+    /// Checks whether a vertex supports an exact local inverse k=1 collapse.
+    ///
+    /// This is narrower than [`Self::remove_vertex`], which may support generic
+    /// cavity retriangulation. Backends without an immutable local-collapse
+    /// validator may conservatively return `false`.
+    fn can_collapse_vertex(&self, _vertex: &Self::VertexHandle) -> bool {
+        false
+    }
 
     /// Subdivide a face by adding a vertex at the given point
     ///

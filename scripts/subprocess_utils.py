@@ -210,7 +210,7 @@ def check_git_repo() -> bool:
     try:
         run_git_command(["rev-parse", "--git-dir"])
         return True
-    except (ExecutableNotFoundError, subprocess.CalledProcessError):
+    except (ExecutableNotFoundError, subprocess.CalledProcessError):  # fmt: skip
         return False
 
 
@@ -224,7 +224,7 @@ def check_git_history() -> bool:
     try:
         run_git_command(["log", "--oneline", "-n", "1"])
         return True
-    except (ExecutableNotFoundError, subprocess.CalledProcessError):
+    except (ExecutableNotFoundError, subprocess.CalledProcessError):  # fmt: skip
         return False
 
 

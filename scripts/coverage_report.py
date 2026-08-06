@@ -13,8 +13,6 @@ Example usage (run from repo root):
     uv run python scripts/coverage_report.py --prefix src/cdt --limit 5
 """
 
-from __future__ import annotations
-
 import argparse
 from dataclasses import dataclass
 from pathlib import Path

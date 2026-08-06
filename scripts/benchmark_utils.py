@@ -38,6 +38,8 @@ DEFAULT_REGRESSION_THRESHOLD = 7.5
 TRUSTED_BENCH_PROFILE = "perf"
 
 if TYPE_CHECKING:
+    _ArgumentParserSubparsers = argparse._SubParsersAction[argparse.ArgumentParser]  # noqa: SLF001
+
     from benchmark_models import (
         BenchmarkData,
         CircumspherePerformanceData,
@@ -57,6 +59,8 @@ if TYPE_CHECKING:
         run_safe_command,
     )
 else:
+    _ArgumentParserSubparsers = argparse._SubParsersAction  # noqa: SLF001
+
     try:
         # When executed as a script from scripts/
         from benchmark_models import (
@@ -282,7 +286,7 @@ class PerformanceSummaryGenerator:
             if result.startswith("v"):
                 return result[1:]  # Remove 'v' prefix
             return "unknown"
-        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):  # fmt: skip
             # Fallback: try to get any recent tag
             try:
                 cp = run_git_command(["tag", "-l", "--sort=-version:refname"], cwd=self.project_root)
@@ -293,7 +297,7 @@ class PerformanceSummaryGenerator:
                         if tag.startswith("v") and len(tag) > 1:
                             return tag[1:]
                 return "unknown"
-            except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+            except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):  # fmt: skip
                 return "unknown"
 
     def _get_version_date(self) -> str:
@@ -314,7 +318,7 @@ class PerformanceSummaryGenerator:
 
             # Fallback to current date
             return datetime.now(UTC).strftime("%Y-%m-%d")
-        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):  # fmt: skip
             return datetime.now(UTC).strftime("%Y-%m-%d")
 
     def _run_circumsphere_benchmarks(self) -> tuple[bool, dict[str, str] | None]:
@@ -1276,7 +1280,7 @@ class CriterionParser:
                 .with_throughput(round(thrpt_low, 3), round(thrpt_mean, 3), round(thrpt_high, 3), "Kelem/s")
             )
 
-        except (FileNotFoundError, json.JSONDecodeError, KeyError, ZeroDivisionError, ValueError):
+        except (FileNotFoundError, json.JSONDecodeError, KeyError, ZeroDivisionError, ValueError):  # fmt: skip
             return None
 
     @staticmethod
@@ -1503,7 +1507,7 @@ class BaselineGenerator:
                 print("=== end stdout ===\n", file=sys.stderr)
             logging.exception("Error in generate_baseline")
             return False
-        except (ExecutableNotFoundError, OSError, ValueError):
+        except (ExecutableNotFoundError, OSError, ValueError):  # fmt: skip
             logging.exception("Error in generate_baseline")
             return False
 
@@ -1517,7 +1521,7 @@ class BaselineGenerator:
         try:
             # Use secure subprocess wrapper for git command
             git_commit = get_git_commit_hash(cwd=self.project_root)
-        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):  # fmt: skip
             git_commit = "unknown"
 
         hardware_info = self.hardware.format_hardware_info(cwd=self.project_root)
@@ -1697,7 +1701,7 @@ class PerformanceComparator:
 
         try:
             git_commit = get_git_commit_hash(cwd=self.project_root)
-        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        except (ExecutableNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):  # fmt: skip
             git_commit = "unknown"
 
         # Parse baseline metadata
@@ -2367,7 +2371,7 @@ class BenchmarkRegressionHelper:
 
         except subprocess.CalledProcessError:
             return False, "baseline_commit_not_found"
-        except (ExecutableNotFoundError, subprocess.TimeoutExpired, OSError, ValueError):
+        except (ExecutableNotFoundError, subprocess.TimeoutExpired, OSError, ValueError):  # fmt: skip
             return False, "error_checking_changes"
 
     @staticmethod
@@ -2513,7 +2517,7 @@ def get_default_bench_timeout() -> int:
     """
     try:
         return int(os.getenv("BENCHMARK_TIMEOUT", "1800"))
-    except (ValueError, TypeError):
+    except (ValueError, TypeError):  # fmt: skip
         return 1800
 
 
@@ -2608,7 +2612,7 @@ def _parse_baseline_metadata(baseline_content: str) -> dict[str, str]:
     return metadata
 
 
-def _sorted_benchmark_list(results: Mapping[str, "BenchmarkData"]) -> list["BenchmarkData"]:
+def _sorted_benchmark_list(results: Mapping[str, BenchmarkData]) -> list[BenchmarkData]:
     """Return benchmarks sorted by (dimension, point count) for stable output."""
     return sorted(results.values(), key=lambda b: (int(b.dimension.rstrip("D")), b.points is None, b.points or 0))
 
@@ -2812,7 +2816,7 @@ class GitHubBaselineFetcher:
             raise RuntimeError(msg) from e
 
 
-def _add_benchmark_subcommands(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
+def _add_benchmark_subcommands(subparsers: _ArgumentParserSubparsers) -> None:
     """Add benchmark-running subcommands."""
     gen_parser = subparsers.add_parser("generate-baseline", help="Generate performance baseline")
     gen_parser.add_argument("--dev", action="store_true", help="Use development mode with faster benchmark settings")
@@ -2847,7 +2851,7 @@ def _add_benchmark_subcommands(subparsers: "argparse._SubParsersAction[argparse.
     cmp_parser.set_defaults(validate_bench_timeout=True)
 
 
-def _add_local_baseline_subcommands(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
+def _add_local_baseline_subcommands(subparsers: _ArgumentParserSubparsers) -> None:
     """Add subcommands that operate on existing baseline artifacts/files."""
     bb_parser = subparsers.add_parser("compare-baselines", help="Compare two baseline files (no benchmarks)")
     bb_parser.add_argument("--old", dest="old_baseline", type=Path, required=True, help="Path to the older baseline file")
@@ -2915,7 +2919,7 @@ def _add_local_baseline_subcommands(subparsers: "argparse._SubParsersAction[argp
     tags_parser.add_argument("--project-root", type=Path, help="Project root containing the git repo (directory containing Cargo.toml)")
 
 
-def _add_workflow_helper_subcommands(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
+def _add_workflow_helper_subcommands(subparsers: _ArgumentParserSubparsers) -> None:
     """Add subcommands used by GitHub Actions workflows."""
     subparsers.add_parser("determine-tag", help="Determine tag name for baseline generation")
 
@@ -2930,7 +2934,7 @@ def _add_workflow_helper_subcommands(subparsers: "argparse._SubParsersAction[arg
     artifact_parser.add_argument("--tag", type=str, required=True, help="Tag name to sanitize")
 
 
-def _add_regression_subcommands(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
+def _add_regression_subcommands(subparsers: _ArgumentParserSubparsers) -> None:
     """Add regression-testing helper subcommands."""
     prepare_parser = subparsers.add_parser("prepare-baseline", help="Prepare baseline for regression testing")
     prepare_parser.add_argument("--baseline-dir", type=Path, default=Path("baseline-artifact"), help="Baseline artifact directory")
@@ -2967,7 +2971,7 @@ def _add_regression_subcommands(subparsers: "argparse._SubParsersAction[argparse
     subparsers.add_parser("regression-summary", help="Generate regression testing summary")
 
 
-def _add_performance_summary_subcommands(subparsers: "argparse._SubParsersAction[argparse.ArgumentParser]") -> None:
+def _add_performance_summary_subcommands(subparsers: _ArgumentParserSubparsers) -> None:
     """Add performance summary generation subcommands."""
     perf_summary_parser = subparsers.add_parser("generate-summary", help="Generate performance summary markdown")
     perf_summary_parser.add_argument("--output", type=Path, help="Output file path (defaults to benches/PERFORMANCE_RESULTS.md)")

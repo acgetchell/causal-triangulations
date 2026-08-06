@@ -1710,7 +1710,19 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
     }
 
     fn can_flip_edge(&self, edge: &Self::EdgeHandle) -> bool {
-        self.interior_facet_for_edge(edge.key).is_some()
+        self.interior_facet_for_edge(edge.key)
+            .is_some_and(|facet| self.dt.can_flip_k2(facet).is_ok())
+    }
+
+    fn can_subdivide_face(&self, face: &Self::FaceHandle, point: &[Self::Coordinate]) -> bool {
+        let Ok(vertex) = Self::build_vertex(point, None, DelaunayOperation::SubdivideFace) else {
+            return false;
+        };
+        self.dt.can_flip_k1_insert(face.key, &vertex).is_ok()
+    }
+
+    fn can_collapse_vertex(&self, vertex: &Self::VertexHandle) -> bool {
+        self.dt.can_flip_k1_remove(vertex.key).is_ok()
     }
 
     fn subdivide_face(
@@ -2947,6 +2959,7 @@ mod tests {
             .edges()
             .find(|edge| backend.can_flip_edge(edge))
             .expect("square has an interior edge");
+        assert!(backend.can_flip_edge(&edge));
         let flip = backend.flip_edge(edge);
         assert!(flip.is_ok());
         assert_eq!(backend.vertex_count(), original_vertex_count);
@@ -2959,6 +2972,17 @@ mod tests {
         let original_vertex_count = backend.vertex_count();
         let original_face_count = backend.face_count();
         let face = backend.faces().next().expect("valid face handle");
+        assert!(!backend.can_subdivide_face(&face, &[0.5, 0.0]));
+        assert_matches!(
+            backend.subdivide_face(face.clone(), &[0.5, 0.0]),
+            Err(DelaunayError::FlipFailed {
+                operation: DelaunayOperation::FlipK1Insert,
+                ..
+            })
+        );
+        assert_eq!(backend.vertex_count(), original_vertex_count);
+        assert_eq!(backend.face_count(), original_face_count);
+        assert!(backend.can_subdivide_face(&face, &[0.5, 1.0 / 3.0]));
         let subdivide = backend
             .subdivide_face(face, &[0.5, 1.0 / 3.0])
             .expect("face subdivision should use k=1 flip");
@@ -2966,6 +2990,7 @@ mod tests {
         assert_eq!(backend.face_count(), original_face_count + 2);
         assert!(backend.is_valid());
 
+        assert!(backend.can_collapse_vertex(&subdivide.new_vertex));
         let (): () = backend
             .remove_vertex(subdivide.new_vertex)
             .expect("degree-3 inserted vertex should be removable");
@@ -3003,26 +3028,38 @@ mod tests {
         );
 
         let bogus_vertex = VertexKey::from(KeyData::from_ffi(u64::MAX));
+        assert!(!backend.can_collapse_vertex(&DelaunayVertexHandle { key: bogus_vertex }));
         assert_matches!(
             backend.remove_vertex(DelaunayVertexHandle { key: bogus_vertex }),
             Err(DelaunayError::InvalidVertex { key }) if key == bogus_vertex,
         );
 
         let bogus_face = SimplexKey::from(KeyData::from_ffi(u64::MAX));
+        assert!(
+            !backend.can_subdivide_face(&DelaunayFaceHandle { key: bogus_face }, &[0.25, 0.25])
+        );
         assert_matches!(
             backend.subdivide_face(DelaunayFaceHandle { key: bogus_face }, &[0.25, 0.25]),
             Err(DelaunayError::InvalidFace { key }) if key == bogus_face,
         );
+    }
 
+    #[test]
+    fn boundary_edits_fail_exact_preflights() {
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
             .expect("labeled triangle should build");
-        let mut boundary_backend = validated_backend(dt);
-        let boundary_edge = boundary_backend
+        let mut backend = validated_backend(dt);
+        let vertex = backend
+            .vertices()
+            .next()
+            .expect("single triangle has boundary vertices");
+        assert!(!backend.can_collapse_vertex(&vertex));
+        let edge = backend
             .edges()
             .next()
             .expect("single triangle has boundary edges");
         assert_matches!(
-            boundary_backend.flip_edge(boundary_edge),
+            backend.flip_edge(edge),
             Err(DelaunayError::NonFlippableEdge { reason, .. })
                 if reason == NonFlippableEdgeReason::NotInteriorFacet,
         );
