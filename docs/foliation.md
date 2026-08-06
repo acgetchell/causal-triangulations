@@ -84,16 +84,21 @@ The upstream validation hierarchy separates the properties needed by CDT evoluti
   straight-line-embedding property needed to rule out folded or overlapping geometry.
 - **Level 5 — Delaunay**: the realized triangulation also satisfies the empty-circumsphere predicate.
 
-Initial CDT constructors are therefore stricter than post-move validation:
+[`CdtValidationProfile`](../src/cdt/triangulation/validation.rs) names the three lifecycle contracts:
 
-- **Initialization**: regular `from_cdt_strip()`, profiled `from_cdt_strip_profile()`, regular `from_toroidal_cdt()`, and
-  `from_toroidal_cdt_profile()` must pass upstream Level 1-5 validation before returning. This certifies those starting meshes as valid embedded
-  PL-manifold Delaunay triangulations.
-- **After ergodic moves / simulation completion**: `CdtTriangulation::validate()` requires upstream Level 1-4 embedding validity plus CDT topology,
-  foliation, causality, and simplex-classification invariants. It intentionally omits Level 5 because the CDT move kernels are not expected to preserve the
-  Delaunay empty-circumsphere predicate.
+- `InitialDelaunay` requires Levels 1-5, including embedding and Delaunay-ness, plus topology, foliation, causality, and strict simplex classification. It is
+  the constructor profile before evolution.
+- `Evolved` requires the Levels 1-4 embedded/non-overlapping realization plus the same CDT-domain predicates. It is the profile for move finalization,
+  checkpoints, results, and ordinary public validation.
+- `StrictDelaunay` adds Level 5 to the evolved contract for optional diagnostics or workflows that intentionally restrict evolved states to Delaunay
+  triangulations.
 
-Call `triangulation.geometry().validate_delaunay()` when a workflow needs the optional stricter Level 1-5 check on an evolved state.
+`CdtTriangulation::validate()` is shorthand for `validate_with_profile(CdtValidationProfile::Evolved)`. Initial constructors use `InitialDelaunay`, and callers
+can opt into the stronger `StrictDelaunay` profile without making Level 5 part of the normal evolved-state ensemble.
+
+All named CDT profiles require current foliation bookkeeping so strict causal simplex validity is actually evaluated. Raw triangulations from
+`from_random_points()` and `from_seeded_points()` remain available for geometry tests and experiments, but they are outside these named CDT profiles;
+`validate()` returns `FoliationError::MissingBookkeeping` until foliation is assigned.
 
 ## Edge Classification
 
@@ -155,11 +160,14 @@ Structural checks:
    single connected cycle
 5. For toroidal topology, timelike edges connect each slice to both neighboring time slices modulo `T`
 
-Ergodic moves resynchronize foliation bookkeeping from live vertex labels after mutation. On toroidal triangulations, the move kernel immediately reruns
-`validate_topology()` and `validate_foliation()` before recording success; failures are rolled back and returned as ordinary local-site rejections. The
-upstream bistellar-edit transaction validates the affected result against the Level 1-4 realization contract before it returns success, so CDT move
-finalization does not repeat the global embedding scan. Explicit `validate()` calls, configured cadence checks, and final result construction still recheck the
-whole evolved-state contract.
+Foliated ergodic moves resynchronize foliation bookkeeping from live vertex labels after mutation, then finalize through the `Evolved` profile. The upstream
+bistellar-edit transaction validates the affected result against the Level 1-4 realization contract before it returns success, so move finalization carries
+that internal embedding evidence into the profile instead of repeating the same global scan. It still checks topology, foliation, causality, and strict simplex
+classification before recording success; failures are rolled back. Explicit `validate()` calls, configured cadence checks, and final result construction have
+no mutation-boundary evidence, so they run the complete `Evolved` profile and recheck the whole embedding.
+
+Unfoliated geometry experiments use a separate internal geometry/topology contract for mutation, checkpoint, and result integrity. That compatibility path is
+not a CDT validation profile and makes no causal-validity claim.
 
 ### `validate_causality_delaunay()`
 

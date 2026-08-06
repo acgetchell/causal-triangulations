@@ -818,7 +818,7 @@ impl SimulationResultsParts {
     ) -> CdtResult<Self> {
         config.validate();
         action_config.validate();
-        triangulation.validate_evolved_cdt()?;
+        triangulation.validate_supported_state()?;
         validate_result_telemetry(
             &config,
             &move_stats,
@@ -847,7 +847,7 @@ impl TryFrom<SimulationResultsBackendWire> for SimulationResultsBackend {
     fn try_from(wire: SimulationResultsBackendWire) -> Result<Self, Self::Error> {
         wire.config.validate();
         wire.action_config.validate();
-        wire.triangulation.validate_evolved_cdt()?;
+        wire.triangulation.validate_supported_state()?;
         Self::new(
             wire.config,
             wire.action_config,

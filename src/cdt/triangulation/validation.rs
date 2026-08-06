@@ -3,6 +3,7 @@
 //! Whole-triangulation validation and causality checks.
 
 use super::CdtTriangulation;
+use crate::cdt::foliation::FoliationError;
 use crate::errors::{
     CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, DelaunayValidationLevel,
 };
@@ -10,6 +11,44 @@ use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::DelaunayError;
 use crate::geometry::traits::TriangulationQuery;
 use std::num::NonZeroUsize;
+
+/// Named invariant sets for validating a CDT triangulation.
+///
+/// Every profile requires a structurally valid, nondegenerate, non-overlapping
+/// embedding together with valid CDT topology, foliation, causality, and strict
+/// simplex classification. [`Self::InitialDelaunay`] and
+/// [`Self::StrictDelaunay`] additionally require the Level 5 Delaunay
+/// empty-circumsphere predicate, while [`Self::Evolved`] intentionally does not.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::triangulation::*;
+///
+/// fn main() -> CdtResult<()> {
+///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+///     tri.validate_with_profile(CdtValidationProfile::InitialDelaunay)?;
+///     tri.validate_with_profile(CdtValidationProfile::Evolved)?;
+///     Ok(())
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CdtValidationProfile {
+    /// Initial Delaunay-backed CDT state before Monte Carlo evolution.
+    InitialDelaunay,
+    /// Evolved CDT state, which need not remain Delaunay.
+    Evolved,
+    /// Optional strict validation requiring an evolved state to remain Delaunay.
+    StrictDelaunay,
+}
+
+/// Records whether the current embedding was checked at the backend mutation boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EmbeddingValidationState {
+    Required,
+    AlreadyValidated,
+}
 
 impl CdtTriangulation<DelaunayBackend2D> {
     /// Validate post-construction CDT properties.
@@ -26,10 +65,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// # Errors
     ///
     /// Returns [`CdtError::DelaunayValidationFailed`] if the backend fails
-    /// upstream Level 1-4 embedding validation. Returns
-    /// [`CdtError::ValidationFailed`] if causality or simplex-classification checks
-    /// fail, and returns topology or foliation errors from the corresponding
-    /// validators when those invariants are violated.
+    /// upstream Level 1-4 embedding validation. Returns [`CdtError::Foliation`]
+    /// with [`FoliationError::MissingBookkeeping`] when no foliation is present,
+    /// returns [`CdtError::ValidationFailed`] if causality or
+    /// simplex-classification checks fail, and returns topology or foliation
+    /// errors from the corresponding validators when those invariants are
+    /// violated.
     ///
     /// # Examples
     ///
@@ -37,13 +78,45 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::from_seeded_points(5, 2, 2, 53)?;
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
     ///     tri.validate()?;
     ///     Ok(())
     /// }
     /// ```
     pub fn validate(&self) -> CdtResult<()> {
-        self.validate_evolved_cdt()
+        self.validate_with_profile(CdtValidationProfile::Evolved)
+    }
+
+    /// Validates this triangulation against a named CDT invariant profile.
+    ///
+    /// The evolved profile requires straight-line embedding validity and all
+    /// CDT-domain invariants without requiring the Delaunay empty-circumsphere
+    /// predicate. The initial and strict-Delaunay profiles add that predicate.
+    /// In every profile, embedding and strict causal simplex validity are
+    /// independent mandatory checks.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::DelaunayValidationFailed`] when the selected geometry
+    /// predicate fails. Returns [`CdtError::Foliation`] with
+    /// [`FoliationError::MissingBookkeeping`] when no foliation is present,
+    /// returns [`CdtError::ValidationFailed`] for causality or strict
+    /// simplex-classification failures, and propagates topology or foliation
+    /// errors from their corresponding validators.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_toroidal_cdt(4, 3)?;
+    ///     tri.validate_with_profile(CdtValidationProfile::StrictDelaunay)?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn validate_with_profile(&self, profile: CdtValidationProfile) -> CdtResult<()> {
+        self.validate_profile(profile, EmbeddingValidationState::Required)
     }
 
     /// Configures how often simulation runs perform full evolved-state validation.
@@ -69,19 +142,99 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
     /// Validates the post-move/final CDT invariant contract.
     pub(crate) fn validate_evolved_cdt(&self) -> CdtResult<()> {
-        self.geometry
-            .validate_embedding()
-            .map_err(|err| CdtError::DelaunayValidationFailed {
-                level: DelaunayValidationLevel::Four,
-                detail: format!(
-                    "{}; triangulation counts: V={}, E={}, F={}",
-                    validation_detail(err),
-                    self.geometry.vertex_count(),
-                    self.geometry.edge_count(),
-                    self.geometry.face_count(),
-                ),
-            })?;
+        self.validate_with_profile(CdtValidationProfile::Evolved)
+    }
+
+    /// Validates either a foliated CDT state or an explicitly unfoliated geometry state.
+    ///
+    /// Raw point-cloud constructors are retained for geometry tests and experiments,
+    /// but they are not valid inputs to a named CDT profile because causality cannot
+    /// be evaluated without foliation bookkeeping.
+    pub(crate) fn validate_supported_state(&self) -> CdtResult<()> {
+        if self.foliation.is_none() {
+            return self.validate_unfoliated_geometry(EmbeddingValidationState::Required);
+        }
+        self.validate_evolved_cdt()
+    }
+
+    /// Completes evolved-state validation from the backend embedding result.
+    #[cfg(test)]
+    fn validate_evolved_cdt_after_embedding(
+        &self,
+        embedding_validation: Result<(), DelaunayError>,
+    ) -> CdtResult<()> {
+        self.validate_embedding_result(embedding_validation)?;
         self.validate_evolved_cdt_domain()
+    }
+
+    /// Applies the selected profile with explicit backend embedding evidence.
+    fn validate_profile(
+        &self,
+        profile: CdtValidationProfile,
+        embedding_state: EmbeddingValidationState,
+    ) -> CdtResult<()> {
+        self.require_profile_foliation()?;
+        self.validate_geometry_for_profile(profile, embedding_state)?;
+        self.validate_evolved_cdt_domain()
+    }
+
+    /// Rejects named CDT profiles when their causal invariant cannot be evaluated.
+    fn require_profile_foliation(&self) -> CdtResult<()> {
+        if self.foliation.is_none() {
+            return Err(FoliationError::MissingBookkeeping.into());
+        }
+        Ok(())
+    }
+
+    /// Validates the geometry and topology contract for raw unfoliated experiments.
+    fn validate_unfoliated_geometry(
+        &self,
+        embedding_state: EmbeddingValidationState,
+    ) -> CdtResult<()> {
+        debug_assert!(self.foliation.is_none());
+        self.validate_geometry_for_profile(CdtValidationProfile::Evolved, embedding_state)?;
+        self.validate_topology()
+    }
+
+    /// Validates the geometry predicate selected by the CDT profile.
+    fn validate_geometry_for_profile(
+        &self,
+        profile: CdtValidationProfile,
+        embedding_state: EmbeddingValidationState,
+    ) -> CdtResult<()> {
+        match profile {
+            CdtValidationProfile::Evolved => {
+                if embedding_state == EmbeddingValidationState::Required {
+                    self.validate_embedding_result(self.geometry.validate_embedding())?;
+                }
+            }
+            CdtValidationProfile::InitialDelaunay | CdtValidationProfile::StrictDelaunay => {
+                self.geometry.validate_delaunay().map_err(|err| {
+                    CdtError::DelaunayValidationFailed {
+                        level: DelaunayValidationLevel::Five,
+                        detail: validation_detail(err),
+                    }
+                })?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Maps backend embedding diagnostics into the public CDT error contract.
+    fn validate_embedding_result(
+        &self,
+        embedding_validation: Result<(), DelaunayError>,
+    ) -> CdtResult<()> {
+        embedding_validation.map_err(|err| CdtError::DelaunayValidationFailed {
+            level: DelaunayValidationLevel::Four,
+            detail: format!(
+                "{}; triangulation counts: V={}, E={}, F={}",
+                validation_detail(err),
+                self.geometry.vertex_count(),
+                self.geometry.edge_count(),
+                self.geometry.face_count(),
+            ),
+        })
     }
 
     /// Validates CDT-owned invariants after a realized backend mutation succeeds.
@@ -91,13 +244,22 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// the global Level 4 scan here would make every proposal pay for the same
     /// whole-mesh predicate twice, so move finalization checks only the
     /// CDT-owned topology, foliation, causality, and simplex-classification
-    /// contract.
+    /// contract. A foliated move still enters the evolved profile with explicit
+    /// evidence that its embedding predicate has already passed. Raw unfoliated
+    /// geometry experiments instead retain their geometry/topology-only contract.
     pub(crate) fn validate_after_realized_mutation(&self) -> CdtResult<()> {
-        self.validate_evolved_cdt_domain()
+        if self.foliation.is_none() {
+            return self.validate_unfoliated_geometry(EmbeddingValidationState::AlreadyValidated);
+        }
+        self.validate_profile(
+            CdtValidationProfile::Evolved,
+            EmbeddingValidationState::AlreadyValidated,
+        )
     }
 
     /// Validates invariants owned by the CDT domain layer.
     fn validate_evolved_cdt_domain(&self) -> CdtResult<()> {
+        self.require_profile_foliation()?;
         self.validate_topology()?;
         self.validate_foliation()?;
         self.validate_causality()?;
@@ -112,12 +274,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// the stricter CDT foliation, topology, causality, and simplex-classification
     /// invariants before any simulation code can observe them.
     pub(crate) fn validate_initial_delaunay_cdt(&mut self) -> CdtResult<()> {
-        self.geometry
-            .validate_delaunay()
-            .map_err(|err| CdtError::DelaunayValidationFailed {
-                level: DelaunayValidationLevel::Five,
-                detail: validation_detail(err),
-            })?;
+        self.require_profile_foliation()?;
+        self.validate_geometry_for_profile(
+            CdtValidationProfile::InitialDelaunay,
+            EmbeddingValidationState::Required,
+        )?;
         self.validate_topology()?;
         self.validate_foliation()?;
         self.validate_causality()?;
@@ -132,7 +293,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// # Errors
     ///
     /// Returns [`CdtError::Foliation`] with
-    /// [`FoliationError::StaleBookkeeping`](crate::cdt::foliation::FoliationError::StaleBookkeeping)
+    /// [`FoliationError::StaleBookkeeping`]
     /// when stored foliation bookkeeping is stale. Returns
     /// [`CdtError::ValidationFailed`] when face vertices or labels cannot be
     /// resolved, and returns [`CdtError::CausalityViolation`] if any edge spans
@@ -177,7 +338,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// # Errors
     ///
     /// Returns [`CdtError::Foliation`] with
-    /// [`FoliationError::StaleBookkeeping`](crate::cdt::foliation::FoliationError::StaleBookkeeping)
+    /// [`FoliationError::StaleBookkeeping`]
     /// when stored foliation bookkeeping is stale (`has_current_foliation()` is
     /// false). Returns [`CdtError::ValidationFailed`] when a face cannot be
     /// resolved to three vertices, any face vertex is unlabeled, or a triangle
@@ -423,13 +584,85 @@ mod tests {
     }
 
     #[test]
-    fn validate_succeeds_for_known_good_seed() {
+    fn named_profiles_reject_unfoliated_state() {
         let triangulation = CdtTriangulation::from_seeded_points(5, 2, 2, 53)
             .expect("Failed to create triangulation");
 
+        for profile in [
+            CdtValidationProfile::InitialDelaunay,
+            CdtValidationProfile::Evolved,
+            CdtValidationProfile::StrictDelaunay,
+        ] {
+            assert_matches!(
+                triangulation.validate_with_profile(profile),
+                Err(CdtError::Foliation(FoliationError::MissingBookkeeping))
+            );
+        }
+        assert_matches!(
+            triangulation.validate(),
+            Err(CdtError::Foliation(FoliationError::MissingBookkeeping))
+        );
+    }
+
+    #[test]
+    fn named_profiles_accept_initial_delaunay_state() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("initial CDT strip should build");
+
+        for profile in [
+            CdtValidationProfile::InitialDelaunay,
+            CdtValidationProfile::Evolved,
+            CdtValidationProfile::StrictDelaunay,
+        ] {
+            triangulation
+                .validate_with_profile(profile)
+                .unwrap_or_else(|error| panic!("{profile:?} should accept initial state: {error}"));
+        }
+    }
+
+    #[test]
+    fn evolved_profile_rejects_noncausal_foliated_state() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 1.0], 1), ([0.0, 2.0], 2)])
+            .expect("noncollinear triangle should build");
+        let backend =
+            DelaunayBackend2D::from_triangulation(dt).expect("single triangle should be Delaunay");
+        let mut triangulation = CdtTriangulation::try_new(backend, 3, 2)
+            .expect("triangle should enter unfoliated geometry state");
         triangulation
-            .validate()
-            .expect("known good triangulation should validate");
+            .assign_foliation_by_y(NonZeroU32::new(3).expect("fixture has three nonempty slices"))
+            .expect("y bands should establish current foliation bookkeeping");
+
+        assert_matches!(
+            triangulation.validate_with_profile(CdtValidationProfile::Evolved),
+            Err(CdtError::CausalityViolation {
+                time_0: 0,
+                time_1: 2,
+                step_distance: 2,
+            })
+        );
+    }
+
+    #[test]
+    fn validate_reports_embedding_failure_with_triangulation_counts() {
+        let backend = labeled_triangle_backend([0, 0, 1]);
+        let triangulation = CdtTriangulation::try_new(backend, 2, 2)
+            .expect("triangle should enter unfoliated CDT state");
+
+        let error = triangulation
+            .validate_evolved_cdt_after_embedding(Err(DelaunayError::ValidationFailed {
+                level: DelaunayValidationLevel::Four,
+                detail: "non-adjacent simplices intersect".to_string(),
+            }))
+            .expect_err("embedding failure should reject evolved CDT state");
+
+        assert_matches!(
+            error,
+            CdtError::DelaunayValidationFailed {
+                level: DelaunayValidationLevel::Four,
+                detail,
+            } if detail
+                == "non-adjacent simplices intersect; triangulation counts: V=3, E=3, F=1"
+        );
     }
 
     #[test]

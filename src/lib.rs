@@ -198,7 +198,9 @@ pub use cdt::metropolis::{
 };
 pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
 pub use cdt::results::{Measurement, SimulationResultsBackend};
-pub use cdt::triangulation::{CdtMetadata, CdtSimplexCounts, CdtTriangulation, SimulationEvent};
+pub use cdt::triangulation::{
+    CdtMetadata, CdtSimplexCounts, CdtTriangulation, CdtValidationProfile, SimulationEvent,
+};
 pub use config::{
     CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, TestConfig, ValidatedCdtConfig,
     ValidatedInitialVolume,
@@ -366,7 +368,9 @@ pub mod prelude {
         pub use crate::errors::{CdtError, CdtResult};
         pub use crate::geometry::CdtTriangulation2D;
         pub use crate::geometry::traits::TriangulationQuery;
-        pub use crate::{CdtMetadata, CdtSimplexCounts, CdtTriangulation, SimulationEvent};
+        pub use crate::{
+            CdtMetadata, CdtSimplexCounts, CdtTriangulation, CdtValidationProfile, SimulationEvent,
+        };
     }
 
     /// Focused exports for local CDT move kernels and move statistics.

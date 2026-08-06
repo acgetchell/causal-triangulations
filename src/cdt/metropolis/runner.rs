@@ -860,7 +860,7 @@ impl MetropolisRunState {
             checkpoint.config.temperature(),
         )?;
         let triangulation = restore_checkpoint_state(checkpoint.chain, &target)?;
-        triangulation.validate_evolved_cdt()?;
+        triangulation.validate_supported_state()?;
         let actual_action = action_for(&checkpoint.action_config, &triangulation);
         if !actions_match(actual_action, stored_action) {
             return Err(checkpoint_resume_failed(
@@ -897,7 +897,7 @@ impl MetropolisRunState {
         config: MetropolisConfig,
         action_config: ActionConfig,
     ) -> CdtResult<CdtMcmcCheckpoint> {
-        self.triangulation.validate_evolved_cdt()?;
+        self.triangulation.validate_supported_state()?;
         let (accepted, rejected) = chain_counters(&self.move_stats)?;
         let current_step = NonZeroU32::new(self.current_step).ok_or_else(|| {
             checkpoint_resume_failed(CheckpointResumeFailure::StepTelemetryLengthMismatch {
@@ -1166,7 +1166,7 @@ impl AcceptedCandidate {
 
     /// Validates the staged triangulation at the configured backend cadence.
     fn validate_if_due(&self, accepted_moves: u64) -> CdtResult<()> {
-        validate_evolved_cdt_candidate_if_due(&self.triangulation, accepted_moves)
+        validate_supported_state_candidate_if_due(&self.triangulation, accepted_moves)
     }
 
     /// Splits the validated accepted candidate for commitment to run state.
@@ -1232,14 +1232,17 @@ const fn missing_planned_step_info(step: u32) -> CdtError {
     CdtError::PlannedProposalTelemetryMissing { step }
 }
 
-/// Runs the expensive full evolved-state validation only when the backend policy is due.
+/// Runs expensive full state validation only when the backend policy is due.
 #[cfg(test)]
-fn validate_evolved_cdt_if_due(state: &MetropolisRunState) -> CdtResult<()> {
-    validate_evolved_cdt_candidate_if_due(&state.triangulation, state.move_stats.total_accepted())
+fn validate_supported_state_if_due(state: &MetropolisRunState) -> CdtResult<()> {
+    validate_supported_state_candidate_if_due(
+        &state.triangulation,
+        state.move_stats.total_accepted(),
+    )
 }
 
-/// Runs expensive evolved-state validation for a staged accepted triangulation.
-fn validate_evolved_cdt_candidate_if_due(
+/// Runs expensive state-appropriate validation for a staged accepted triangulation.
+fn validate_supported_state_candidate_if_due(
     triangulation: &CdtTriangulation2D,
     accepted_moves: u64,
 ) -> CdtResult<()> {
@@ -1247,7 +1250,7 @@ fn validate_evolved_cdt_candidate_if_due(
         .geometry()
         .should_check_delaunay_after(accepted_moves)
     {
-        triangulation.validate_evolved_cdt()?;
+        triangulation.validate_supported_state()?;
     }
     Ok(())
 }
@@ -1693,7 +1696,7 @@ mod tests {
         state.move_stats.record_success(MoveType::Move22);
 
         assert!(
-            validate_evolved_cdt_if_due(&state).is_err(),
+            validate_supported_state_if_due(&state).is_err(),
             "EveryN(1) should run full validation after the first accepted move"
         );
     }
@@ -1715,7 +1718,7 @@ mod tests {
         let mut state = empty_run_state(triangulation);
         state.move_stats.record_success(MoveType::Move22);
 
-        validate_evolved_cdt_if_due(&state)
+        validate_supported_state_if_due(&state)
             .expect("EndOnly should skip cadence validation on accepted moves");
         assert!(
             state

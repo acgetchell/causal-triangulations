@@ -24,6 +24,8 @@ mod foliation;
 mod moves;
 mod validation;
 
+pub use validation::CdtValidationProfile;
+
 static NEXT_TRIANGULATION_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Returns a fresh process-local identity for transient triangulation caches.
@@ -574,10 +576,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Validates a deserialized checkpoint before exposing restored CDT state.
     ///
     /// This keeps serde deserialization aligned with the public constructor and
-    /// post-move contracts: checkpoint data must restore to a fully valid CDT
-    /// triangulation, including geometry, topology, foliation, and causality.
+    /// post-move contracts. Foliated checkpoint data must restore to a fully
+    /// valid CDT triangulation, including geometry, topology, foliation, and
+    /// causality; explicitly unfoliated geometry experiments restore through the
+    /// separate geometry/topology contract.
     fn validate_checkpoint_invariants(&self) -> CdtResult<()> {
-        self.validate_evolved_cdt()
+        self.validate_supported_state()
     }
 }
 
