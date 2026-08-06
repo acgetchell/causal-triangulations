@@ -20,7 +20,9 @@ use delaunay::prelude::DataType;
 use delaunay::prelude::export::{MeshExport, MeshExportError};
 use delaunay::tds::{EdgeKey, FacetHandle, SimplexKey, Tds, Vertex, VertexKey};
 use delaunay::topology::traits::{GlobalTopology, TopologyKind, ToroidalConstructionMode};
-use delaunay::{DelaunayCheckPolicy, DelaunayTriangulation, TopologyGuarantee};
+use delaunay::{
+    DelaunayCheckPolicy, DelaunayTriangulation, SimplexBarycenterError, TopologyGuarantee,
+};
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
@@ -414,6 +416,15 @@ pub enum DelaunayError {
     InvalidFace {
         /// The simplex key that was looked up.
         key: SimplexKey,
+    },
+
+    /// Upstream topology-aware barycenter computation failed for a live face.
+    #[error("failed to compute barycenter for face {key:?}: {detail}")]
+    FaceBarycenterFailed {
+        /// The simplex key whose barycenter was requested.
+        key: SimplexKey,
+        /// Underlying barycenter diagnostic.
+        detail: String,
     },
 
     /// Coordinate slice length does not match the backend dimension.
@@ -1030,6 +1041,29 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
                 None
             }
         }
+    }
+
+    /// Computes the upstream topology-aware barycenter of a live face.
+    ///
+    /// Periodic triangulations use the simplex's stored lift offsets before
+    /// canonicalizing the result back into the fundamental domain.
+    pub(crate) fn face_barycenter(
+        &self,
+        face: &DelaunayFaceHandle,
+    ) -> Result<[f64; D], DelaunayError> {
+        let point = self
+            .dt
+            .simplex_barycenter(face.key)
+            .map_err(|error| match error {
+                SimplexBarycenterError::MissingSimplex { .. } => {
+                    DelaunayError::InvalidFace { key: face.key }
+                }
+                error => DelaunayError::FaceBarycenterFailed {
+                    key: face.key,
+                    detail: error.to_string(),
+                },
+            })?;
+        Ok(*point.coords())
     }
 
     /// Returns Delaunay's stable, detached mesh-interchange export.
@@ -1757,6 +1791,7 @@ mod tests {
         generate_delaunay2, random_delaunay2, seeded_delaunay2,
     };
     use crate::{CdtTriangulation, CdtValidationProfile};
+    use approx::assert_relative_eq;
     use delaunay::DelaunayRepairPolicy;
     use delaunay::prelude::construction::{ConstructionOptions, DelaunayTriangulationBuilder};
     use serde_json::{Value, error::Category};
@@ -2157,57 +2192,72 @@ mod tests {
     }
 
     #[test]
-    fn embedding_validation_failure_restores_mutation_snapshot() {
-        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 0)])
-            .expect("triangle should build");
-        let mut backend = validated_backend(dt);
-        let serialized_before = serde_json::to_value(&backend).expect("backend should serialize");
-        let dt_before = backend.dt.clone();
-        let facets_before = backend.interior_facets_by_edge.clone();
-        let expected_facets = facets_before.clone();
-        backend
-            .insert_vertex(&[0.25, 0.25])
-            .expect("inside-point insertion should commit");
-
-        backend
-            .validate_structural()
-            .expect("inside-point insertion should preserve structural validity");
-        backend
-            .validate_embedding()
-            .expect("inside-point insertion should preserve the embedding");
-        assert_ne!(
-            serde_json::to_value(&backend).expect("mutated backend should serialize"),
-            serialized_before,
-            "test setup should mutate the triangulation before injecting failure"
-        );
-
-        let error = backend
-            .restore_if_embedding_invalid(
-                Err(DelaunayError::ValidationFailed {
+    fn embedding_validation_errors_restore_mutation_snapshot() {
+        let validation_errors = [
+            (
+                DelaunayError::ValidationFailed {
                     level: DelaunayValidationLevel::Four,
                     detail: "non-adjacent simplices intersect".to_string(),
-                }),
-                dt_before,
-                facets_before,
-                DelaunayOperation::InsertVertex,
-                "[0.25, 0.25]",
-            )
-            .expect_err("failed embedding validation should reject the mutation");
+                },
+                "insert_vertex produced invalid geometry for [0.25, 0.25]: non-adjacent simplices intersect",
+            ),
+            (
+                DelaunayError::NotImplemented {
+                    operation: DelaunayOperation::ReserveCapacity,
+                },
+                "insert_vertex produced invalid geometry for [0.25, 0.25]: not implemented: reserve_capacity",
+            ),
+        ];
 
-        assert_matches!(
-            error,
-            DelaunayError::ValidationFailed {
-                level: DelaunayValidationLevel::Four,
-                detail,
-            } if detail.contains(
-                "insert_vertex produced invalid geometry for [0.25, 0.25]: non-adjacent simplices intersect"
-            )
-        );
-        assert_eq!(
-            serde_json::to_value(&backend).expect("restored backend should serialize"),
-            serialized_before
-        );
-        assert_eq!(backend.interior_facets_by_edge, expected_facets);
+        for (validation_error, expected_detail) in validation_errors {
+            let dt =
+                build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 0)])
+                    .expect("triangle should build");
+            let mut backend = validated_backend(dt);
+            let serialized_before =
+                serde_json::to_value(&backend).expect("backend should serialize");
+            let dt_before = backend.dt.clone();
+            let facets_before = backend.interior_facets_by_edge.clone();
+            let expected_facets = facets_before.clone();
+            backend
+                .insert_vertex(&[0.25, 0.25])
+                .expect("inside-point insertion should commit");
+
+            backend
+                .validate_structural()
+                .expect("inside-point insertion should preserve structural validity");
+            backend
+                .validate_embedding()
+                .expect("inside-point insertion should preserve the embedding");
+            assert_ne!(
+                serde_json::to_value(&backend).expect("mutated backend should serialize"),
+                serialized_before,
+                "test setup should mutate the triangulation before injecting failure"
+            );
+
+            let error = backend
+                .restore_if_embedding_invalid(
+                    Err(validation_error),
+                    dt_before,
+                    facets_before,
+                    DelaunayOperation::InsertVertex,
+                    "[0.25, 0.25]".to_string(),
+                )
+                .expect_err("failed embedding validation should reject the mutation");
+
+            assert_matches!(
+                error,
+                DelaunayError::ValidationFailed {
+                    level: DelaunayValidationLevel::Four,
+                    detail,
+                } if detail == expected_detail
+            );
+            assert_eq!(
+                serde_json::to_value(&backend).expect("restored backend should serialize"),
+                serialized_before
+            );
+            assert_eq!(backend.interior_facets_by_edge, expected_facets);
+        }
     }
 
     #[test]
@@ -2361,6 +2411,105 @@ mod tests {
         let invalid_handle = DelaunayFaceHandle { key: bogus_key };
         let err = backend.face_vertices(&invalid_handle).unwrap_err();
         assert_matches!(err, DelaunayError::InvalidFace { key } if key == bogus_key);
+    }
+
+    #[test]
+    fn face_barycenter_matches_euclidean_triangle_centroid() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 1)])
+            .expect("triangle fixture should build");
+        let backend = validated_backend(dt);
+        let face = backend
+            .faces()
+            .next()
+            .expect("triangle fixture should contain a face");
+
+        let point = backend
+            .face_barycenter(&face)
+            .expect("Euclidean face barycenter should resolve");
+
+        assert_relative_eq!(point[0], 1.0 / 3.0, epsilon = 1e-15);
+        assert_relative_eq!(point[1], 1.0 / 3.0, epsilon = 1e-15);
+    }
+
+    #[test]
+    fn face_barycenter_rejects_invalid_handle() {
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 1)])
+            .expect("triangle fixture should build");
+        let backend = validated_backend(dt);
+        let bogus_key = SimplexKey::from(KeyData::from_ffi(u64::MAX));
+        let invalid_handle = DelaunayFaceHandle { key: bogus_key };
+
+        let error = backend.face_barycenter(&invalid_handle).unwrap_err();
+
+        assert_matches!(error, DelaunayError::InvalidFace { key } if key == bogus_key);
+    }
+
+    #[test]
+    fn face_barycenter_lifts_periodic_simplex_before_averaging() {
+        let triangulation =
+            CdtTriangulation::from_toroidal_cdt(4, 3).expect("toroidal fixture should build");
+        let backend = triangulation.geometry();
+        let domain = backend
+            .periodic_domain()
+            .expect("toroidal fixture should expose its periodic domain");
+
+        let (face, coordinates) = backend
+            .faces()
+            .find_map(|face| {
+                let vertices = backend.face_vertices(&face).ok()?;
+                let coordinates: Vec<[f64; 2]> = vertices
+                    .into_iter()
+                    .map(|vertex| {
+                        let coordinates = backend.vertex_coordinates(&vertex).ok()?;
+                        let [x, y] = coordinates.as_slice() else {
+                            return None;
+                        };
+                        Some([*x, *y])
+                    })
+                    .collect::<Option<_>>()?;
+                let coordinates: [[f64; 2]; 3] = coordinates.try_into().ok()?;
+                let crosses_seam = (0..2).any(|axis| {
+                    let minimum = coordinates
+                        .iter()
+                        .map(|point| point[axis])
+                        .fold(f64::INFINITY, f64::min);
+                    let maximum = coordinates
+                        .iter()
+                        .map(|point| point[axis])
+                        .fold(f64::NEG_INFINITY, f64::max);
+                    maximum - minimum > domain[axis] / 2.0
+                });
+                crosses_seam.then_some((face, coordinates))
+            })
+            .expect("periodic fixture should contain a simplex crossing a domain seam");
+
+        let reference = coordinates[0];
+        let mut expected = [0.0; 2];
+        for axis in 0..2 {
+            let period = domain[axis];
+            expected[axis] = coordinates
+                .iter()
+                .map(|point| {
+                    let delta = point[axis] - reference[axis];
+                    if delta > period / 2.0 {
+                        point[axis] - period
+                    } else if delta < -period / 2.0 {
+                        point[axis] + period
+                    } else {
+                        point[axis]
+                    }
+                })
+                .sum::<f64>()
+                / 3.0;
+            expected[axis] = expected[axis].rem_euclid(period);
+        }
+
+        let point = backend
+            .face_barycenter(&face)
+            .expect("periodic face barycenter should resolve");
+
+        assert_relative_eq!(point[0], expected[0], epsilon = 1e-12);
+        assert_relative_eq!(point[1], expected[1], epsilon = 1e-12);
     }
 
     #[test]

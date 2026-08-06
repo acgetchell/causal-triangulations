@@ -640,6 +640,18 @@ mod tests {
                 step_distance: 2,
             })
         );
+
+        let domain_error = triangulation
+            .validate_evolved_cdt_after_embedding(Ok(()))
+            .expect_err("successful embedding evidence must not bypass CDT-domain validation");
+        assert_eq!(
+            domain_error,
+            CdtError::CausalityViolation {
+                time_0: 0,
+                time_1: 2,
+                step_distance: 2,
+            }
+        );
     }
 
     #[test]
