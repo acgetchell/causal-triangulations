@@ -470,7 +470,7 @@ just publish-check
 | `src/`        | `just test-unit test-doc` (or `just ci`)     |
 | `scripts/`    | `just python-check test-python`              |
 | `notebooks/`  | `just notebook-check`                        |
-| Any Rust      | `just doc-check`                             |
+| Any Rust      | Also run `just doc-check` with the applicable Rust path command |
 
 ---
 
