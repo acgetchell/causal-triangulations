@@ -287,8 +287,9 @@ The implementation lives under `src/cdt/triangulation/` and is wired from `src/l
 
 `MetropolisAlgorithm::run()` is the current CDT production runner for proposal-before-mutation sampling. It proposes a move type, samples an explicit local
 proposal site from the same universe used for proposal counts, plans that site on a cloned triangulation, computes `ΔS` and the forward/reverse
-Metropolis-Hastings site-count ratio, accepts or rejects the concrete proposal, and only replaces the live triangulation after acceptance. Ordinary causal,
-geometric, and backend edit failures are self-loop proposal outcomes recorded in `ProposalStatistics`; hard backend failures remain structured errors.
+Metropolis-Hastings family-probability and site-count ratio, accepts or rejects the concrete proposal, and only replaces the live triangulation after
+acceptance. Ordinary causal, geometric, and backend edit failures are self-loop proposal outcomes recorded in `ProposalStatistics`; hard backend failures
+remain structured errors.
 Toroidal move finalization rejects and rolls back candidate sites that would violate χ = 0 or the closed-S¹ per-slice foliation invariant.
 
 The module tree is declared from `src/lib.rs` to avoid the `metropolis.rs` plus `metropolis/` layout pattern. `adapter.rs` is the single CDT adapter boundary
@@ -309,8 +310,12 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
 - `scalar_trace()` and `write_trace_csv()` expose step diagnostics through `markov-chain-monte-carlo::Trace`, using a rectangular CSV table suitable for Polars
   and other downstream dataframe tools.
 
-### `cdt/proposal_policy.rs` — Borrowed Proposal-Policy Inspection
+### `cdt/proposal_policy.rs` — Checked Family Policies And Borrowed Inspection
 
+- `CdtMoveFamilyPolicy` evaluates finite nonnegative relative weights from one invariant-safe family view at a time; CDT normalizes state-dependent output,
+  while `UniformCdtMoveFamilyPolicy` and `CdtMoveFamilyDistribution` provide checked static distributions that avoid unrelated family-cache refreshes.
+- Family probabilities are quantized to the proposal RNG's exact 53-bit categorical grid, preserving positive support and keeping sampled mass identical to
+  the probabilities used in the Hastings correction.
 - `CdtProposalPolicyView` borrows a validated triangulation and one synchronized family cache without exposing mutable geometry or cloning the triangulation.
 - `MoveType::REVERSIBLE_1P1`, `MoveType::identifier`, and `MoveType::reverse` define the stable family order, external identifiers, and reverse mapping.
 - `CdtProposalSiteId` is an opaque family ordinal with triangulation-instance and modification-version provenance; fresh views reject foreign, stale,
@@ -318,8 +323,8 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
 - Offered-site counts and deterministic ID iteration share `MoveSiteCache` and the exact visitor used by conventional sampler selection and reverse-site
   accounting. These sites belong to the actual proposal support but are not an eligible/executable-site mask: later backend edits or CDT validation may still
   reject an offered site as an ordinary self-loop proposal.
-- `tests/proposal_policy.rs` verifies the public boundary, including empty families, ordering, state facts, invalidation, and representative accepted toroidal
-  inverse moves.
+- `tests/proposal_policy.rs` verifies the public boundary, including empty families, ordering, state facts, invalidation, independent concrete-pair
+  detailed-balance calculations, fixed-policy checkpoint reproducibility, and representative accepted toroidal inverse moves.
 
 ### `cdt/observables.rs` — User-facing estimators
 

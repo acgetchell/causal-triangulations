@@ -4,10 +4,11 @@
 
 use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::FoliationError;
+use crate::cdt::proposal_policy::CdtMoveFamilyPolicyError;
 use crate::cdt::results::CdtScalarTraceOutcome;
 use crate::config::CdtTopology;
 use crate::geometry::{SpacetimeCoordinateComponent, SpacetimeCoordinateError};
-use markov_chain_monte_carlo::{McmcError, StepOutcome};
+use markov_chain_monte_carlo::{DiscreteProposalRatioError, McmcError, StepOutcome};
 use std::fmt;
 
 /// Highest cumulative upstream Delaunay validation level being enforced.
@@ -1254,6 +1255,10 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             | CdtError::InvalidScalarTraceCount { .. }
             | CdtError::MeasurementCountOverflow { .. }
             | CdtError::InvalidSimulationConfiguration { .. }
+            | CdtError::ProposalPolicyFailed { .. }
+            | CdtError::MetropolisProposalPolicyFailed { .. }
+            | CdtError::ProposalRatioFailed { .. }
+            | CdtError::MetropolisProposalRatioFailed { .. }
             | CdtError::PlannedProposalStepFailed { .. }
             | CdtError::UnexpectedPlannedStepOutcome { .. }
             | CdtError::PlannedProposalTelemetryMissing { .. }
@@ -1429,6 +1434,38 @@ pub enum CdtError {
         attempt: usize,
         /// Most specific lower-level rejection or failure observed.
         source: MetropolisMoveApplicationFailure,
+    },
+    /// A standalone planned proposal could not evaluate a checked family distribution.
+    #[error("CDT proposal policy failed: {source}")]
+    ProposalPolicyFailed {
+        /// Typed policy evaluation or normalization failure.
+        source: CdtMoveFamilyPolicyError,
+    },
+    /// A Metropolis run could not evaluate a checked family distribution.
+    #[error("CDT proposal policy failed at Metropolis step {step}: {source}")]
+    MetropolisProposalPolicyFailed {
+        /// Monte Carlo step whose pre-state or reverse-state policy evaluation failed.
+        step: u32,
+        /// Typed policy evaluation or normalization failure.
+        source: CdtMoveFamilyPolicyError,
+    },
+    /// A standalone planned proposal carried invalid family/site ratio components.
+    #[error("CDT proposal ratio failed for {move_type:?}: {source}")]
+    ProposalRatioFailed {
+        /// Selected forward family.
+        move_type: MoveType,
+        /// Typed upstream ratio-construction failure.
+        source: DiscreteProposalRatioError,
+    },
+    /// A Metropolis run received invalid family/site ratio components.
+    #[error("CDT proposal ratio failed for {move_type:?} at Metropolis step {step}: {source}")]
+    MetropolisProposalRatioFailed {
+        /// Monte Carlo step whose planned ratio was invalid.
+        step: u32,
+        /// Selected forward family.
+        move_type: MoveType,
+        /// Typed upstream ratio-construction failure.
+        source: DiscreteProposalRatioError,
     },
     /// A planned CDT proposal step completed without required proposal telemetry.
     #[error("planned CDT proposal step {step} completed without required proposal telemetry")]
@@ -1608,6 +1645,12 @@ pub enum CdtError {
         #[source]
         failure: CheckpointResumeFailure,
     },
+}
+
+impl From<CdtMoveFamilyPolicyError> for CdtError {
+    fn from(source: CdtMoveFamilyPolicyError) -> Self {
+        Self::ProposalPolicyFailed { source }
+    }
 }
 
 impl CdtError {

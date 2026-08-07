@@ -2,7 +2,8 @@
 
 > **MCMC backend boundary:** this page describes the current CDT production Metropolis runner. Its proposal-before-mutation contract should be preserved, but
 > generic Metropolis-Hastings mechanics should live behind `markov-chain-monte-carlo` adapters rather than CDT-local sampler logic. Chunked continuation now
-> uses upstream proposal planning and checkpoint-compatible continuation from `markov-chain-monte-carlo` v0.4. Repository-owned Semgrep rules enforce the
+> uses upstream proposal planning, weighted discrete proposal ratios, and checkpoint-compatible continuation from `markov-chain-monte-carlo` v0.4.1.
+> Repository-owned Semgrep rules enforce the
 > production boundary by rejecting CDT-local generic acceptance draws and manual accepted/rejected sampler counters; any further upstream planned-step hooks and
 > telemetry needs are tracked by [`markov-chain-monte-carlo#61`](https://github.com/acgetchell/markov-chain-monte-carlo/issues/61).
 
@@ -10,7 +11,9 @@
 
 For each step:
 
-1. Select a move type with `ErgodicsSystem::select_random_move()`.
+1. Evaluate the configured `CdtMoveFamilyPolicy` once for every family in `MoveType::REVERSIBLE_1P1`, using one invariant-safe borrowed policy view per family.
+   Validate the returned finite nonnegative weights, normalize them, and sample one family without renormalizing around empty offered-site sets. The built-in
+   conventional path uses `UniformCdtMoveFamilyPolicy` through this same boundary.
 2. Read the cached sampleable local sites for that move type, rebuilding the cache first if the triangulation cache key changed, and select one site uniformly
    from that same site universe. If no site exists, record the step as a self-loop proposal and continue without changing the live triangulation.
 3. Compute the proposed action change from the concrete proposal's simplex-count delta:
@@ -19,11 +22,12 @@ For each step:
    - `(3,1)`: `ΔN0 = -1`, `ΔN1 = -3`, `ΔN2 = -2`
 4. Apply the selected site once on a cloned proposed state. Ordinary causal, geometric, or backend edit failures are self-loop proposal outcomes; the live
    triangulation is unchanged.
-5. Count the forward sites from the cached selected move-family set and count the reverse sites for the inverse move type on the proposed state.
-6. Accept successful transitions with the Metropolis-Hastings probability
+5. Count the forward sites from the cached selected move-family set. Re-evaluate the policy on the planned post-move state and count the reverse sites for the
+   inverse family from the same canonical cache implementation.
+6. Build the weighted family/site correction with `markov-chain-monte-carlo::DiscreteProposalRatio` and accept successful transitions with
    `min(1, exp(-ΔS / T + log(q(current | proposed) / q(proposed | current))))`. For equal move-family weights this adds
-   `log(forward_site_count / reverse_site_count)` to the ordinary action term, so `(1,3)` and `(3,1)` proposals account for their different site
-   multiplicities.
+   `log(forward_site_count / reverse_site_count)` to the ordinary action term. Unequal or state-dependent policies additionally contribute
+   `log(p(reverse(m) | y) / p(m | x))`.
 7. Only after acceptance, replace the live triangulation with the planned proposed state.
 8. If proposal planning hits a hard backend or invariant failure, return `CdtError::MetropolisMoveApplicationFailed` with the step, move type, retry count, and
    lower-level failure.
@@ -145,8 +149,8 @@ proposal probability, even if applying it later returns an ordinary geometric, c
 `ErgodicsSystem` owns this proposal-site universe as a per-move-family cache keyed by `(instance_id, modification_count)`. The instance identity prevents
 cross-instance reuse when distinct triangulations have colliding modification counts, while the modification count keeps ordinary self-loop outcomes cheap.
 Forward counts are therefore the cached set length, and forward sampling is uniform over the same cached vector. Accepted mutations replace or mutate the
-triangulation, causing the next proposal to rebuild before sampling stale handles. Proposed-state reverse counts are computed from a fresh cache for the cloned
-proposed state using that same `(instance_id, modification_count)` validity check.
+triangulation, causing the next proposal to rebuild before sampling stale handles. Proposed-state reverse counts refresh the reverse-family entry in the same
+`ErgodicsSystem` cache for the cloned proposed state using that `(instance_id, modification_count)` validity check.
 
 Before a site enters that cache, the geometry adapter runs Delaunay 0.8's immutable k=1/k=2 feasibility validator for every primitive that can be checked on the
 current state. These exact deterministic preflights come from
@@ -174,7 +178,8 @@ A CDT proposal is represented by an explicit local site selected from the curren
 
 `CdtProposal::policy_view()` and `ErgodicsSystem::proposal_policy_view()` expose the canonical offered-site universe without exposing Delaunay handles or a
 mutable triangulation. Each `CdtProposalPolicyView` is scoped to one move family so the conventional sampler can inspect only the selected family; an external
-policy can iterate `MoveType::REVERSIBLE_1P1` to inspect every family through the same boundary.
+state-dependent policy receives one short-lived view for each entry in `MoveType::REVERSIBLE_1P1`. Fixed policies bypass unrelated family views and reuse
+their checked distribution directly.
 
 The policy view and opaque site-ID types are available from `prelude::simulation`; `prelude::moves` remains focused on local move kernels, move families, and
 move statistics. `MoveType` intentionally appears in both scoped preludes because it identifies both kernel operations and simulation proposal families. The
@@ -189,6 +194,29 @@ stable family order and identifiers are:
 
 `Move22` and `EdgeFlip` remain distinct policy identifiers for compatibility with the conventional four-family distribution, although both use the same 2D
 k=2 flip kernel and therefore expose the same site universe.
+
+### Injected Family Policies
+
+`CdtMoveFamilyPolicy::family_weight()` is the state-dependent family-only injection boundary. CDT calls it four times per evaluated state, once with each
+`CdtProposalPolicyView`. Outputs are relative normalization inputs, not site weights: every value must be finite and nonnegative, and the complete array must
+have a positive finite normalization total. Custom state-dependent implementations may use topology, simplex counts, slice sizes, family identity, and
+offered-site information from the view.
+
+`CdtMoveFamilyPolicy::fixed_distribution()` is the opt-in fast path for state-independent policies. `CdtMoveFamilyDistribution::from_weights()` provides a
+checked fixed policy, while `UniformCdtMoveFamilyPolicy` supplies the conventional baseline; both reuse their distribution without enumerating all four
+family-site caches. Effective probabilities are quantized to the proposal RNG's 53-bit categorical draw grid. Every positive input retains at least one draw
+atom, and the same exact integer masses drive family sampling and the reported Hastings probabilities.
+
+Individual zero family weights are allowed. All-zero output is `CdtMoveFamilyPolicyError::EmptySupport`; negative or non-finite output and non-finite
+normalization totals are separate typed errors. A positive-weight family with zero offered sites remains in the family distribution and becomes a typed
+`NoOfferedSite` self-loop if selected. CDT never conditions the family distribution on site availability after selection. For a successful forward plan,
+zero reverse-family probability or zero reverse offered-site count is valid input to the MCMC ratio and yields a `-∞` log correction, so the transition is
+rejected without mutating the chain.
+
+Use `CdtProposal::with_policy()` or `CdtProposal::with_seed_and_policy()` with an upstream delayed chain directly. The production facade provides
+`MetropolisAlgorithm::run_with_policy()`, `run_to_checkpoint_with_policy()`, `resume_from_checkpoint_with_policy()`, and
+`resume_to_checkpoint_with_policy()`. CDT checkpoints preserve the proposal RNG stream but do not serialize external policy or model state; experiment code
+must persist and restore that state separately.
 
 The view exposes the selected and reverse families, CDT topology, invariant-bearing simplex counts, borrowed slice sizes, the offered-site count, and an
 exact-size iterator of opaque `CdtProposalSiteId` values. Empty families return count zero and an empty iterator. IDs use deterministic ascending ordinals for
@@ -228,6 +256,15 @@ same `y`:
 q(x -> y) = sum over (m, s) where apply(x, m, s) = y of p(m | x) / |S_m(x)|
 ```
 
+For one canonical family/site atom with unit transition multiplicity, the implemented forward and reverse probabilities are:
+
+```text
+q(x -> y) = p(m | x) / |S_m(x)|
+q(y -> x) = p(reverse(m) | y) / |S_reverse(m)(y)|
+```
+
+The reverse probability is always evaluated from the realized planned state `y`; it is never copied from `x`.
+
 For equal move-family weights and one proposal site per resulting state, this reduces to the familiar site-count correction:
 
 ```text
@@ -262,6 +299,15 @@ diagnostic errors, not normal MCMC rejection outcomes.
 
 ## Proposal Statistics
 
+Each fresh in-memory `MonteCarloStep` also exposes `ProposalKernelTelemetry` through `proposal_telemetry()`. Successful plans report selected and reverse
+families, both family probabilities, both canonical offered-site counts, the independently inspectable family and site log-ratio components, and the complete
+Hastings correction. Self-loops retain the selected family, pre-state probability, original denominator, and typed `CdtProposalPlanningOutcome`. Pair this
+with `MonteCarloStepOutcome` to distinguish planning rejection, Metropolis rejection, and acceptance without parsing strings or accessing private state.
+
+Policy/model persistence and external audit logging remain outside the timed transition. Callers that serialize checkpoints should therefore persist required
+policy state and per-step policy telemetry in their experiment artifact layer; legacy-compatible serialized CDT step records do not embed the optional
+in-memory proposal audit field.
+
 `ProposalStatistics` is telemetry, not part of the Markov kernel. It records:
 
 - selected move-family proposals
@@ -274,6 +320,10 @@ diagnostic errors, not normal MCMC rejection outcomes.
 
 These counters explain chain stickiness and backend behavior, but detailed balance is maintained by the proposal probability used at the current step, not by
 empirical frequencies accumulated earlier in the run.
+
+`tests/proposal_policy.rs` independently reconstructs forward and reverse family/site probabilities for concrete uniform and unequal-weight transitions,
+checks the resulting Metropolis-Hastings flux equality, and compares a fixed-policy checkpoint/resume run with its uninterrupted seeded trajectory. These are
+pairwise kernel and same-build reproducibility checks; they do not by themselves establish ergodicity, mixing quality, or physical convergence.
 
 The explicit-site model avoids dry-run cloning every candidate during site counting. The only required full triangulation clone is the planned proposed state
 used by planned Metropolis acceptance, plus a narrow rollback snapshot around composite mutations whose intermediate backend steps can partially commit.

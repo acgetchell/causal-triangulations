@@ -5,11 +5,352 @@
 use super::helpers::actions_match;
 use crate::cdt::ergodic_moves::MoveType;
 use crate::errors::{CdtError, CdtResult, CheckpointResumeFailure};
+use markov_chain_monte_carlo::DiscreteProposalRatio;
 use serde::de::Error as DeError;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::error::Error;
 use std::fmt;
 use std::num::NonZeroU32;
+
+/// Typed result of CDT-local proposal planning before the Metropolis decision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CdtProposalPlanningOutcome {
+    /// A concrete site was realized and the complete reversible ratio was evaluated.
+    ConcretePlan,
+    /// The selected move would underflow or overflow count-level simplex arithmetic.
+    InvalidCountDelta,
+    /// The selected family had no canonical offered sites.
+    NoOfferedSite,
+    /// The sampled offered site failed CDT causality during realization.
+    CausalityViolation,
+    /// The sampled offered site failed a geometric or post-mutation invariant.
+    GeometricViolation,
+    /// The sampled offered site was rejected by the backend move kernel.
+    KernelRejected,
+}
+
+/// Family and offered-site telemetry for one CDT proposal attempt.
+///
+/// Successful plans expose the complete forward and reverse components used by
+/// Metropolis-Hastings. Self-loop attempts retain the selected family,
+/// pre-state probability, original offered-site denominator, and typed local
+/// rejection reason; reverse-state fields are absent because no proposed state
+/// exists. Pair this record with [`MonteCarloStep::outcome`] to distinguish
+/// planning self-loops from ordinary Metropolis rejection and acceptance.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ProposalKernelTelemetry {
+    selected_family: MoveType,
+    reverse_family: MoveType,
+    forward_family_probability: f64,
+    reverse_family_probability: Option<f64>,
+    forward_site_count: usize,
+    reverse_site_count: Option<usize>,
+    planning_outcome: CdtProposalPlanningOutcome,
+}
+
+impl ProposalKernelTelemetry {
+    /// Constructs kernel telemetry from already checked planner components.
+    pub(crate) const fn new(
+        selected_family: MoveType,
+        reverse_family: MoveType,
+        forward_family_probability: f64,
+        reverse_family_probability: Option<f64>,
+        forward_site_count: usize,
+        reverse_site_count: Option<usize>,
+        planning_outcome: CdtProposalPlanningOutcome,
+    ) -> Self {
+        Self {
+            selected_family,
+            reverse_family,
+            forward_family_probability,
+            reverse_family_probability,
+            forward_site_count,
+            reverse_site_count,
+            planning_outcome,
+        }
+    }
+
+    /// Returns the family selected in the pre-move state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::*;
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let results = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
+    ///     ActionConfig::default(),
+    /// )
+    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    /// let Some(telemetry) = results.steps()[0].proposal_telemetry() else {
+    ///     return Ok(());
+    /// };
+    /// assert_eq!(telemetry.selected_family(), results.steps()[0].move_type());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn selected_family(self) -> MoveType {
+        self.selected_family
+    }
+
+    /// Returns the family required to reverse a successful plan.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::*;
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let results = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
+    ///     ActionConfig::default(),
+    /// )
+    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    /// let Some(telemetry) = results.steps()[0].proposal_telemetry() else {
+    ///     return Ok(());
+    /// };
+    /// assert_eq!(telemetry.reverse_family(), telemetry.selected_family().reverse());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn reverse_family(self) -> MoveType {
+        self.reverse_family
+    }
+
+    /// Returns `p(m | x)` from the pre-move state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::*;
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let results = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
+    ///     ActionConfig::default(),
+    /// )
+    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    /// let Some(telemetry) = results.steps()[0].proposal_telemetry() else {
+    ///     return Ok(());
+    /// };
+    /// assert_eq!(telemetry.forward_family_probability(), 0.25);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn forward_family_probability(self) -> f64 {
+        self.forward_family_probability
+    }
+
+    /// Returns `p(reverse(m) | y)` when a concrete post-move state exists.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::*;
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let results = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
+    ///     ActionConfig::default(),
+    /// )
+    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    /// let Some(telemetry) = results.steps()[0].proposal_telemetry() else {
+    ///     return Ok(());
+    /// };
+    /// assert!(telemetry.reverse_family_probability().is_none_or(f64::is_finite));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn reverse_family_probability(self) -> Option<f64> {
+        self.reverse_family_probability
+    }
+
+    /// Returns the original canonical forward offered-site denominator.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::*;
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let results = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
+    ///     ActionConfig::default(),
+    /// )
+    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    /// let Some(telemetry) = results.steps()[0].proposal_telemetry() else {
+    ///     return Ok(());
+    /// };
+    /// let _forward_sites = telemetry.forward_site_count();
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn forward_site_count(self) -> usize {
+        self.forward_site_count
+    }
+
+    /// Returns the canonical reverse offered-site denominator for a concrete plan.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::*;
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let results = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
+    ///     ActionConfig::default(),
+    /// )
+    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    /// let Some(telemetry) = results.steps()[0].proposal_telemetry() else {
+    ///     return Ok(());
+    /// };
+    /// assert!(telemetry.reverse_site_count().is_none_or(|count| count > 0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn reverse_site_count(self) -> Option<usize> {
+        self.reverse_site_count
+    }
+
+    /// Returns the typed CDT-local planning result.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::*;
+    /// use std::assert_matches;
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let results = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
+    ///     ActionConfig::default(),
+    /// )
+    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    /// let Some(telemetry) = results.steps()[0].proposal_telemetry() else {
+    ///     return Ok(());
+    /// };
+    /// assert_matches!(
+    ///     telemetry.planning_outcome(),
+    ///     CdtProposalPlanningOutcome::ConcretePlan
+    ///         | CdtProposalPlanningOutcome::InvalidCountDelta
+    ///         | CdtProposalPlanningOutcome::NoOfferedSite
+    ///         | CdtProposalPlanningOutcome::CausalityViolation
+    ///         | CdtProposalPlanningOutcome::GeometricViolation
+    ///         | CdtProposalPlanningOutcome::KernelRejected
+    /// );
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn planning_outcome(self) -> CdtProposalPlanningOutcome {
+        self.planning_outcome
+    }
+
+    /// Returns the family-probability log-ratio component for a concrete plan.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::*;
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let results = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
+    ///     ActionConfig::default(),
+    /// )
+    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    /// let Some(telemetry) = results.steps()[0].proposal_telemetry() else {
+    ///     return Ok(());
+    /// };
+    /// assert!(telemetry.log_family_probability_ratio().is_none_or(f64::is_finite));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn log_family_probability_ratio(self) -> Option<f64> {
+        let reverse = self.reverse_family_probability?;
+        DiscreteProposalRatio::new(self.forward_family_probability, 1, reverse, 1)
+            .ok()
+            .map(DiscreteProposalRatio::log_q_ratio)
+    }
+
+    /// Returns the offered-site-count log-ratio component for a concrete plan.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::*;
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let results = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
+    ///     ActionConfig::default(),
+    /// )
+    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    /// let Some(telemetry) = results.steps()[0].proposal_telemetry() else {
+    ///     return Ok(());
+    /// };
+    /// assert!(telemetry.log_site_count_ratio().is_none_or(f64::is_finite));
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn log_site_count_ratio(self) -> Option<f64> {
+        let reverse = self.reverse_site_count?;
+        DiscreteProposalRatio::from_counts(self.forward_site_count, reverse)
+            .ok()
+            .map(DiscreteProposalRatio::log_q_ratio)
+    }
+
+    /// Returns the complete family-plus-site log Hastings correction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::*;
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let results = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
+    ///     ActionConfig::default(),
+    /// )
+    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    /// let Some(telemetry) = results.steps()[0].proposal_telemetry() else {
+    ///     return Ok(());
+    /// };
+    /// let total = telemetry.log_proposal_ratio();
+    /// let family = telemetry.log_family_probability_ratio();
+    /// let sites = telemetry.log_site_count_ratio();
+    /// assert_eq!(total.is_some(), family.is_some() && sites.is_some());
+    /// if let (Some(total), Some(family), Some(sites)) = (total, family, sites) {
+    ///     approx::assert_relative_eq!(total, family + sites, epsilon = 1e-12);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn log_proposal_ratio(self) -> Option<f64> {
+        let reverse_probability = self.reverse_family_probability?;
+        let reverse_sites = self.reverse_site_count?;
+        DiscreteProposalRatio::new(
+            self.forward_family_probability,
+            self.forward_site_count,
+            reverse_probability,
+            reverse_sites,
+        )
+        .ok()
+        .map(DiscreteProposalRatio::log_q_ratio)
+    }
+}
 
 /// Telemetry for one completed Monte Carlo step.
 ///
@@ -48,6 +389,13 @@ pub struct MonteCarloStep {
     move_type: MoveType,
     action_before: f64,
     outcome: MonteCarloStepOutcome,
+    /// In-memory proposal-density audit record.
+    ///
+    /// External persistence is caller-owned so policy/model logging stays out
+    /// of the timed sampler transition. Serialized legacy checkpoints therefore
+    /// restore this optional field as absent.
+    #[serde(skip)]
+    proposal_telemetry: Option<ProposalKernelTelemetry>,
 }
 
 #[derive(Deserialize)]
@@ -118,7 +466,17 @@ impl MonteCarloStep {
             move_type,
             action_before,
             outcome,
+            proposal_telemetry: None,
         })
+    }
+
+    /// Attaches checked proposal-kernel telemetry to a completed step.
+    pub(crate) const fn with_proposal_telemetry(
+        mut self,
+        proposal_telemetry: ProposalKernelTelemetry,
+    ) -> Self {
+        self.proposal_telemetry = Some(proposal_telemetry);
+        self
     }
 
     /// Creates validated telemetry for an accepted Metropolis step.
@@ -337,6 +695,39 @@ impl MonteCarloStep {
     #[must_use]
     pub const fn outcome(&self) -> &MonteCarloStepOutcome {
         &self.outcome
+    }
+
+    /// Returns the in-memory proposal-density audit record when available.
+    ///
+    /// Fresh and in-memory-resumed simulations populate this field. Callers
+    /// that serialize checkpoints should persist any required policy audit log
+    /// separately; deserialized legacy-compatible step telemetry returns
+    /// `None` here.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let results = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
+    ///     ActionConfig::default(),
+    /// )
+    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    /// let step = &results.steps()[0];
+    /// let Some(telemetry) = step.proposal_telemetry() else {
+    ///     return Ok(());
+    /// };
+    /// assert_eq!(telemetry.selected_family(), step.move_type());
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn proposal_telemetry(&self) -> Option<&ProposalKernelTelemetry> {
+        self.proposal_telemetry.as_ref()
     }
 
     /// Returns whether the step was accepted by the Metropolis-Hastings transition.

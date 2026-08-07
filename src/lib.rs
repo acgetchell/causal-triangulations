@@ -169,7 +169,8 @@ pub mod cdt {
         };
         pub use runner::{MetropolisAlgorithm, MetropolisConfig};
         pub use telemetry::{
-            AcceptedStepTelemetry, MonteCarloStep, MonteCarloStepOutcome, ProposalStatistics,
+            AcceptedStepTelemetry, CdtProposalPlanningOutcome, MonteCarloStep,
+            MonteCarloStepOutcome, ProposalKernelTelemetry, ProposalStatistics,
             RejectedProposalStepTelemetry,
         };
     }
@@ -195,12 +196,15 @@ pub use cdt::foliation::{
 };
 pub use cdt::metropolis::{
     AcceptedStepTelemetry, CdtMcmcCheckpoint, CdtProposal, CdtProposalError, CdtProposalInfo,
-    CdtProposalPlan, CdtTarget, MetropolisAlgorithm, MetropolisConfig, MonteCarloStep,
-    MonteCarloStepOutcome, ProposalStatistics, RejectedProposalStepTelemetry, StepOutcome,
+    CdtProposalPlan, CdtProposalPlanningOutcome, CdtTarget, MetropolisAlgorithm, MetropolisConfig,
+    MonteCarloStep, MonteCarloStepOutcome, ProposalKernelTelemetry, ProposalStatistics,
+    RejectedProposalStepTelemetry, StepOutcome,
 };
 pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
 pub use cdt::proposal_policy::{
+    CdtMoveFamilyDistribution, CdtMoveFamilyPolicy, CdtMoveFamilyPolicyError,
     CdtProposalPolicyView, CdtProposalSiteId, CdtProposalSiteIdError, CdtProposalSiteIds,
+    UniformCdtMoveFamilyPolicy,
 };
 pub use cdt::results::{Measurement, SimulationResultsBackend};
 pub use cdt::triangulation::{
@@ -439,12 +443,14 @@ pub mod prelude {
         pub use crate::cdt::ergodic_moves::MoveType;
         pub use crate::cdt::metropolis::{
             AcceptedStepTelemetry, CdtMcmcCheckpoint, CdtProposal, CdtProposalError,
-            CdtProposalInfo, CdtProposalPlan, CdtTarget, MetropolisAlgorithm, MetropolisConfig,
-            MonteCarloStep, MonteCarloStepOutcome, ProposalStatistics,
-            RejectedProposalStepTelemetry,
+            CdtProposalInfo, CdtProposalPlan, CdtProposalPlanningOutcome, CdtTarget,
+            MetropolisAlgorithm, MetropolisConfig, MonteCarloStep, MonteCarloStepOutcome,
+            ProposalKernelTelemetry, ProposalStatistics, RejectedProposalStepTelemetry,
         };
         pub use crate::cdt::proposal_policy::{
+            CdtMoveFamilyDistribution, CdtMoveFamilyPolicy, CdtMoveFamilyPolicyError,
             CdtProposalPolicyView, CdtProposalSiteId, CdtProposalSiteIdError, CdtProposalSiteIds,
+            UniformCdtMoveFamilyPolicy,
         };
         pub use crate::cdt::results::{Measurement, SimulationResultsBackend};
         pub use crate::cdt::triangulation::SimulationEvent;

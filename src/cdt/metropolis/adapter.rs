@@ -3,14 +3,21 @@
 //! Adapter boundary between CDT state and `markov-chain-monte-carlo`.
 
 use super::helpers::{action_for, proposed_delta_action, simplex_counts, validate_temperature};
-use super::telemetry::{CdtProposalSiteRejection, ProposalStatistics};
+use super::telemetry::{
+    CdtProposalPlanningOutcome, CdtProposalSiteRejection, ProposalKernelTelemetry,
+    ProposalStatistics,
+};
 use crate::cdt::action::ActionConfig;
-use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType, proposal_site_count};
-use crate::cdt::proposal_policy::CdtProposalPolicyView;
+use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveType};
+use crate::cdt::proposal_policy::{
+    CdtMoveFamilyDistribution, CdtMoveFamilyPolicy, CdtMoveFamilyPolicyError,
+    CdtProposalPolicyView, UniformCdtMoveFamilyPolicy,
+};
 use crate::errors::{CdtError, CdtResult, MetropolisMoveApplicationFailure};
 use crate::geometry::CdtTriangulation2D;
 use markov_chain_monte_carlo::{
-    Chain, ChainCheckpoint, DelayedProposal, DiscreteProposalRatio, McmcError, Target,
+    Chain, ChainCheckpoint, DelayedProposal, DiscreteProposalRatio, DiscreteProposalRatioError,
+    McmcError, Target,
 };
 use rand::Rng;
 use std::error::Error;
@@ -70,8 +77,8 @@ impl Target<CdtTriangulation2D> for CdtTarget {
 /// may mutate that clone to realize a concrete local site, but it never mutates
 /// the live simulation state. The sampler scores this plan with the
 /// Metropolis-Hastings forward/reverse proposal-site ratio, then commits the
-/// cloned state only if the Metropolis step accepts it. This planning boundary
-/// is the natural hook for future adaptive or self-learning proposal selection.
+/// cloned state only if the Metropolis step accepts it. Injected family policies
+/// evaluate through invariant-safe borrowed views at this planning boundary.
 ///
 /// # Examples
 ///
@@ -94,10 +101,20 @@ impl Target<CdtTriangulation2D> for CdtTarget {
 ///     plan.move_type(),
 ///     MoveType::Move22 | MoveType::Move13Add | MoveType::Move31Remove | MoveType::EdgeFlip
 /// );
+/// assert_eq!(plan.reverse_move_type(), plan.move_type().reverse());
+/// assert_eq!(plan.forward_family_probability(), 0.25);
+/// assert_eq!(plan.reverse_family_probability(), 0.25);
+/// assert!(plan.forward_site_count() > 0);
+/// assert!(plan.reverse_site_count() > 0);
 /// assert!(plan.action_before().is_finite());
 /// approx::assert_relative_eq!(
 ///     plan.action_after(),
 ///     plan.action_before() + plan.delta_action(),
+///     epsilon = 1e-12
+/// );
+/// approx::assert_relative_eq!(
+///     plan.log_proposal_ratio(),
+///     plan.log_family_probability_ratio() + plan.log_site_count_ratio(),
 ///     epsilon = 1e-12
 /// );
 /// # Ok(())
@@ -109,6 +126,8 @@ pub struct CdtProposalPlan {
     pub(crate) action_before: f64,
     pub(crate) action_after: f64,
     pub(crate) delta_action: f64,
+    pub(crate) forward_family_probability: f64,
+    pub(crate) reverse_family_probability: f64,
     pub(crate) forward_site_count: usize,
     /// Reverse proposal-site denominator for the realized proposed state.
     ///
@@ -117,6 +136,7 @@ pub struct CdtProposalPlan {
     /// ratio. It is a count of sites and must be greater than zero for a
     /// realized proposal to have finite reverse weight.
     pub(crate) reverse_site_count: usize,
+    pub(crate) log_proposal_ratio: f64,
     pub(crate) proposed_state: CdtTriangulation2D,
 }
 
@@ -231,6 +251,217 @@ impl CdtProposalPlan {
     pub const fn delta_action(&self) -> f64 {
         self.delta_action
     }
+
+    /// Returns the family that proposes the inverse transition.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtProposal, CdtResult, CdtTriangulation, DelayedProposal,
+    /// };
+    /// use rand::{SeedableRng, rngs::StdRng};
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut rng = StdRng::seed_from_u64(11);
+    /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
+    ///     assert_eq!(plan.reverse_move_type(), plan.move_type().reverse());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn reverse_move_type(&self) -> MoveType {
+        self.move_type.reverse()
+    }
+
+    /// Returns `p(m | x)`, evaluated on the pre-move state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtProposal, CdtResult, CdtTriangulation, DelayedProposal,
+    /// };
+    /// use rand::{SeedableRng, rngs::StdRng};
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut rng = StdRng::seed_from_u64(11);
+    /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
+    ///     assert_eq!(plan.forward_family_probability(), 0.25);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn forward_family_probability(&self) -> f64 {
+        self.forward_family_probability
+    }
+
+    /// Returns `p(reverse(m) | y)`, evaluated on the planned post-move state.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtProposal, CdtResult, CdtTriangulation, DelayedProposal,
+    /// };
+    /// use rand::{SeedableRng, rngs::StdRng};
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut rng = StdRng::seed_from_u64(11);
+    /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
+    ///     assert_eq!(plan.reverse_family_probability(), 0.25);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn reverse_family_probability(&self) -> f64 {
+        self.reverse_family_probability
+    }
+
+    /// Returns the canonical offered-site count `|S_m(x)|`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtProposal, CdtResult, CdtTriangulation, DelayedProposal,
+    /// };
+    /// use rand::{SeedableRng, rngs::StdRng};
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut rng = StdRng::seed_from_u64(11);
+    /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
+    ///     assert!(plan.forward_site_count() > 0);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn forward_site_count(&self) -> usize {
+        self.forward_site_count
+    }
+
+    /// Returns the canonical reverse offered-site count `|S_reverse(m)(y)|`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtProposal, CdtResult, CdtTriangulation, DelayedProposal,
+    /// };
+    /// use rand::{SeedableRng, rngs::StdRng};
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut rng = StdRng::seed_from_u64(11);
+    /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
+    ///     assert!(plan.reverse_site_count() > 0);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn reverse_site_count(&self) -> usize {
+        self.reverse_site_count
+    }
+
+    /// Returns `log(p(reverse(m) | y) / p(m | x))`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtProposal, CdtResult, CdtTriangulation, DelayedProposal,
+    /// };
+    /// use rand::{SeedableRng, rngs::StdRng};
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut rng = StdRng::seed_from_u64(11);
+    /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
+    ///     assert_eq!(plan.log_family_probability_ratio(), 0.0);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn log_family_probability_ratio(&self) -> f64 {
+        DiscreteProposalRatio::new(
+            self.forward_family_probability,
+            1,
+            self.reverse_family_probability,
+            1,
+        )
+        .map_or(f64::NEG_INFINITY, DiscreteProposalRatio::log_q_ratio)
+    }
+
+    /// Returns `log(|S_m(x)| / |S_reverse(m)(y)|)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtProposal, CdtResult, CdtTriangulation, DelayedProposal,
+    /// };
+    /// use rand::{SeedableRng, rngs::StdRng};
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut rng = StdRng::seed_from_u64(11);
+    /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
+    ///     assert!(plan.log_site_count_ratio().is_finite());
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn log_site_count_ratio(&self) -> f64 {
+        DiscreteProposalRatio::from_counts(self.forward_site_count, self.reverse_site_count)
+            .map_or(f64::NEG_INFINITY, DiscreteProposalRatio::log_q_ratio)
+    }
+
+    /// Returns the complete family-plus-site Hastings correction.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtProposal, CdtResult, CdtTriangulation, DelayedProposal,
+    /// };
+    /// use rand::{SeedableRng, rngs::StdRng};
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut rng = StdRng::seed_from_u64(11);
+    /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
+    ///     approx::assert_relative_eq!(
+    ///         plan.log_proposal_ratio(),
+    ///         plan.log_family_probability_ratio() + plan.log_site_count_ratio(),
+    ///         epsilon = 1e-12
+    ///     );
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn log_proposal_ratio(&self) -> f64 {
+        self.log_proposal_ratio
+    }
 }
 
 /// Telemetry returned by planned CDT proposal steps.
@@ -257,6 +488,10 @@ impl CdtProposalPlan {
 ///
 /// let info = proposal.info(&plan);
 /// assert_eq!(info.move_type, plan.move_type());
+/// assert_eq!(info.reverse_move_type, plan.reverse_move_type());
+/// assert_eq!(info.forward_site_count, plan.forward_site_count());
+/// assert_eq!(info.reverse_site_count, Some(plan.reverse_site_count()));
+/// assert_eq!(info.log_proposal_ratio, Some(plan.log_proposal_ratio()));
 /// assert!(info.delta_action.is_some());
 /// if let Some(delta_action) = info.delta_action {
 ///     approx::assert_relative_eq!(delta_action, plan.delta_action(), epsilon = 1e-12);
@@ -274,6 +509,68 @@ pub struct CdtProposalInfo {
     pub action_after: Option<f64>,
     /// Proposed action change.
     pub delta_action: Option<f64>,
+    /// Family needed to propose the inverse transition.
+    pub reverse_move_type: MoveType,
+    /// Forward family probability evaluated on the pre-move state.
+    pub forward_family_probability: f64,
+    /// Reverse-family probability evaluated on the planned post-move state.
+    pub reverse_family_probability: Option<f64>,
+    /// Canonical offered-site count for the selected family in the pre-move state.
+    pub forward_site_count: usize,
+    /// Canonical offered-site count for the reverse family in the post-move state.
+    pub reverse_site_count: Option<usize>,
+    /// Family-probability contribution to the log Hastings correction.
+    pub log_family_probability_ratio: Option<f64>,
+    /// Offered-site-count contribution to the log Hastings correction.
+    pub log_site_count_ratio: Option<f64>,
+    /// Complete family-plus-site log Hastings correction.
+    pub log_proposal_ratio: Option<f64>,
+    /// CDT-local result of attempting to realize the selected family and site.
+    pub planning_outcome: CdtProposalPlanningOutcome,
+}
+
+impl CdtProposalInfo {
+    /// Returns the policy and proposal-density audit record for this attempt.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtProposal, CdtResult, CdtTriangulation, DelayedProposal,
+    /// };
+    /// use rand::{SeedableRng, rngs::StdRng};
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut rng = StdRng::seed_from_u64(11);
+    /// let plan = proposal.propose_plan(&tri, &mut rng)?;
+    /// let info = match &plan {
+    ///     Some(plan) => proposal.info(plan),
+    ///     None => {
+    ///         let Some(info) = proposal.no_plan_info() else {
+    ///             return Ok(());
+    ///         };
+    ///         info
+    ///     }
+    /// };
+    /// let telemetry = info.proposal_telemetry();
+    /// assert_eq!(telemetry.selected_family(), info.move_type);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub const fn proposal_telemetry(self) -> ProposalKernelTelemetry {
+        ProposalKernelTelemetry::new(
+            self.move_type,
+            self.reverse_move_type,
+            self.forward_family_probability,
+            self.reverse_family_probability,
+            self.forward_site_count,
+            self.reverse_site_count,
+            self.planning_outcome,
+        )
+    }
 }
 
 /// Error reported by planned CDT proposal planning or commit.
@@ -304,6 +601,18 @@ pub struct CdtProposalInfo {
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum CdtProposalError {
+    /// The injected family policy could not produce a checked distribution.
+    Policy {
+        /// Typed policy evaluation or normalization failure.
+        source: CdtMoveFamilyPolicyError,
+    },
+    /// The upstream MCMC proposal-ratio boundary rejected planned components.
+    ProposalRatio {
+        /// Selected forward move family.
+        move_type: MoveType,
+        /// Typed upstream family/site ratio construction failure.
+        source: DiscreteProposalRatioError,
+    },
     /// Constructing or applying a concrete proposal hit a hard backend or invariant failure.
     ApplicationFailed {
         /// Move type whose concrete application failed.
@@ -318,6 +627,11 @@ pub enum CdtProposalError {
 impl fmt::Display for CdtProposalError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Policy { source } => write!(f, "CDT move-family policy failed: {source}"),
+            Self::ProposalRatio { move_type, source } => write!(
+                f,
+                "failed to construct the proposal ratio for {move_type:?}: {source}"
+            ),
             Self::ApplicationFailed {
                 move_type,
                 attempt,
@@ -333,6 +647,8 @@ impl fmt::Display for CdtProposalError {
 impl Error for CdtProposalError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            Self::Policy { source } => Some(source),
+            Self::ProposalRatio { source, .. } => Some(source),
             Self::ApplicationFailed { source, .. } => Some(source),
         }
     }
@@ -341,6 +657,10 @@ impl Error for CdtProposalError {
 impl From<CdtProposalError> for CdtError {
     fn from(error: CdtProposalError) -> Self {
         match error {
+            CdtProposalError::Policy { source } => Self::ProposalPolicyFailed { source },
+            CdtProposalError::ProposalRatio { move_type, source } => {
+                Self::ProposalRatioFailed { move_type, source }
+            }
             CdtProposalError::ApplicationFailed {
                 move_type,
                 attempt,
@@ -361,9 +681,9 @@ impl From<CdtProposalError> for CdtError {
 /// triangulation, scores the proposed state with the same [`ActionConfig`] as
 /// the matching [`CdtTarget`] or [`MetropolisAlgorithm`](super::MetropolisAlgorithm), corrects for
 /// forward/reverse proposal-site counts, and commits the clone only after
-/// acceptance. Future self-learning Metropolis-Hastings proposal policies
-/// should plug into this planner boundary instead of mutating the live chain
-/// before acceptance.
+/// acceptance. Uniform, fixed weighted, and state-dependent family policies all
+/// use this planner boundary instead of mutating the live chain before
+/// acceptance.
 ///
 /// # Examples
 ///
@@ -385,15 +705,16 @@ impl From<CdtProposalError> for CdtError {
 /// # Ok(())
 /// # }
 /// ```
-pub struct CdtProposal {
+pub struct CdtProposal<P = UniformCdtMoveFamilyPolicy> {
     action_config: ActionConfig,
     moves: ErgodicsSystem,
+    policy: P,
     last_step_info: Option<CdtProposalInfo>,
     last_no_plan_info: Option<CdtProposalInfo>,
     last_proposal_stats: ProposalStatistics,
 }
 
-impl CdtProposal {
+impl CdtProposal<UniformCdtMoveFamilyPolicy> {
     /// Creates a new unseeded CDT proposal planner.
     ///
     /// Proposed-state scoring is delegated to the target passed to
@@ -412,6 +733,7 @@ impl CdtProposal {
         Self {
             action_config,
             moves: ErgodicsSystem::new(),
+            policy: UniformCdtMoveFamilyPolicy,
             last_step_info: None,
             last_no_plan_info: None,
             last_proposal_stats: ProposalStatistics::new(),
@@ -437,6 +759,64 @@ impl CdtProposal {
         Self {
             action_config,
             moves: ErgodicsSystem::with_seed(seed),
+            policy: UniformCdtMoveFamilyPolicy,
+            last_step_info: None,
+            last_no_plan_info: None,
+            last_proposal_stats: ProposalStatistics::new(),
+        }
+    }
+}
+
+impl<P> CdtProposal<P>
+where
+    P: CdtMoveFamilyPolicy,
+{
+    /// Creates an unseeded planner with an injected family policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtMoveFamilyDistribution, CdtProposal,
+    /// };
+    ///
+    /// let policy = CdtMoveFamilyDistribution::from_weights([1.0, 3.0, 1.0, 1.0])?;
+    /// let _proposal = CdtProposal::with_policy(ActionConfig::default(), policy);
+    /// # Ok::<(), causal_triangulations::CdtMoveFamilyPolicyError>(())
+    /// ```
+    #[must_use]
+    pub fn with_policy(action_config: ActionConfig, policy: P) -> Self {
+        action_config.validate();
+        Self {
+            action_config,
+            moves: ErgodicsSystem::new(),
+            policy,
+            last_step_info: None,
+            last_no_plan_info: None,
+            last_proposal_stats: ProposalStatistics::new(),
+        }
+    }
+
+    /// Creates a deterministically seeded planner with an injected family policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtMoveFamilyDistribution, CdtProposal,
+    /// };
+    ///
+    /// let policy = CdtMoveFamilyDistribution::from_weights([1.0, 3.0, 1.0, 1.0])?;
+    /// let _proposal = CdtProposal::with_seed_and_policy(ActionConfig::default(), 42, policy);
+    /// # Ok::<(), causal_triangulations::CdtMoveFamilyPolicyError>(())
+    /// ```
+    #[must_use]
+    pub fn with_seed_and_policy(action_config: ActionConfig, seed: u64, policy: P) -> Self {
+        action_config.validate();
+        Self {
+            action_config,
+            moves: ErgodicsSystem::with_seed(seed),
+            policy,
             last_step_info: None,
             last_no_plan_info: None,
             last_proposal_stats: ProposalStatistics::new(),
@@ -479,11 +859,16 @@ impl CdtProposal {
     /// Resumed simulations use this to hand the upstream sampler the exact
     /// proposal RNG stream stored in a CDT checkpoint while resetting
     /// per-step telemetry caches.
-    pub(crate) fn from_ergodics(action_config: ActionConfig, moves: ErgodicsSystem) -> Self {
+    pub(crate) fn from_ergodics_with_policy(
+        action_config: ActionConfig,
+        moves: ErgodicsSystem,
+        policy: P,
+    ) -> Self {
         action_config.validate();
         Self {
             action_config,
             moves,
+            policy,
             last_step_info: None,
             last_no_plan_info: None,
             last_proposal_stats: ProposalStatistics::new(),
@@ -517,7 +902,81 @@ impl CdtProposal {
     }
 }
 
-impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
+/// Evaluates and normalizes one complete family distribution for `state`.
+///
+/// Fixed policies return their already checked distribution without touching
+/// proposal-site caches. State-dependent policies receive every canonical
+/// family view, including families with no offered sites. This deliberately
+/// prevents availability-based renormalization from changing the proposal
+/// kernel after policy evaluation.
+fn evaluate_policy_distribution<P>(
+    policy: &P,
+    moves: &mut ErgodicsSystem,
+    state: &CdtTriangulation2D,
+) -> Result<CdtMoveFamilyDistribution, CdtMoveFamilyPolicyError>
+where
+    P: CdtMoveFamilyPolicy + ?Sized,
+{
+    if let Some(distribution) = policy.fixed_distribution() {
+        return Ok(distribution);
+    }
+
+    let mut weights = [0.0; 4];
+    for (index, family) in MoveType::REVERSIBLE_1P1.into_iter().enumerate() {
+        let view = moves.proposal_policy_view(state, family);
+        weights[index] = policy.family_weight(&view)?;
+    }
+    CdtMoveFamilyDistribution::from_weights(weights)
+}
+
+/// Builds typed telemetry for a selected family that produced no concrete plan.
+const fn no_plan_info(
+    move_type: MoveType,
+    action_before: f64,
+    forward_family_probability: f64,
+    forward_site_count: usize,
+    planning_outcome: CdtProposalPlanningOutcome,
+) -> CdtProposalInfo {
+    CdtProposalInfo {
+        move_type,
+        action_before,
+        action_after: None,
+        delta_action: None,
+        reverse_move_type: move_type.reverse(),
+        forward_family_probability,
+        reverse_family_probability: None,
+        forward_site_count,
+        reverse_site_count: None,
+        log_family_probability_ratio: None,
+        log_site_count_ratio: None,
+        log_proposal_ratio: None,
+        planning_outcome,
+    }
+}
+
+/// Builds complete public telemetry from an invariant-bearing concrete plan.
+fn plan_info(plan: &CdtProposalPlan) -> CdtProposalInfo {
+    CdtProposalInfo {
+        move_type: plan.move_type,
+        action_before: plan.action_before,
+        action_after: Some(plan.action_after),
+        delta_action: Some(plan.delta_action),
+        reverse_move_type: plan.reverse_move_type(),
+        forward_family_probability: plan.forward_family_probability,
+        reverse_family_probability: Some(plan.reverse_family_probability),
+        forward_site_count: plan.forward_site_count,
+        reverse_site_count: Some(plan.reverse_site_count),
+        log_family_probability_ratio: Some(plan.log_family_probability_ratio()),
+        log_site_count_ratio: Some(plan.log_site_count_ratio()),
+        log_proposal_ratio: Some(plan.log_proposal_ratio),
+        planning_outcome: CdtProposalPlanningOutcome::ConcretePlan,
+    }
+}
+
+impl<P> DelayedProposal<CdtTriangulation2D> for CdtProposal<P>
+where
+    P: CdtMoveFamilyPolicy,
+{
     type Plan = CdtProposalPlan;
     type Info = CdtProposalInfo;
     type Error = CdtProposalError;
@@ -527,16 +986,16 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
         state: &CdtTriangulation2D,
         _rng: &mut R,
     ) -> Result<Option<Self::Plan>, Self::Error> {
-        let move_type = self.moves.select_random_move();
+        self.last_step_info = None;
+        self.last_no_plan_info = None;
+        self.last_proposal_stats = ProposalStatistics::new();
+        let distribution = evaluate_policy_distribution(&self.policy, &mut self.moves, state)
+            .map_err(|source| CdtProposalError::Policy { source })?;
+        let move_type = self.moves.select_move_family(&distribution);
+        let forward_family_probability = distribution.probability(move_type);
         let action_before = action_for(&self.action_config, state);
-        let no_plan_info = CdtProposalInfo {
-            move_type,
-            action_before,
-            action_after: None,
-            delta_action: None,
-        };
         let mut proposal_stats = ProposalStatistics::new();
-        let plan = match propose_concrete_plan(
+        let mut plan = match propose_concrete_plan(
             state,
             &mut self.moves,
             &mut proposal_stats,
@@ -544,8 +1003,21 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
             move_type,
             action_before,
         ) {
-            Ok(Some(plan)) => plan,
-            Ok(None) => {
+            Ok(ConcretePlanAttempt {
+                plan: Some(plan), ..
+            }) => plan,
+            Ok(ConcretePlanAttempt {
+                plan: None,
+                planning_outcome,
+                forward_site_count,
+            }) => {
+                let no_plan_info = no_plan_info(
+                    move_type,
+                    action_before,
+                    forward_family_probability,
+                    forward_site_count,
+                    planning_outcome,
+                );
                 self.last_step_info = Some(no_plan_info);
                 self.last_no_plan_info = Some(no_plan_info);
                 self.last_proposal_stats = proposal_stats;
@@ -553,7 +1025,7 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
                 return Ok(None);
             }
             Err(err) => {
-                self.last_step_info = Some(no_plan_info);
+                self.last_step_info = None;
                 self.last_no_plan_info = None;
                 proposal_stats.record_hard_failure();
                 self.last_proposal_stats = proposal_stats;
@@ -565,12 +1037,30 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
                 });
             }
         };
-        self.last_step_info = Some(CdtProposalInfo {
-            move_type: plan.move_type,
-            action_before: plan.action_before,
-            action_after: Some(plan.action_after),
-            delta_action: Some(plan.delta_action),
-        });
+        let reverse_distribution =
+            match evaluate_policy_distribution(&self.policy, &mut self.moves, &plan.proposed_state)
+            {
+                Ok(distribution) => distribution,
+                Err(source) => {
+                    self.last_proposal_stats = proposal_stats;
+                    return Err(CdtProposalError::Policy { source });
+                }
+            };
+        plan.forward_family_probability = forward_family_probability;
+        plan.reverse_family_probability = reverse_distribution.probability(move_type.reverse());
+        plan.log_proposal_ratio = match DiscreteProposalRatio::new(
+            plan.forward_family_probability,
+            plan.forward_site_count,
+            plan.reverse_family_probability,
+            plan.reverse_site_count,
+        ) {
+            Ok(ratio) => ratio.log_q_ratio(),
+            Err(source) => {
+                self.last_proposal_stats = proposal_stats;
+                return Err(CdtProposalError::ProposalRatio { move_type, source });
+            }
+        };
+        self.last_step_info = Some(plan_info(&plan));
         self.last_no_plan_info = None;
         self.last_proposal_stats = proposal_stats;
         Ok(Some(plan))
@@ -591,19 +1081,14 @@ impl DelayedProposal<CdtTriangulation2D> for CdtProposal {
 
     fn log_q_ratio(
         &self,
-        state: &CdtTriangulation2D,
+        _state: &CdtTriangulation2D,
         plan: &Self::Plan,
     ) -> Result<f64, Self::Error> {
-        Ok(concrete_log_q_ratio(state, plan))
+        Ok(concrete_log_q_ratio(plan))
     }
 
     fn info(&self, plan: &Self::Plan) -> Self::Info {
-        CdtProposalInfo {
-            move_type: plan.move_type,
-            action_before: plan.action_before,
-            action_after: Some(plan.action_after),
-            delta_action: Some(plan.delta_action),
-        }
+        plan_info(plan)
     }
 
     fn commit<R: Rng + ?Sized>(
@@ -623,13 +1108,46 @@ pub(crate) struct MoveApplicationError {
     pub(crate) source: CdtError,
 }
 
+/// Result of attempting to realize one selected family on a cloned state.
+#[derive(Debug)]
+pub(crate) struct ConcretePlanAttempt {
+    /// Concrete, validated proposed state, or `None` for an ordinary self-loop.
+    pub(crate) plan: Option<CdtProposalPlan>,
+    /// Typed result of attempting to realize the selected family and site.
+    pub(crate) planning_outcome: CdtProposalPlanningOutcome,
+    /// Original selected-family denominator in the pre-move state.
+    pub(crate) forward_site_count: usize,
+}
+
+impl ConcretePlanAttempt {
+    const fn self_loop(
+        planning_outcome: CdtProposalPlanningOutcome,
+        forward_site_count: usize,
+    ) -> Self {
+        Self {
+            plan: None,
+            planning_outcome,
+            forward_site_count,
+        }
+    }
+
+    const fn planned(plan: CdtProposalPlan) -> Self {
+        let forward_site_count = plan.forward_site_count;
+        Self {
+            plan: Some(plan),
+            planning_outcome: CdtProposalPlanningOutcome::ConcretePlan,
+            forward_site_count,
+        }
+    }
+}
+
 /// Plans one concrete CDT proposal without mutating the live chain state.
 ///
 /// The helper samples a local site, applies it to a cloned triangulation, and
 /// records the forward and reverse proposal-site counts needed for the
 /// Hastings correction. Ordinary no-site, causality, geometry, and recoverable
-/// backend rejections return `Ok(None)` so the public planned-proposal API can
-/// expose them as self-loop proposals.
+/// backend rejections return an attempt without a concrete plan so the public
+/// planned-proposal API can expose them as typed self-loop proposals.
 ///
 /// # Errors
 ///
@@ -642,18 +1160,24 @@ pub(crate) fn propose_concrete_plan(
     action_config: &ActionConfig,
     move_type: MoveType,
     action_before: f64,
-) -> Result<Option<CdtProposalPlan>, MoveApplicationError> {
+) -> Result<ConcretePlanAttempt, MoveApplicationError> {
     if proposed_delta_action(action_config, simplex_counts(state), move_type).is_none() {
         proposal_stats.record_move_family(0);
         proposal_stats.record_no_site();
-        return Ok(None);
+        return Ok(ConcretePlanAttempt::self_loop(
+            CdtProposalPlanningOutcome::InvalidCountDelta,
+            0,
+        ));
     }
     let selection = moves.select_proposal_site(state, move_type);
     let forward_site_count = selection.site_count;
     proposal_stats.record_move_family(forward_site_count);
     let Some(site) = selection.site else {
         proposal_stats.record_no_site();
-        return Ok(None);
+        return Ok(ConcretePlanAttempt::self_loop(
+            CdtProposalPlanningOutcome::NoOfferedSite,
+            forward_site_count,
+        ));
     };
 
     let mut proposed_state = state.clone();
@@ -670,27 +1194,44 @@ pub(crate) fn propose_concrete_plan(
         }
         MoveResult::CausalityViolation => {
             proposal_stats.record_site_rejection(&CdtProposalSiteRejection::CausalityViolation);
-            return Ok(None);
+            return Ok(ConcretePlanAttempt::self_loop(
+                CdtProposalPlanningOutcome::CausalityViolation,
+                forward_site_count,
+            ));
         }
         MoveResult::GeometricViolation => {
             proposal_stats.record_site_rejection(&CdtProposalSiteRejection::GeometricViolation);
-            return Ok(None);
+            return Ok(ConcretePlanAttempt::self_loop(
+                CdtProposalPlanningOutcome::GeometricViolation,
+                forward_site_count,
+            ));
         }
         MoveResult::Rejected(err) => {
             proposal_stats.record_site_rejection(&CdtProposalSiteRejection::Kernel(err));
-            return Ok(None);
+            return Ok(ConcretePlanAttempt::self_loop(
+                CdtProposalPlanningOutcome::KernelRejected,
+                forward_site_count,
+            ));
         }
     };
     let delta_action = action_after - action_before;
-    let reverse_site_count = proposal_site_count(&proposed_state, move_type.reverse());
+    let reverse_site_count = moves
+        .proposal_policy_view(&proposed_state, move_type.reverse())
+        .offered_site_count();
+    let log_proposal_ratio =
+        DiscreteProposalRatio::from_counts(forward_site_count, reverse_site_count)
+            .map_or(f64::NEG_INFINITY, DiscreteProposalRatio::log_q_ratio);
 
-    Ok(Some(CdtProposalPlan {
+    Ok(ConcretePlanAttempt::planned(CdtProposalPlan {
         move_type,
         action_before,
         action_after,
         delta_action,
+        forward_family_probability: 1.0,
+        reverse_family_probability: 1.0,
         forward_site_count,
         reverse_site_count,
+        log_proposal_ratio,
         proposed_state,
     }))
 }
@@ -700,9 +1241,8 @@ pub(crate) fn propose_concrete_plan(
 /// The ratio uses the instantaneous forward and reverse local-site counts from
 /// the selected move family. Zero denominators represent impossible proposal
 /// weights and are scored as negative infinity rather than panicking.
-pub(crate) fn concrete_log_q_ratio(_state: &CdtTriangulation2D, plan: &CdtProposalPlan) -> f64 {
-    DiscreteProposalRatio::from_counts(plan.forward_site_count, plan.reverse_site_count)
-        .map_or(f64::NEG_INFINITY, DiscreteProposalRatio::log_q_ratio)
+pub(crate) const fn concrete_log_q_ratio(plan: &CdtProposalPlan) -> f64 {
+    plan.log_proposal_ratio
 }
 
 /// Restores a checkpointed triangulation through the upstream MCMC chain type.

@@ -8,7 +8,7 @@
 //! - (3,1) moves: collapse a degree-3 vertex back to one triangle
 //! - edge flips: retained as an API-compatible alias for the 2D (2,2) move
 
-use crate::cdt::proposal_policy::CdtProposalPolicyView;
+use crate::cdt::proposal_policy::{CdtMoveFamilyDistribution, CdtProposalPolicyView};
 use crate::config::CdtTopology;
 use crate::errors::{BackendMutationOperation, CdtError, CdtResult, CheckpointResumeFailure};
 use crate::geometry::CdtTriangulation2D;
@@ -909,6 +909,18 @@ impl ErgodicsSystem {
             2 => MoveType::Move31Remove,
             _ => MoveType::EdgeFlip,
         }
+    }
+
+    /// Samples one family from a checked normalized policy distribution.
+    ///
+    /// The proposal RNG remains owned by the serialized ergodic-move system,
+    /// keeping family and site selection reproducible across CDT checkpoints.
+    pub(crate) fn select_move_family(
+        &mut self,
+        distribution: &CdtMoveFamilyDistribution,
+    ) -> MoveType {
+        let draw = self.rng.random::<u64>() >> (u64::BITS - 53);
+        select_move_family_at(distribution, draw)
     }
 
     /// Returns an immutable proposal-policy view for one move family.
@@ -2025,6 +2037,7 @@ fn removal_candidate_is_causal(
 /// forward and reverse site multiplicities for volume-changing CDT moves.
 /// Counts include only sites that pass the same deterministic pre-mutation
 /// guards as the mutating executor.
+#[cfg(test)]
 pub(crate) fn proposal_site_count(
     triangulation: &CdtTriangulation2D,
     move_type: MoveType,
@@ -2165,6 +2178,25 @@ fn removal_sites(triangulation: &CdtTriangulation2D, visit: &mut impl FnMut(Prop
 fn is_toroidal_foliated(triangulation: &CdtTriangulation2D) -> bool {
     matches!(triangulation.metadata().topology(), CdtTopology::Toroidal)
         && triangulation.has_foliation()
+}
+
+/// Maps one 53-bit categorical draw to the distribution's exact integer masses.
+///
+/// [`CdtMoveFamilyDistribution`] guarantees that the four masses partition the
+/// complete draw range, so the final branch is an internal invariant fallback
+/// rather than unreported probability assigned to one family.
+fn select_move_family_at(distribution: &CdtMoveFamilyDistribution, draw: u64) -> MoveType {
+    debug_assert!(draw < (1_u64 << 53));
+    let mut cumulative = 0_u64;
+    for family in MoveType::REVERSIBLE_1P1 {
+        cumulative += distribution.sample_mass(family);
+        if draw < cumulative {
+            return family;
+        }
+    }
+
+    debug_assert_eq!(cumulative, 1_u64 << 53);
+    MoveType::EdgeFlip
 }
 
 #[cfg(test)]
@@ -3588,6 +3620,35 @@ mod tests {
         }
 
         assert!(move_types.len() > 1);
+    }
+
+    #[test]
+    fn quantized_family_selector_matches_every_reported_support_interval() {
+        let distribution = CdtMoveFamilyDistribution::from_weights([
+            f64::MIN_POSITIVE,
+            1.0,
+            f64::MIN_POSITIVE,
+            f64::MIN_POSITIVE,
+        ])
+        .expect("extreme finite family weights should remain supported");
+        let mut interval_start = 0_u64;
+
+        for family in MoveType::REVERSIBLE_1P1 {
+            let mass = distribution.sample_mass(family);
+            assert!(mass > 0, "positive raw weight lost support for {family:?}");
+            assert_eq!(select_move_family_at(&distribution, interval_start), family);
+            assert_eq!(
+                select_move_family_at(&distribution, interval_start + mass - 1),
+                family
+            );
+            interval_start += mass;
+        }
+
+        assert_eq!(interval_start, 1_u64 << 53);
+        assert_eq!(
+            select_move_family_at(&distribution, (1_u64 << 53) - 1),
+            MoveType::EdgeFlip
+        );
     }
 
     #[test]

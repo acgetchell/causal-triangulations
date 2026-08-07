@@ -9,7 +9,9 @@
 //! - Run the Metropolis loop over real 2D CDT move kernels
 
 use causal_triangulations::prelude::errors::CdtResult;
-use causal_triangulations::prelude::simulation::{CdtConfig, MetropolisAlgorithm};
+use causal_triangulations::prelude::simulation::{
+    CdtConfig, CdtMoveFamilyDistribution, MetropolisAlgorithm,
+};
 use causal_triangulations::prelude::triangulation::CdtTriangulation;
 use log::{LevelFilter, info};
 
@@ -51,7 +53,11 @@ fn main() -> CdtResult<()> {
 
     info!("Attempting CDT simulation...");
     let algorithm = MetropolisAlgorithm::new(metropolis_config, action_config);
-    let results = algorithm.run(triangulation)?;
+    // Family weights follow MoveType::REVERSIBLE_1P1 order. CDT validates and
+    // normalizes them, then continues to own uniform canonical site selection
+    // and the exact forward/reverse Hastings correction.
+    let family_policy = CdtMoveFamilyDistribution::from_weights([1.0, 2.0, 2.0, 1.0])?;
+    let results = algorithm.run_with_policy(triangulation, &family_policy)?;
 
     // Display results
     info!("Simulation completed!");
