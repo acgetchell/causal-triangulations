@@ -3,7 +3,7 @@
 use causal_triangulations::prelude::geometry::{DelaunayBackend2D, build_delaunay2_with_data};
 use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveResult, MoveType};
 use causal_triangulations::prelude::simulation::{
-    ActionConfig, CdtProposal, CdtProposalSiteIdError, CdtTopology,
+    ActionConfig, CdtProposal, CdtProposalSiteId, CdtProposalSiteIdError, CdtTopology,
 };
 use causal_triangulations::prelude::triangulation::{CdtResult, CdtTriangulation};
 use std::assert_matches;
@@ -53,7 +53,7 @@ fn policy_view_has_deterministic_order_and_explicit_empty_families() -> CdtResul
         let reverse_ordinals = view
             .offered_sites()
             .rev()
-            .map(|site| site.ordinal())
+            .map(CdtProposalSiteId::ordinal)
             .collect::<Vec<_>>();
         assert_eq!(reverse_ordinals, (0..sites.len()).rev().collect::<Vec<_>>());
         sites
