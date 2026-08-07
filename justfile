@@ -287,9 +287,9 @@ check-fast:
     cargo check
 
 # CI simulation: flat union of GitHub-equivalent focused validators.
-# Runnable Rust unit and integration tests share one release-profile nextest pass;
-# rustdoc doctests remain separate because nextest does not execute them.
-ci: action-lint zizmor markdown-check spell-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check test-python notebook-check shell-check semgrep semgrep-test fmt-check clippy doc-check test-rust-ci test-doc bench-compile examples-validate
+# All Cargo targets receive the same Clippy coverage as the SARIF workflow;
+# runnable Rust tests and rustdoc doctests remain separate execution evidence.
+ci: action-lint zizmor markdown-check spell-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check test-python notebook-check shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check test-rust-ci test-doc bench-compile examples-validate
     @echo "🎯 CI checks complete!"
 
 # CI with performance baseline
@@ -312,11 +312,11 @@ clean:
     rm -rf coverage_report
     rm -rf coverage
 
-# Core production Rust linting used by default validation gates.
+# Fast production Rust linting used by `just check`.
 clippy:
     cargo clippy --workspace --all-features --lib --bins -- -D warnings -W clippy::pedantic -W clippy::nursery -W clippy::cargo
 
-# Optional broad Clippy sweep; focused CI buckets compile tests, examples, and benches.
+# Full Cargo-target Clippy sweep used by `just ci` and the GitHub SARIF workflow.
 clippy-all-targets:
     cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic -W clippy::nursery -W clippy::cargo
 

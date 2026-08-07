@@ -243,7 +243,7 @@ documented:
   inspect or debug simulations
 - `prelude::observables` for user-facing analysis APIs that measure triangulations or derived physical observables, such as volume profiles, Hausdorff-dimension
   estimators, and spectral-dimension estimators
-- `prelude::testing` for fixture-only helpers such as the mock backend and its typed error categories
+- `prelude::testing` for fixture-only helpers such as `TestConfig`, the mock backend, and its typed error categories
 
 Keep the simulation and observables boundaries crisp:
 
@@ -338,6 +338,12 @@ No module outside `src/geometry/` may import from the `delaunay` crate directly.
 - Handle types from `crate::geometry::backends::delaunay` (`DelaunayVertexHandle`, `DelaunayEdgeHandle`, `DelaunayFaceHandle`)
 - Trait methods from `TriangulationQuery` / `TriangulationMut`
 - Generator utilities from `crate::geometry::generators`
+
+Keep `GeometryBackend` associated coordinate and handle types unconstrained.
+Place numeric, cloning, equality, hashing, or formatting requirements on the
+smallest operation that consumes each capability. Likewise, Delaunay adapter
+impls should use upstream narrow payload traits instead of `DataType` unless
+validation, topology mutation, or another operation needs that full contract.
 
 This ensures the `delaunay` crate can be upgraded or replaced without touching CDT logic.
 

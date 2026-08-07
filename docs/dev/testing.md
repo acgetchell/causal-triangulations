@@ -246,7 +246,7 @@ just ci
 The `ci` recipe directly composes the GitHub-equivalent leaf validators instead of depending on `check`, `lint`, or `test-all`. It enforces:
 
 - **repository and configuration checks**: GitHub Actions, Markdown, spelling, JSON, TOML, YAML/CFF, Python, shell, and repository-owned Semgrep rules
-- **core Rust checks**: formatting, production library/binary Clippy, and documentation builds
+- **core Rust checks**: formatting, all-target Clippy matching the GitHub SARIF workflow, and production documentation builds
 - **Rust correctness**: library unit tests and integration-test crates in one release-profile `test-rust-ci` nextest pass, plus separate rustdoc doctests
 - **Python correctness**: pytest over support scripts, including the reusable notebook checker
 - **notebooks**: source notebooks are output-clean, extracted code passes Ruff and ty, and the fast notebook set executes headlessly through the uv-managed

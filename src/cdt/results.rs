@@ -9,20 +9,19 @@
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::{MoveStatistics, MoveType};
 use crate::cdt::metropolis::{
-    ChainId, MetropolisConfig, MonteCarloStep, MonteCarloStepOutcome, ProposalStatistics, Trace,
-    TraceError, TraceRecord, TraceStepOutcome,
+    ChainId, MetropolisConfig, MonteCarloStep, MonteCarloStepOutcome, ProposalStatistics,
+    StepOutcome, Trace, TraceError, TraceRecord, TraceStepOutcome,
     checkpoint::{chain_counters, checkpoint_resume_failed},
     helpers::{actions_match, expected_measurement_count, expected_measurement_step},
 };
 use crate::cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
-use crate::cdt::triangulation::CdtSimplexCounts;
+use crate::cdt::triangulation::{CdtSimplexCounts, CdtTriangulation2D};
 use crate::config::{CdtConfig, CdtTopology, ValidatedCdtConfig};
 use crate::errors::{
     CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, CheckpointMoveCounter,
     CheckpointResumeFailure, MeasurementCountField, OutputFormat, ProposalTelemetryCounter,
-    ScalarTraceField,
+    ScalarTraceField, SimplexCountField,
 };
-use crate::geometry::CdtTriangulation2D;
 use crate::geometry::backends::delaunay::DelaunayMeshExport;
 use crate::geometry::traits::TriangulationQuery;
 use crate::util::usize_to_f64;
@@ -89,7 +88,7 @@ const CDT_TRACE_CHAIN_ID: ChainId = ChainId::new(0);
 
 /// Invariant-bearing CDT trace outcome stored in serialized result/checkpoint rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CdtScalarTraceOutcome {
+pub(crate) enum CdtScalarTraceOutcome {
     /// A concrete proposal was accepted and committed.
     Accepted,
     /// A concrete proposal was rejected by Metropolis-Hastings.
@@ -105,6 +104,15 @@ impl CdtScalarTraceOutcome {
             Self::Accepted => TraceStepOutcome::accepted(),
             Self::RejectedProposal => TraceStepOutcome::rejected_proposal(),
             Self::NoProposal => TraceStepOutcome::no_proposal(),
+        }
+    }
+
+    /// Converts the serialized outcome into the public sampler outcome used by diagnostics.
+    const fn into_step_outcome(self) -> StepOutcome {
+        match self {
+            Self::Accepted => StepOutcome::Accepted,
+            Self::RejectedProposal => StepOutcome::RejectedProposal,
+            Self::NoProposal => StepOutcome::NoProposal,
         }
     }
 }
@@ -821,11 +829,13 @@ impl SimulationResultsParts {
         triangulation.validate_supported_state()?;
         validate_result_telemetry(
             &config,
+            &action_config,
             &move_stats,
             &proposal_stats,
             &steps,
             &measurements,
             &scalar_trace_rows,
+            &triangulation,
         )?;
         Ok(Self {
             config,
@@ -880,13 +890,19 @@ impl<'de> Deserialize<'de> for SimulationResultsBackend {
 /// measurements, move counters, and proposal counters must describe the same
 /// completed chain, or the initial construction snapshot produced when callers
 /// build a triangulation without running Metropolis sampling.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "result validation correlates every independently serialized telemetry stream"
+)]
 fn validate_result_telemetry(
     config: &MetropolisConfig,
+    action_config: &ActionConfig,
     move_stats: &MoveStatistics,
     proposal_stats: &ProposalStatistics,
     steps: &[MonteCarloStep],
     measurements: &[Measurement],
     scalar_trace_rows: &[CdtScalarTraceRow],
+    triangulation: &CdtTriangulation2D,
 ) -> CdtResult<()> {
     if is_initial_construction_snapshot(
         move_stats,
@@ -895,7 +911,13 @@ fn validate_result_telemetry(
         measurements,
         scalar_trace_rows,
     ) {
-        return Ok(());
+        return validate_trajectory_observables(
+            action_config,
+            steps,
+            measurements,
+            scalar_trace_rows,
+            triangulation,
+        );
     }
 
     let expected_steps = usize::try_from(config.steps().get()).unwrap_or(usize::MAX);
@@ -926,7 +948,14 @@ fn validate_result_telemetry(
     validate_result_steps(steps, accepted)?;
     validate_result_measurements(config, steps, measurements)?;
     validate_result_proposal_stats(proposal_stats, steps.len(), accepted, rejected)?;
-    validate_scalar_trace_rows(config, proposal_stats, steps, scalar_trace_rows)
+    validate_scalar_trace_rows(config, proposal_stats, steps, scalar_trace_rows)?;
+    validate_trajectory_observables(
+        action_config,
+        steps,
+        measurements,
+        scalar_trace_rows,
+        triangulation,
+    )
 }
 
 /// Recognizes a construction-only result before Metropolis steps have run.
@@ -948,6 +977,350 @@ fn is_initial_construction_snapshot(
         && proposal_stats.accepted_transitions() == 0
         && proposal_stats.hard_failures() == 0
         && matches!(measurements, [measurement] if measurement.step() == 0)
+}
+
+/// One reconstructed trajectory state with action derived from its simplex counts.
+#[derive(Debug, Clone, Copy)]
+struct CdtTrajectorySnapshot {
+    counts: CdtSimplexCounts,
+    action: f64,
+}
+
+impl CdtTrajectorySnapshot {
+    /// Derives the action from the same count snapshot retained for observable checks.
+    fn new(action_config: &ActionConfig, counts: CdtSimplexCounts) -> Self {
+        Self {
+            action: action_config.calculate_action(
+                counts.vertex_count(),
+                counts.edge_count(),
+                counts.triangle_count(),
+            ),
+            counts,
+        }
+    }
+}
+
+/// Parses all persisted observables against one shared count/action trajectory.
+pub(crate) fn validate_trajectory_observables(
+    action_config: &ActionConfig,
+    steps: &[MonteCarloStep],
+    measurements: &[Measurement],
+    scalar_trace_rows: &[CdtScalarTraceRow],
+    triangulation: &CdtTriangulation2D,
+) -> CdtResult<()> {
+    let final_counts = triangulation.simplex_counts()?;
+    let final_volume_profile = triangulation.volume_profile()?;
+    let initial_counts = steps.iter().rev().try_fold(final_counts, |counts, step| {
+        rewind_accepted_step_counts(step, counts)
+    })?;
+    let mut current = CdtTrajectorySnapshot::new(action_config, initial_counts);
+    let final_step = u32::try_from(steps.len()).map_err(|_| {
+        checkpoint_resume_failed(CheckpointResumeFailure::StepTelemetryIndexOverflow)
+    })?;
+    let mut measurement_index = if let Some(initial_measurement) = measurements.first()
+        && initial_measurement.step() == 0
+    {
+        validate_measurement_snapshot(initial_measurement, &current)?;
+        if final_step == 0 {
+            validate_measurement_profile_matches(initial_measurement, &final_volume_profile)?;
+        }
+        1
+    } else {
+        0
+    };
+
+    for (step, row) in steps.iter().zip(scalar_trace_rows) {
+        let step_number = step.step().get();
+        validate_step_action_before(step, &current)?;
+
+        let proposed = if step.accepted() || step.delta_action().is_some() {
+            Some(CdtTrajectorySnapshot::new(
+                action_config,
+                advance_proposed_step_counts(step, current.counts)?,
+            ))
+        } else {
+            None
+        };
+        if let (Some(actual_delta), Some(proposed)) = (step.delta_action(), proposed) {
+            let expected_delta = proposed.action - current.action;
+            if !actions_match(actual_delta, expected_delta) {
+                return Err(checkpoint_resume_failed(
+                    CheckpointResumeFailure::StepDeltaActionStateMismatch {
+                        step: step_number,
+                        actual: actual_delta,
+                        expected: expected_delta,
+                    },
+                ));
+            }
+        }
+        let after = if step.accepted() {
+            proposed
+                .ok_or_else(|| invalid_step_count_transition(step, SimplexCountField::Vertices))?
+        } else {
+            current
+        };
+        validate_step_action(step, &after)?;
+        validate_scalar_trace_snapshot(row, &after)?;
+
+        if let Some(measurement) = measurements.get(measurement_index)
+            && measurement.step() == step_number
+        {
+            validate_measurement_snapshot(measurement, &after)?;
+            validate_measurement_profile_matches(measurement, &row.volume_profile)?;
+            if step_number == final_step {
+                validate_measurement_profile_matches(measurement, &final_volume_profile)?;
+            }
+            measurement_index += 1;
+        }
+        current = after;
+    }
+
+    if let Some(final_row) = scalar_trace_rows.last()
+        && final_row.volume_profile != final_volume_profile
+    {
+        return Err(checkpoint_resume_failed(
+            CheckpointResumeFailure::ScalarTraceVolumeProfileStateMismatch {
+                step: final_row.step.get(),
+                actual: final_row.volume_profile.clone(),
+                expected: final_volume_profile,
+            },
+        ));
+    }
+    Ok(())
+}
+
+/// Checks a step's action-before value against its reconstructed pre-step state.
+fn validate_step_action_before(
+    step: &MonteCarloStep,
+    before: &CdtTrajectorySnapshot,
+) -> CdtResult<()> {
+    if actions_match(step.action_before(), before.action) {
+        return Ok(());
+    }
+    Err(checkpoint_resume_failed(
+        CheckpointResumeFailure::StepActionBeforeStateMismatch {
+            step: step.step().get(),
+            actual: step.action_before(),
+            expected: before.action,
+        },
+    ))
+}
+
+/// Checks a step's effective action against its reconstructed post-step state.
+fn validate_step_action(step: &MonteCarloStep, after: &CdtTrajectorySnapshot) -> CdtResult<()> {
+    let actual = step.action_after().unwrap_or_else(|| step.action_before());
+    if actions_match(actual, after.action) {
+        return Ok(());
+    }
+    Err(checkpoint_resume_failed(
+        CheckpointResumeFailure::StepActionStateMismatch {
+            step: step.step().get(),
+            actual,
+            expected: after.action,
+        },
+    ))
+}
+
+/// Rewinds one accepted move's fixed simplex-count delta from a post-step state.
+fn rewind_accepted_step_counts(
+    step: &MonteCarloStep,
+    counts: CdtSimplexCounts,
+) -> CdtResult<CdtSimplexCounts> {
+    if !step.accepted() {
+        return Ok(counts);
+    }
+    match step.move_type() {
+        MoveType::Move22 | MoveType::EdgeFlip => Ok(counts),
+        MoveType::Move13Add => transition_counts(step, counts, false, [1, 3, 2]),
+        MoveType::Move31Remove => transition_counts(step, counts, true, [1, 3, 2]),
+    }
+}
+
+/// Applies one scored proposal's fixed simplex-count delta to its pre-step state.
+fn advance_proposed_step_counts(
+    step: &MonteCarloStep,
+    counts: CdtSimplexCounts,
+) -> CdtResult<CdtSimplexCounts> {
+    match step.move_type() {
+        MoveType::Move22 | MoveType::EdgeFlip => Ok(counts),
+        MoveType::Move13Add => transition_counts(step, counts, true, [1, 3, 2]),
+        MoveType::Move31Remove => transition_counts(step, counts, false, [1, 3, 2]),
+    }
+}
+
+/// Applies a checked three-field simplex-count transition while preserving positivity.
+fn transition_counts(
+    step: &MonteCarloStep,
+    counts: CdtSimplexCounts,
+    add: bool,
+    amounts: [usize; 3],
+) -> CdtResult<CdtSimplexCounts> {
+    let vertices = transition_count(
+        step,
+        SimplexCountField::Vertices,
+        counts.vertex_count(),
+        amounts[0],
+        add,
+    )?;
+    let edges = transition_count(
+        step,
+        SimplexCountField::Edges,
+        counts.edge_count(),
+        amounts[1],
+        add,
+    )?;
+    let triangles = transition_count(
+        step,
+        SimplexCountField::Triangles,
+        counts.triangle_count(),
+        amounts[2],
+        add,
+    )?;
+    CdtSimplexCounts::try_new(vertices, edges, triangles)
+}
+
+/// Performs one checked count adjustment for a reconstructed move transition.
+fn transition_count(
+    step: &MonteCarloStep,
+    field: SimplexCountField,
+    value: usize,
+    amount: usize,
+    add: bool,
+) -> CdtResult<usize> {
+    let adjusted = if add {
+        value.checked_add(amount)
+    } else {
+        value.checked_sub(amount).filter(|adjusted| *adjusted > 0)
+    };
+    adjusted.ok_or_else(|| invalid_step_count_transition(step, field))
+}
+
+/// Builds the typed restore error for an impossible move count transition.
+const fn invalid_step_count_transition(
+    step: &MonteCarloStep,
+    field: SimplexCountField,
+) -> CdtError {
+    checkpoint_resume_failed(CheckpointResumeFailure::StepSimplexCountTransitionInvalid {
+        step: step.step().get(),
+        move_type: step.move_type(),
+        field,
+    })
+}
+
+/// Checks one scalar trace row's observables against its reconstructed post-step state.
+fn validate_scalar_trace_snapshot(
+    row: &CdtScalarTraceRow,
+    snapshot: &CdtTrajectorySnapshot,
+) -> CdtResult<()> {
+    validate_scalar_trace_count(
+        row.step.get(),
+        MeasurementCountField::Vertices,
+        row.vertices.get(),
+        snapshot.counts.vertex_count(),
+    )?;
+    validate_scalar_trace_count(
+        row.step.get(),
+        MeasurementCountField::Edges,
+        row.edges.get(),
+        snapshot.counts.edge_count(),
+    )?;
+    validate_scalar_trace_count(
+        row.step.get(),
+        MeasurementCountField::Triangles,
+        row.triangles.get(),
+        snapshot.counts.triangle_count(),
+    )
+}
+
+/// Checks one scalar trace count against its reconstructed state.
+fn validate_scalar_trace_count(
+    step: u32,
+    field: MeasurementCountField,
+    actual: u32,
+    expected: usize,
+) -> CdtResult<()> {
+    if usize::try_from(actual).ok() == Some(expected) {
+        return Ok(());
+    }
+    Err(checkpoint_resume_failed(
+        CheckpointResumeFailure::ScalarTraceSimplexCountStateMismatch {
+            step,
+            field,
+            actual,
+            expected,
+        },
+    ))
+}
+
+/// Checks one measurement's action and counts against its reconstructed state.
+fn validate_measurement_snapshot(
+    measurement: &Measurement,
+    snapshot: &CdtTrajectorySnapshot,
+) -> CdtResult<()> {
+    if !actions_match(measurement.action(), snapshot.action) {
+        return Err(checkpoint_resume_failed(
+            CheckpointResumeFailure::MeasurementActionStateMismatch {
+                step: measurement.step(),
+                actual: measurement.action(),
+                expected: snapshot.action,
+            },
+        ));
+    }
+    validate_measurement_count(
+        measurement.step(),
+        MeasurementCountField::Vertices,
+        measurement.vertices().get(),
+        snapshot.counts.vertex_count(),
+    )?;
+    validate_measurement_count(
+        measurement.step(),
+        MeasurementCountField::Edges,
+        measurement.edges().get(),
+        snapshot.counts.edge_count(),
+    )?;
+    validate_measurement_count(
+        measurement.step(),
+        MeasurementCountField::Triangles,
+        measurement.triangles().get(),
+        snapshot.counts.triangle_count(),
+    )
+}
+
+/// Checks one measurement count against its reconstructed state.
+fn validate_measurement_count(
+    step: u32,
+    field: MeasurementCountField,
+    actual: u32,
+    expected: usize,
+) -> CdtResult<()> {
+    if usize::try_from(actual).ok() == Some(expected) {
+        return Ok(());
+    }
+    Err(checkpoint_resume_failed(
+        CheckpointResumeFailure::MeasurementSimplexCountStateMismatch {
+            step,
+            field,
+            actual,
+            expected,
+        },
+    ))
+}
+
+/// Checks a measurement profile against independent telemetry for the same state.
+fn validate_measurement_profile_matches(
+    measurement: &Measurement,
+    expected: &[u32],
+) -> CdtResult<()> {
+    if measurement.volume_profile() == expected {
+        return Ok(());
+    }
+    Err(checkpoint_resume_failed(
+        CheckpointResumeFailure::MeasurementVolumeProfileStateMismatch {
+            step: measurement.step(),
+            actual: measurement.volume_profile().to_vec(),
+            expected: expected.to_vec(),
+        },
+    ))
 }
 
 /// Checks per-step records against accepted-count and action-delta invariants.
@@ -1183,10 +1556,10 @@ fn validate_scalar_trace_row(
     let expected_outcome = scalar_trace_outcome_from_step(step);
     if row.payload.outcome() != expected_outcome {
         return Err(checkpoint_resume_failed(
-            CheckpointResumeFailure::ScalarTraceAcceptedMismatch {
+            CheckpointResumeFailure::ScalarTraceOutcomeMismatch {
                 step: step_number,
-                actual: row.payload.outcome(),
-                expected: expected_outcome,
+                actual: row.payload.outcome().into_step_outcome(),
+                expected: expected_outcome.into_step_outcome(),
             },
         ));
     }
@@ -2325,6 +2698,27 @@ mod tests {
             .expect("test measurement should satisfy action and count invariants")
     }
 
+    fn state_measurement(
+        step: u32,
+        action: f64,
+        triangulation: &CdtTriangulation2D,
+    ) -> Measurement {
+        Measurement::try_from_simplex_counts(
+            step,
+            action,
+            triangulation
+                .simplex_counts()
+                .expect("test triangulation should have positive simplex counts"),
+        )
+        .expect("test triangulation counts should fit measurement storage")
+        .try_with_volume_profile(
+            triangulation
+                .volume_profile()
+                .expect("test triangulation volume profile should build"),
+        )
+        .expect("test triangulation volume profile should fit its triangle count")
+    }
+
     /// Builds a result container around deterministic geometry for summary-method tests.
     fn results_with(
         config: MetropolisConfig,
@@ -2347,33 +2741,43 @@ mod tests {
 
     fn valid_rejected_result(triangulation: CdtTriangulation2D) -> SimulationResultsBackend {
         let config = metropolis_config(1.0, 1, 0, 1);
+        let action_config = ActionConfig::default();
+        let counts = triangulation
+            .simplex_counts()
+            .expect("test triangulation should have positive simplex counts");
+        let action = action_config.calculate_action(
+            counts.vertex_count(),
+            counts.edge_count(),
+            counts.triangle_count(),
+        );
         let mut move_stats = MoveStatistics::new();
         move_stats.record_attempt(MoveType::Move22);
         let scalar_trace_rows = vec![
             CdtScalarTraceRow::new(
                 step_number(1),
                 CdtScalarTraceOutcome::NoProposal,
-                -0.0 / config.temperature(),
-                0.0,
+                -action / config.temperature(),
+                action,
                 &triangulation,
                 MoveType::Move22,
                 None,
-                0.0,
+                action,
                 None,
                 config.seed(),
             )
             .expect("trace row should build"),
         ];
+        let measurements = vec![
+            state_measurement(0, action, &triangulation),
+            state_measurement(1, action, &triangulation),
+        ];
         SimulationResultsBackend::new(
             config,
-            ActionConfig::default(),
+            action_config,
             move_stats,
             ProposalStatistics::from_validated_parts(1, 0, 1, 0, 0, 0, 0, 0, 0),
-            vec![no_proposal_step(1, MoveType::Move22, 0.0)],
-            vec![
-                measurement(0, 0.0, 12, 26, 12),
-                measurement(1, 0.0, 12, 26, 12),
-            ],
+            vec![no_proposal_step(1, MoveType::Move22, action)],
+            measurements,
             scalar_trace_rows,
             Duration::ZERO,
             triangulation,
@@ -2438,28 +2842,32 @@ mod tests {
     fn public_constructor_accepts_valid_components_and_preserves_accessors() {
         let config = seeded_metropolis_config(1.5, 1, 0, 1, 23);
         let action_config = action_config(1.0, 0.5, 0.25);
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let counts = triangulation
+            .simplex_counts()
+            .expect("test triangulation should have positive simplex counts");
+        let action = action_config.calculate_action(
+            counts.vertex_count(),
+            counts.edge_count(),
+            counts.triangle_count(),
+        );
         let mut move_stats = MoveStatistics::new();
         move_stats.record_attempt(MoveType::Move22);
         move_stats.record_success(MoveType::Move22);
         let proposal_stats = ProposalStatistics::from_validated_parts(1, 7, 0, 0, 0, 0, 0, 1, 0);
-        let step = accepted_step(1, MoveType::Move22, 4.0, 3.5);
+        let step = accepted_step(1, MoveType::Move22, action, action);
         let measurements = vec![
-            measurement(0, 4.0, 12, 26, 12)
-                .try_with_volume_profile(vec![4, 4, 4])
-                .expect("volume profile should fit triangle count"),
-            measurement(1, 3.5, 12, 26, 12)
-                .try_with_volume_profile(vec![4, 4, 4])
-                .expect("volume profile should fit triangle count"),
+            state_measurement(0, action, &triangulation),
+            state_measurement(1, action, &triangulation),
         ];
         let elapsed = Duration::from_millis(42);
-        let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let scalar_trace_rows = vec![
             CdtScalarTraceRow::new(
                 step.step(),
                 CdtScalarTraceOutcome::Accepted,
-                -3.5 / config.temperature(),
-                3.5,
+                -action / config.temperature(),
+                action,
                 &triangulation,
                 step.move_type(),
                 step.delta_action(),
@@ -2489,7 +2897,13 @@ mod tests {
         assert_eq!(results.move_stats().total_accepted(), 1);
         assert_eq!(results.proposal_stats(), &proposal_stats);
         assert_eq!(results.steps()[0].step().get(), 1);
-        assert_eq!(results.measurements()[0].volume_profile(), &[4, 4, 4]);
+        assert_eq!(
+            results.measurements()[0].volume_profile(),
+            results
+                .triangulation()
+                .volume_profile()
+                .expect("result triangulation profile should build")
+        );
         assert_eq!(results.elapsed_time(), elapsed);
         assert_eq!(results.triangulation().slice_sizes(), &[4, 4, 4]);
     }
@@ -2747,10 +3161,10 @@ mod tests {
         assert_matches!(
             error,
             CdtError::CheckpointResumeFailed {
-                failure: CheckpointResumeFailure::ScalarTraceAcceptedMismatch {
+                failure: CheckpointResumeFailure::ScalarTraceOutcomeMismatch {
                     step: 1,
-                    actual: CdtScalarTraceOutcome::Accepted,
-                    expected: CdtScalarTraceOutcome::NoProposal
+                    actual: StepOutcome::Accepted,
+                    expected: StepOutcome::NoProposal
                 }
             }
         );
@@ -3384,6 +3798,135 @@ mod tests {
         assert!(
             error.to_string().contains("nonzero") || error.to_string().contains("invalid value"),
             "unexpected serde error: {error}"
+        );
+    }
+
+    #[test]
+    fn deserialization_rejects_action_history_detached_from_final_geometry() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let results = valid_rejected_result(triangulation);
+        let mut payload = to_value(&results).expect("results should serialize");
+        let tampered_action = results.steps()[0].action_before() + 1.0;
+        payload["steps"][0]["action_before"] =
+            to_value(tampered_action).expect("action should serialize");
+        payload["scalar_trace_rows"][0]["action_before"] =
+            to_value(tampered_action).expect("action should serialize");
+        payload["scalar_trace_rows"][0]["action"] =
+            to_value(tampered_action).expect("action should serialize");
+        payload["scalar_trace_rows"][0]["log_prob"] =
+            to_value(-tampered_action / results.config().temperature())
+                .expect("log probability should serialize");
+        payload["measurements"][1]["action"] =
+            to_value(tampered_action).expect("action should serialize");
+
+        let error = from_str::<SimulationResultsBackend>(&payload.to_string())
+            .expect_err("a self-consistent but detached action history should be rejected");
+
+        assert!(
+            error
+                .to_string()
+                .contains("action_before does not match the reconstructed state"),
+            "unexpected serde error: {error}"
+        );
+    }
+
+    #[test]
+    fn deserialization_rejects_measurement_counts_detached_from_step_state() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let results = valid_rejected_result(triangulation);
+        let mut payload = to_value(&results).expect("results should serialize");
+        payload["measurements"][0]["vertices"] =
+            to_value(results.measurements()[0].vertices().get() + 1)
+                .expect("count should serialize");
+
+        let error = from_str::<SimulationResultsBackend>(&payload.to_string())
+            .expect_err("measurement counts must match the reconstructed state");
+
+        assert!(
+            error
+                .to_string()
+                .contains("measurement vertices count does not match the reconstructed state"),
+            "unexpected serde error: {error}"
+        );
+    }
+
+    #[test]
+    fn deserialization_rejects_trace_counts_detached_from_step_state() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let results = valid_rejected_result(triangulation);
+        let mut payload = to_value(&results).expect("results should serialize");
+        payload["scalar_trace_rows"][0]["vertices"] =
+            to_value(results.measurements()[1].vertices().get() + 1)
+                .expect("count should serialize");
+
+        let error = from_str::<SimulationResultsBackend>(&payload.to_string())
+            .expect_err("trace counts must match the reconstructed state");
+
+        assert!(
+            error
+                .to_string()
+                .contains("scalar trace vertices count does not match the reconstructed state"),
+            "unexpected serde error: {error}"
+        );
+    }
+
+    #[test]
+    fn deserialization_rejects_final_profiles_detached_from_final_geometry() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let results = valid_rejected_result(triangulation);
+        let mut payload = to_value(&results).expect("results should serialize");
+        let tampered_profile = to_value([3_u32, 4, 5]).expect("profile should serialize");
+        payload["scalar_trace_rows"][0]["volume_profile"] = tampered_profile.clone();
+        payload["measurements"][1]["volume_profile"] = tampered_profile;
+
+        let error = from_str::<SimulationResultsBackend>(&payload.to_string())
+            .expect_err("final profiles must match the restored triangulation");
+
+        assert!(
+            error
+                .to_string()
+                .contains("measurement volume profile does not match the reconstructed state"),
+            "unexpected serde error: {error}"
+        );
+    }
+
+    #[test]
+    fn construction_snapshot_rejects_measurement_detached_from_geometry() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let action_config = ActionConfig::default();
+        let counts = triangulation
+            .simplex_counts()
+            .expect("test triangulation should have positive simplex counts");
+        let action = action_config.calculate_action(
+            counts.vertex_count(),
+            counts.edge_count(),
+            counts.triangle_count(),
+        );
+        let measurement = state_measurement(0, action + 1.0, &triangulation);
+
+        let error = SimulationResultsBackend::new(
+            metropolis_config(1.0, 1, 0, 1),
+            action_config,
+            MoveStatistics::new(),
+            ProposalStatistics::new(),
+            Vec::new(),
+            vec![measurement],
+            Vec::new(),
+            Duration::ZERO,
+            triangulation,
+        )
+        .expect_err("construction snapshots must bind their measurement to final geometry");
+
+        assert_matches!(
+            error,
+            CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::MeasurementActionStateMismatch { step: 0, .. }
+            }
         );
     }
 

@@ -57,7 +57,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::CdtTriangulation2D;
+    use crate::cdt::triangulation::CdtTriangulation2D;
     use crate::geometry::generators::build_delaunay2_from_simplices;
     use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
 

@@ -164,7 +164,8 @@ causal-triangulations/
 │   ├── proposal_policy.rs
 │   ├── proptest_foliation.rs
 │   ├── proptest_metropolis.rs
-│   └── regressions.rs
+│   ├── regressions.rs
+│   └── trait_bound_ergonomics.rs
 ├── .bencher.toml
 ├── .codecov.yml
 ├── .coderabbit.yml
@@ -244,6 +245,7 @@ through to upstream `delaunay::` APIs directly.
 
 - Owns the `CdtTriangulation` state, `CdtMetadata`, `SimulationEvent`, metadata validation, cached simplex-count accessors, and common backend-agnostic state
   methods
+- Defines `CdtTriangulation2D`, the CDT-domain alias that binds `CdtTriangulation` to the supported 2D Delaunay backend
 - `CdtSimplexCounts` carries the CDT-domain proof that constructed triangulations have positive vertex, edge, and triangle counts as `NonZeroUsize`, while
   raw geometry queries remain `usize` so backend construction, clearing, and collection-style count APIs can represent zero
 - `from_cdt_strip(vertices_per_slice, num_slices)` — Delaunay-built open-boundary 1+1 CDT strip with strict Up/Down simplex classification and upstream Level
@@ -339,9 +341,11 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
 
 ### `geometry/traits.rs` — Backend-neutral interface
 
-- `GeometryBackend` defines associated coordinate, handle, and error types for a geometry implementation
+- `GeometryBackend` defines unconstrained associated coordinate and handle types plus the backend error type; algorithms place numeric, cloning, identity, and
+  hashing bounds only on the methods that use those capabilities
 - `TriangulationQuery` is the read-only surface used by CDT logic for counts, handles, adjacency, coordinates, face vertices, and validation
 - `TriangulationMut` is the narrow mutation surface used by CDT-owned move kernels through CDT state mutation methods, not broad mutable backend exposure
+- `TriangulationOps` supplies blanket high-level operations to sized and unsized query implementations, with handle capabilities constrained per operation
 - Result structs such as `FlipResult`, `EdgeAdjacentFaces`, and `SubdivisionResult` keep local topology operations backend-neutral
 - Use `prelude::geometry` for real backend construction and geometry traits; use `prelude::testing` for mock-backend doctests or downstream fixture code
 
@@ -376,13 +380,12 @@ Together with `backends/delaunay.rs`, this module is the only place that directl
 The toroidal CDT constructor builds from labeled lattice vertices and delegates to the upstream periodic image-point constructor, then validates the resulting
 Delaunay triangulation before CDT foliation, causality, topology, and simplex-classification checks run.
 
-### `util.rs` — Numeric helpers
+### `util.rs` — Crate-private numeric helpers
 
-- `saturating_usize_to_i32` — crate-internal usize→i32 conversion for Euler characteristic arithmetic
+- `usize_to_f64` — checked `usize`→`f64` conversion for observable estimators
+- `f64_band_to_u32` — clamped `f64`→`u32` conversion for internal y-coordinate binning
 - Simulation action inputs use native `usize` topology counts; validated CDT count snapshots use `NonZeroUsize`; measurement and trace telemetry downcasts to
   `u32` are checked at construction boundaries
-- `y_to_time_bucket` — f64→Option<u32> via round(), for time-slice assignment
-- `f64_band_to_u32` — f64→u32 clamped, for y-coordinate binning
 
 ## Notebooks
 

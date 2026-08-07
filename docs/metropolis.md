@@ -11,9 +11,10 @@
 
 For each step:
 
-1. Evaluate the configured `CdtMoveFamilyPolicy` once for every family in `MoveType::REVERSIBLE_1P1`, using one invariant-safe borrowed policy view per family.
-   Validate the returned finite nonnegative weights, normalize them, and sample one family without renormalizing around empty offered-site sets. The built-in
-   conventional path uses `UniformCdtMoveFamilyPolicy` through this same boundary.
+1. Obtain the configured `CdtMoveFamilyPolicy` distribution. Fixed policies return their checked distribution directly; state-dependent policies are
+   evaluated once for every family in `MoveType::REVERSIBLE_1P1`, using one invariant-safe borrowed policy view per family. Validate returned finite
+   nonnegative weights, normalize them, and sample one family without renormalizing around empty offered-site sets. The built-in conventional path uses
+   `UniformCdtMoveFamilyPolicy` through this same boundary.
 2. Read the cached sampleable local sites for that move type, rebuilding the cache first if the triangulation cache key changed, and select one site uniformly
    from that same site universe. If no site exists, record the step as a self-loop proposal and continue without changing the live triangulation.
 3. Compute the proposed action change from the concrete proposal's simplex-count delta:
@@ -24,7 +25,7 @@ For each step:
    triangulation is unchanged.
 5. Count the forward sites from the cached selected move-family set. Re-evaluate the policy on the planned post-move state and count the reverse sites for the
    inverse family from the same canonical cache implementation.
-6. Build the weighted family/site correction with `markov-chain-monte-carlo::DiscreteProposalRatio` and accept successful transitions with
+6. Build the path-conditioned weighted family/site correction with `markov-chain-monte-carlo::DiscreteProposalRatio` and accept successful transitions with
    `min(1, exp(-ΔS / T + log(q(current | proposed) / q(proposed | current))))`. For equal move-family weights this adds
    `log(forward_site_count / reverse_site_count)` to the ordinary action term. Unequal or state-dependent policies additionally contribute
    `log(p(reverse(m) | y) / p(m | x))`.
@@ -193,7 +194,8 @@ stable family order and identifiers are:
 | `EdgeFlip` | `edge-flip` | `EdgeFlip` |
 
 `Move22` and `EdgeFlip` remain distinct policy identifiers for compatibility with the conventional four-family distribution, although both use the same 2D
-k=2 flip kernel and therefore expose the same site universe.
+k=2 flip kernel and therefore expose the same site universe. The sampler treats them as distinct auxiliary mixture components and conditions acceptance on
+the family/site path that was actually selected.
 
 ### Injected Family Policies
 
@@ -243,45 +245,38 @@ implementation for policy consumers.
 The current policy view exposes offered sites, not eligible sites. Proposal policies, including future learned policies, must therefore use its IDs and counts
 as the actual proposal support and must not interpret them as a guarantee that execution will succeed.
 
-For state `x`, move family `m`, and a sampleable site set `S_m(x)`, a uniformly sampled site contributes:
+For state `x`, move family `m`, and a sampleable site set `S_m(x)`, one sampled auxiliary proposal atom `c = (m, s)` contributes:
 
 ```text
-p(m | x) / |S_m(x)|
+q_c(x -> y) = p(m | x) / |S_m(x)|
 ```
 
-to the proposal probability. The full transition probability from `x` to a distinct proposed state `y` is the sum over every sampled site that produces that
-same `y`:
+The Metropolis-Hastings decision is conditioned on this selected atom instead of marginalizing it away before acceptance. The current canonical local-move
+representation pairs every successful forward atom with one reverse-family atom, so the implemented reverse component is:
 
 ```text
-q(x -> y) = sum over (m, s) where apply(x, m, s) = y of p(m | x) / |S_m(x)|
+q_reverse(c)(y -> x) = p(reverse(m) | y) / |S_reverse(m)(y)|
 ```
 
-For one canonical family/site atom with unit transition multiplicity, the implemented forward and reverse probabilities are:
+The reverse probability is always evaluated from the realized planned state `y`; it is never copied from `x`. The resulting pathwise correction is:
 
 ```text
-q(x -> y) = p(m | x) / |S_m(x)|
-q(y -> x) = p(reverse(m) | y) / |S_reverse(m)(y)|
+log_q_ratio =
+    log(p(reverse(m) | y)) - log(p(m | x))
+  + log(|S_m(x)|) - log(|S_reverse(m)(y)|)
 ```
 
-The reverse probability is always evaluated from the realized planned state `y`; it is never copied from `x`.
-
-For equal move-family weights and one proposal site per resulting state, this reduces to the familiar site-count correction:
+For equal move-family weights, this reduces to the familiar site-count correction:
 
 ```text
 log_q_ratio = log(|S_forward(x)|) - log(|S_reverse(y)|)
 ```
 
-If multiple proposal sites can produce the same final triangulation, that multiplicity must be included:
-
-```text
-log_q_ratio =
-    log(p(reverse | y)) - log(p(forward | x))
-  + log(multiplicity(y -> x)) - log(multiplicity(x -> y))
-  + log(|S_forward(x)|) - log(|S_reverse(y)|)
-```
-
-The implementation should prefer canonical proposal-site definitions that make the multiplicity term equal to one. When that is not possible, the concrete
-proposal plan must carry enough identity to compute the forward and reverse transition multiplicities explicitly.
+Multiple auxiliary atoms may reach the same endpoint `y`, including the same flip exposed through the distinct `Move22` and `EdgeFlip` families. They remain
+separate mixture components: each paired forward/reverse path satisfies detailed balance independently, and summing those balanced accepted fluxes preserves
+detailed balance for the state transition. Their probabilities are therefore not aggregated into the per-plan correction. A future proposal workflow that
+marginalizes paths before acceptance, or that cannot pair each sampled atom with one reverse atom, would instead need the full endpoint probability summed
+over all contributing paths and explicit multiplicities.
 
 ## Ordinary Rejections
 

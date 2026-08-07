@@ -11,12 +11,12 @@ use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveStatistics, MoveType};
 use crate::cdt::results::{
     CdtScalarTraceRow, Measurement, SimulationResultsBackend, SimulationResultsParts,
-    validate_scalar_trace_rows,
+    validate_scalar_trace_rows, validate_trajectory_observables,
 };
+use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::errors::{
     CdtError, CdtResult, CheckpointMoveCounter, CheckpointResumeFailure, ProposalTelemetryCounter,
 };
-use crate::geometry::CdtTriangulation2D;
 use markov_chain_monte_carlo::ChainCheckpoint;
 use rand::rngs::Xoshiro256PlusPlus;
 use serde::de::Error as DeError;
@@ -663,7 +663,13 @@ pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> Cd
         &checkpoint.steps,
         &checkpoint.scalar_trace_rows,
     )?;
-    Ok(())
+    validate_trajectory_observables(
+        &checkpoint.action_config,
+        &checkpoint.steps,
+        &checkpoint.measurements,
+        &checkpoint.scalar_trace_rows,
+        checkpoint.triangulation(),
+    )
 }
 
 /// Verifies that the stored checkpoint action is finite and matches the restored state.

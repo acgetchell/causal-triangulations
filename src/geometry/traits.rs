@@ -5,34 +5,22 @@
 //! This module defines the trait-based interface that completely isolates
 //! CDT algorithms from specific geometry implementations.
 
-use num_traits::Float;
 use std::error::Error as StdError;
-use std::fmt::Debug;
-use std::hash::Hash;
-
-/// Core numeric trait for coordinates in geometric calculations.
-///
-/// `num_traits::Float` already implies `Copy`, `Clone`, `PartialEq`, and `PartialOrd`.
-pub trait CoordinateScalar: Float {}
-
-impl<T: Float> CoordinateScalar for T {}
-
-/// Handle types for geometry entities - completely opaque to prevent coupling
-pub trait GeometryHandle: Clone + Eq + Hash + Debug {}
-
-// Blanket implementation for any type satisfying the constraints
-impl<T: Clone + Eq + Hash + Debug> GeometryHandle for T {}
 
 /// Core geometry backend trait - completely abstracted from implementation details.
+///
+/// Coordinate and handle types are deliberately unconstrained here. Read-only
+/// count and topology consumers do not need numeric coordinates or cloneable,
+/// hashable handles; algorithms add those capabilities only where they use them.
 pub trait GeometryBackend {
-    /// Coordinate type used by this backend
-    type Coordinate: CoordinateScalar;
-    /// Opaque handle type for vertices
-    type VertexHandle: GeometryHandle;
-    /// Opaque handle type for edges
-    type EdgeHandle: GeometryHandle;
-    /// Opaque handle type for faces
-    type FaceHandle: GeometryHandle;
+    /// Coordinate type used by this backend.
+    type Coordinate;
+    /// Opaque handle type for vertices.
+    type VertexHandle;
+    /// Opaque handle type for edges.
+    type EdgeHandle;
+    /// Opaque handle type for faces.
+    type FaceHandle;
     /// Error type for backend operations
     type Error: StdError;
 

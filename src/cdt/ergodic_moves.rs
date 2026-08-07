@@ -9,9 +9,9 @@
 //! - edge flips: retained as an API-compatible alias for the 2D (2,2) move
 
 use crate::cdt::proposal_policy::{CdtMoveFamilyDistribution, CdtProposalPolicyView};
+use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::config::CdtTopology;
 use crate::errors::{BackendMutationOperation, CdtError, CdtResult, CheckpointResumeFailure};
-use crate::geometry::CdtTriangulation2D;
 use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
 };

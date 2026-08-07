@@ -2,9 +2,8 @@
 
 //! End-to-end physics integration tests for 1+1 CDT simulations.
 
-use causal_triangulations::{
-    CdtConfig, CdtTopology, TestConfig, ValidatedCdtConfig, run_simulation,
-};
+use causal_triangulations::prelude::testing::TestConfig;
+use causal_triangulations::{CdtConfig, CdtTopology, ValidatedCdtConfig, run_simulation};
 
 /// Enables real simulation mode on canned test configs with a deterministic seed.
 const fn simulated_config(mut config: CdtConfig, seed: u64) -> CdtConfig {

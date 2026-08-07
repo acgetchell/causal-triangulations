@@ -298,14 +298,16 @@ recipes, and a reusable notebook parser/linter. Delaunay's current notebook buck
 quickstart and visualization notebooks in routine CI and reserves the analysis-cache notebook for `notebook-check-slow`.
 
 - `just ci` names each distinct validator directly instead of reaching them through `check`, `lint`, or `test-all`. This keeps Markdown, configuration,
-  Python, notebooks, production Rust, runnable Rust tests, doctests, benchmarks, and examples independently selectable and avoids hidden target-class overlap.
+  Python, notebooks, Rust linting, runnable Rust tests, doctests, benchmarks, and examples independently selectable and makes target-class overlap explicit.
 - `test-rust-ci` runs library unit tests and integration-test crates together with
   `cargo nextest run --release --profile ci --lib --tests --verbose`; `test-rust` adds the separate rustdoc bucket because nextest does not execute doctests.
   `test-unit`, `test-doc`, and `test-integration` remain debug-profile focused recipes for changed-surface work, with `test-lib` retained as a compatibility
   alias. `.config/nextest.toml` defines the named CI profile with no retries, non-fail-fast execution, immediate final failure output, and a bounded slow-test
   timeout so the command behaves consistently on every platform.
-- Default Clippy validation now covers production library and binary targets. The former all-target sweep remains available as `clippy-all-targets`, outside
-  `just ci`, because tests, examples, and benchmarks already have focused validators that compile their own target classes.
+- The fast `clippy` recipe remains scoped to production library and binary targets, while `just ci` uses `clippy-all-targets` to match
+  `.github/workflows/rust-clippy.yml`. PR #234 demonstrated that compiling tests, examples, and benchmarks in their focused buckets does not execute Clippy
+  lints such as `clippy::ref_option` or `clippy::items_after_statements`. The all-target CI sweep is therefore distinct lint evidence, not redundant compile
+  evidence, and prevents GitHub Advanced Security SARIF findings that cannot be reproduced by the documented local CI command.
 - `scripts/notebook_check.py` now owns notebook discovery, JSON parsing, cell compilation, output hygiene, extracted-code Ruff/ty diagnostics, and multi-file
   failure reporting. `notebook-output-check` calls the same checker with external-code checks disabled instead of maintaining a second `jq` implementation.
   Just continues to own launch behavior, the fast/slow execution sets, output placement under `target/notebooks`, and explicit source-output cleanup.

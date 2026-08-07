@@ -1631,7 +1631,7 @@ impl TestConfig {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::TestConfig;
+    /// use causal_triangulations::prelude::testing::TestConfig;
     ///
     /// let config = TestConfig::small();
     /// assert_eq!(config.steps, 10);
@@ -1663,7 +1663,7 @@ impl TestConfig {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::TestConfig;
+    /// use causal_triangulations::prelude::testing::TestConfig;
     ///
     /// let config = TestConfig::medium();
     /// assert_eq!(config.vertices, 64);
@@ -1695,7 +1695,7 @@ impl TestConfig {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::TestConfig;
+    /// use causal_triangulations::prelude::testing::TestConfig;
     ///
     /// let config = TestConfig::large();
     /// assert_eq!(config.vertices, 256);

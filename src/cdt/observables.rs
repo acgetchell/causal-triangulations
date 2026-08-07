@@ -5,8 +5,8 @@
 //! This module contains user-facing analysis routines that measure fixed
 //! triangulations or simulation outputs without owning the simulation loop.
 
+use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::errors::{CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure};
-use crate::geometry::CdtTriangulation2D;
 use crate::geometry::traits::TriangulationQuery;
 use crate::util::usize_to_f64;
 use std::collections::{HashMap, VecDeque};

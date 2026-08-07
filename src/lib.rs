@@ -81,8 +81,8 @@ pub mod config;
 /// Error types for the CDT library.
 pub mod errors;
 
-/// Utility functions for random number generation and mathematical operations.
-pub mod util;
+/// Crate-private numeric conversion helpers.
+mod util;
 
 /// Geometry abstraction layer for CDT simulations.
 ///
@@ -114,17 +114,12 @@ pub mod geometry {
     /// Uses `f64` coordinates with `u32` vertex data (time-slice labels) and `i32` simplex data.
     pub type DelaunayBackend2D = backends::delaunay::DelaunayBackend<u32, i32, 2>;
 
-    /// Default backend type for 2D CDT simulations
-    pub type DefaultBackend = DelaunayBackend2D;
-
-    /// Convenient alias for CDT triangulations using the default backend
-    pub type CdtTriangulation2D = crate::cdt::triangulation::CdtTriangulation<DefaultBackend>;
-
     pub use coordinates::{
         SpacetimeCoordinate, SpacetimeCoordinateComponent, SpacetimeCoordinateError,
     };
     pub use generators::{
         DelaunayTriangulation2D, GlobalTopology, TopologyGuarantee, ToroidalConstructionMode,
+        ToroidalDomain,
     };
 }
 
@@ -208,10 +203,11 @@ pub use cdt::proposal_policy::{
 };
 pub use cdt::results::{Measurement, SimulationResultsBackend};
 pub use cdt::triangulation::{
-    CdtMetadata, CdtSimplexCounts, CdtTriangulation, CdtValidationProfile, SimulationEvent,
+    CdtMetadata, CdtSimplexCounts, CdtTriangulation, CdtTriangulation2D, CdtValidationProfile,
+    SimulationEvent,
 };
 pub use config::{
-    CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, TestConfig, ValidatedCdtConfig,
+    CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, ValidatedCdtConfig,
     ValidatedInitialVolume,
 };
 pub use errors::{
@@ -223,6 +219,7 @@ pub use errors::{
 };
 pub use geometry::traits::TriangulationQuery;
 pub use geometry::{SpacetimeCoordinate, SpacetimeCoordinateComponent, SpacetimeCoordinateError};
+pub use markov_chain_monte_carlo::{DiscreteProposalRatioError, McmcError};
 
 use crate::cdt::results::SimulationResultsParts;
 use std::env;
@@ -255,9 +252,8 @@ static NEXT_TEMP_OUTPUT_ID: AtomicU64 = AtomicU64::new(0);
 /// ```
 pub mod prelude {
     // Core CDT types
-    pub use crate::geometry::CdtTriangulation2D;
     pub use crate::geometry::traits::TriangulationQuery;
-    pub use crate::{CdtMetadata, CdtSimplexCounts, CdtTriangulation};
+    pub use crate::{CdtTriangulation, CdtTriangulation2D};
 
     // Action and simulation setup
     pub use crate::cdt::action::ActionConfig;
@@ -268,11 +264,11 @@ pub mod prelude {
     pub use crate::config::{CdtConfig, CdtTopology, ValidatedCdtConfig};
     pub use crate::errors::{CdtError, CdtResult};
 
-    /// Focused exports for configuration parsing and presets.
+    /// Focused exports for configuration parsing and overrides.
     pub mod config {
         pub use crate::config::{
-            CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, TestConfig,
-            ValidatedCdtConfig, ValidatedInitialVolume,
+            CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, ValidatedCdtConfig,
+            ValidatedInitialVolume,
         };
     }
 
@@ -282,7 +278,8 @@ pub mod prelude {
     /// use std::assert_matches;
     /// use causal_triangulations::prelude::errors::{
     ///     BackendMutationOperation, CdtError, CdtValidationCheck,
-    ///     CdtValidationFailure, FoliationError,
+    ///     CdtMoveFamilyPolicyError, CdtValidationFailure,
+    ///     DiscreteProposalRatioError, FoliationError, McmcError,
     ///     MetropolisMoveApplicationFailure,
     ///     SpacetimeCoordinateComponent,
     /// };
@@ -293,6 +290,28 @@ pub mod prelude {
     ///     foliation_err,
     ///     CdtError::Foliation(FoliationError::EmptyFoliation)
     /// );
+    /// let policy_err = CdtError::ProposalPolicyFailed {
+    ///     source: CdtMoveFamilyPolicyError::EmptySupport,
+    /// };
+    /// assert_matches!(
+    ///     policy_err,
+    ///     CdtError::ProposalPolicyFailed {
+    ///         source: CdtMoveFamilyPolicyError::EmptySupport,
+    ///     }
+    /// );
+    /// let ratio_err = CdtError::ProposalRatioFailed {
+    ///     move_type: MoveType::Move22,
+    ///     source: DiscreteProposalRatioError::ZeroForwardSiteCount,
+    /// };
+    /// assert_matches!(
+    ///     ratio_err,
+    ///     CdtError::ProposalRatioFailed {
+    ///         source: DiscreteProposalRatioError::ZeroForwardSiteCount,
+    ///         ..
+    ///     }
+    /// );
+    /// let mcmc_err = CdtError::Mcmc(McmcError::NanProposedLogProb);
+    /// assert_matches!(mcmc_err, CdtError::Mcmc(McmcError::NanProposedLogProb));
     /// let coordinate_err = CdtError::ValidationFailed {
     ///     check: CdtValidationCheck::Geometry,
     ///     failure: CdtValidationFailure::VertexCoordinateNonFinite {
@@ -326,6 +345,7 @@ pub mod prelude {
     /// ```
     pub mod errors {
         pub use crate::cdt::foliation::FoliationError;
+        pub use crate::cdt::proposal_policy::CdtMoveFamilyPolicyError;
         pub use crate::errors::{
             BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck,
             CdtValidationFailure, CheckpointMoveCounter, CheckpointOperation,
@@ -335,6 +355,7 @@ pub mod prelude {
             TriangulationMetadataField,
         };
         pub use crate::geometry::SpacetimeCoordinateComponent;
+        pub use markov_chain_monte_carlo::{DiscreteProposalRatioError, McmcError};
     }
 
     /// Focused exports for CDT action calculations.
@@ -375,10 +396,10 @@ pub mod prelude {
         };
         pub use crate::config::CdtTopology;
         pub use crate::errors::{CdtError, CdtResult};
-        pub use crate::geometry::CdtTriangulation2D;
         pub use crate::geometry::traits::TriangulationQuery;
         pub use crate::{
-            CdtMetadata, CdtSimplexCounts, CdtTriangulation, CdtValidationProfile, SimulationEvent,
+            CdtMetadata, CdtSimplexCounts, CdtTriangulation, CdtTriangulation2D,
+            CdtValidationProfile, SimulationEvent,
         };
     }
 
@@ -456,12 +477,11 @@ pub mod prelude {
         pub use crate::cdt::triangulation::SimulationEvent;
         pub use crate::config::{CdtConfig, CdtTopology, ValidatedCdtConfig};
         pub use crate::errors::{CdtError, CdtResult};
-        pub use crate::geometry::CdtTriangulation2D;
         pub use crate::geometry::traits::TriangulationQuery;
-        pub use crate::{CdtSimplexCounts, CdtTriangulation, run_simulation};
+        pub use crate::{CdtSimplexCounts, CdtTriangulation, CdtTriangulation2D, run_simulation};
         pub use markov_chain_monte_carlo::{
-            ChainCheckpoint, ChainId, DelayedProposal, StepOutcome, Target, Trace, TraceError,
-            TraceRecord, TraceStepOutcome,
+            ChainCheckpoint, ChainId, DelayedProposal, DiscreteProposalRatioError, McmcError,
+            StepOutcome, Target, Trace, TraceError, TraceRecord, TraceStepOutcome,
         };
     }
 
@@ -489,11 +509,10 @@ pub mod prelude {
     /// }
     /// ```
     pub mod observables {
-        pub use crate::CdtTriangulation;
         pub use crate::cdt::observables::{
             estimate_hausdorff_dimension, estimate_spectral_dimension,
         };
-        pub use crate::geometry::CdtTriangulation2D;
+        pub use crate::{CdtTriangulation, CdtTriangulation2D};
     }
 
     /// Focused exports for geometry backend construction and querying.
@@ -557,17 +576,20 @@ pub mod prelude {
 
     /// Focused exports for tests and documentation fixtures.
     ///
-    /// This prelude exposes the mock geometry backend and the traits commonly
-    /// exercised by downstream tests without mixing fixture-only types into the
-    /// production geometry prelude.
+    /// This prelude exposes canned test configurations, the mock geometry
+    /// backend, and the traits commonly exercised by downstream tests without
+    /// mixing fixture-only types into production preludes.
     ///
     /// ```
     /// use causal_triangulations::prelude::testing::*;
     ///
+    /// let config = TestConfig::small();
+    /// assert_eq!(config.steps, 10);
     /// let backend = MockBackend::create_triangle();
     /// assert_eq!(backend.vertex_count(), 3);
     /// ```
     pub mod testing {
+        pub use crate::config::TestConfig;
         pub use crate::geometry::backends::mock::{
             MockBackend, MockError, MockNonFlippableReason, MockOperation, MockStorageTarget,
         };

@@ -5,7 +5,6 @@
 use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::FoliationError;
 use crate::cdt::proposal_policy::CdtMoveFamilyPolicyError;
-use crate::cdt::results::CdtScalarTraceOutcome;
 use crate::config::CdtTopology;
 use crate::geometry::{SpacetimeCoordinateComponent, SpacetimeCoordinateError};
 use markov_chain_monte_carlo::{DiscreteProposalRatioError, McmcError, StepOutcome};
@@ -803,6 +802,52 @@ pub enum CheckpointResumeFailure {
         /// Expected sequential step value.
         expected: u32,
     },
+    /// A step's pre-move action disagrees with its reconstructed simplex-count state.
+    #[error(
+        "step {step} action_before does not match the reconstructed state: got {actual}, expected {expected}"
+    )]
+    StepActionBeforeStateMismatch {
+        /// Step with inconsistent action telemetry.
+        step: u32,
+        /// Serialized pre-move action.
+        actual: f64,
+        /// Action recomputed from the reconstructed pre-move simplex counts.
+        expected: f64,
+    },
+    /// A step's effective post-move action disagrees with its reconstructed state.
+    #[error(
+        "step {step} action does not match the reconstructed state: got {actual}, expected {expected}"
+    )]
+    StepActionStateMismatch {
+        /// Step with inconsistent action telemetry.
+        step: u32,
+        /// Serialized effective post-move action.
+        actual: f64,
+        /// Action recomputed from the reconstructed post-move simplex counts.
+        expected: f64,
+    },
+    /// A scored proposal delta disagrees with the move family's count-level action change.
+    #[error(
+        "step {step} delta_action does not match the reconstructed proposal: got {actual}, expected {expected}"
+    )]
+    StepDeltaActionStateMismatch {
+        /// Step with inconsistent proposal telemetry.
+        step: u32,
+        /// Serialized proposal action delta.
+        actual: f64,
+        /// Action delta recomputed from the move's simplex-count transition.
+        expected: f64,
+    },
+    /// A move's simplex-count transition cannot be reconstructed without overflow or zero counts.
+    #[error("step {step} {move_type:?} transition cannot produce a positive {field} simplex count")]
+    StepSimplexCountTransitionInvalid {
+        /// Step with an impossible count transition.
+        step: u32,
+        /// Move family whose count delta is invalid.
+        move_type: MoveType,
+        /// Simplex-count field that would overflow, underflow, or become zero.
+        field: SimplexCountField,
+    },
     /// Step telemetry contains a non-finite pre-move action.
     #[error("step {step} has non-finite action_before")]
     NonFiniteStepActionBefore {
@@ -861,13 +906,13 @@ pub enum CheckpointResumeFailure {
     },
     /// Scalar trace outcome disagrees with step telemetry.
     #[error("step {step} scalar trace outcome mismatch: got {actual:?}, expected {expected:?}")]
-    ScalarTraceAcceptedMismatch {
+    ScalarTraceOutcomeMismatch {
         /// Step with invalid scalar trace telemetry.
         step: u32,
         /// Outcome reconstructed from scalar trace telemetry.
-        actual: CdtScalarTraceOutcome,
+        actual: StepOutcome,
         /// Outcome reconstructed from step telemetry.
-        expected: CdtScalarTraceOutcome,
+        expected: StepOutcome,
     },
     /// Scalar trace optional action delta disagrees with step telemetry.
     #[error("step {step} scalar trace delta_action does not match step telemetry")]
@@ -920,6 +965,30 @@ pub enum CheckpointResumeFailure {
         profile_total: u64,
         /// Stored scalar trace triangle count.
         triangles: u32,
+    },
+    /// A scalar trace simplex count disagrees with the reconstructed post-step state.
+    #[error(
+        "step {step} scalar trace {field} count does not match the reconstructed state: got {actual}, expected {expected}"
+    )]
+    ScalarTraceSimplexCountStateMismatch {
+        /// Step with inconsistent scalar trace telemetry.
+        step: u32,
+        /// Simplex-count field that disagrees with the trajectory.
+        field: MeasurementCountField,
+        /// Serialized scalar trace count.
+        actual: u32,
+        /// Count reconstructed from the accepted move trajectory.
+        expected: usize,
+    },
+    /// A scalar trace volume profile disagrees with the restored final triangulation.
+    #[error("step {step} scalar trace volume profile does not match the restored state")]
+    ScalarTraceVolumeProfileStateMismatch {
+        /// Step with inconsistent scalar trace telemetry.
+        step: u32,
+        /// Serialized scalar trace volume profile.
+        actual: Vec<u32>,
+        /// Volume profile recomputed from the restored final triangulation.
+        expected: Vec<u32>,
     },
     /// Scalar trace contains a non-finite numeric value.
     #[error("step {step} scalar trace field {field} is non-finite")]
@@ -974,6 +1043,42 @@ pub enum CheckpointResumeFailure {
         actual: u32,
         /// Expected measurement step from the sampling schedule.
         expected: u32,
+    },
+    /// A measurement action disagrees with the reconstructed state at its step.
+    #[error(
+        "step {step} measurement action does not match the reconstructed state: got {actual}, expected {expected}"
+    )]
+    MeasurementActionStateMismatch {
+        /// Step with inconsistent measurement telemetry.
+        step: u32,
+        /// Serialized measurement action.
+        actual: f64,
+        /// Action recomputed from the reconstructed simplex counts.
+        expected: f64,
+    },
+    /// A measurement simplex count disagrees with the reconstructed state at its step.
+    #[error(
+        "step {step} measurement {field} count does not match the reconstructed state: got {actual}, expected {expected}"
+    )]
+    MeasurementSimplexCountStateMismatch {
+        /// Step with inconsistent measurement telemetry.
+        step: u32,
+        /// Simplex-count field that disagrees with the trajectory.
+        field: MeasurementCountField,
+        /// Serialized measurement count.
+        actual: u32,
+        /// Count reconstructed from the accepted move trajectory.
+        expected: usize,
+    },
+    /// A measurement volume profile disagrees with the trace or restored final state.
+    #[error("step {step} measurement volume profile does not match the reconstructed state")]
+    MeasurementVolumeProfileStateMismatch {
+        /// Step with inconsistent measurement telemetry.
+        step: u32,
+        /// Serialized measurement volume profile.
+        actual: Vec<u32>,
+        /// Profile stored for the same trace state or recomputed from final geometry.
+        expected: Vec<u32>,
     },
     /// A per-move counter sum overflowed.
     #[error("{counter} move count exceeds u64::MAX")]

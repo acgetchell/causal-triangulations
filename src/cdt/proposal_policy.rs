@@ -3,10 +3,9 @@
 //! Borrowed, invariant-safe views for 1+1 CDT proposal policies.
 
 use crate::cdt::ergodic_moves::{MoveType, ProposalSite};
-use crate::cdt::triangulation::CdtSimplexCounts;
+use crate::cdt::triangulation::{CdtSimplexCounts, CdtTriangulation2D};
 use crate::config::CdtTopology;
 use crate::errors::CdtResult;
-use crate::geometry::CdtTriangulation2D;
 use std::error::Error;
 use std::fmt;
 use std::iter::FusedIterator;
@@ -86,10 +85,7 @@ pub trait CdtMoveFamilyPolicy {
     ) -> Result<f64, CdtMoveFamilyPolicyError>;
 }
 
-impl<P> CdtMoveFamilyPolicy for &P
-where
-    P: CdtMoveFamilyPolicy + ?Sized,
-{
+impl<P: CdtMoveFamilyPolicy + ?Sized> CdtMoveFamilyPolicy for &P {
     fn fixed_distribution(&self) -> Option<CdtMoveFamilyDistribution> {
         (**self).fixed_distribution()
     }
@@ -335,7 +331,8 @@ fn sample_mass_probability(sample_mass: u64) -> f64 {
 
 /// Quantizes normalized weights onto the exact 53-bit family-selection grid.
 ///
-/// Largest-remainder allocation keeps the effective distribution as close as
+/// Largest-remainder allocation assigns missing atoms one at a time to the
+/// greatest current residual, keeping the effective distribution as close as
 /// possible to the requested weights. A final support repair assigns one atom
 /// to positive weights below the RNG resolution and removes the same mass from
 /// the largest supported family, so sampling and Hastings telemetry remain
@@ -351,8 +348,13 @@ fn quantized_sample_masses(weights: [f64; 4], total_weight: f64) -> [u64; 4] {
 
     let allocated = sample_masses.into_iter().sum::<u64>();
     if allocated < FAMILY_SAMPLE_RESOLUTION {
-        let recipient = largest_remainder_index(&remainders, &weights);
-        sample_masses[recipient] += FAMILY_SAMPLE_RESOLUTION - allocated;
+        let mut missing = FAMILY_SAMPLE_RESOLUTION - allocated;
+        while missing > 0 {
+            let recipient = largest_remainder_index(&remainders, &weights);
+            sample_masses[recipient] += 1;
+            remainders[recipient] -= 1.0;
+            missing -= 1;
+        }
     } else if allocated > FAMILY_SAMPLE_RESOLUTION {
         remove_sample_mass(
             &mut sample_masses,
@@ -399,10 +401,10 @@ fn floor_sample_mass(ideal_mass: f64) -> u64 {
     ideal_mass.floor() as u64
 }
 
-/// Selects the supported family with the largest fractional allocation remainder.
+/// Selects the supported family with the greatest ideal-minus-allocated residual.
 fn largest_remainder_index(remainders: &[f64; 4], weights: &[f64; 4]) -> usize {
-    let mut selected = 0;
-    for index in 1..remainders.len() {
+    let mut selected = weights.iter().position(|weight| *weight > 0.0).unwrap_or(0);
+    for index in (selected + 1)..remainders.len() {
         if weights[index] > 0.0 && remainders[index] > remainders[selected] {
             selected = index;
         }
@@ -419,6 +421,9 @@ fn remove_sample_mass(sample_masses: &mut [u64; 4], mut excess: u64, minimum_mas
             break;
         };
         let available = sample_masses[donor] - minimum_masses[donor];
+        if available == 0 {
+            break;
+        }
         debug_assert!(available > 0);
         let removed = available.min(excess);
         sample_masses[donor] -= removed;
@@ -837,5 +842,49 @@ impl<'a> CdtProposalPolicyView<'a> {
     /// Clones one private site descriptor at a checked cache ordinal.
     pub(crate) fn site_at(&self, ordinal: usize) -> Option<ProposalSite> {
         self.sites.get(ordinal).cloned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn largest_remainder_tie_selects_the_first_supported_family() {
+        assert_eq!(largest_remainder_index(&[0.0; 4], &[0.0, 1.0, 1.0, 0.0]), 1);
+    }
+
+    #[test]
+    fn largest_remainder_distributes_tied_deficit_across_supported_families() {
+        let sample_masses = quantized_sample_masses([1.0, 1.0, 1.0, 0.0], 3.0);
+        let base_mass = FAMILY_SAMPLE_RESOLUTION / 3;
+
+        assert_eq!(sample_masses, [base_mass + 1, base_mass + 1, base_mass, 0]);
+    }
+
+    #[test]
+    fn quantization_repairs_floating_point_over_allocation() {
+        let weights = [
+            2.586_533_581_119_734_5e-145,
+            3.150_634_300_336_162e170,
+            1.763_720_237_770_371e178,
+            8.817_431_993_270_876e163,
+        ];
+        let total_weight = weights.into_iter().sum::<f64>();
+        let naive_allocation = weights
+            .map(|weight| floor_sample_mass(weight / total_weight * FAMILY_SAMPLE_RESOLUTION_F64))
+            .into_iter()
+            .sum::<u64>();
+        assert!(naive_allocation > FAMILY_SAMPLE_RESOLUTION);
+
+        let sample_masses = quantized_sample_masses(weights, total_weight);
+
+        assert_eq!(
+            sample_masses.into_iter().sum::<u64>(),
+            FAMILY_SAMPLE_RESOLUTION
+        );
+        for (weight, sample_mass) in weights.into_iter().zip(sample_masses) {
+            assert_eq!(sample_mass > 0, weight > 0.0);
+        }
     }
 }

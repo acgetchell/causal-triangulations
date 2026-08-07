@@ -13,8 +13,8 @@ use crate::cdt::proposal_policy::{
     CdtMoveFamilyDistribution, CdtMoveFamilyPolicy, CdtMoveFamilyPolicyError,
     CdtProposalPolicyView, UniformCdtMoveFamilyPolicy,
 };
+use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::errors::{CdtError, CdtResult, MetropolisMoveApplicationFailure};
-use crate::geometry::CdtTriangulation2D;
 use markov_chain_monte_carlo::{
     Chain, ChainCheckpoint, DelayedProposal, DiscreteProposalRatio, DiscreteProposalRatioError,
     McmcError, Target,
@@ -767,10 +767,7 @@ impl CdtProposal<UniformCdtMoveFamilyPolicy> {
     }
 }
 
-impl<P> CdtProposal<P>
-where
-    P: CdtMoveFamilyPolicy,
-{
+impl<P> CdtProposal<P> {
     /// Creates an unseeded planner with an injected family policy.
     ///
     /// # Examples
@@ -785,7 +782,10 @@ where
     /// # Ok::<(), causal_triangulations::CdtMoveFamilyPolicyError>(())
     /// ```
     #[must_use]
-    pub fn with_policy(action_config: ActionConfig, policy: P) -> Self {
+    pub fn with_policy(action_config: ActionConfig, policy: P) -> Self
+    where
+        P: CdtMoveFamilyPolicy,
+    {
         action_config.validate();
         Self {
             action_config,
@@ -811,7 +811,10 @@ where
     /// # Ok::<(), causal_triangulations::CdtMoveFamilyPolicyError>(())
     /// ```
     #[must_use]
-    pub fn with_seed_and_policy(action_config: ActionConfig, seed: u64, policy: P) -> Self {
+    pub fn with_seed_and_policy(action_config: ActionConfig, seed: u64, policy: P) -> Self
+    where
+        P: CdtMoveFamilyPolicy,
+    {
         action_config.validate();
         Self {
             action_config,
@@ -863,7 +866,10 @@ where
         action_config: ActionConfig,
         moves: ErgodicsSystem,
         policy: P,
-    ) -> Self {
+    ) -> Self
+    where
+        P: CdtMoveFamilyPolicy,
+    {
         action_config.validate();
         Self {
             action_config,
@@ -1227,6 +1233,8 @@ pub(crate) fn propose_concrete_plan(
         action_before,
         action_after,
         delta_action,
+        // These family probabilities and the site-only ratio are placeholders;
+        // `propose_plan` replaces all three before returning the plan to a consumer.
         forward_family_probability: 1.0,
         reverse_family_probability: 1.0,
         forward_site_count,

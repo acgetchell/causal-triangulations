@@ -5,9 +5,9 @@
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::results::Measurement;
+use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::config::validate_schedule;
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
-use crate::geometry::CdtTriangulation2D;
 use std::num::NonZeroU32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -10,11 +10,13 @@ use causal_triangulations::prelude::simulation::{
     CdtProposalPolicyView, CdtProposalSiteId, CdtProposalSiteIdError, CdtTopology, DelayedProposal,
     MetropolisAlgorithm, MetropolisConfig, UniformCdtMoveFamilyPolicy,
 };
-use causal_triangulations::prelude::triangulation::{CdtResult, CdtTriangulation};
+use causal_triangulations::prelude::triangulation::{
+    CdtResult, CdtTriangulation, CdtTriangulation2D,
+};
 use rand::{SeedableRng, rngs::StdRng};
-use std::assert_matches;
+use std::{assert_matches, cell::Cell};
 
-fn single_triangle() -> causal_triangulations::geometry::CdtTriangulation2D {
+fn single_triangle() -> CdtTriangulation2D {
     let triangulation =
         build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
             .expect("build labeled triangle");
@@ -25,12 +27,12 @@ fn single_triangle() -> causal_triangulations::geometry::CdtTriangulation2D {
 
 fn proposal_info(
     proposal: &mut impl DelayedProposal<
-        causal_triangulations::geometry::CdtTriangulation2D,
+        CdtTriangulation2D,
         Plan = causal_triangulations::CdtProposalPlan,
         Info = CdtProposalInfo,
         Error = CdtProposalError,
     >,
-    plan: &Option<causal_triangulations::CdtProposalPlan>,
+    plan: Option<&causal_triangulations::CdtProposalPlan>,
 ) -> CdtProposalInfo {
     match plan {
         Some(plan) => proposal.info(plan),
@@ -69,6 +71,43 @@ impl CdtMoveFamilyPolicy for VolumeDependentPolicy {
     }
 }
 
+struct EmptyPolicy;
+
+impl CdtMoveFamilyPolicy for EmptyPolicy {
+    fn family_weight(
+        &self,
+        _view: &CdtProposalPolicyView<'_>,
+    ) -> Result<f64, CdtMoveFamilyPolicyError> {
+        Ok(0.0)
+    }
+}
+
+struct FailOnReverseEvaluation {
+    calls: Cell<usize>,
+}
+
+impl CdtMoveFamilyPolicy for FailOnReverseEvaluation {
+    fn family_weight(
+        &self,
+        view: &CdtProposalPolicyView<'_>,
+    ) -> Result<f64, CdtMoveFamilyPolicyError> {
+        let call = self.calls.get();
+        self.calls.set(call + 1);
+        if call >= MoveType::REVERSIBLE_1P1.len() {
+            return Err(CdtMoveFamilyPolicyError::EvaluationFailed {
+                family: view.family(),
+                detail: "reverse-state policy failure".to_string(),
+            });
+        }
+
+        Ok(if view.family() == MoveType::Move13Add {
+            1.0
+        } else {
+            0.0
+        })
+    }
+}
+
 #[test]
 fn move_family_identifiers_and_reverse_mapping_are_stable() {
     assert_eq!(
@@ -93,7 +132,11 @@ fn fixed_family_distribution_normalizes_and_rejects_invalid_support() {
     {
         assert_relative_eq!(actual, expected, epsilon = f64::EPSILON);
     }
-    assert_eq!(distribution.probability(MoveType::Move31Remove), 0.0);
+    assert_relative_eq!(
+        distribution.probability(MoveType::Move31Remove),
+        0.0,
+        epsilon = f64::EPSILON
+    );
 
     for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
         assert_matches!(
@@ -113,6 +156,70 @@ fn fixed_family_distribution_normalizes_and_rejects_invalid_support() {
         Err(CdtMoveFamilyPolicyError::NonFiniteTotalWeight { total_weight })
             if total_weight == f64::INFINITY
     );
+
+    assert_eq!(
+        CdtMoveFamilyDistribution::default(),
+        CdtMoveFamilyDistribution::uniform()
+    );
+    let triangulation = single_triangle();
+    let mut moves = ErgodicsSystem::new();
+    for family in MoveType::REVERSIBLE_1P1 {
+        let view = moves.proposal_policy_view(&triangulation, family);
+        assert_relative_eq!(
+            distribution
+                .family_weight(&view)
+                .expect("checked distribution should return its family probability"),
+            distribution.probability(family),
+            epsilon = f64::EPSILON
+        );
+        assert_relative_eq!(
+            UniformCdtMoveFamilyPolicy
+                .family_weight(&view)
+                .expect("uniform policy evaluation should be infallible"),
+            1.0,
+            epsilon = f64::EPSILON
+        );
+    }
+}
+
+#[test]
+fn policy_errors_retain_actionable_context_and_convert_to_cdt_errors() {
+    let evaluation = CdtMoveFamilyPolicyError::EvaluationFailed {
+        family: MoveType::Move13Add,
+        detail: "model unavailable".to_string(),
+    }
+    .to_string();
+    assert!(evaluation.contains("move-1-3-add"));
+    assert!(evaluation.contains("model unavailable"));
+
+    let invalid = CdtMoveFamilyPolicyError::InvalidWeight {
+        family: MoveType::Move31Remove,
+        weight: -0.5,
+    }
+    .to_string();
+    assert!(invalid.contains("move-3-1-remove"));
+    assert!(invalid.contains("-0.5"));
+
+    assert!(
+        CdtMoveFamilyPolicyError::EmptySupport
+            .to_string()
+            .contains("empty support")
+    );
+    assert!(
+        CdtMoveFamilyPolicyError::NonFiniteTotalWeight {
+            total_weight: f64::INFINITY,
+        }
+        .to_string()
+        .contains("normalization total")
+    );
+
+    let error: CdtError = CdtMoveFamilyPolicyError::EmptySupport.into();
+    assert_matches!(
+        error,
+        CdtError::ProposalPolicyFailed {
+            source: CdtMoveFamilyPolicyError::EmptySupport,
+        }
+    );
 }
 
 #[test]
@@ -131,12 +238,12 @@ fn positive_weight_empty_family_is_typed_self_loop_without_mutation() {
     let plan = proposal
         .propose_plan(&triangulation, &mut rng)
         .expect("empty offered-site support is an ordinary self-loop");
-    let info = proposal_info(&mut proposal, &plan);
+    let info = proposal_info(&mut proposal, plan.as_ref());
 
     assert!(plan.is_none());
     assert_eq!(info.move_type, MoveType::Move22);
     assert_eq!(info.reverse_move_type, MoveType::Move22);
-    assert_eq!(info.forward_family_probability, 1.0);
+    assert_relative_eq!(info.forward_family_probability, 1.0, epsilon = f64::EPSILON);
     assert_eq!(info.forward_site_count, 0);
     assert_eq!(
         info.planning_outcome,
@@ -163,8 +270,8 @@ fn uniform_injected_policy_matches_the_conventional_checked_path() -> CdtResult<
 
     let conventional_plan = conventional.propose_plan(&triangulation, &mut conventional_rng)?;
     let injected_plan = injected.propose_plan(&triangulation, &mut injected_rng)?;
-    let conventional_info = proposal_info(&mut conventional, &conventional_plan);
-    let injected_info = proposal_info(&mut injected, &injected_plan);
+    let conventional_info = proposal_info(&mut conventional, conventional_plan.as_ref());
+    let injected_info = proposal_info(&mut injected, injected_plan.as_ref());
 
     assert_eq!(injected_info, conventional_info);
     assert_eq!(injected_plan.is_some(), conventional_plan.is_some());
@@ -272,9 +379,10 @@ fn fixed_policy_checkpoint_resume_matches_uninterrupted_rng_stream() -> CdtResul
     for (resumed_step, uninterrupted_step) in resumed.steps().iter().zip(uninterrupted.steps()) {
         assert_eq!(resumed_step.step(), uninterrupted_step.step());
         assert_eq!(resumed_step.move_type(), uninterrupted_step.move_type());
-        assert_eq!(
+        assert_relative_eq!(
             resumed_step.action_before(),
-            uninterrupted_step.action_before()
+            uninterrupted_step.action_before(),
+            epsilon = f64::EPSILON
         );
         assert_eq!(resumed_step.outcome(), uninterrupted_step.outcome());
         assert_eq!(
@@ -469,15 +577,22 @@ fn invalid_policy_aborts_before_mutating_the_chain() -> CdtResult<()> {
         .expect_err("all-zero policy must be rejected before construction");
     assert_matches!(policy, CdtMoveFamilyPolicyError::EmptySupport);
 
-    struct EmptyPolicy;
-    impl CdtMoveFamilyPolicy for EmptyPolicy {
-        fn family_weight(
-            &self,
-            _view: &CdtProposalPolicyView<'_>,
-        ) -> Result<f64, CdtMoveFamilyPolicyError> {
-            Ok(0.0)
+    let mut proposal = CdtProposal::with_policy(ActionConfig::default(), EmptyPolicy);
+    let mut rng = StdRng::seed_from_u64(57);
+    let proposal_error = proposal
+        .propose_plan(&triangulation, &mut rng)
+        .expect_err("unseeded empty-support policy should fail before family selection");
+    assert!(
+        proposal_error
+            .to_string()
+            .contains("CDT move-family policy failed")
+    );
+    assert_matches!(
+        proposal_error,
+        CdtProposalError::Policy {
+            source: CdtMoveFamilyPolicyError::EmptySupport,
         }
-    }
+    );
 
     let algorithm = MetropolisAlgorithm::new(
         MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(59),
@@ -492,6 +607,44 @@ fn invalid_policy_aborts_before_mutating_the_chain() -> CdtResult<()> {
             step: 1,
             source: CdtMoveFamilyPolicyError::EmptySupport,
         }
+    );
+    assert_eq!(
+        (
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+        ),
+        counts_before
+    );
+    Ok(())
+}
+
+#[test]
+fn reverse_state_policy_failure_is_typed_and_does_not_mutate_live_state() -> CdtResult<()> {
+    let triangulation = CdtTriangulation::from_toroidal_cdt(4, 4)?;
+    let counts_before = (
+        triangulation.vertex_count(),
+        triangulation.edge_count(),
+        triangulation.face_count(),
+    );
+    let policy = FailOnReverseEvaluation {
+        calls: Cell::new(0),
+    };
+    let mut proposal = CdtProposal::with_seed_and_policy(ActionConfig::default(), 67, policy);
+    let mut rng = StdRng::seed_from_u64(69);
+
+    let error = proposal
+        .propose_plan(&triangulation, &mut rng)
+        .expect_err("reverse-state policy evaluation should preserve its typed failure");
+
+    assert_matches!(
+        error,
+        CdtProposalError::Policy {
+            source: CdtMoveFamilyPolicyError::EvaluationFailed {
+                family: MoveType::Move22,
+                ref detail,
+            },
+        } if detail == "reverse-state policy failure"
     );
     assert_eq!(
         (
@@ -562,7 +715,7 @@ fn fixed_policy_shortcut_skips_state_dependent_family_evaluation() -> CdtResult<
     let mut rng = StdRng::seed_from_u64(79);
 
     let plan = proposal.propose_plan(&triangulation, &mut rng)?;
-    let info = proposal_info(&mut proposal, &plan);
+    let info = proposal_info(&mut proposal, plan.as_ref());
 
     assert_relative_eq!(
         info.forward_family_probability,
@@ -595,6 +748,7 @@ fn algorithm_exposes_typed_policy_audit_telemetry_after_each_step() -> CdtResult
         );
 
         if telemetry.planning_outcome() == CdtProposalPlanningOutcome::ConcretePlan {
+            assert!(telemetry.forward_site_count() > 0);
             let family = telemetry
                 .log_family_probability_ratio()
                 .expect("concrete plan should expose its family component");

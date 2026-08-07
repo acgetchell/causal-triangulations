@@ -84,7 +84,11 @@ impl<V: Hash> Hash for UnorderedSet<V> {
 ///
 /// For Delaunay simplices, a facet is the set of all simplex vertices excluding one vertex.
 /// Any facet that appears in exactly one simplex is on the boundary.
-fn boundary_facets<B: TriangulationQuery>(tri: &B) -> Vec<Vec<B::VertexHandle>> {
+fn boundary_facets<B>(tri: &B) -> Vec<Vec<B::VertexHandle>>
+where
+    B: TriangulationQuery + ?Sized,
+    B::VertexHandle: Clone + Eq + Hash,
+{
     // Map: facet key -> (occurrence count, representative vertex list)
     type FacetCounts<V> = HashMap<UnorderedSet<V>, (usize, Vec<V>)>;
     let mut facet_counts: FacetCounts<B::VertexHandle> = HashMap::new();
@@ -134,8 +138,12 @@ fn boundary_facets<B: TriangulationQuery>(tri: &B) -> Vec<Vec<B::VertexHandle>> 
         .collect()
 }
 
-/// Common utility operations for triangulations
-pub trait TriangulationOps: TriangulationQuery + Sized {
+/// Common utility operations for triangulations.
+///
+/// Handle capabilities are constrained on individual operations so every
+/// [`TriangulationQuery`] implementation receives the extension trait without
+/// inheriting cloning, equality, or hashing requirements it does not use.
+pub trait TriangulationOps: TriangulationQuery {
     /// Check if the triangulation satisfies Delaunay property (if applicable)
     ///
     /// # Examples
@@ -171,7 +179,10 @@ pub trait TriangulationOps: TriangulationQuery + Sized {
     /// let hull = backend.convex_hull();
     /// assert_eq!(hull.len(), 3);
     /// ```
-    fn convex_hull(&self) -> Vec<Self::VertexHandle> {
+    fn convex_hull(&self) -> Vec<Self::VertexHandle>
+    where
+        Self::VertexHandle: Clone + Eq + Hash,
+    {
         let mut hull_vertices: HashSet<Self::VertexHandle> = HashSet::new();
 
         for facet in boundary_facets(self) {
@@ -200,7 +211,11 @@ pub trait TriangulationOps: TriangulationQuery + Sized {
     /// let boundary = backend.boundary_edges();
     /// assert_eq!(boundary.len(), 3);
     /// ```
-    fn boundary_edges(&self) -> Vec<Self::EdgeHandle> {
+    fn boundary_edges(&self) -> Vec<Self::EdgeHandle>
+    where
+        Self::VertexHandle: Clone + Eq + Hash,
+        Self::EdgeHandle: Clone + Eq + Hash,
+    {
         // Build a lookup from an (unordered) vertex pair to the corresponding edge handle.
         let mut edge_by_vertices: HashMap<UnorderedPair<Self::VertexHandle>, Self::EdgeHandle> =
             HashMap::new();
@@ -211,7 +226,7 @@ pub trait TriangulationOps: TriangulationQuery + Sized {
                     edge_by_vertices.insert(UnorderedPair(v1, v2), edge);
                 }
                 None => {
-                    log::trace!("boundary_edges: skipping unresolved edge {edge:?}");
+                    log::trace!("boundary_edges: skipping unresolved edge");
                 }
             }
         }
@@ -236,7 +251,7 @@ pub trait TriangulationOps: TriangulationQuery + Sized {
 }
 
 // Blanket implementation for all types that implement TriangulationQuery
-impl<T: TriangulationQuery> TriangulationOps for T {}
+impl<T: TriangulationQuery + ?Sized> TriangulationOps for T {}
 
 #[cfg(test)]
 mod tests {

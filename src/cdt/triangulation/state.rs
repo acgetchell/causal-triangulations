@@ -56,6 +56,17 @@ pub struct CdtTriangulation<B> {
     foliation_synced_at_modification: Option<u64>,
 }
 
+/// CDT triangulation using the crate's supported 2D Delaunay backend.
+///
+/// ```
+/// use causal_triangulations::CdtTriangulation2D;
+///
+/// let triangulation = CdtTriangulation2D::from_cdt_strip(4, 3)?;
+/// assert_eq!(triangulation.slice_sizes(), &[4, 4, 4]);
+/// # Ok::<(), causal_triangulations::CdtError>(())
+/// ```
+pub type CdtTriangulation2D = CdtTriangulation<DelaunayBackend2D>;
+
 /// Strictly positive simplex counts for a CDT triangulation.
 ///
 /// Generic geometry backends can be empty while they are being constructed,

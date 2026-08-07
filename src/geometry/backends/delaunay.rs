@@ -16,8 +16,8 @@ use crate::geometry::traits::{
 };
 use delaunay::flips::BistellarFlips;
 use delaunay::geometry::kernel::AdaptiveKernel;
-use delaunay::prelude::DataType;
 use delaunay::prelude::export::{MeshExport, MeshExportError};
+use delaunay::prelude::{DataSerialize, DataType};
 use delaunay::tds::{EdgeKey, FacetHandle, SimplexKey, Tds, Vertex, VertexKey};
 use delaunay::topology::traits::{GlobalTopology, TopologyKind, ToroidalConstructionMode};
 use delaunay::{
@@ -67,7 +67,7 @@ pub struct DelaunayBackend<VertexData, SimplexData, const D: usize> {
     interior_facets_by_edge: HashMap<EdgeKey, FacetHandle>,
 }
 
-impl<VertexData: DataType, SimplexData: DataType, const D: usize> Clone
+impl<VertexData: Clone, SimplexData: Clone, const D: usize> Clone
     for DelaunayBackend<VertexData, SimplexData, D>
 {
     fn clone(&self) -> Self {
@@ -234,10 +234,8 @@ impl SerializableDelaunayCheckPolicy {
     }
 }
 
-impl<VertexData: DataType, SimplexData: DataType, const D: usize> Serialize
+impl<VertexData: DataSerialize, SimplexData: DataSerialize, const D: usize> Serialize
     for DelaunayBackend<VertexData, SimplexData, D>
-where
-    RawTriangulation<VertexData, SimplexData, D>: Serialize,
 {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -255,8 +253,6 @@ where
 
 impl<'de, VertexData: DataType, SimplexData: DataType, const D: usize> Deserialize<'de>
     for DelaunayBackend<VertexData, SimplexData, D>
-where
-    Tds<VertexData, SimplexData, D>: Deserialize<'de>,
 {
     fn deserialize<DE>(deserializer: DE) -> Result<Self, DE::Error>
     where
@@ -745,7 +741,9 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
         backend.validate_delaunay()?;
         Ok(backend)
     }
+}
 
+impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, SimplexData, D> {
     /// Access the underlying Delaunay triangulation (read-only)
     ///
     /// # Examples
@@ -803,7 +801,11 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// }
     /// ```
     #[must_use]
-    pub fn is_delaunay(&self) -> bool {
+    pub fn is_delaunay(&self) -> bool
+    where
+        VertexData: DataType,
+        SimplexData: DataType,
+    {
         self.validate_delaunay().is_ok()
     }
 
@@ -839,7 +841,11 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///     Ok(())
     /// }
     /// ```
-    pub fn validate_delaunay(&self) -> Result<(), DelaunayError> {
+    pub fn validate_delaunay(&self) -> Result<(), DelaunayError>
+    where
+        VertexData: DataType,
+        SimplexData: DataType,
+    {
         self.dt
             .validate()
             .map_err(|err| DelaunayError::ValidationFailed {
@@ -881,7 +887,11 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///     Ok(())
     /// }
     /// ```
-    pub fn validate_embedding(&self) -> Result<(), DelaunayError> {
+    pub fn validate_embedding(&self) -> Result<(), DelaunayError>
+    where
+        VertexData: DataType,
+        SimplexData: DataType,
+    {
         self.dt
             .as_triangulation()
             .validate_realization()
@@ -928,7 +938,11 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ///     Ok(())
     /// }
     /// ```
-    pub fn validate_structural(&self) -> Result<(), DelaunayError> {
+    pub fn validate_structural(&self) -> Result<(), DelaunayError>
+    where
+        VertexData: DataType,
+        SimplexData: DataType,
+    {
         self.dt
             .as_triangulation()
             .validate()
@@ -1118,7 +1132,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// }
     /// ```
     #[must_use]
-    pub fn vertex_data_by_key(&self, key: VertexKey) -> Option<VertexData> {
+    pub fn vertex_data_by_key(&self, key: VertexKey) -> Option<VertexData>
+    where
+        VertexData: Copy,
+    {
         self.dt.vertex(key)?.data().copied()
     }
 
@@ -1158,7 +1175,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// }
     /// ```
     #[must_use]
-    pub fn simplex_data_by_key(&self, key: SimplexKey) -> Option<SimplexData> {
+    pub fn simplex_data_by_key(&self, key: SimplexKey) -> Option<SimplexData>
+    where
+        SimplexData: Copy,
+    {
         self.dt.simplex(key)?.data().copied()
     }
 
@@ -1285,7 +1305,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     }
 }
 
-impl<VertexData: DataType, SimplexData: DataType, const D: usize> GeometryBackend
+impl<VertexData, SimplexData, const D: usize> GeometryBackend
     for DelaunayBackend<VertexData, SimplexData, D>
 {
     type Coordinate = f64;

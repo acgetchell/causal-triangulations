@@ -28,12 +28,12 @@ use crate::cdt::proposal_policy::{CdtMoveFamilyPolicy, UniformCdtMoveFamilyPolic
 use crate::cdt::results::{
     CdtScalarTraceOutcome, CdtScalarTraceRow, Measurement, SimulationResultsBackend,
 };
+use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::cdt::triangulation::SimulationEvent;
 use crate::errors::{
     CdtError, CdtResult, CheckpointResumeFailure, ConfigurationSetting,
     MetropolisMoveApplicationFailure,
 };
-use crate::geometry::CdtTriangulation2D;
 use markov_chain_monte_carlo::{
     Chain, ChainCheckpoint, DelayedStep, DelayedStepError, Sampler, StepOutcome,
 };
@@ -529,14 +529,11 @@ impl MetropolisAlgorithm {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn run_with_policy<P>(
+    pub fn run_with_policy(
         &self,
         triangulation: CdtTriangulation2D,
-        policy: &P,
-    ) -> CdtResult<SimulationResultsBackend>
-    where
-        P: CdtMoveFamilyPolicy + ?Sized,
-    {
+        policy: &(impl CdtMoveFamilyPolicy + ?Sized),
+    ) -> CdtResult<SimulationResultsBackend> {
         self.run_to_checkpoint_with_policy(triangulation, policy)?
             .into_results()
     }
@@ -681,14 +678,11 @@ impl MetropolisAlgorithm {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn run_to_checkpoint_with_policy<P>(
+    pub fn run_to_checkpoint_with_policy(
         &self,
         triangulation: CdtTriangulation2D,
-        policy: &P,
-    ) -> CdtResult<CdtMcmcCheckpoint>
-    where
-        P: CdtMoveFamilyPolicy + ?Sized,
-    {
+        policy: &(impl CdtMoveFamilyPolicy + ?Sized),
+    ) -> CdtResult<CdtMcmcCheckpoint> {
         self.config.try_validate()?;
         self.action_config.validate();
 
@@ -786,14 +780,11 @@ impl MetropolisAlgorithm {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn resume_from_checkpoint_with_policy<P>(
+    pub fn resume_from_checkpoint_with_policy(
         &self,
         checkpoint: CdtMcmcCheckpoint,
-        policy: &P,
-    ) -> CdtResult<SimulationResultsBackend>
-    where
-        P: CdtMoveFamilyPolicy + ?Sized,
-    {
+        policy: &(impl CdtMoveFamilyPolicy + ?Sized),
+    ) -> CdtResult<SimulationResultsBackend> {
         self.resume_to_checkpoint_with_policy(checkpoint, policy)
             .and_then(CdtMcmcCheckpoint::into_results)
     }
@@ -892,14 +883,11 @@ impl MetropolisAlgorithm {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn resume_to_checkpoint_with_policy<P>(
+    pub fn resume_to_checkpoint_with_policy(
         &self,
         checkpoint: CdtMcmcCheckpoint,
-        policy: &P,
-    ) -> CdtResult<CdtMcmcCheckpoint>
-    where
-        P: CdtMoveFamilyPolicy + ?Sized,
-    {
+        policy: &(impl CdtMoveFamilyPolicy + ?Sized),
+    ) -> CdtResult<CdtMcmcCheckpoint> {
         self.config.try_validate()?;
         self.action_config.validate();
         validate_resume_compatible(self, &checkpoint)?;
@@ -960,15 +948,12 @@ impl MetropolisAlgorithm {
     /// continuation. It rebuilds the generic chain view from CDT counters,
     /// persists the proposal RNG stream after each chunk, and keeps CDT-owned
     /// telemetry synchronized with upstream planned-proposal outcomes.
-    fn run_steps<P>(
+    fn run_steps(
         &self,
         state: &mut MetropolisRunState,
         additional_steps: NonZeroU32,
-        policy: &P,
-    ) -> CdtResult<()>
-    where
-        P: CdtMoveFamilyPolicy + ?Sized,
-    {
+        policy: &(impl CdtMoveFamilyPolicy + ?Sized),
+    ) -> CdtResult<()> {
         let start = Instant::now();
         let target = CdtTarget::new(self.action_config.clone(), self.config.temperature())?;
         let (accepted, rejected) = chain_counters(&state.move_stats)?;
@@ -2340,6 +2325,34 @@ mod tests {
 
         assert!(
             error.to_string().contains("checkpoint action mismatch"),
+            "unexpected serde error: {error}"
+        );
+    }
+
+    #[test]
+    fn serialized_checkpoint_rejects_action_history_detached_from_final_geometry() {
+        let checkpoint = serializable_rejected_checkpoint(ActionConfig::default());
+        let mut payload = to_value(&checkpoint).expect("checkpoint should serialize");
+        let tampered_action = checkpoint.current_action() + 1.0;
+        payload["steps"][0]["action_before"] =
+            to_value(tampered_action).expect("action should serialize");
+        payload["scalar_trace_rows"][0]["action_before"] =
+            to_value(tampered_action).expect("action should serialize");
+        payload["scalar_trace_rows"][0]["action"] =
+            to_value(tampered_action).expect("action should serialize");
+        payload["scalar_trace_rows"][0]["log_prob"] =
+            to_value(-tampered_action).expect("log probability should serialize");
+        payload["measurements"][1]["action"] =
+            to_value(tampered_action).expect("action should serialize");
+
+        let Err(error) = from_str::<CdtMcmcCheckpoint>(&payload.to_string()) else {
+            panic!("a self-consistent but detached checkpoint action history should be rejected");
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("action_before does not match the reconstructed state"),
             "unexpected serde error: {error}"
         );
     }
@@ -3972,6 +3985,11 @@ mod tests {
         let policy_error = CdtProposalError::Policy {
             source: policy_source.clone(),
         };
+        assert!(
+            policy_error
+                .to_string()
+                .contains("CDT move-family policy failed")
+        );
         assert_eq!(
             Error::source(&policy_error).map(ToString::to_string),
             Some(policy_source.to_string())
@@ -3989,13 +4007,22 @@ mod tests {
             move_type: MoveType::Move13Add,
             source: ratio_source,
         };
+        assert!(ratio_error.to_string().contains("Move13Add"));
         assert_eq!(
             Error::source(&ratio_error).map(ToString::to_string),
             Some(ratio_source.to_string())
         );
         assert_matches!(
-            CdtError::from(ratio_error),
+            CdtError::from(ratio_error.clone()),
             CdtError::ProposalRatioFailed {
+                move_type: MoveType::Move13Add,
+                source,
+            } if source == ratio_source
+        );
+        assert_matches!(
+            proposal_step_error(23, ratio_error),
+            CdtError::MetropolisProposalRatioFailed {
+                step: 23,
                 move_type: MoveType::Move13Add,
                 source,
             } if source == ratio_source
