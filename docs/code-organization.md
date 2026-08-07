@@ -117,6 +117,7 @@ causal-triangulations/
 │   │   │   ├── runner.rs
 │   │   │   └── telemetry.rs
 │   │   ├── observables.rs
+│   │   ├── proposal_policy.rs
 │   │   ├── results.rs
 │   │   └── triangulation/
 │   │       ├── builders.rs
@@ -160,6 +161,7 @@ causal-triangulations/
 │   ├── integration_tests.rs
 │   ├── large_scale_debug.rs
 │   ├── physics_integration.rs
+│   ├── proposal_policy.rs
 │   ├── proptest_foliation.rs
 │   ├── proptest_metropolis.rs
 │   └── regressions.rs
@@ -306,6 +308,18 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
   dimension estimates.
 - `scalar_trace()` and `write_trace_csv()` expose step diagnostics through `markov-chain-monte-carlo::Trace`, using a rectangular CSV table suitable for Polars
   and other downstream dataframe tools.
+
+### `cdt/proposal_policy.rs` — Borrowed Proposal-Policy Inspection
+
+- `CdtProposalPolicyView` borrows a validated triangulation and one synchronized family cache without exposing mutable geometry or cloning the triangulation.
+- `MoveType::REVERSIBLE_1P1`, `MoveType::identifier`, and `MoveType::reverse` define the stable family order, external identifiers, and reverse mapping.
+- `CdtProposalSiteId` is an opaque family ordinal with triangulation-instance and modification-version provenance; fresh views reject foreign, stale,
+  cross-family, and out-of-range IDs through `CdtProposalSiteIdError`.
+- Offered-site counts and deterministic ID iteration share `MoveSiteCache` and the exact visitor used by conventional sampler selection and reverse-site
+  accounting. These sites belong to the actual proposal support but are not an eligible/executable-site mask: later backend edits or CDT validation may still
+  reject an offered site as an ordinary self-loop proposal.
+- `tests/proposal_policy.rs` verifies the public boundary, including empty families, ordering, state facts, invalidation, and representative accepted toroidal
+  inverse moves.
 
 ### `cdt/observables.rs` — User-facing estimators
 

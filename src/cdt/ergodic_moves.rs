@@ -8,6 +8,7 @@
 //! - (3,1) moves: collapse a degree-3 vertex back to one triangle
 //! - edge flips: retained as an API-compatible alias for the 2D (2,2) move
 
+use crate::cdt::proposal_policy::CdtProposalPolicyView;
 use crate::config::CdtTopology;
 use crate::errors::{BackendMutationOperation, CdtError, CdtResult, CheckpointResumeFailure};
 use crate::geometry::CdtTriangulation2D;
@@ -31,6 +32,75 @@ pub enum MoveType {
     Move31Remove,
     /// Edge flip: API-compatible alias for the 2D (2,2) move
     EdgeFlip,
+}
+
+impl MoveType {
+    /// Stable ordering of the reversible 1+1 CDT proposal families.
+    ///
+    /// Policy implementations should iterate this array instead of relying on
+    /// enum discriminants or serialization details. The order is part of the
+    /// public proposal-policy contract.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::MoveType;
+    ///
+    /// assert_eq!(MoveType::REVERSIBLE_1P1.len(), 4);
+    /// assert_eq!(MoveType::REVERSIBLE_1P1[0], MoveType::Move22);
+    /// ```
+    pub const REVERSIBLE_1P1: [Self; 4] = [
+        Self::Move22,
+        Self::Move13Add,
+        Self::Move31Remove,
+        Self::EdgeFlip,
+    ];
+
+    /// Returns the stable textual identifier for this move family.
+    ///
+    /// These identifiers are intended for policy tables, telemetry schemas,
+    /// and other external mappings. They do not expose enum discriminants or
+    /// checkpoint serialization.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::MoveType;
+    ///
+    /// assert_eq!(MoveType::Move13Add.identifier(), "move-1-3-add");
+    /// ```
+    #[must_use]
+    pub const fn identifier(self) -> &'static str {
+        match self {
+            Self::Move22 => "move-2-2",
+            Self::Move13Add => "move-1-3-add",
+            Self::Move31Remove => "move-3-1-remove",
+            Self::EdgeFlip => "edge-flip",
+        }
+    }
+
+    /// Returns the reversible family used to propose the inverse transition.
+    ///
+    /// The two flip names are self-inverse, while `(1,3)` and `(3,1)` are an
+    /// inverse pair.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::MoveType;
+    ///
+    /// assert_eq!(MoveType::Move13Add.reverse(), MoveType::Move31Remove);
+    /// assert_eq!(MoveType::EdgeFlip.reverse(), MoveType::EdgeFlip);
+    /// ```
+    #[must_use]
+    pub const fn reverse(self) -> Self {
+        match self {
+            Self::Move22 => Self::Move22,
+            Self::Move13Add => Self::Move31Remove,
+            Self::Move31Remove => Self::Move13Add,
+            Self::EdgeFlip => Self::EdgeFlip,
+        }
+    }
 }
 
 /// Result of attempting an ergodic move.
@@ -672,12 +742,6 @@ impl MoveSiteCache {
         }
     }
 
-    /// Counts one cached move family after synchronizing with the triangulation.
-    fn site_count(&mut self, triangulation: &CdtTriangulation2D, move_type: MoveType) -> usize {
-        self.ensure_current(triangulation, move_type);
-        self.family(move_type).sites.len()
-    }
-
     /// Materializes every sampleable site for one move family.
     fn collect_family(
         triangulation: &CdtTriangulation2D,
@@ -847,6 +911,42 @@ impl ErgodicsSystem {
         }
     }
 
+    /// Returns an immutable proposal-policy view for one move family.
+    ///
+    /// The view borrows `triangulation` and this system's canonical versioned
+    /// site cache. Cache synchronization may allocate when this family has not
+    /// yet been inspected for the current state, but the returned view counts
+    /// and iterates sites without further allocation or triangulation clones.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveType};
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let triangulation = CdtTriangulation::from_cdt_strip(4, 3)?;
+    /// let mut moves = ErgodicsSystem::new();
+    /// let view = moves.proposal_policy_view(&triangulation, MoveType::Move13Add);
+    /// assert_eq!(view.family(), MoveType::Move13Add);
+    /// assert_eq!(view.reverse_family(), MoveType::Move31Remove);
+    /// assert_eq!(view.offered_sites().len(), view.offered_site_count());
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn proposal_policy_view<'a>(
+        &'a mut self,
+        triangulation: &'a CdtTriangulation2D,
+        move_type: MoveType,
+    ) -> CdtProposalPolicyView<'a> {
+        self.site_cache.ensure_current(triangulation, move_type);
+        CdtProposalPolicyView::new(
+            triangulation,
+            move_type,
+            &self.site_cache.family(move_type).sites,
+        )
+    }
+
     /// Samples one concrete proposal site from the same cached universe used for proposal counts.
     ///
     /// The cache materializes the deterministic visitor output once per
@@ -857,20 +957,22 @@ impl ErgodicsSystem {
         triangulation: &CdtTriangulation2D,
         move_type: MoveType,
     ) -> ProposalSiteSelection {
-        self.site_cache.ensure_current(triangulation, move_type);
-        let family = self.site_cache.family(move_type);
-        let site_count = family.sites.len();
+        let site_count = self
+            .proposal_policy_view(triangulation, move_type)
+            .offered_site_count();
         let selected_site = if site_count == 0 {
             None
         } else {
             let index = self.rng.random_range(0..site_count);
-            Some(family.sites[index].clone())
+            let view = self.proposal_policy_view(triangulation, move_type);
+            view.site_at(index)
         };
+        let geometric_candidate_seen = self.site_cache.family(move_type).geometric_candidate_seen;
 
         ProposalSiteSelection {
             site_count,
             site: selected_site,
-            geometric_candidate_seen: family.geometric_candidate_seen,
+            geometric_candidate_seen,
         }
     }
 
@@ -1927,7 +2029,10 @@ pub(crate) fn proposal_site_count(
     triangulation: &CdtTriangulation2D,
     move_type: MoveType,
 ) -> usize {
-    MoveSiteCache::default().site_count(triangulation, move_type)
+    let mut cache = MoveSiteCache::default();
+    cache.ensure_current(triangulation, move_type);
+    CdtProposalPolicyView::new(triangulation, move_type, &cache.family(move_type).sites)
+        .offered_site_count()
 }
 
 /// Visits every sampleable proposal site for one move family.
@@ -2139,9 +2244,24 @@ mod tests {
                 triangulation.metadata().modification_count(),
             );
             let counted = proposal_site_count(triangulation, move_type);
+            let view = system.proposal_policy_view(triangulation, move_type);
+            let viewed = view.offered_site_count();
+            let viewed_ids = view.offered_sites().collect::<Vec<_>>();
+            for (ordinal, site) in viewed_ids.iter().enumerate() {
+                assert_eq!(site.family(), move_type);
+                assert_eq!(site.ordinal(), ordinal);
+                view.validate_site(*site)
+                    .expect("fresh policy-view site should validate");
+            }
             let sampled = system.select_proposal_site(triangulation, move_type);
 
             assert_eq!(counted, family.sites.len(), "count drift for {move_type:?}");
+            assert_eq!(viewed, counted, "policy-view drift for {move_type:?}");
+            assert_eq!(
+                viewed_ids.len(),
+                counted,
+                "policy-view enumeration drift for {move_type:?}"
+            );
             assert_eq!(
                 sampled.site_count, counted,
                 "sampling drift for {move_type:?}"
