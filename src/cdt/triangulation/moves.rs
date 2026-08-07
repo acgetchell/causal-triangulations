@@ -59,7 +59,7 @@ mod tests {
     use super::*;
     use crate::cdt::triangulation::CdtTriangulation2D;
     use crate::geometry::generators::build_delaunay2_from_simplices;
-    use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
+    use crate::geometry::traits::TriangulationQuery;
 
     /// Computes the centroid of a live triangular face.
     fn face_centroid(triangulation: &CdtTriangulation<DelaunayBackend2D>) -> Vec<f64> {

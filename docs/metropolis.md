@@ -215,10 +215,10 @@ normalization totals are separate typed errors. A positive-weight family with ze
 zero reverse-family probability or zero reverse offered-site count is valid input to the MCMC ratio and yields a `-∞` log correction, so the transition is
 rejected without mutating the chain.
 
-Use `CdtProposal::with_policy()` or `CdtProposal::with_seed_and_policy()` with an upstream delayed chain directly. The production facade provides
-`MetropolisAlgorithm::run_with_policy()`, `run_to_checkpoint_with_policy()`, `resume_from_checkpoint_with_policy()`, and
-`resume_to_checkpoint_with_policy()`. CDT checkpoints preserve the proposal RNG stream but do not serialize external policy or model state; experiment code
-must persist and restore that state separately.
+Use `CdtProposal::new(action).with_seed(seed).with_policy(policy)` with an upstream delayed chain directly. The production facade binds the policy once through
+`MetropolisAlgorithm::with_policy()`, after which `run()`, `run_with_checkpoint()`, `run_to_checkpoint()`, `resume_from_checkpoint()`, and
+`resume_to_checkpoint()` all use that policy. CDT checkpoints preserve the proposal RNG stream but do not serialize external policy or model state; experiment
+code must persist and restore that state separately, then bind the restored policy to the runner used for continuation.
 
 The view exposes the selected and reverse families, CDT topology, invariant-bearing simplex counts, borrowed slice sizes, the offered-site count, and an
 exact-size iterator of opaque `CdtProposalSiteId` values. Empty families return count zero and an empty iterator. IDs use deterministic ascending ordinals for

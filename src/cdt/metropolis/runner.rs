@@ -28,8 +28,7 @@ use crate::cdt::proposal_policy::{CdtMoveFamilyPolicy, UniformCdtMoveFamilyPolic
 use crate::cdt::results::{
     CdtScalarTraceOutcome, CdtScalarTraceRow, Measurement, SimulationResultsBackend,
 };
-use crate::cdt::triangulation::CdtTriangulation2D;
-use crate::cdt::triangulation::SimulationEvent;
+use crate::cdt::triangulation::{CdtTriangulation2D, SimulationEvent};
 use crate::errors::{
     CdtError, CdtResult, CheckpointResumeFailure, ConfigurationSetting,
     MetropolisMoveApplicationFailure,
@@ -76,7 +75,7 @@ impl<'de> Deserialize<'de> for MetropolisConfig {
         D: serde::Deserializer<'de>,
     {
         let wire = MetropolisConfigWire::deserialize(deserializer)?;
-        Self::new_with_seed(
+        Self::try_from_parts(
             wire.temperature,
             wire.steps,
             wire.thermalization_steps,
@@ -126,7 +125,7 @@ impl MetropolisConfig {
         thermalization_steps: u32,
         measurement_frequency: u32,
     ) -> CdtResult<Self> {
-        Self::new_with_seed(
+        Self::try_from_parts(
             temperature,
             steps,
             thermalization_steps,
@@ -135,23 +134,11 @@ impl MetropolisConfig {
         )
     }
 
-    /// Creates a new validated Metropolis configuration with an explicit RNG seed.
+    /// Builds a validated configuration from raw boundary parts.
     ///
-    /// # Errors
-    ///
-    /// Returns [`CdtError::InvalidSimulationConfiguration`] for the same invalid
-    /// temperature or schedule values as [`Self::new`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::MetropolisConfig;
-    ///
-    /// let config = MetropolisConfig::new_with_seed(1.0, 100, 10, 5, Some(42))?;
-    /// assert_eq!(config.seed(), Some(42));
-    /// # Ok::<(), causal_triangulations::CdtError>(())
-    /// ```
-    pub fn new_with_seed(
+    /// Keeping optional-seed parsing private leaves [`Self::new`] followed by
+    /// [`Self::with_seed`] as the single public construction workflow.
+    fn try_from_parts(
         temperature: f64,
         steps: u32,
         thermalization_steps: u32,
@@ -409,15 +396,19 @@ struct MetropolisRunState {
 
 /// Metropolis-Hastings algorithm implementation for CDT.
 ///
-/// Accepts or rejects proposed CDT move types before applying them.
-pub struct MetropolisAlgorithm {
+/// Accepts or rejects proposed CDT move types before applying them. The policy
+/// type is part of the runner so fresh runs and checkpoint continuations use the
+/// same configured family-selection workflow.
+pub struct MetropolisAlgorithm<P = UniformCdtMoveFamilyPolicy> {
     /// Algorithm configuration
     config: MetropolisConfig,
     /// Action calculation configuration
     action_config: ActionConfig,
+    /// Family-level proposal policy
+    policy: P,
 }
 
-impl MetropolisAlgorithm {
+impl MetropolisAlgorithm<UniformCdtMoveFamilyPolicy> {
     /// Creates a new Metropolis algorithm instance.
     ///
     /// # Examples
@@ -436,6 +427,47 @@ impl MetropolisAlgorithm {
         Self {
             config,
             action_config,
+            policy: UniformCdtMoveFamilyPolicy,
+        }
+    }
+}
+
+impl<P> MetropolisAlgorithm<P> {
+    /// Returns this runner with a caller-supplied family-level proposal policy.
+    ///
+    /// The policy is retained across fresh-run and checkpoint-resume terminals.
+    /// Borrow the policy when its model state or audit data must remain
+    /// caller-owned.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtMoveFamilyDistribution, CdtResult, CdtTriangulation,
+    ///     MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let policy = CdtMoveFamilyDistribution::from_weights([1.0, 2.0, 2.0, 1.0])?;
+    /// let results = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 2, 0, 1)?.with_seed(7),
+    ///     ActionConfig::default(),
+    /// )
+    /// .with_policy(&policy)
+    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    /// assert_eq!(results.steps().len(), 2);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_policy<Q>(self, policy: Q) -> MetropolisAlgorithm<Q>
+    where
+        Q: CdtMoveFamilyPolicy,
+    {
+        MetropolisAlgorithm {
+            config: self.config,
+            action_config: self.action_config,
+            policy,
         }
     }
 
@@ -446,7 +478,12 @@ impl MetropolisAlgorithm {
     pub(crate) const fn action_config(&self) -> &ActionConfig {
         &self.action_config
     }
+}
 
+impl<P> MetropolisAlgorithm<P>
+where
+    P: CdtMoveFamilyPolicy,
+{
     /// Run the Monte Carlo simulation.
     ///
     /// Each step runs through the upstream planned-proposal sampler. CDT plans
@@ -459,8 +496,7 @@ impl MetropolisAlgorithm {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
-    /// configuration is invalid, [`CdtError::InvalidConfiguration`] if the
-    /// action configuration is invalid,
+    /// configuration is invalid,
     /// [`CdtError::MetropolisMoveApplicationFailed`] if an accepted move causes
     /// a hard backend mutation failure,
     /// [`CdtError::PlannedProposalTelemetryMissing`] if the upstream sampler
@@ -469,8 +505,10 @@ impl MetropolisAlgorithm {
     /// vertices, edges, or triangles,
     /// [`CdtError::MeasurementCountOverflow`] if a measurement count cannot fit
     /// compact telemetry storage, [`CdtError::InvalidMeasurementAction`] if a
-    /// measurement action is non-finite, or a validation error for unrecoverable
-    /// triangulation failures.
+    /// measurement action is non-finite,
+    /// [`CdtError::MetropolisProposalPolicyFailed`] if the configured policy
+    /// returns an invalid or empty-support distribution, or a validation error
+    /// for unrecoverable triangulation failures.
     ///
     /// # Examples
     ///
@@ -488,54 +526,7 @@ impl MetropolisAlgorithm {
     /// }
     /// ```
     pub fn run(&self, triangulation: CdtTriangulation2D) -> CdtResult<SimulationResultsBackend> {
-        self.run_with_policy(triangulation, &UniformCdtMoveFamilyPolicy)
-    }
-
-    /// Runs the simulation with an externally supplied family-level policy.
-    ///
-    /// CDT evaluates `policy` through invariant-safe family views on both the
-    /// pre-move and planned post-move states. The policy supplies only family
-    /// weights; CDT retains uniform canonical site selection, exact Hastings
-    /// accounting, validation, acceptance, and commit ownership.
-    ///
-    /// Policy model persistence and external logging remain caller-owned and
-    /// occur outside the timed sampler transition.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same simulation errors as [`Self::run`], plus
-    /// [`CdtError::MetropolisProposalPolicyFailed`] when the injected policy
-    /// returns an invalid or empty-support distribution.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::simulation::{
-    ///     ActionConfig, CdtMoveFamilyDistribution, CdtResult, CdtTriangulation,
-    ///     MetropolisAlgorithm, MetropolisConfig,
-    /// };
-    ///
-    /// # fn main() -> CdtResult<()> {
-    /// let policy = CdtMoveFamilyDistribution::from_weights([1.0, 2.0, 2.0, 1.0])?;
-    /// let algorithm = MetropolisAlgorithm::new(
-    ///     MetropolisConfig::new(1.0, 2, 0, 1)?.with_seed(7),
-    ///     ActionConfig::default(),
-    /// );
-    /// let results = algorithm.run_with_policy(
-    ///     CdtTriangulation::from_cdt_strip(4, 3)?,
-    ///     &policy,
-    /// )?;
-    /// assert_eq!(results.steps().len(), 2);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn run_with_policy(
-        &self,
-        triangulation: CdtTriangulation2D,
-        policy: &(impl CdtMoveFamilyPolicy + ?Sized),
-    ) -> CdtResult<SimulationResultsBackend> {
-        self.run_to_checkpoint_with_policy(triangulation, policy)?
-            .into_results()
+        self.run_to_checkpoint(triangulation)?.into_results()
     }
 
     /// Run the simulation and return both the final results and checkpoint.
@@ -550,8 +541,7 @@ impl MetropolisAlgorithm {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
-    /// configuration is invalid, [`CdtError::InvalidConfiguration`] if the
-    /// action configuration is invalid,
+    /// configuration is invalid,
     /// [`CdtError::MetropolisMoveApplicationFailed`] if an accepted move causes
     /// a hard backend mutation failure,
     /// [`CdtError::PlannedProposalTelemetryMissing`] if the upstream sampler
@@ -560,8 +550,10 @@ impl MetropolisAlgorithm {
     /// vertices, edges, or triangles,
     /// [`CdtError::MeasurementCountOverflow`] if a measurement count cannot fit
     /// compact telemetry storage, [`CdtError::InvalidMeasurementAction`] if a
-    /// measurement action is non-finite, or a validation error for unrecoverable
-    /// triangulation failures.
+    /// measurement action is non-finite,
+    /// [`CdtError::MetropolisProposalPolicyFailed`] if the configured policy
+    /// returns an invalid or empty-support distribution, or a validation error
+    /// for unrecoverable triangulation failures.
     ///
     /// # Examples
     ///
@@ -603,12 +595,14 @@ impl MetropolisAlgorithm {
     /// Serialized restore uses checked backend reconstruction, so snapshots
     /// whose evolved geometry is no longer Delaunay-valid may fail to
     /// deserialize even though the in-memory checkpoint can still be resumed.
+    /// The configured policy is used for the complete run but is not serialized
+    /// into the checkpoint; callers remain responsible for persisting external
+    /// model state needed by a later process.
     ///
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
-    /// configuration is invalid, [`CdtError::InvalidConfiguration`] if the
-    /// action configuration is invalid,
+    /// configuration is invalid,
     /// [`CdtError::MetropolisMoveApplicationFailed`] if an accepted move causes
     /// a hard backend mutation failure,
     /// [`CdtError::PlannedProposalTelemetryMissing`] if the upstream sampler
@@ -617,8 +611,10 @@ impl MetropolisAlgorithm {
     /// vertices, edges, or triangles,
     /// [`CdtError::MeasurementCountOverflow`] if a measurement count cannot fit
     /// compact telemetry storage, [`CdtError::InvalidMeasurementAction`] if a
-    /// measurement action is non-finite, or a validation error for unrecoverable
-    /// triangulation failures.
+    /// measurement action is non-finite,
+    /// [`CdtError::MetropolisProposalPolicyFailed`] if the configured policy
+    /// returns an invalid or empty-support distribution, or a validation error
+    /// for unrecoverable triangulation failures.
     ///
     /// # Examples
     ///
@@ -643,51 +639,11 @@ impl MetropolisAlgorithm {
         &self,
         triangulation: CdtTriangulation2D,
     ) -> CdtResult<CdtMcmcCheckpoint> {
-        self.run_to_checkpoint_with_policy(triangulation, &UniformCdtMoveFamilyPolicy)
-    }
-
-    /// Runs with an injected family policy and returns a resumable CDT checkpoint.
-    ///
-    /// The checkpoint preserves CDT and proposal RNG state. The injected policy
-    /// is intentionally not serialized; callers must persist immutable policy
-    /// or model state separately and supply the same policy when resuming.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same errors as [`Self::run_with_policy`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::simulation::{
-    ///     ActionConfig, CdtMoveFamilyDistribution, CdtResult, CdtTriangulation,
-    ///     MetropolisAlgorithm, MetropolisConfig,
-    /// };
-    ///
-    /// # fn main() -> CdtResult<()> {
-    /// let policy = CdtMoveFamilyDistribution::uniform();
-    /// let checkpoint = MetropolisAlgorithm::new(
-    ///     MetropolisConfig::new(1.0, 2, 0, 1)?.with_seed(13),
-    ///     ActionConfig::default(),
-    /// )
-    /// .run_to_checkpoint_with_policy(
-    ///     CdtTriangulation::from_cdt_strip(4, 3)?,
-    ///     &policy,
-    /// )?;
-    /// assert_eq!(checkpoint.current_step().get(), 2);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn run_to_checkpoint_with_policy(
-        &self,
-        triangulation: CdtTriangulation2D,
-        policy: &(impl CdtMoveFamilyPolicy + ?Sized),
-    ) -> CdtResult<CdtMcmcCheckpoint> {
         self.config.try_validate()?;
         self.action_config.validate();
 
         let mut state = self.initial_state(triangulation)?;
-        self.run_steps(&mut state, self.config.steps, policy)?;
+        self.run_steps(&mut state, self.config.steps)?;
         state.into_checkpoint(self.config.clone(), self.action_config.clone())
     }
 
@@ -700,8 +656,7 @@ impl MetropolisAlgorithm {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the resumed
-    /// Metropolis configuration is invalid, [`CdtError::InvalidConfiguration`]
-    /// if the action configuration is invalid, or
+    /// Metropolis configuration is invalid, or
     /// [`CdtError::CheckpointResumeFailed`] if the checkpoint is incompatible
     /// with this algorithm or internally inconsistent. Returns
     /// [`CdtError::MetropolisMoveApplicationFailed`],
@@ -712,7 +667,9 @@ impl MetropolisAlgorithm {
     /// [`CdtError::MeasurementCountOverflow`] if a resumed measurement count
     /// cannot fit compact telemetry storage,
     /// [`CdtError::InvalidMeasurementAction`] if a resumed measurement action is
-    /// non-finite, or validation errors for failures during resumed sampling.
+    /// non-finite, [`CdtError::MetropolisProposalPolicyFailed`] if the configured
+    /// policy returns an invalid or empty-support distribution, or validation
+    /// errors for failures during resumed sampling.
     ///
     /// # Examples
     ///
@@ -745,47 +702,7 @@ impl MetropolisAlgorithm {
         &self,
         checkpoint: CdtMcmcCheckpoint,
     ) -> CdtResult<SimulationResultsBackend> {
-        self.resume_from_checkpoint_with_policy(checkpoint, &UniformCdtMoveFamilyPolicy)
-    }
-
-    /// Continues a checkpoint with an injected family policy.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same errors as [`Self::resume_from_checkpoint`], plus typed
-    /// injected-policy failures from [`Self::run_with_policy`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::simulation::{
-    ///     ActionConfig, CdtMoveFamilyDistribution, CdtResult, CdtTriangulation,
-    ///     MetropolisAlgorithm, MetropolisConfig,
-    /// };
-    ///
-    /// # fn main() -> CdtResult<()> {
-    /// let policy = CdtMoveFamilyDistribution::uniform();
-    /// let action = ActionConfig::default();
-    /// let checkpoint = MetropolisAlgorithm::new(
-    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(13),
-    ///     action.clone(),
-    /// )
-    /// .run_to_checkpoint_with_policy(CdtTriangulation::from_cdt_strip(4, 3)?, &policy)?;
-    /// let results = MetropolisAlgorithm::new(
-    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(999),
-    ///     action,
-    /// )
-    /// .resume_from_checkpoint_with_policy(checkpoint, &policy)?;
-    /// assert_eq!(results.steps().len(), 2);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn resume_from_checkpoint_with_policy(
-        &self,
-        checkpoint: CdtMcmcCheckpoint,
-        policy: &(impl CdtMoveFamilyPolicy + ?Sized),
-    ) -> CdtResult<SimulationResultsBackend> {
-        self.resume_to_checkpoint_with_policy(checkpoint, policy)
+        self.resume_to_checkpoint(checkpoint)
             .and_then(CdtMcmcCheckpoint::into_results)
     }
 
@@ -796,12 +713,13 @@ impl MetropolisAlgorithm {
     /// such as sweep-based debug runs that size each chunk from the current
     /// triangulation volume while preserving RNG streams, counters,
     /// measurements, and checkpoint-compatible continuation state.
+    /// The same policy bound through [`Self::with_policy`] is used for the
+    /// resumed chunk.
     ///
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the resumed
-    /// Metropolis configuration is invalid, [`CdtError::InvalidConfiguration`]
-    /// if the action configuration is invalid, or
+    /// Metropolis configuration is invalid, or
     /// [`CdtError::CheckpointResumeFailed`] if the checkpoint is incompatible
     /// with this algorithm or internally inconsistent. Returns
     /// [`CdtError::MetropolisMoveApplicationFailed`],
@@ -812,7 +730,9 @@ impl MetropolisAlgorithm {
     /// [`CdtError::MeasurementCountOverflow`] if a resumed measurement count
     /// cannot fit compact telemetry storage,
     /// [`CdtError::InvalidMeasurementAction`] if a resumed measurement action is
-    /// non-finite, or validation errors for failures during resumed sampling.
+    /// non-finite, [`CdtError::MetropolisProposalPolicyFailed`] if the configured
+    /// policy returns an invalid or empty-support distribution, or validation
+    /// errors for failures during resumed sampling.
     ///
     /// # Examples
     ///
@@ -844,50 +764,6 @@ impl MetropolisAlgorithm {
         &self,
         checkpoint: CdtMcmcCheckpoint,
     ) -> CdtResult<CdtMcmcCheckpoint> {
-        self.resume_to_checkpoint_with_policy(checkpoint, &UniformCdtMoveFamilyPolicy)
-    }
-
-    /// Continues a checkpoint with an injected policy and returns another checkpoint.
-    ///
-    /// The caller is responsible for supplying policy/model state compatible
-    /// with the checkpointed experiment; CDT persists only its own proposal RNG
-    /// and simulation state.
-    ///
-    /// # Errors
-    ///
-    /// Returns the same errors as [`Self::resume_to_checkpoint`], plus typed
-    /// injected-policy failures from [`Self::run_with_policy`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::simulation::{
-    ///     ActionConfig, CdtMoveFamilyDistribution, CdtResult, CdtTriangulation,
-    ///     MetropolisAlgorithm, MetropolisConfig,
-    /// };
-    ///
-    /// # fn main() -> CdtResult<()> {
-    /// let policy = CdtMoveFamilyDistribution::uniform();
-    /// let action = ActionConfig::default();
-    /// let checkpoint = MetropolisAlgorithm::new(
-    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(13),
-    ///     action.clone(),
-    /// )
-    /// .run_to_checkpoint_with_policy(CdtTriangulation::from_cdt_strip(4, 3)?, &policy)?;
-    /// let checkpoint = MetropolisAlgorithm::new(
-    ///     MetropolisConfig::new(1.0, 2, 0, 1)?.with_seed(999),
-    ///     action,
-    /// )
-    /// .resume_to_checkpoint_with_policy(checkpoint, &policy)?;
-    /// assert_eq!(checkpoint.current_step().get(), 3);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn resume_to_checkpoint_with_policy(
-        &self,
-        checkpoint: CdtMcmcCheckpoint,
-        policy: &(impl CdtMoveFamilyPolicy + ?Sized),
-    ) -> CdtResult<CdtMcmcCheckpoint> {
         self.config.try_validate()?;
         self.action_config.validate();
         validate_resume_compatible(self, &checkpoint)?;
@@ -902,7 +778,7 @@ impl MetropolisAlgorithm {
             .ok_or_else(|| checkpoint_resume_failed(CheckpointResumeFailure::StepCountOverflow))?;
 
         let mut state = MetropolisRunState::from_checkpoint(checkpoint)?;
-        self.run_steps(&mut state, self.config.steps, policy)?;
+        self.run_steps(&mut state, self.config.steps)?;
         state.into_checkpoint(result_config, self.action_config.clone())
     }
 
@@ -952,7 +828,6 @@ impl MetropolisAlgorithm {
         &self,
         state: &mut MetropolisRunState,
         additional_steps: NonZeroU32,
-        policy: &(impl CdtMoveFamilyPolicy + ?Sized),
     ) -> CdtResult<()> {
         let start = Instant::now();
         let target = CdtTarget::new(self.action_config.clone(), self.config.temperature())?;
@@ -962,7 +837,7 @@ impl MetropolisAlgorithm {
         let mut proposal = CdtProposal::from_ergodics_with_policy(
             self.action_config.clone(),
             state.ergodics.clone(),
-            policy,
+            &self.policy,
         );
         let mut acceptance_rng = state.acceptance_rng.clone();
 
@@ -1105,8 +980,8 @@ impl MetropolisRunState {
 ///
 /// Fresh and resumed simulations use the same upstream sampler path so
 /// checkpoint continuation cannot drift from ordinary sampling behavior.
-fn record_planned_step(
-    algorithm: &MetropolisAlgorithm,
+fn record_planned_step<P>(
+    algorithm: &MetropolisAlgorithm<P>,
     state: &mut MetropolisRunState,
     step: NonZeroU32,
     planned_step: &DelayedStep<CdtProposalInfo>,
@@ -1195,8 +1070,8 @@ fn step_outcome_for_trace(
 /// `delta_action` derived from the same reconstructed action. Missing
 /// accepted-step action evidence is rejected before any run state or telemetry
 /// is mutated.
-fn record_planned_step_parts(
-    algorithm: &MetropolisAlgorithm,
+fn record_planned_step_parts<P>(
+    algorithm: &MetropolisAlgorithm<P>,
     state: &mut MetropolisRunState,
     step: NonZeroU32,
     record: PlannedStepRecord<'_>,
@@ -1353,8 +1228,8 @@ impl AcceptedCandidate {
 }
 
 /// Builds a measurement for a planned step only when the configured cadence is due.
-fn staged_measurement_for_step(
-    algorithm: &MetropolisAlgorithm,
+fn staged_measurement_for_step<P>(
+    algorithm: &MetropolisAlgorithm<P>,
     step: NonZeroU32,
     action: f64,
     triangulation: &CdtTriangulation2D,
@@ -1471,29 +1346,28 @@ fn accepted_move_error(
 
 #[cfg(test)]
 mod tests {
-    use super::super::adapter::{
-        CdtProposal, CdtProposalError, CdtProposalPlan, ConcretePlanAttempt, concrete_log_q_ratio,
-        propose_concrete_plan,
-    };
-    use super::super::helpers::{SimplexCounts, proposed_delta_action, simplex_counts};
-    use super::super::telemetry::{CdtProposalPlanningOutcome, CdtProposalSiteRejection};
     use super::*;
     use crate::cdt::action::CDT_1P1_CRITICAL_TRIANGLE_COSMOLOGICAL_CONSTANT;
     use crate::cdt::ergodic_moves::proposal_site_count;
     use crate::cdt::foliation::FoliationError;
+    use crate::cdt::metropolis::{
+        adapter::{
+            CdtProposalPlan, ConcretePlanAttempt, concrete_log_q_ratio, propose_concrete_plan,
+        },
+        helpers::{SimplexCounts, proposed_delta_action, simplex_counts},
+        telemetry::{CdtProposalPlanningOutcome, CdtProposalSiteRejection},
+    };
     use crate::cdt::proposal_policy::CdtMoveFamilyPolicyError;
     use crate::cdt::triangulation::CdtTriangulation;
-    use crate::errors::{BackendMutationOperation, CheckpointMoveCounter, ConfigurationSetting};
+    use crate::errors::{BackendMutationOperation, CheckpointMoveCounter};
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
-    use markov_chain_monte_carlo::{
-        Chain, DelayedProposal, DelayedStepError, DiscreteProposalRatio, McmcError, Target,
-    };
-    use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
+    use markov_chain_monte_carlo::{DelayedProposal, DiscreteProposalRatio, McmcError, Target};
+    use rand::{Rng, RngExt, rngs::StdRng};
     use serde_json::{from_str, to_string, to_value};
     use std::assert_matches;
     use std::error::Error;
-    use std::num::{NonZeroU32, NonZeroUsize};
+    use std::num::NonZeroUsize;
 
     fn concrete_proposal_info(
         move_type: MoveType,
@@ -1698,14 +1572,14 @@ mod tests {
         measurement_frequency: u32,
         seed: u64,
     ) -> MetropolisConfig {
-        MetropolisConfig::new_with_seed(
+        MetropolisConfig::new(
             temperature,
             steps,
             thermalization_steps,
             measurement_frequency,
-            Some(seed),
         )
         .expect("test Metropolis config should be valid")
+        .with_seed(seed)
     }
 
     fn action_config(coupling_0: f64, coupling_2: f64, cosmological_constant: f64) -> ActionConfig {
@@ -1981,8 +1855,8 @@ mod tests {
 
     #[test]
     fn test_action_calculation() {
-        let triangulation =
-            CdtTriangulation::from_random_points(5, 1, 2).expect("Failed to create triangulation");
+        let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 0x00AC_710A)
+            .expect("Failed to create triangulation");
 
         let config = MetropolisConfig::default();
         let action_config = ActionConfig::default();
@@ -3497,7 +3371,6 @@ mod tests {
             .run_steps(
                 &mut state,
                 NonZeroU32::new(1).expect("one additional step is nonzero"),
-                &UniformCdtMoveFamilyPolicy,
             )
             .expect_err("overflowing step counter should reject continuation");
 
@@ -3760,7 +3633,7 @@ mod tests {
         let action_config = ActionConfig::default();
         let target =
             CdtTarget::new(action_config.clone(), 1.0).expect("valid target configuration");
-        let mut proposal = CdtProposal::with_seed(action_config, 7);
+        let mut proposal = CdtProposal::new(action_config).with_seed(7);
         let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
         let mut rng = StdRng::seed_from_u64(7);
 
@@ -3860,7 +3733,7 @@ mod tests {
         let action_config = ActionConfig::default();
         let target =
             CdtTarget::new(action_config.clone(), 1.0).expect("valid target configuration");
-        let proposal = CdtProposal::with_seed(action_config, 7);
+        let proposal = CdtProposal::new(action_config).with_seed(7);
         let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
         let action_before = action_for(&ActionConfig::default(), &triangulation);
         let plan = CdtProposalPlan {
@@ -3891,7 +3764,7 @@ mod tests {
         let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
         let mut chain = Chain::new(triangulation, &target)
             .expect("initial state should have finite log probability");
-        let mut proposal = CdtProposal::with_seed(action_config, 7);
+        let mut proposal = CdtProposal::new(action_config).with_seed(7);
         let mut rng = StdRng::seed_from_u64(11);
 
         let step = chain
@@ -3912,7 +3785,7 @@ mod tests {
     #[test]
     fn cdt_proposal_commit_applies_concrete_planned_state() {
         let action_config = ActionConfig::default();
-        let mut proposal = CdtProposal::with_seed(action_config.clone(), 11);
+        let mut proposal = CdtProposal::new(action_config.clone()).with_seed(11);
         let mut triangulation =
             CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed to create");
         let proposed_state =

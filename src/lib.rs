@@ -211,11 +211,13 @@ pub use config::{
     ValidatedInitialVolume,
 };
 pub use errors::{
-    BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
-    CheckpointMoveCounter, CheckpointOperation, CheckpointResumeFailure, ConfigurationSetting,
-    DelaunayValidationLevel, GenerationParameterIssue, MeasurementCountField,
-    MetropolisMoveApplicationFailure, OutputFormat, ProposalTelemetryCounter, ScalarTraceField,
-    SimplexCountField, TriangulationMetadataField,
+    BackendMutationOperation, BackendRollbackFailure, BackendRollbackFailures, CdtError, CdtResult,
+    CdtValidationCheck, CdtValidationFailure, CheckpointMoveCounter, CheckpointOperation,
+    CheckpointResumeFailure, ConfigurationSetting, DelaunayGenerationFailure,
+    DelaunayGenerationQuantity, DelaunayGenerationStage, DelaunayValidationLevel,
+    GenerationParameterIssue, MeasurementCountField, MetropolisMoveApplicationFailure,
+    ObservableQuantity, OutputFormat, OutputPreparationStage, OutputWriteStage,
+    ProposalTelemetryCounter, ScalarTraceField, SimplexCountField, TriangulationMetadataField,
 };
 pub use geometry::traits::TriangulationQuery;
 pub use geometry::{SpacetimeCoordinate, SpacetimeCoordinateComponent, SpacetimeCoordinateError};
@@ -347,12 +349,14 @@ pub mod prelude {
         pub use crate::cdt::foliation::FoliationError;
         pub use crate::cdt::proposal_policy::CdtMoveFamilyPolicyError;
         pub use crate::errors::{
-            BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck,
-            CdtValidationFailure, CheckpointMoveCounter, CheckpointOperation,
-            CheckpointResumeFailure, ConfigurationSetting, DelaunayValidationLevel,
-            GenerationParameterIssue, MeasurementCountField, MetropolisMoveApplicationFailure,
-            OutputFormat, ProposalTelemetryCounter, ScalarTraceField, SimplexCountField,
-            TriangulationMetadataField,
+            BackendMutationOperation, BackendRollbackFailure, BackendRollbackFailures, CdtError,
+            CdtResult, CdtValidationCheck, CdtValidationFailure, CheckpointMoveCounter,
+            CheckpointOperation, CheckpointResumeFailure, ConfigurationSetting,
+            DelaunayGenerationFailure, DelaunayGenerationQuantity, DelaunayGenerationStage,
+            DelaunayValidationLevel, GenerationParameterIssue, MeasurementCountField,
+            MetropolisMoveApplicationFailure, ObservableQuantity, OutputFormat,
+            OutputPreparationStage, OutputWriteStage, ProposalTelemetryCounter, ScalarTraceField,
+            SimplexCountField, TriangulationMetadataField,
         };
         pub use crate::geometry::SpacetimeCoordinateComponent;
         pub use markov_chain_monte_carlo::{DiscreteProposalRatioError, McmcError};
@@ -555,7 +559,8 @@ pub mod prelude {
     pub mod geometry {
         pub use crate::errors::DelaunayValidationLevel;
         pub use crate::geometry::backends::delaunay::{
-            DelaunayBackend, DelaunayError, DelaunayOperation, NonFlippableEdgeReason,
+            DelaunayBackend, DelaunayError, DelaunayFlipOutputFailure, DelaunayOperation,
+            NonFlippableEdgeReason,
         };
         pub use crate::geometry::generators::{
             GlobalTopology, TopologyGuarantee, ToroidalConstructionMode, ToroidalDomain,
@@ -628,8 +633,10 @@ pub mod prelude {
 /// cannot be resolved. Returns [`CdtError::OutputPathConflict`] if CSV and JSON
 /// outputs resolve to the same file. Output path resolution and conflict checks
 /// happen before triangulation construction or sampling begins. Returns
-/// [`CdtError::OutputWriteFailed`] if the configured output file, parent
-/// directory creation, or JSON serialization fails after the run completes.
+/// [`CdtError::OutputPreparationFailed`] if trace or mesh preparation fails
+/// after the run completes. Returns [`CdtError::OutputWriteFailed`] if the
+/// configured output file, parent directory creation, serialization, or staged
+/// publication fails.
 ///
 /// # Examples
 ///
@@ -904,8 +911,9 @@ impl<'a> StagedOutput<'a> {
 
     /// Renames the staged output into its final path.
     fn persist(&self) -> CdtResult<()> {
-        fs::rename(&self.temp_path, self.final_path)
-            .map_err(|err| output_write_failed(self.final_path, self.format, err))
+        fs::rename(&self.temp_path, self.final_path).map_err(|err| {
+            output_write_failed(self.final_path, self.format, OutputWriteStage::Persist, err)
+        })
     }
 
     /// Removes the staged temporary file if it still exists.
@@ -916,9 +924,18 @@ impl<'a> StagedOutput<'a> {
     /// Reports a staged write failure against the configured final path.
     fn remap_error(&self, error: CdtError) -> CdtError {
         match error {
-            CdtError::OutputWriteFailed { detail, .. } => CdtError::OutputWriteFailed {
+            CdtError::OutputPreparationFailed { stage, detail, .. } => {
+                CdtError::OutputPreparationFailed {
+                    path: self.final_path.display().to_string(),
+                    format: self.format,
+                    stage,
+                    detail,
+                }
+            }
+            CdtError::OutputWriteFailed { stage, detail, .. } => CdtError::OutputWriteFailed {
                 path: self.final_path.display().to_string(),
                 format: self.format,
+                stage,
                 detail,
             },
             error => error,
@@ -945,10 +962,16 @@ fn sibling_temp_output_path(path: &Path, format: OutputFormat) -> PathBuf {
 }
 
 /// Builds a typed output write error for crate-root persistence helpers.
-fn output_write_failed(path: &Path, format: OutputFormat, err: impl Display) -> CdtError {
+fn output_write_failed(
+    path: &Path,
+    format: OutputFormat,
+    stage: OutputWriteStage,
+    err: impl Display,
+) -> CdtError {
     CdtError::OutputWriteFailed {
         path: path.display().to_string(),
         format,
+        stage,
         detail: err.to_string(),
     }
 }
@@ -958,12 +981,10 @@ mod tests {
     use super::*;
     use crate::cdt::action::DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT;
     use approx::assert_relative_eq;
-    use serde_json::{Value, from_str};
+    use serde_json::{Value, from_str, to_string};
     use std::assert_matches;
-    use std::env;
-    use std::fs;
-    use std::path::PathBuf;
-    use std::process;
+    use std::collections::HashSet;
+    use std::sync::{Arc, Barrier};
     use std::thread;
 
     fn create_test_config() -> CdtConfig {
@@ -1057,7 +1078,7 @@ mod tests {
             Some(0)
         );
 
-        let json = serde_json::to_string(&results).expect("construction snapshot should serialize");
+        let json = to_string(&results).expect("construction snapshot should serialize");
         let roundtrip: SimulationResultsBackend =
             from_str(&json).expect("construction snapshot should deserialize");
 
@@ -1141,13 +1162,38 @@ mod tests {
     }
 
     #[test]
-    fn sibling_temp_output_path_is_unique_per_call() {
+    fn sibling_temp_output_path_is_unique_across_threads() {
+        const WORKERS: usize = 16;
+
         let output_path = temp_output_path("unique-trace.csv");
+        let barrier = Arc::new(Barrier::new(WORKERS));
+        #[expect(
+            clippy::needless_collect,
+            reason = "all barrier participants must be spawned before any worker is joined"
+        )]
+        let handles = (0..WORKERS)
+            .map(|_| {
+                let output_path = output_path.clone();
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    sibling_temp_output_path(&output_path, OutputFormat::Csv)
+                })
+            })
+            .collect::<Vec<_>>();
 
-        let first = sibling_temp_output_path(&output_path, OutputFormat::Csv);
-        let second = sibling_temp_output_path(&output_path, OutputFormat::Csv);
+        let paths = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("temporary-path worker should finish"))
+            .collect::<HashSet<_>>();
 
-        assert_ne!(first, second);
+        assert_eq!(paths.len(), WORKERS);
+        assert!(
+            paths
+                .iter()
+                .all(|path| path.parent() == output_path.parent()),
+            "temporary paths should remain beside the final output"
+        );
     }
 
     #[test]
@@ -1225,21 +1271,14 @@ mod tests {
         let mut config = create_test_config();
         config.measurement_frequency = 0;
 
-        let result = config.into_validated();
-        assert!(result.is_err(), "Should reject zero measurement frequency");
-
-        if let Err(CdtError::InvalidSimulationConfiguration {
-            setting,
-            provided_value,
-            expected,
-        }) = result
-        {
-            assert_eq!(setting, ConfigurationSetting::MeasurementFrequency);
-            assert_eq!(provided_value, "0");
-            assert_eq!(expected, "≥ 1");
-        } else {
-            panic!("Expected InvalidSimulationConfiguration error");
-        }
+        assert_matches!(
+            config.into_validated(),
+            Err(CdtError::InvalidSimulationConfiguration {
+                setting: ConfigurationSetting::MeasurementFrequency,
+                ref provided_value,
+                ref expected,
+            }) if provided_value == "0" && expected == "≥ 1"
+        );
     }
 
     #[test]
@@ -1248,24 +1287,14 @@ mod tests {
         config.steps = 100;
         config.measurement_frequency = 200; // Greater than steps
 
-        let result = config.into_validated();
-        assert!(
-            result.is_err(),
-            "Should reject measurement frequency greater than steps"
+        assert_matches!(
+            config.into_validated(),
+            Err(CdtError::InvalidSimulationConfiguration {
+                setting: ConfigurationSetting::MeasurementFrequency,
+                ref provided_value,
+                ref expected,
+            }) if provided_value == "200" && expected == "≤ steps (100)"
         );
-
-        if let Err(CdtError::InvalidSimulationConfiguration {
-            setting,
-            provided_value,
-            expected,
-        }) = result
-        {
-            assert_eq!(setting, ConfigurationSetting::MeasurementFrequency);
-            assert_eq!(provided_value, "200");
-            assert_eq!(expected, "≤ steps (100)");
-        } else {
-            panic!("Expected InvalidSimulationConfiguration error");
-        }
     }
 
     #[test]
@@ -1273,21 +1302,14 @@ mod tests {
         let mut config = create_test_config();
         config.vertices = 2; // Less than minimum of 3
 
-        let result = config.into_validated();
-        assert!(result.is_err(), "Should reject too few vertices");
-
-        if let Err(CdtError::InvalidConfiguration {
-            setting,
-            provided_value,
-            expected,
-        }) = result
-        {
-            assert_eq!(setting, ConfigurationSetting::Vertices);
-            assert_eq!(provided_value, "2");
-            assert_eq!(expected, "≥ 3");
-        } else {
-            panic!("Expected InvalidConfiguration error");
-        }
+        assert_matches!(
+            config.into_validated(),
+            Err(CdtError::InvalidConfiguration {
+                setting: ConfigurationSetting::Vertices,
+                ref provided_value,
+                ref expected,
+            }) if provided_value == "2" && expected == "≥ 3"
+        );
     }
 
     #[test]
@@ -1295,21 +1317,14 @@ mod tests {
         let mut config = create_test_config();
         config.temperature = -1.0;
 
-        let result = config.into_validated();
-        assert!(result.is_err(), "Should reject negative temperature");
-
-        if let Err(CdtError::InvalidSimulationConfiguration {
-            setting,
-            provided_value,
-            expected,
-        }) = result
-        {
-            assert_eq!(setting, ConfigurationSetting::Temperature);
-            assert_eq!(provided_value, "-1");
-            assert_eq!(expected, "finite and positive");
-        } else {
-            panic!("Expected InvalidSimulationConfiguration error");
-        }
+        assert_matches!(
+            config.into_validated(),
+            Err(CdtError::InvalidSimulationConfiguration {
+                setting: ConfigurationSetting::Temperature,
+                ref provided_value,
+                ref expected,
+            }) if provided_value == "-1" && expected == "finite and positive"
+        );
     }
 
     #[test]

@@ -9,11 +9,11 @@
 //!
 //! Time labels are stored directly as vertex data in the Delaunay triangulation
 //! (`Vertex<f64, u32, 2>` — the `u32` is the time-slice index). This mirrors
-//! CGAL's `vertex->info()` used in CDT-plusplus.  The `Foliation` struct
-//! tracks only aggregate bookkeeping (per-slice counts and total slices).
+//! CGAL's `vertex->info()` used in CDT-plusplus.  The
+//! [`Foliation`](crate::cdt::foliation::Foliation) struct tracks only aggregate
+//! bookkeeping (per-slice counts and total slices).
 
-use serde::de::Error as DeError;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as DeError};
 use std::num::NonZeroU32;
 use std::{error::Error, fmt};
 
@@ -740,9 +740,8 @@ mod tests {
 
     #[test]
     fn test_foliation_slice_size_mismatch() {
-        let result = Foliation::from_slice_sizes(vec![3, 3], slice_count(3));
-        assert!(result.is_err());
-        let err = result.unwrap_err();
+        let err = Foliation::from_slice_sizes(vec![3, 3], slice_count(3))
+            .expect_err("mismatched slice counts should be rejected");
         assert_eq!(
             err,
             FoliationError::SliceSizeMismatch {

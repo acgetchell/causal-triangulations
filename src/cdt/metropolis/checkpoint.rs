@@ -19,8 +19,7 @@ use crate::errors::{
 };
 use markov_chain_monte_carlo::ChainCheckpoint;
 use rand::rngs::Xoshiro256PlusPlus;
-use serde::de::Error as DeError;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as DeError};
 use std::num::NonZeroU32;
 use std::time::Duration;
 
@@ -543,8 +542,8 @@ const fn checkpoint_current_step(step: u32) -> CdtResult<NonZeroU32> {
 /// Returns [`CdtError::CheckpointResumeFailed`] when physics settings or
 /// sampling schedule settings differ from the checkpoint, or when the
 /// checkpoint counters and telemetry fail validation.
-pub(crate) fn validate_resume_compatible(
-    algorithm: &MetropolisAlgorithm,
+pub(crate) fn validate_resume_compatible<P>(
+    algorithm: &MetropolisAlgorithm<P>,
     checkpoint: &CdtMcmcCheckpoint,
 ) -> CdtResult<()> {
     ResumeCompatibleActionConfig::new(algorithm.action_config(), &checkpoint.action_config)?;
@@ -615,11 +614,11 @@ const fn ordered_f64_bits(value: f64) -> u64 {
 ///
 /// # Errors
 ///
-/// Returns [`CdtError::InvalidSimulationConfiguration`] for invalid
-/// Metropolis settings, [`CdtError::InvalidConfiguration`] for invalid action
-/// couplings, or [`CdtError::CheckpointResumeFailed`] when serialized chain
-/// counters, step telemetry, measurements, or stored action do not match the
-/// configured sampling schedule and restored triangulation state.
+/// Returns [`CdtError::CheckpointResumeFailed`] when serialized chain counters,
+/// step telemetry, measurements, scalar trace rows, or stored action do not
+/// match the configured sampling schedule and restored triangulation state.
+/// [`MetropolisConfig`] and [`ActionConfig`] validate before storage, so this
+/// helper only audits relationships among their checkpointed data.
 pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
     checkpoint.config.validate();
     checkpoint.action_config.validate();

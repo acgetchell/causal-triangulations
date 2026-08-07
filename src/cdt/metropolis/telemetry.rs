@@ -6,8 +6,7 @@ use super::helpers::actions_match;
 use crate::cdt::ergodic_moves::MoveType;
 use crate::errors::{CdtError, CdtResult, CheckpointResumeFailure};
 use markov_chain_monte_carlo::DiscreteProposalRatio;
-use serde::de::Error as DeError;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as DeError};
 use std::error::Error;
 use std::fmt;
 use std::num::NonZeroU32;
@@ -357,7 +356,7 @@ impl ProposalKernelTelemetry {
 /// Step telemetry is emitted only for completed Metropolis transitions, so
 /// [`Self::step`] is always nonzero. A step-0 construction or initial-state
 /// sample appears as a [`Measurement`](crate::cdt::results::Measurement), not as
-/// a `MonteCarloStep`.
+/// a [`MonteCarloStep`].
 ///
 /// Accepted, rejected-proposal, and no-proposal outcomes are stored as
 /// [`MonteCarloStepOutcome`] variants, so accepted action payloads cannot be
@@ -1683,6 +1682,7 @@ impl ProposalStatistics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{from_str, from_value, to_value};
     use std::assert_matches;
 
     fn step_number(step: u32) -> NonZeroU32 {
@@ -1741,9 +1741,9 @@ mod tests {
         ];
 
         for step in steps {
-            let value = serde_json::to_value(&step).expect("step telemetry should serialize");
+            let value = to_value(&step).expect("step telemetry should serialize");
             let round_tripped: MonteCarloStep =
-                serde_json::from_value(value).expect("valid step telemetry should deserialize");
+                from_value(value).expect("valid step telemetry should deserialize");
 
             assert_eq!(round_tripped.step(), step.step());
             assert_eq!(round_tripped.move_type(), step.move_type());
@@ -1771,7 +1771,7 @@ mod tests {
             }
         }"#;
 
-        let error = serde_json::from_str::<MonteCarloStep>(payload)
+        let error = from_str::<MonteCarloStep>(payload)
             .expect_err("accepted action-after/delta mismatch should be rejected");
 
         assert!(
@@ -1795,7 +1795,7 @@ mod tests {
             }
         }"#;
 
-        let step = serde_json::from_str::<MonteCarloStep>(payload)
+        let step = from_str::<MonteCarloStep>(payload)
             .expect("rejected proposal without delta should deserialize");
 
         assert_eq!(step.step().get(), 2);

@@ -12,8 +12,7 @@
 use crate::cdt::action::{ActionConfig, DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT};
 use crate::cdt::metropolis::MetropolisConfig;
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
-use clap::error::ErrorKind;
-use clap::{ArgGroup, Error as ClapError, Parser, ValueEnum};
+use clap::{ArgGroup, Error as ClapError, Parser, ValueEnum, error::ErrorKind};
 use dirs::home_dir;
 use serde::{Deserialize, Serialize};
 use std::ffi::OsString;
@@ -73,7 +72,7 @@ pub struct CdtConfig {
     /// This is the canonical runtime count. For regular initial CDT data it
     /// must divide evenly by [`Self::timeslices`]; the binary's
     /// `--vertices-per-slice` option computes this total before constructing
-    /// `CdtConfig`.
+    /// [`CdtConfig`].
     pub vertices: u32,
 
     /// Number of time slices in the initial triangulation.
@@ -247,13 +246,16 @@ impl ValidatedCdtConfig {
                 )?,
             }
         };
-        let metropolis_config = MetropolisConfig::new_with_seed(
+        let metropolis_config = MetropolisConfig::new(
             config.temperature,
             config.steps,
             config.thermalization_steps,
             config.measurement_frequency,
-            config.seed,
         )?;
+        let metropolis_config = match config.seed {
+            Some(seed) => metropolis_config.with_seed(seed),
+            None => metropolis_config,
+        };
         Ok(Self {
             config,
             metropolis_config,
@@ -1201,7 +1203,7 @@ fn validate_coupling(setting: ConfigurationSetting, value: f64) -> CdtResult<()>
     }
 }
 
-/// Converts a validated positive configuration count into a `NonZeroU32`.
+/// Converts a validated positive configuration count into a [`NonZeroU32`].
 ///
 /// [`ValidatedCdtConfig`] uses this helper after raw [`CdtConfig`] validation so
 /// downstream callers can preserve nonzero proof instead of rechecking raw
@@ -1320,7 +1322,7 @@ const fn to_action_config(config: &CdtConfig) -> ActionConfig {
 }
 
 impl CdtConfig {
-    /// Builds a new instance of `CdtConfig` from command-line arguments.
+    /// Builds a new [`CdtConfig`] from command-line arguments.
     ///
     /// This uses the binary-facing CLI parser and exits the process with
     /// Clap's diagnostic when parsing fails. Prefer [`Self::try_from_args`] in
@@ -1340,7 +1342,7 @@ impl CdtConfig {
             .unwrap_or_else(|err| err.exit())
     }
 
-    /// Parses a `CdtConfig` from an explicit argument iterator without exiting
+    /// Parses a [`CdtConfig`] from an explicit argument iterator without exiting
     /// the process on invalid input.
     ///
     /// Use this in tests, libraries, and other embedding contexts that need to
@@ -1727,9 +1729,8 @@ impl TestConfig {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
-    use dirs::home_dir;
+    use serde_json::{from_str, to_string};
     use std::assert_matches;
-    use std::path::PathBuf;
 
     #[test]
     fn test_config_new() {
@@ -1792,7 +1793,7 @@ mod tests {
         ])
         .expect_err("overflowed per-slice total should be a parse error");
 
-        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
         assert!(
             error
                 .to_string()
@@ -1816,18 +1817,16 @@ mod tests {
 
         assert_matches!(
             error.kind(),
-            clap::error::ErrorKind::ValueValidation | clap::error::ErrorKind::InvalidValue
+            ErrorKind::ValueValidation | ErrorKind::InvalidValue
         );
     }
 
     #[test]
     fn topology_serializes_with_cli_vocabulary() {
-        let json =
-            serde_json::to_string(&CdtTopology::OpenBoundary).expect("topology should serialize");
+        let json = to_string(&CdtTopology::OpenBoundary).expect("topology should serialize");
         assert_eq!(json, "\"open-boundary\"");
 
-        let topology: CdtTopology =
-            serde_json::from_str("\"toroidal\"").expect("topology should deserialize");
+        let topology: CdtTopology = from_str("\"toroidal\"").expect("topology should deserialize");
         assert_eq!(topology, CdtTopology::Toroidal);
     }
 

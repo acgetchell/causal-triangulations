@@ -38,9 +38,9 @@ impl CdtTarget {
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::InvalidConfiguration`] if the action couplings are
-    /// non-finite, or [`CdtError::InvalidSimulationConfiguration`] if
-    /// `temperature` is not finite and positive.
+    /// Returns [`CdtError::InvalidSimulationConfiguration`] if `temperature` is
+    /// not finite and positive. [`ActionConfig`] has already validated its
+    /// couplings before this constructor receives it.
     ///
     /// # Examples
     ///
@@ -91,7 +91,7 @@ impl Target<CdtTriangulation2D> for CdtTarget {
 ///
 /// # fn main() -> CdtResult<()> {
 /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-/// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+/// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
 /// let mut rng = StdRng::seed_from_u64(11);
 ///
 /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
@@ -154,7 +154,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
     ///     return Ok(());
@@ -183,7 +183,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
     ///     return Ok(());
@@ -212,7 +212,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
     ///     return Ok(());
@@ -238,7 +238,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
     ///     return Ok(());
@@ -264,7 +264,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
     ///     assert_eq!(plan.reverse_move_type(), plan.move_type().reverse());
@@ -289,7 +289,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
     ///     assert_eq!(plan.forward_family_probability(), 0.25);
@@ -314,7 +314,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
     ///     assert_eq!(plan.reverse_family_probability(), 0.25);
@@ -339,7 +339,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
     ///     assert!(plan.forward_site_count() > 0);
@@ -364,7 +364,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
     ///     assert!(plan.reverse_site_count() > 0);
@@ -389,7 +389,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
     ///     assert_eq!(plan.log_family_probability_ratio(), 0.0);
@@ -420,7 +420,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
     ///     assert!(plan.log_site_count_ratio().is_finite());
@@ -446,7 +446,7 @@ impl CdtProposalPlan {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// if let Some(plan) = proposal.propose_plan(&tri, &mut rng)? {
     ///     approx::assert_relative_eq!(
@@ -480,7 +480,7 @@ impl CdtProposalPlan {
 ///
 /// # fn main() -> CdtResult<()> {
 /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-/// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+/// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
 /// let mut rng = StdRng::seed_from_u64(11);
 /// let Some(plan) = proposal.propose_plan(&tri, &mut rng)? else {
 ///     return Ok(());
@@ -542,7 +542,7 @@ impl CdtProposalInfo {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     /// let mut rng = StdRng::seed_from_u64(11);
     /// let plan = proposal.propose_plan(&tri, &mut rng)?;
     /// let info = match &plan {
@@ -577,9 +577,10 @@ impl CdtProposalInfo {
 ///
 /// No-site outcomes are ordinary proposal absence and are reported from
 /// [`DelayedProposal::propose_plan`] as `Ok(None)`, matching the upstream
-/// plan-before-commit contract. `ApplicationFailed` represents a hard backend or
-/// invariant failure while constructing or committing a concrete proposal, and
-/// preserves the typed [`CdtError`] that caused the failed application.
+/// plan-before-commit contract. [`CdtProposalError::ApplicationFailed`]
+/// represents a hard backend or invariant failure while constructing or
+/// committing a concrete proposal, and preserves the typed [`CdtError`] that
+/// caused the failed application.
 ///
 /// # Examples
 ///
@@ -739,36 +740,38 @@ impl CdtProposal<UniformCdtMoveFamilyPolicy> {
             last_proposal_stats: ProposalStatistics::new(),
         }
     }
+}
 
-    /// Creates a seeded CDT proposal planner.
+impl<P> CdtProposal<P> {
+    /// Returns this proposal planner with a deterministic internal RNG seed.
     ///
-    /// The seed controls the internal move-family selector. The `rng` passed to
-    /// [`DelayedProposal::propose_plan`] is still accepted for compatibility
-    /// with generic MCMC drivers.
+    /// The seed controls the internal move-family and site selector. The `rng`
+    /// passed to [`DelayedProposal::propose_plan`] is still accepted for
+    /// compatibility with generic MCMC drivers. Reseeding clears cached
+    /// per-attempt telemetry so subsequent inspection cannot observe data from
+    /// the earlier RNG stream.
     ///
     /// # Examples
     ///
     /// ```
     /// use causal_triangulations::prelude::simulation::{ActionConfig, CdtProposal};
     ///
-    /// let _proposal = CdtProposal::with_seed(ActionConfig::default(), 42);
+    /// let _proposal = CdtProposal::new(ActionConfig::default()).with_seed(42);
     /// ```
     #[must_use]
-    pub fn with_seed(action_config: ActionConfig, seed: u64) -> Self {
-        action_config.validate();
-        Self {
-            action_config,
-            moves: ErgodicsSystem::with_seed(seed),
-            policy: UniformCdtMoveFamilyPolicy,
-            last_step_info: None,
-            last_no_plan_info: None,
-            last_proposal_stats: ProposalStatistics::new(),
-        }
+    pub fn with_seed(mut self, seed: u64) -> Self {
+        self.moves = ErgodicsSystem::with_seed(seed);
+        self.last_step_info = None;
+        self.last_no_plan_info = None;
+        self.last_proposal_stats = ProposalStatistics::new();
+        self
     }
-}
 
-impl<P> CdtProposal<P> {
-    /// Creates an unseeded planner with an injected family policy.
+    /// Returns this proposal planner with a caller-supplied family policy.
+    ///
+    /// The conversion preserves the current proposal RNG stream and clears
+    /// cached per-attempt telemetry. Borrow `policy` when its model state or
+    /// audit data must remain caller-owned.
     ///
     /// # Examples
     ///
@@ -778,47 +781,19 @@ impl<P> CdtProposal<P> {
     /// };
     ///
     /// let policy = CdtMoveFamilyDistribution::from_weights([1.0, 3.0, 1.0, 1.0])?;
-    /// let _proposal = CdtProposal::with_policy(ActionConfig::default(), policy);
+    /// let _proposal = CdtProposal::new(ActionConfig::default())
+    ///     .with_seed(42)
+    ///     .with_policy(policy);
     /// # Ok::<(), causal_triangulations::CdtMoveFamilyPolicyError>(())
     /// ```
     #[must_use]
-    pub fn with_policy(action_config: ActionConfig, policy: P) -> Self
+    pub fn with_policy<Q>(self, policy: Q) -> CdtProposal<Q>
     where
-        P: CdtMoveFamilyPolicy,
+        Q: CdtMoveFamilyPolicy,
     {
-        action_config.validate();
-        Self {
-            action_config,
-            moves: ErgodicsSystem::new(),
-            policy,
-            last_step_info: None,
-            last_no_plan_info: None,
-            last_proposal_stats: ProposalStatistics::new(),
-        }
-    }
-
-    /// Creates a deterministically seeded planner with an injected family policy.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::simulation::{
-    ///     ActionConfig, CdtMoveFamilyDistribution, CdtProposal,
-    /// };
-    ///
-    /// let policy = CdtMoveFamilyDistribution::from_weights([1.0, 3.0, 1.0, 1.0])?;
-    /// let _proposal = CdtProposal::with_seed_and_policy(ActionConfig::default(), 42, policy);
-    /// # Ok::<(), causal_triangulations::CdtMoveFamilyPolicyError>(())
-    /// ```
-    #[must_use]
-    pub fn with_seed_and_policy(action_config: ActionConfig, seed: u64, policy: P) -> Self
-    where
-        P: CdtMoveFamilyPolicy,
-    {
-        action_config.validate();
-        Self {
-            action_config,
-            moves: ErgodicsSystem::with_seed(seed),
+        CdtProposal {
+            action_config: self.action_config,
+            moves: self.moves,
             policy,
             last_step_info: None,
             last_no_plan_info: None,
@@ -842,7 +817,7 @@ impl<P> CdtProposal<P> {
     ///
     /// # fn main() -> CdtResult<()> {
     /// let state = CdtTriangulation::from_cdt_strip(4, 3)?;
-    /// let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    /// let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     /// let view = proposal.policy_view(&state, MoveType::Move13Add);
     /// assert_eq!(view.reverse_family(), MoveType::Move31Remove);
     /// assert_eq!(view.offered_sites().len(), view.offered_site_count());
@@ -1108,9 +1083,17 @@ where
     }
 }
 
+/// Hard proposal-planning failure preserved for public error conversion.
+///
+/// This carrier keeps the attempt number and structured CDT error intact so
+/// [`DelayedProposal::propose_plan`] can expose
+/// [`CdtProposalError::ApplicationFailed`] without flattening the underlying
+/// failure into text.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct MoveApplicationError {
+    /// One-based proposal attempt that produced the hard failure.
     pub(crate) attempt: usize,
+    /// Structured CDT failure reported by the move kernel.
     pub(crate) source: CdtError,
 }
 

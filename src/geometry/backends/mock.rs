@@ -184,14 +184,12 @@ pub enum MockError {
     },
 
     /// A face exists, but its local topology cannot be subdivided.
-    #[error("Face {face} cannot be subdivided: found {vertex_count} vertices, expected {expected}")]
+    #[error("Face {face} cannot be subdivided: found {vertex_count} vertices, expected 3")]
     NonSubdividableFace {
         /// Face handle that was requested.
         face: usize,
         /// Number of vertices currently stored for the face.
         vertex_count: usize,
-        /// Expected local topology.
-        expected: &'static str,
     },
 }
 
@@ -675,7 +673,6 @@ impl TriangulationMut for MockBackend {
             return Err(MockError::NonSubdividableFace {
                 face: face.0,
                 vertex_count: vertices.len(),
-                expected: "3 vertices",
             });
         }
 
@@ -1194,7 +1191,6 @@ mod tests {
             Err(MockError::NonSubdividableFace {
                 face: 0,
                 vertex_count: 4,
-                expected: "3 vertices",
             })
         );
         assert_eq!(backend.vertex_count(), 4);

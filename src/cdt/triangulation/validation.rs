@@ -505,7 +505,7 @@ fn validation_detail(error: DelaunayError) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cdt::foliation::{EdgeType, FoliationError};
+    use crate::cdt::foliation::EdgeType;
     use crate::config::CdtTopology;
     use crate::geometry::generators::build_delaunay2_with_data;
     use std::assert_matches;
@@ -679,8 +679,8 @@ mod tests {
 
     #[test]
     fn validate_causality_is_vacuous_without_foliation() {
-        let triangulation =
-            CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
+        let triangulation = CdtTriangulation::from_seeded_points(5, 2, 2, 0x0A11_DA7E)
+            .expect("Failed to create triangulation");
 
         triangulation
             .validate_causality()

@@ -300,7 +300,7 @@ const fn validate_component(
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
-    use serde_json::to_value;
+    use serde_json::{json, to_value};
     use std::assert_matches;
 
     #[test]
@@ -400,7 +400,7 @@ mod tests {
 
         assert_eq!(
             to_value(coordinate).expect("coordinate should serialize"),
-            serde_json::json!([2.0, 3.0])
+            json!([2.0, 3.0])
         );
     }
 }

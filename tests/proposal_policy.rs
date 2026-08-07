@@ -1,7 +1,6 @@
 //! Public-contract tests for the borrowed CDT proposal-policy view.
 
 use approx::assert_relative_eq;
-use causal_triangulations::CdtError;
 use causal_triangulations::prelude::geometry::{DelaunayBackend2D, build_delaunay2_with_data};
 use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveResult, MoveType};
 use causal_triangulations::prelude::simulation::{
@@ -13,7 +12,9 @@ use causal_triangulations::prelude::simulation::{
 use causal_triangulations::prelude::triangulation::{
     CdtResult, CdtTriangulation, CdtTriangulation2D,
 };
+use causal_triangulations::{CdtError, CdtProposalPlan};
 use rand::{SeedableRng, rngs::StdRng};
+use serde_json::to_value;
 use std::{assert_matches, cell::Cell};
 
 fn single_triangle() -> CdtTriangulation2D {
@@ -28,11 +29,11 @@ fn single_triangle() -> CdtTriangulation2D {
 fn proposal_info(
     proposal: &mut impl DelayedProposal<
         CdtTriangulation2D,
-        Plan = causal_triangulations::CdtProposalPlan,
+        Plan = CdtProposalPlan,
         Info = CdtProposalInfo,
         Error = CdtProposalError,
     >,
-    plan: Option<&causal_triangulations::CdtProposalPlan>,
+    plan: Option<&CdtProposalPlan>,
 ) -> CdtProposalInfo {
     match plan {
         Some(plan) => proposal.info(plan),
@@ -232,7 +233,9 @@ fn positive_weight_empty_family_is_typed_self_loop_without_mutation() {
     );
     let policy = CdtMoveFamilyDistribution::from_weights([1.0, 0.0, 0.0, 0.0])
         .expect("single-family support should be valid");
-    let mut proposal = CdtProposal::with_seed_and_policy(ActionConfig::default(), 7, policy);
+    let mut proposal = CdtProposal::new(ActionConfig::default())
+        .with_seed(7)
+        .with_policy(policy);
     let mut rng = StdRng::seed_from_u64(11);
 
     let plan = proposal
@@ -260,11 +263,12 @@ fn positive_weight_empty_family_is_typed_self_loop_without_mutation() {
 }
 
 #[test]
-fn uniform_injected_policy_matches_the_conventional_checked_path() -> CdtResult<()> {
+fn fluent_proposal_policy_binding_preserves_the_seeded_uniform_path() -> CdtResult<()> {
     let triangulation = CdtTriangulation::from_toroidal_cdt(4, 4)?;
-    let mut conventional = CdtProposal::with_seed(ActionConfig::default(), 29);
-    let mut injected =
-        CdtProposal::with_seed_and_policy(ActionConfig::default(), 29, UniformCdtMoveFamilyPolicy);
+    let mut conventional = CdtProposal::new(ActionConfig::default()).with_seed(29);
+    let mut injected = CdtProposal::new(ActionConfig::default())
+        .with_seed(29)
+        .with_policy(UniformCdtMoveFamilyPolicy);
     let mut conventional_rng = StdRng::seed_from_u64(31);
     let mut injected_rng = StdRng::seed_from_u64(31);
 
@@ -279,6 +283,27 @@ fn uniform_injected_policy_matches_the_conventional_checked_path() -> CdtResult<
 }
 
 #[test]
+fn policy_bound_runner_supports_results_and_checkpoint_terminal() -> CdtResult<()> {
+    let policy = CdtMoveFamilyDistribution::from_weights([1.0, 3.0, 1.0, 1.0])?;
+    let algorithm = MetropolisAlgorithm::new(
+        MetropolisConfig::new(1.0, 4, 0, 1)?.with_seed(31),
+        ActionConfig::default(),
+    )
+    .with_policy(&policy);
+
+    let (results, checkpoint) =
+        algorithm.run_with_checkpoint(CdtTriangulation::from_toroidal_cdt(4, 4)?)?;
+
+    assert_eq!(results.steps().len(), checkpoint.steps().len());
+    for (result_step, checkpoint_step) in results.steps().iter().zip(checkpoint.steps()) {
+        assert_eq!(result_step.step(), checkpoint_step.step());
+    }
+    assert_eq!(results.proposal_stats(), checkpoint.proposal_stats());
+    assert_eq!(checkpoint.current_step().get(), 4);
+    Ok(())
+}
+
+#[test]
 fn uniform_injected_runner_reproduces_seeded_conventional_trajectory() -> CdtResult<()> {
     let triangulation = CdtTriangulation::from_toroidal_cdt(4, 4)?;
     let algorithm = MetropolisAlgorithm::new(
@@ -286,7 +311,9 @@ fn uniform_injected_runner_reproduces_seeded_conventional_trajectory() -> CdtRes
         ActionConfig::default(),
     );
     let conventional = algorithm.run(triangulation.clone())?;
-    let injected = algorithm.run_with_policy(triangulation, &UniformCdtMoveFamilyPolicy)?;
+    let injected = algorithm
+        .with_policy(UniformCdtMoveFamilyPolicy)
+        .run(triangulation)?;
 
     assert_eq!(injected.steps().len(), conventional.steps().len());
     for (injected_step, conventional_step) in injected.steps().iter().zip(conventional.steps()) {
@@ -315,7 +342,7 @@ fn uniform_injected_runner_reproduces_seeded_conventional_trajectory() -> CdtRes
 #[test]
 fn uniform_policy_concrete_pair_satisfies_independent_detailed_balance() -> CdtResult<()> {
     let triangulation = CdtTriangulation::from_toroidal_cdt(4, 4)?;
-    let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 83);
+    let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(83);
     let mut rng = StdRng::seed_from_u64(89);
     let plan = (0..64)
         .find_map(|_| {
@@ -363,16 +390,19 @@ fn fixed_policy_checkpoint_resume_matches_uninterrupted_rng_stream() -> CdtResul
         MetropolisConfig::new(1.0, 12, 0, 1)?.with_seed(97),
         action.clone(),
     )
-    .run_with_policy(initial.clone(), &policy)?;
+    .with_policy(&policy)
+    .run(initial.clone())?;
 
     let prefix = MetropolisAlgorithm::new(
         MetropolisConfig::new(1.0, 5, 0, 1)?.with_seed(97),
         action.clone(),
     )
-    .run_to_checkpoint_with_policy(initial, &policy)?;
+    .with_policy(&policy)
+    .run_to_checkpoint(initial)?;
     let resumed =
         MetropolisAlgorithm::new(MetropolisConfig::new(1.0, 7, 0, 1)?.with_seed(999), action)
-            .resume_from_checkpoint_with_policy(prefix, &policy)?;
+            .with_policy(&policy)
+            .resume_from_checkpoint(prefix)?;
 
     assert_eq!(resumed.config().steps().get(), 12);
     assert_eq!(resumed.steps().len(), uninterrupted.steps().len());
@@ -406,8 +436,8 @@ fn fixed_policy_checkpoint_resume_matches_uninterrupted_rng_stream() -> CdtResul
         );
     }
     assert_eq!(
-        serde_json::to_value(resumed.measurements()).expect("measurements should serialize"),
-        serde_json::to_value(uninterrupted.measurements()).expect("measurements should serialize")
+        to_value(resumed.measurements()).expect("measurements should serialize"),
+        to_value(uninterrupted.measurements()).expect("measurements should serialize")
     );
     assert_eq!(
         (
@@ -437,7 +467,9 @@ fn unequal_fixed_weights_match_analytic_family_and_site_ratio() -> CdtResult<()>
     let triangulation = CdtTriangulation::from_toroidal_cdt(4, 4)?;
     let policy = CdtMoveFamilyDistribution::from_weights([0.0, 3.0, 1.0, 0.0])
         .expect("fixed test weights should be valid");
-    let mut proposal = CdtProposal::with_seed_and_policy(ActionConfig::default(), 41, policy);
+    let mut proposal = CdtProposal::new(ActionConfig::default())
+        .with_seed(41)
+        .with_policy(policy);
     let mut rng = StdRng::seed_from_u64(43);
 
     let plan = (0..64)
@@ -529,8 +561,9 @@ fn reverse_policy_probability_is_evaluated_on_planned_post_state() -> CdtResult<
     let vertices_before = triangulation.simplex_counts()?.vertex_count();
     let vertices_before =
         u32::try_from(vertices_before).expect("test fixture vertex count should fit u32");
-    let mut proposal =
-        CdtProposal::with_seed_and_policy(ActionConfig::default(), 47, VolumeDependentPolicy);
+    let mut proposal = CdtProposal::new(ActionConfig::default())
+        .with_seed(47)
+        .with_policy(VolumeDependentPolicy);
     let mut rng = StdRng::seed_from_u64(53);
 
     let plan = (0..128)
@@ -577,7 +610,7 @@ fn invalid_policy_aborts_before_mutating_the_chain() -> CdtResult<()> {
         .expect_err("all-zero policy must be rejected before construction");
     assert_matches!(policy, CdtMoveFamilyPolicyError::EmptySupport);
 
-    let mut proposal = CdtProposal::with_policy(ActionConfig::default(), EmptyPolicy);
+    let mut proposal = CdtProposal::new(ActionConfig::default()).with_policy(EmptyPolicy);
     let mut rng = StdRng::seed_from_u64(57);
     let proposal_error = proposal
         .propose_plan(&triangulation, &mut rng)
@@ -599,7 +632,8 @@ fn invalid_policy_aborts_before_mutating_the_chain() -> CdtResult<()> {
         ActionConfig::default(),
     );
     let error = algorithm
-        .run_with_policy(triangulation.clone(), &EmptyPolicy)
+        .with_policy(EmptyPolicy)
+        .run(triangulation.clone())
         .expect_err("empty-support runtime policy should be typed");
     assert_matches!(
         error,
@@ -630,7 +664,9 @@ fn reverse_state_policy_failure_is_typed_and_does_not_mutate_live_state() -> Cdt
     let policy = FailOnReverseEvaluation {
         calls: Cell::new(0),
     };
-    let mut proposal = CdtProposal::with_seed_and_policy(ActionConfig::default(), 67, policy);
+    let mut proposal = CdtProposal::new(ActionConfig::default())
+        .with_seed(67)
+        .with_policy(policy);
     let mut rng = StdRng::seed_from_u64(69);
 
     let error = proposal
@@ -672,8 +708,9 @@ fn runtime_policy_outputs_are_checked_before_family_selection() -> CdtResult<()>
     let triangulation = CdtTriangulation::from_cdt_strip(4, 3)?;
     let mut rng = StdRng::seed_from_u64(71);
     for invalid in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
-        let mut proposal =
-            CdtProposal::with_seed_and_policy(ActionConfig::default(), 73, ConstantPolicy(invalid));
+        let mut proposal = CdtProposal::new(ActionConfig::default())
+            .with_seed(73)
+            .with_policy(ConstantPolicy(invalid));
         assert_matches!(
             proposal.propose_plan(&triangulation, &mut rng),
             Err(CdtProposalError::Policy {
@@ -711,7 +748,9 @@ fn fixed_policy_shortcut_skips_state_dependent_family_evaluation() -> CdtResult<
         .expect("fixed shortcut distribution should be valid");
     let policy = FixedShortcut(distribution);
     let triangulation = CdtTriangulation::from_toroidal_cdt(4, 4)?;
-    let mut proposal = CdtProposal::with_seed_and_policy(ActionConfig::default(), 73, policy);
+    let mut proposal = CdtProposal::new(ActionConfig::default())
+        .with_seed(73)
+        .with_policy(policy);
     let mut rng = StdRng::seed_from_u64(79);
 
     let plan = proposal.propose_plan(&triangulation, &mut rng)?;
@@ -733,7 +772,9 @@ fn algorithm_exposes_typed_policy_audit_telemetry_after_each_step() -> CdtResult
         MetropolisConfig::new(1.0, 8, 0, 1)?.with_seed(61),
         ActionConfig::default(),
     );
-    let results = algorithm.run_with_policy(CdtTriangulation::from_toroidal_cdt(4, 4)?, &policy)?;
+    let results = algorithm
+        .with_policy(&policy)
+        .run(CdtTriangulation::from_toroidal_cdt(4, 4)?)?;
 
     for step in results.steps() {
         let telemetry = step
@@ -785,7 +826,7 @@ fn zero_reverse_family_probability_forces_rejection_without_mutation() -> CdtRes
         MetropolisConfig::new(1.0, 4, 0, 1)?.with_seed(67),
         ActionConfig::default(),
     );
-    let results = algorithm.run_with_policy(triangulation, &policy)?;
+    let results = algorithm.with_policy(&policy).run(triangulation)?;
     let concrete_steps = results
         .steps()
         .iter()
@@ -853,7 +894,7 @@ fn policy_view_has_deterministic_order_and_explicit_empty_families() -> CdtResul
         .proposal_policy_view(&triangulation, MoveType::Move13Add)
         .offered_sites()
         .collect::<Vec<_>>();
-    let mut proposal = CdtProposal::with_seed(ActionConfig::default(), 7);
+    let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(7);
     let proposal_count = proposal
         .policy_view(&triangulation, MoveType::Move13Add)
         .offered_site_count();

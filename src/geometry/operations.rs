@@ -6,11 +6,10 @@
 //! geometry backends.
 
 use super::traits::TriangulationQuery;
-use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
-/// Produces comparable endpoint hashes so unordered keys can avoid requiring `Ord`.
+/// Produces comparable endpoint hashes so unordered keys can avoid requiring [`Ord`].
 fn stable_hash<T: Hash>(value: &T) -> u64 {
     let mut hasher = DefaultHasher::new();
     value.hash(&mut hasher);
@@ -19,7 +18,7 @@ fn stable_hash<T: Hash>(value: &T) -> u64 {
 
 /// An unordered (undirected) pair key.
 ///
-/// Used to treat edges as undirected without requiring an `Ord` bound on the handle type.
+/// Used to treat edges as undirected without requiring an [`Ord`] bound on the handle type.
 #[derive(Clone, Debug)]
 struct UnorderedPair<V>(V, V);
 
@@ -257,9 +256,8 @@ impl<T: TriangulationQuery + ?Sized> TriangulationOps for T {}
 mod tests {
     use super::*;
     use crate::geometry::backends::mock::MockBackend;
-    use crate::geometry::traits::{EdgeAdjacentFacesResult, GeometryBackend, TriangulationQuery};
+    use crate::geometry::traits::{EdgeAdjacentFacesResult, GeometryBackend};
     use std::assert_matches;
-    use std::collections::HashSet;
 
     #[derive(Debug, Clone)]
     struct FixtureBackend {

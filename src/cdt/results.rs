@@ -19,15 +19,13 @@ use crate::cdt::triangulation::{CdtSimplexCounts, CdtTriangulation2D};
 use crate::config::{CdtConfig, CdtTopology, ValidatedCdtConfig};
 use crate::errors::{
     CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, CheckpointMoveCounter,
-    CheckpointResumeFailure, MeasurementCountField, OutputFormat, ProposalTelemetryCounter,
-    ScalarTraceField, SimplexCountField,
+    CheckpointResumeFailure, MeasurementCountField, OutputFormat, OutputPreparationStage,
+    OutputWriteStage, ProposalTelemetryCounter, ScalarTraceField, SimplexCountField,
 };
 use crate::geometry::backends::delaunay::DelaunayMeshExport;
 use crate::geometry::traits::TriangulationQuery;
 use crate::util::usize_to_f64;
-use serde::de::Error as DeError;
-use serde::ser::SerializeStruct;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as DeError, ser::SerializeStruct};
 use serde_json::to_writer_pretty;
 use std::fmt::Display;
 use std::fs::{File, create_dir_all};
@@ -1001,6 +999,8 @@ impl CdtTrajectorySnapshot {
 }
 
 /// Parses all persisted observables against one shared count/action trajectory.
+///
+/// Callers must validate that `steps` and `scalar_trace_rows` have equal lengths first.
 pub(crate) fn validate_trajectory_observables(
     action_config: &ActionConfig,
     steps: &[MonteCarloStep],
@@ -1794,9 +1794,9 @@ impl SimulationResultsBackend {
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::InvalidSimulationConfiguration`] if `config` is not a
-    /// runnable Metropolis configuration, or [`CdtError::InvalidConfiguration`] if
-    /// `action_config` contains non-finite couplings.
+    /// Returns [`CdtError::CheckpointResumeFailed`] when the supplied counters,
+    /// step telemetry, measurements, scalar trace rows, actions, or sampling
+    /// schedule do not describe one coherent completed chain.
     ///
     /// The final triangulation is checked with the crate's evolved-CDT validation
     /// path, so this can also return backend validation, topology, foliation,
@@ -2034,9 +2034,10 @@ impl SimulationResultsBackend {
     ///     )
     ///     .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
     ///
-    ///     let trace = results.scalar_trace().map_err(|err| CdtError::OutputWriteFailed {
+    ///     let trace = results.scalar_trace().map_err(|err| CdtError::OutputPreparationFailed {
     ///         path: "in-memory scalar trace".to_string(),
     ///         format: causal_triangulations::prelude::errors::OutputFormat::Csv,
+    ///         stage: causal_triangulations::prelude::errors::OutputPreparationStage::ScalarTrace,
     ///         detail: err.to_string(),
     ///     })?;
     ///     assert_eq!(trace.len(), results.steps().len());
@@ -2420,9 +2421,9 @@ impl SimulationResultsBackend {
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::OutputWriteFailed`] if the file or a parent directory
-    /// cannot be created, if trace construction fails, or if writing the CSV
-    /// fails.
+    /// Returns [`CdtError::OutputPreparationFailed`] if scalar-trace construction
+    /// fails. Returns [`CdtError::OutputWriteFailed`] if the file or a parent
+    /// directory cannot be created or writing the CSV fails.
     /// # Examples
     ///
     /// ```no_run
@@ -2442,17 +2443,24 @@ impl SimulationResultsBackend {
     pub fn write_trace_csv(&self, path: impl AsRef<Path>) -> CdtResult<()> {
         let path = path.as_ref();
         ensure_parent_directory(path, OutputFormat::Csv)?;
-        let trace = self
-            .scalar_trace()
-            .map_err(|err| output_error(path, OutputFormat::Csv, err))?;
-        let file = File::create(path).map_err(|err| output_error(path, OutputFormat::Csv, err))?;
+        let trace = self.scalar_trace().map_err(|err| {
+            output_preparation_error(
+                path,
+                OutputFormat::Csv,
+                OutputPreparationStage::ScalarTrace,
+                err,
+            )
+        })?;
+        let file = File::create(path).map_err(|err| {
+            output_write_error(path, OutputFormat::Csv, OutputWriteStage::CreateFile, err)
+        })?;
         let mut writer = BufWriter::new(file);
-        trace
-            .write_csv(&mut writer)
-            .map_err(|err| output_error(path, OutputFormat::Csv, err))?;
-        writer
-            .flush()
-            .map_err(|err| output_error(path, OutputFormat::Csv, err))
+        trace.write_csv(&mut writer).map_err(|err| {
+            output_write_error(path, OutputFormat::Csv, OutputWriteStage::Serialize, err)
+        })?;
+        writer.flush().map_err(|err| {
+            output_write_error(path, OutputFormat::Csv, OutputWriteStage::Flush, err)
+        })
     }
 
     /// Writes a JSON summary for external analysis and run bookkeeping.
@@ -2471,9 +2479,10 @@ impl SimulationResultsBackend {
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::OutputWriteFailed`] if the file or a parent directory
-    /// cannot be created, if the final-triangulation mesh cannot be exported, or
-    /// if JSON serialization fails.
+    /// Returns [`CdtError::OutputPreparationFailed`] if the final-triangulation
+    /// mesh cannot be exported. Returns the original validation error if vertex
+    /// labels cannot be exported. Returns [`CdtError::OutputWriteFailed`] if the
+    /// file or a parent directory cannot be created or JSON serialization fails.
     ///
     /// # Examples
     ///
@@ -2501,22 +2510,14 @@ impl SimulationResultsBackend {
     ) -> CdtResult<()> {
         let path = path.as_ref();
         let mesh = self.triangulation.geometry().mesh_export().map_err(|err| {
-            output_error(
+            output_preparation_error(
                 path,
                 OutputFormat::Json,
-                format!("Delaunay mesh export failed while building simulation summary: {err}"),
+                OutputPreparationStage::MeshExport,
+                err,
             )
         })?;
-        let vertex_time_labels =
-            triangulation_vertex_time_labels(&self.triangulation).map_err(|err| {
-                output_error(
-                    path,
-                    OutputFormat::Json,
-                    format!(
-                        "CDT mesh-label export failed while building simulation summary: {err}"
-                    ),
-                )
-            })?;
+        let vertex_time_labels = triangulation_vertex_time_labels(&self.triangulation)?;
         let summary = SimulationSummary {
             config: config.config(),
             metropolis_config: &self.config,
@@ -2546,14 +2547,24 @@ impl SimulationResultsBackend {
         };
 
         ensure_parent_directory(path, OutputFormat::Json)?;
-        let file = File::create(path).map_err(|err| output_error(path, OutputFormat::Json, err))?;
+        let file = File::create(path).map_err(|err| {
+            output_write_error(path, OutputFormat::Json, OutputWriteStage::CreateFile, err)
+        })?;
         let mut writer = BufWriter::new(file);
-        to_writer_pretty(&mut writer, &summary)
-            .map_err(|err| output_error(path, OutputFormat::Json, err))?;
-        writeln!(writer).map_err(|err| output_error(path, OutputFormat::Json, err))?;
-        writer
-            .flush()
-            .map_err(|err| output_error(path, OutputFormat::Json, err))
+        to_writer_pretty(&mut writer, &summary).map_err(|err| {
+            output_write_error(path, OutputFormat::Json, OutputWriteStage::Serialize, err)
+        })?;
+        writeln!(writer).map_err(|err| {
+            output_write_error(
+                path,
+                OutputFormat::Json,
+                OutputWriteStage::WriteTerminator,
+                err,
+            )
+        })?;
+        writer.flush().map_err(|err| {
+            output_write_error(path, OutputFormat::Json, OutputWriteStage::Flush, err)
+        })
     }
 }
 
@@ -2581,16 +2592,39 @@ fn ensure_parent_directory(path: &Path, format: OutputFormat) -> CdtResult<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
     {
-        create_dir_all(parent).map_err(|err| output_error(path, format, err))?;
+        create_dir_all(parent).map_err(|err| {
+            output_write_error(path, format, OutputWriteStage::CreateParentDirectory, err)
+        })?;
     }
     Ok(())
 }
 
-/// Builds a typed output error without exposing I/O dependencies in public APIs.
-fn output_error(path: &Path, format: OutputFormat, err: impl Display) -> CdtError {
+/// Builds a typed output preparation error without exposing dependencies in public APIs.
+fn output_preparation_error(
+    path: &Path,
+    format: OutputFormat,
+    stage: OutputPreparationStage,
+    err: impl Display,
+) -> CdtError {
+    CdtError::OutputPreparationFailed {
+        path: path.display().to_string(),
+        format,
+        stage,
+        detail: err.to_string(),
+    }
+}
+
+/// Builds a typed output write error without exposing I/O dependencies in public APIs.
+fn output_write_error(
+    path: &Path,
+    format: OutputFormat,
+    stage: OutputWriteStage,
+    err: impl Display,
+) -> CdtError {
     CdtError::OutputWriteFailed {
         path: path.display().to_string(),
         format,
+        stage,
         detail: err.to_string(),
     }
 }
@@ -2598,19 +2632,17 @@ fn output_error(path: &Path, format: OutputFormat, err: impl Display) -> CdtErro
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cdt::ergodic_moves::MoveType;
     use crate::cdt::foliation::FoliationError;
     use crate::cdt::metropolis::MetropolisAlgorithm;
     use crate::cdt::triangulation::CdtTriangulation;
-    use crate::errors::{ConfigurationSetting, MeasurementCountField};
+    use crate::errors::ConfigurationSetting;
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
-    use serde_json::{Value, from_str, from_value, to_value};
+    use serde_json::{Value, from_str, from_value, to_string, to_value};
     use std::assert_matches;
     use std::collections::HashSet;
     use std::env;
     use std::fs;
-    use std::num::NonZeroU32;
     use std::path::PathBuf;
     use std::process;
     use std::thread;
@@ -2637,14 +2669,14 @@ mod tests {
         measurement_frequency: u32,
         seed: u64,
     ) -> MetropolisConfig {
-        MetropolisConfig::new_with_seed(
+        MetropolisConfig::new(
             temperature,
             steps,
             thermalization_steps,
             measurement_frequency,
-            Some(seed),
         )
         .expect("test Metropolis config should be valid")
+        .with_seed(seed)
     }
 
     fn action_config(coupling_0: f64, coupling_2: f64, cosmological_constant: f64) -> ActionConfig {
@@ -3768,15 +3800,15 @@ mod tests {
         let triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let results = valid_rejected_result(triangulation);
-        let json = serde_json::to_string(&results).expect("results should serialize");
+        let json = to_string(&results).expect("results should serialize");
         let roundtrip: SimulationResultsBackend =
-            serde_json::from_str(&json).expect("valid serialized results should load");
+            from_str(&json).expect("valid serialized results should load");
         assert_relative_eq!(roundtrip.config.temperature(), 1.0);
 
         let invalid_json = json.replacen("\"temperature\":1.0", "\"temperature\":0.0", 1);
         assert_ne!(invalid_json, json);
 
-        let error = serde_json::from_str::<SimulationResultsBackend>(&invalid_json)
+        let error = from_str::<SimulationResultsBackend>(&invalid_json)
             .expect_err("validated deserialization should reject zero temperature");
         let message = error.to_string();
         assert!(
@@ -4353,12 +4385,14 @@ mod tests {
         let CdtError::OutputWriteFailed {
             path,
             format,
+            stage,
             detail,
         } = csv_error
         else {
             panic!("expected CSV output write failure, got {csv_error:?}");
         };
         assert_eq!(format, OutputFormat::Csv);
+        assert_eq!(stage, OutputWriteStage::CreateParentDirectory);
         assert_eq!(path, csv_path.display().to_string());
         assert!(!detail.is_empty());
 
@@ -4372,12 +4406,14 @@ mod tests {
         let CdtError::OutputWriteFailed {
             path,
             format,
+            stage,
             detail,
         } = json_error
         else {
             panic!("expected JSON output write failure, got {json_error:?}");
         };
         assert_eq!(format, OutputFormat::Json);
+        assert_eq!(stage, OutputWriteStage::CreateParentDirectory);
         assert_eq!(path, json_path.display().to_string());
         assert!(!detail.is_empty());
 

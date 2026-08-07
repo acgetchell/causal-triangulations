@@ -190,6 +190,129 @@ impl fmt::Display for GenerationParameterIssue {
     }
 }
 
+/// Operation performed when upstream Delaunay generation failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DelaunayGenerationStage {
+    /// Sampling random input points.
+    PointSampling,
+    /// Constructing a Delaunay triangulation from validated input vertices.
+    TriangulationConstruction,
+}
+
+impl fmt::Display for DelaunayGenerationStage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PointSampling => formatter.write_str("point sampling"),
+            Self::TriangulationConstruction => formatter.write_str("triangulation construction"),
+        }
+    }
+}
+
+/// Count converted while preparing Delaunay generation state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DelaunayGenerationQuantity {
+    /// Total requested vertex count.
+    TotalVertices,
+    /// Total expected finite-face count.
+    TotalFaces,
+    /// Requested vertices per spatial slice.
+    VerticesPerSlice,
+    /// Requested number of time slices.
+    TimeSlices,
+    /// One time-slice index.
+    SliceIndex,
+    /// One entry in a spatial volume profile.
+    SliceVolume,
+}
+
+impl fmt::Display for DelaunayGenerationQuantity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TotalVertices => formatter.write_str("total vertex count"),
+            Self::TotalFaces => formatter.write_str("total face count"),
+            Self::VerticesPerSlice => formatter.write_str("vertices per slice"),
+            Self::TimeSlices => formatter.write_str("time-slice count"),
+            Self::SliceIndex => formatter.write_str("time-slice index"),
+            Self::SliceVolume => formatter.write_str("slice volume"),
+        }
+    }
+}
+
+/// Structured reason that Delaunay generation failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum DelaunayGenerationFailure {
+    /// An upstream point sampler or triangulation constructor failed.
+    #[error("{stage} failed: {detail}")]
+    Upstream {
+        /// Generation stage that failed.
+        stage: DelaunayGenerationStage,
+        /// Upstream diagnostic retained for debugging.
+        detail: String,
+    },
+    /// A validated generation count could not fit the platform index type.
+    #[error("could not convert {quantity} to usize: {detail}")]
+    NumericConversion {
+        /// Count being converted.
+        quantity: DelaunayGenerationQuantity,
+        /// Conversion diagnostic.
+        detail: String,
+    },
+    /// Storage for generated vertex specifications could not be reserved.
+    #[error("could not reserve {requested_capacity} vertex specifications: {detail}")]
+    StorageReservation {
+        /// Capacity requested from the vertex-specification buffer.
+        requested_capacity: usize,
+        /// Allocation diagnostic.
+        detail: String,
+    },
+    /// A completed builder returned a mesh with unexpected live counts.
+    #[error(
+        "generated mesh has {actual_vertices} vertices and {actual_faces} faces; expected {expected_vertices} vertices and {expected_faces} faces"
+    )]
+    MeshSizeMismatch {
+        /// Live vertices returned by the builder.
+        actual_vertices: usize,
+        /// Vertices requested by the constructor.
+        expected_vertices: usize,
+        /// Live finite faces returned by the builder.
+        actual_faces: usize,
+        /// Finite faces requested by the constructor.
+        expected_faces: usize,
+    },
+    /// Causal filtering found an invalid face whose slices cannot lose another vertex.
+    #[error(
+        "non-strict face {face} cannot be filtered because every offending slice is at the minimum size {minimum_slice_size}"
+    )]
+    MinimumSliceSizeReached {
+        /// Backend face key whose incident vertices cannot be removed.
+        face: String,
+        /// Minimum permitted number of vertices per slice.
+        minimum_slice_size: usize,
+    },
+    /// Causal filtering exhausted its bounded pass budget.
+    #[error(
+        "exhausted {max_passes} causal-filtering passes with {remaining_violations} non-strict simplices remaining"
+    )]
+    FilterPassBudgetExhausted {
+        /// Maximum filtering passes permitted by the constructor.
+        max_passes: u32,
+        /// Non-strict simplices remaining after the final pass.
+        remaining_violations: usize,
+    },
+    /// Causal filtering found violations but no removable incident vertex.
+    #[error("found {remaining_violations} non-strict simplices but no removable offending vertex")]
+    NoRemovableFilterVertex {
+        /// Non-strict simplices remaining when filtering stopped.
+        remaining_violations: usize,
+    },
+    /// The deterministic toroidal candidate iterator was empty.
+    #[error("no deterministic toroidal embedding candidates were attempted")]
+    NoEmbeddingCandidates,
+}
+
 /// Identifies the CDT triangulation metadata field that failed validation.
 ///
 /// Use this with [`CdtError::InvalidTriangulationMetadata`] to distinguish
@@ -243,6 +366,56 @@ pub enum OutputFormat {
     Csv,
     /// JSON simulation summary output.
     Json,
+}
+
+/// In-memory preparation step performed before an output file is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum OutputPreparationStage {
+    /// Constructing the scalar trace written to CSV.
+    ScalarTrace,
+    /// Exporting the final triangulation mesh for a JSON summary.
+    MeshExport,
+}
+
+impl fmt::Display for OutputPreparationStage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ScalarTrace => formatter.write_str("scalar trace construction"),
+            Self::MeshExport => formatter.write_str("mesh export"),
+        }
+    }
+}
+
+/// Filesystem or serialization step that failed while writing output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum OutputWriteStage {
+    /// Creating a missing parent directory.
+    CreateParentDirectory,
+    /// Creating or truncating the output file.
+    CreateFile,
+    /// Encoding and writing the primary output payload.
+    Serialize,
+    /// Writing a trailing record terminator.
+    WriteTerminator,
+    /// Flushing buffered output to the operating system.
+    Flush,
+    /// Publishing a fully written staged file at its configured path.
+    Persist,
+}
+
+impl fmt::Display for OutputWriteStage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CreateParentDirectory => formatter.write_str("create parent directory"),
+            Self::CreateFile => formatter.write_str("create file"),
+            Self::Serialize => formatter.write_str("serialize output"),
+            Self::WriteTerminator => formatter.write_str("write record terminator"),
+            Self::Flush => formatter.write_str("flush output"),
+            Self::Persist => formatter.write_str("persist staged output"),
+        }
+    }
 }
 
 impl fmt::Display for OutputFormat {
@@ -301,6 +474,70 @@ impl fmt::Display for BackendMutationOperation {
             Self::RemoveVertex => formatter.write_str("remove_vertex"),
             Self::FlipEdge => formatter.write_str("flip_edge"),
         }
+    }
+}
+
+/// One failed attempt to restore a backend payload during rollback.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct BackendRollbackFailure {
+    /// Backend operation used for the restoration attempt.
+    pub operation: BackendMutationOperation,
+    /// Human-readable backend handle targeted by the restoration attempt.
+    pub target: String,
+    /// Backend diagnostic returned by the failed restoration attempt.
+    pub detail: String,
+}
+
+impl fmt::Display for BackendRollbackFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} on {}: {}",
+            self.operation, self.target, self.detail
+        )
+    }
+}
+
+/// Ordered rollback failures retained after a primary backend mutation error.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BackendRollbackFailures(Vec<BackendRollbackFailure>);
+
+impl BackendRollbackFailures {
+    /// Preserves rollback failures in the order their restoration attempts ran.
+    #[must_use]
+    pub const fn new(failures: Vec<BackendRollbackFailure>) -> Self {
+        Self(failures)
+    }
+
+    /// Returns the structured rollback failure records.
+    #[must_use]
+    pub fn as_slice(&self) -> &[BackendRollbackFailure] {
+        &self.0
+    }
+
+    /// Returns whether every restoration attempt succeeded.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Display for BackendRollbackFailures {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, failure) in self.0.iter().enumerate() {
+            if index != 0 {
+                formatter.write_str("; ")?;
+            }
+            failure.fmt(formatter)?;
+        }
+        Ok(())
+    }
+}
+
+impl From<Vec<BackendRollbackFailure>> for BackendRollbackFailures {
+    fn from(failures: Vec<BackendRollbackFailure>) -> Self {
+        Self::new(failures)
     }
 }
 
@@ -423,7 +660,7 @@ pub enum CdtValidationFailure {
         vertex: String,
         /// Component that was non-finite.
         component: SpacetimeCoordinateComponent,
-        /// Observed non-finite value, stored as text because `f64` is not `Eq`.
+        /// Observed non-finite value, stored as text because `f64` is not [`Eq`].
         value: String,
     },
     /// A foliated face was not classifiable as a strict Up or Down CDT simplex.
@@ -529,6 +766,39 @@ impl fmt::Display for CdtValidationFailure {
                 formatter,
                 "face {face} is not a strict CDT simplex (expected Up or Down)"
             ),
+        }
+    }
+}
+
+impl std::error::Error for CdtValidationFailure {}
+
+/// Observable counter converted to floating point for numerical estimation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ObservableQuantity {
+    /// Accumulated volume of a dual-graph ball.
+    DualBallVolume,
+    /// Number of dual-ball samples contributing to an average.
+    DualBallSampleCount,
+    /// Radius in the dual graph.
+    DualGraphRadius,
+    /// Live neighbors of one dual-graph node.
+    LiveDualNeighborCount,
+    /// Live dual-graph node count.
+    DualGraphNodeCount,
+    /// Diffusion step used in a spectral-dimension fit.
+    DiffusionStep,
+}
+
+impl fmt::Display for ObservableQuantity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DualBallVolume => formatter.write_str("dual ball volume"),
+            Self::DualBallSampleCount => formatter.write_str("dual ball sample count"),
+            Self::DualGraphRadius => formatter.write_str("dual graph radius"),
+            Self::LiveDualNeighborCount => formatter.write_str("live dual-neighbor count"),
+            Self::DualGraphNodeCount => formatter.write_str("dual graph node count"),
+            Self::DiffusionStep => formatter.write_str("diffusion step"),
         }
     }
 }
@@ -1228,7 +1498,7 @@ pub enum MetropolisMoveApplicationFailure {
     },
     /// A backend mutation failed, then rollback of staged payloads also failed.
     #[error(
-        "backend mutation failed [{operation}] on {target}: {detail}; rollback failed: {rollback_errors}"
+        "backend mutation failed [{operation}] on {target}: {detail}; rollback failed: {rollback_failures}"
     )]
     BackendRollback {
         /// Mutation operation being attempted when the first failure occurred.
@@ -1237,8 +1507,8 @@ pub enum MetropolisMoveApplicationFailure {
         target: String,
         /// Primary mutation failure detail.
         detail: String,
-        /// Rollback failure details for one or more payloads.
-        rollback_errors: String,
+        /// Structured failures from one or more restoration attempts.
+        rollback_failures: BackendRollbackFailures,
     },
     /// Upstream Delaunay validation rejected the evolved geometry.
     #[error("Delaunay validation failed [{level}]: {detail}")]
@@ -1254,6 +1524,7 @@ pub enum MetropolisMoveApplicationFailure {
         /// Validation check that failed.
         check: CdtValidationCheck,
         /// Structured validation failure detail.
+        #[source]
         failure: CdtValidationFailure,
     },
     /// Topology metadata did not match the evolved backend Euler characteristic.
@@ -1276,7 +1547,7 @@ pub enum MetropolisMoveApplicationFailure {
     },
     /// Foliation bookkeeping or validation failed.
     #[error("foliation validation failed: {0}")]
-    Foliation(FoliationError),
+    Foliation(#[source] FoliationError),
     /// A post-mutation edge violated CDT causality.
     #[error("{}", format_causality_violation(*time_0, *time_1, *step_distance))]
     CausalityViolation {
@@ -1288,10 +1559,11 @@ pub enum MetropolisMoveApplicationFailure {
         step_distance: u32,
     },
     /// A hard failure reached the Metropolis boundary through an unexpected error category.
-    #[error("unexpected accepted-move failure: {detail}")]
+    #[error("unexpected accepted-move failure: {source}")]
     Unexpected {
-        /// Lower-level error text retained for diagnostics.
-        detail: String,
+        /// Lower-level typed error retained for inspection and source chaining.
+        #[source]
+        source: Box<CdtError>,
     },
 }
 
@@ -1311,12 +1583,12 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
                 operation,
                 target,
                 detail,
-                rollback_errors,
+                rollback_failures,
             } => Self::BackendRollback {
                 operation,
                 target,
                 detail,
-                rollback_errors,
+                rollback_failures,
             },
             CdtError::DelaunayValidationFailed { level, detail } => {
                 Self::DelaunayValidation { level, detail }
@@ -1370,13 +1642,15 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             | CdtError::InvalidTriangulationMetadata { .. }
             | CdtError::VertexBuildFailed { .. }
             | CdtError::Mcmc(_)
+            | CdtError::ObservableNumericConversionFailed { .. }
+            | CdtError::OutputPreparationFailed { .. }
             | CdtError::OutputWriteFailed { .. }
             | CdtError::OutputPathResolutionFailed { .. }
             | CdtError::OutputPathConflict { .. }
             | CdtError::OutputReadFailed { .. }
             | CdtError::CheckpointSerializationFailed { .. }
             | CdtError::CheckpointResumeFailed { .. }) => Self::Unexpected {
-                detail: unexpected.to_string(),
+                source: Box::new(unexpected),
             },
         }
     }
@@ -1389,9 +1663,9 @@ pub enum CdtError {
     /// Invalid dimension specified
     #[error("Unsupported dimension: {0}. Only 2D is currently supported")]
     UnsupportedDimension(u32),
-    /// Delaunay triangulation generation failed with detailed context
+    /// Delaunay triangulation generation failed with detailed context.
     #[error(
-        "Delaunay triangulation generation failed: {vertex_count} vertices, range [{}, {}], attempt {attempt}: {underlying_error}",
+        "Delaunay triangulation generation failed: {vertex_count} vertices, range [{}, {}], attempt {attempt}: {failure}",
         coordinate_range.0,
         coordinate_range.1
     )]
@@ -1402,8 +1676,9 @@ pub enum CdtError {
         coordinate_range: (f64, f64),
         /// Attempt number when the failure occurred
         attempt: u32,
-        /// Description of the underlying error that caused the failure
-        underlying_error: String,
+        /// Structured generation failure category.
+        #[source]
+        failure: DelaunayGenerationFailure,
     },
     /// Upstream Delaunay validation rejected a geometry backend.
     #[error("Delaunay validation failed [{level}]: {detail}")]
@@ -1618,6 +1893,7 @@ pub enum CdtError {
         /// Validation check that failed.
         check: CdtValidationCheck,
         /// Structured validation failure detail.
+        #[source]
         failure: CdtValidationFailure,
     },
     /// Topology metadata does not match the backend Euler characteristic.
@@ -1661,7 +1937,7 @@ pub enum CdtError {
     },
     /// Backend mutation failed and restoring previously staged payloads also failed.
     #[error(
-        "Backend mutation failed [{operation}] on {target}: {detail}; rollback failed: {rollback_errors}"
+        "Backend mutation failed [{operation}] on {target}: {detail}; rollback failed: {rollback_failures}"
     )]
     BackendRollbackFailed {
         /// Mutation operation being attempted when the first failure occurred.
@@ -1670,8 +1946,8 @@ pub enum CdtError {
         target: String,
         /// Primary mutation failure detail.
         detail: String,
-        /// Rollback failure details for one or more payloads.
-        rollback_errors: String,
+        /// Structured failures from one or more restoration attempts.
+        rollback_failures: BackendRollbackFailures,
     },
     /// An edge violates the causal structure by spanning more than one time slice
     /// (or, on toroidal topology, more than one *circular* slice step).
@@ -1683,8 +1959,9 @@ pub enum CdtError {
         time_1: u32,
         /// Topology-aware temporal step distance between the two labels.
         ///
-        /// On `OpenBoundary` topology this equals `time_0.abs_diff(time_1)`.
-        /// On `Toroidal` topology it is the circular distance
+        /// On [`CdtTopology::OpenBoundary`] this equals
+        /// `time_0.abs_diff(time_1)`. On [`CdtTopology::Toroidal`] it is the
+        /// circular distance
         /// `min(d, T − d)`, so the wrap-around edge between slice `T − 1`
         /// and slice `0` reads as `1` rather than `T − 1`.  This is the
         /// quantity that triggers the violation (`step_distance > 1`).
@@ -1693,13 +1970,35 @@ pub enum CdtError {
     /// Upstream MCMC framework error, such as a non-finite log-probability.
     #[error("MCMC error: {0}")]
     Mcmc(#[from] McmcError),
+    /// An observable counter could not be represented as `f64`.
+    #[error("Cannot convert {quantity} value {value} to f64")]
+    ObservableNumericConversionFailed {
+        /// Observable quantity being converted.
+        quantity: ObservableQuantity,
+        /// Integer value that could not be represented.
+        value: usize,
+    },
+    /// Preparing in-memory data for CSV/JSON output failed before file I/O began.
+    #[error("Failed to prepare {format} output for {path} during {stage}: {detail}")]
+    OutputPreparationFailed {
+        /// Target output path, retained to identify the requested artifact.
+        path: String,
+        /// Output format being prepared.
+        format: OutputFormat,
+        /// In-memory preparation step that failed.
+        stage: OutputPreparationStage,
+        /// Lower-level preparation diagnostic.
+        detail: String,
+    },
     /// Writing CSV/JSON simulation output failed.
-    #[error("Failed to write {format} output to {path}: {detail}")]
+    #[error("Failed to write {format} output to {path} during {stage}: {detail}")]
     OutputWriteFailed {
         /// Target output path.
         path: String,
         /// Output format being written.
         format: OutputFormat,
+        /// Filesystem or serialization step that failed.
+        stage: OutputWriteStage,
         /// Lower-level I/O or serialization error.
         detail: String,
     },
@@ -1873,12 +2172,19 @@ mod tests {
             vertex_count: 10,
             coordinate_range: (-1.0, 1.0),
             attempt: 5,
-            underlying_error: "Too many duplicate points".to_string(),
+            failure: DelaunayGenerationFailure::Upstream {
+                stage: DelaunayGenerationStage::TriangulationConstruction,
+                detail: "Too many duplicate points".to_string(),
+            },
         };
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Delaunay triangulation generation failed: 10 vertices, range [-1, 1], attempt 5: Too many duplicate points"
+            "Delaunay triangulation generation failed: 10 vertices, range [-1, 1], attempt 5: triangulation construction failed: Too many duplicate points"
+        );
+        assert_eq!(
+            Error::source(&error).map(ToString::to_string),
+            Some("triangulation construction failed: Too many duplicate points".to_string())
         );
     }
 
@@ -2199,6 +2505,10 @@ mod tests {
             display,
             "Validation failed [geometry]: backend reported invalid triangulation structure"
         );
+        assert_eq!(
+            Error::source(&error).map(ToString::to_string),
+            Some("backend reported invalid triangulation structure".to_string())
+        );
     }
 
     #[test]
@@ -2335,13 +2645,16 @@ mod tests {
             operation: BackendMutationOperation::SetVertexDataByKey,
             target: "vertex VertexKey(123v1)".to_string(),
             detail: "backend reported invalid vertex key".to_string(),
-            rollback_errors: "vertex VertexKey(7v1): backend reported invalid vertex key"
-                .to_string(),
+            rollback_failures: BackendRollbackFailures::new(vec![BackendRollbackFailure {
+                operation: BackendMutationOperation::SetVertexDataByKey,
+                target: "vertex VertexKey(7v1)".to_string(),
+                detail: "backend reported invalid vertex key".to_string(),
+            }]),
         };
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Backend mutation failed [set_vertex_data_by_key] on vertex VertexKey(123v1): backend reported invalid vertex key; rollback failed: vertex VertexKey(7v1): backend reported invalid vertex key"
+            "Backend mutation failed [set_vertex_data_by_key] on vertex VertexKey(123v1): backend reported invalid vertex key; rollback failed: set_vertex_data_by_key on vertex VertexKey(7v1): backend reported invalid vertex key"
         );
     }
 
@@ -2481,13 +2794,21 @@ mod tests {
                     operation: BackendMutationOperation::FlipEdge,
                     target: "edge EdgeKey(5v1)".to_string(),
                     detail: "flip failed".to_string(),
-                    rollback_errors: "rollback failed".to_string(),
+                    rollback_failures: BackendRollbackFailures::new(vec![BackendRollbackFailure {
+                        operation: BackendMutationOperation::FlipEdge,
+                        target: "edge EdgeKey(5v1)".to_string(),
+                        detail: "rollback failed".to_string(),
+                    }]),
                 },
                 MetropolisMoveApplicationFailure::BackendRollback {
                     operation: BackendMutationOperation::FlipEdge,
                     target: "edge EdgeKey(5v1)".to_string(),
                     detail: "flip failed".to_string(),
-                    rollback_errors: "rollback failed".to_string(),
+                    rollback_failures: BackendRollbackFailures::new(vec![BackendRollbackFailure {
+                        operation: BackendMutationOperation::FlipEdge,
+                        target: "edge EdgeKey(5v1)".to_string(),
+                        detail: "rollback failed".to_string(),
+                    }]),
                 },
             ),
             (
@@ -2564,15 +2885,16 @@ mod tests {
     #[test]
     fn metropolis_move_application_failure_unexpected_retains_diagnostic() {
         let failure = MetropolisMoveApplicationFailure::from(CdtError::UnsupportedDimension(3));
+        assert_eq!(
+            Error::source(&failure).map(ToString::to_string),
+            Some("Unsupported dimension: 3. Only 2D is currently supported".to_string())
+        );
 
-        let MetropolisMoveApplicationFailure::Unexpected { detail } = failure else {
+        let MetropolisMoveApplicationFailure::Unexpected { source } = failure else {
             panic!("expected unexpected failure source");
         };
 
-        assert_eq!(
-            detail,
-            "Unsupported dimension: 3. Only 2D is currently supported"
-        );
+        assert_eq!(*source, CdtError::UnsupportedDimension(3));
     }
 
     #[test]
@@ -2637,11 +2959,13 @@ mod tests {
         let error = CdtError::OutputWriteFailed {
             path: "trace.csv".to_string(),
             format: OutputFormat::Csv,
+            stage: OutputWriteStage::CreateFile,
             detail: "permission denied".to_string(),
         };
         let CdtError::OutputWriteFailed {
             path,
             format,
+            stage,
             detail,
         } = &error
         else {
@@ -2649,11 +2973,31 @@ mod tests {
         };
         assert_eq!(path, "trace.csv");
         assert_eq!(*format, OutputFormat::Csv);
+        assert_eq!(*stage, OutputWriteStage::CreateFile);
         assert_eq!(detail, "permission denied");
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Failed to write CSV output to trace.csv: permission denied"
+            "Failed to write CSV output to trace.csv during create file: permission denied"
+        );
+    }
+
+    #[test]
+    fn output_preparation_failed_preserves_stage() {
+        let error = CdtError::OutputPreparationFailed {
+            path: "summary.json".to_string(),
+            format: OutputFormat::Json,
+            stage: OutputPreparationStage::MeshExport,
+            detail: "invalid mesh".to_string(),
+        };
+
+        assert_matches!(
+            error,
+            CdtError::OutputPreparationFailed {
+                format: OutputFormat::Json,
+                stage: OutputPreparationStage::MeshExport,
+                ..
+            }
         );
     }
 
@@ -2815,9 +3159,15 @@ mod tests {
             expected: "≥ 1".to_string(),
         });
 
-        assert!(success.is_ok());
-        assert!(failure.is_err());
         assert_eq!(success, Ok(42));
+        assert_matches!(
+            failure,
+            Err(CdtError::InvalidConfiguration {
+                setting: ConfigurationSetting::Steps,
+                ref provided_value,
+                ref expected,
+            }) if provided_value == "0" && expected == "≥ 1"
+        );
     }
 
     #[test]

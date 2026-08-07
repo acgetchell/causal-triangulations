@@ -51,13 +51,14 @@ fn main() -> CdtResult<()> {
     let metropolis_config = config.to_metropolis_config();
     let action_config = config.to_action_config();
 
-    info!("Attempting CDT simulation...");
-    let algorithm = MetropolisAlgorithm::new(metropolis_config, action_config);
     // Family weights follow MoveType::REVERSIBLE_1P1 order. CDT validates and
     // normalizes them, then continues to own uniform canonical site selection
     // and the exact forward/reverse Hastings correction.
     let family_policy = CdtMoveFamilyDistribution::from_weights([1.0, 2.0, 2.0, 1.0])?;
-    let results = algorithm.run_with_policy(triangulation, &family_policy)?;
+    info!("Attempting CDT simulation...");
+    let algorithm =
+        MetropolisAlgorithm::new(metropolis_config, action_config).with_policy(&family_policy);
+    let results = algorithm.run(triangulation)?;
 
     // Display results
     info!("Simulation completed!");

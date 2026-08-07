@@ -291,7 +291,8 @@ The implementation lives under `src/cdt/triangulation/` and is wired from `src/l
 proposal site from the same universe used for proposal counts, plans that site on a cloned triangulation, computes `ΔS` and the forward/reverse
 Metropolis-Hastings family-probability and site-count ratio, accepts or rejects the concrete proposal, and only replaces the live triangulation after
 acceptance. Ordinary causal, geometric, and backend edit failures are self-loop proposal outcomes recorded in `ProposalStatistics`; hard backend failures
-remain structured errors.
+remain structured errors. `MetropolisAlgorithm::with_policy()` binds a family policy once so fresh-run, result-plus-checkpoint, checkpoint-only, and resume
+terminals share one orthogonal execution surface rather than separate policy-suffixed methods.
 Toroidal move finalization rejects and rolls back candidate sites that would violate χ = 0 or the closed-S¹ per-slice foliation invariant.
 
 The module tree is declared from `src/lib.rs` to avoid the `metropolis.rs` plus `metropolis/` layout pattern. `adapter.rs` is the single CDT adapter boundary

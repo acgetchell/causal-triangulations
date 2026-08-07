@@ -28,7 +28,27 @@ pub trait GeometryBackend {
     fn backend_name(&self) -> &'static str;
 }
 
-/// Read-only triangulation operations
+/// Read-only queries over a geometry backend's triangulation.
+///
+/// Generic CDT and analysis code can depend on this trait to inspect counts,
+/// connectivity, and coordinates without naming a concrete backend.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::testing::*;
+///
+/// fn simplex_counts(backend: &impl TriangulationQuery) -> (usize, usize, usize) {
+///     (
+///         backend.vertex_count(),
+///         backend.edge_count(),
+///         backend.face_count(),
+///     )
+/// }
+///
+/// let backend = MockBackend::create_triangle();
+/// assert_eq!(simplex_counts(&backend), (3, 3, 1));
+/// ```
 pub trait TriangulationQuery: GeometryBackend {
     /// Get the number of vertices in the triangulation
     fn vertex_count(&self) -> usize;
@@ -264,7 +284,29 @@ impl<V, F> SubdivisionResult<V, F> {
     }
 }
 
-/// Mutable triangulation operations
+/// Topology and coordinate mutations supported by a geometry backend.
+///
+/// Implementations return backend-specific errors and preserve their structural
+/// invariants across successful mutations.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::testing::*;
+///
+/// fn insert_origin<B>(backend: &mut B) -> Result<B::VertexHandle, B::Error>
+/// where
+///     B: TriangulationMut<Coordinate = f64>,
+/// {
+///     backend.reserve_capacity(1, 0)?;
+///     backend.insert_vertex(&[0.0, 0.0])
+/// }
+///
+/// let mut backend = MockBackend::new_2d();
+/// let _vertex = insert_origin(&mut backend)?;
+/// assert_eq!(backend.vertex_count(), 1);
+/// # Ok::<(), MockError>(())
+/// ```
 pub trait TriangulationMut: TriangulationQuery {
     /// Insert a new vertex at the given coordinates
     ///

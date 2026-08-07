@@ -160,7 +160,7 @@ fn cdt_cli_invalid_measurement_frequency_zero() {
 }
 
 #[test]
-fn cdt_cli_invalid_measurement_frequency_too_large() {
+fn cdt_cli_reports_invalid_measurement_frequency_when_logging_is_disabled() {
     let mut cmd = cdt_command();
 
     cmd.arg("--vertices-per-slice").arg("4");
@@ -168,6 +168,7 @@ fn cdt_cli_invalid_measurement_frequency_too_large() {
     cmd.arg("--steps").arg("100");
     cmd.arg("--measurement-frequency").arg("200");
     cmd.arg("--simulate");
+    cmd.env("RUST_LOG", "off");
 
     cmd.assert().failure().stderr(predicate::str::contains(
         "Invalid simulation configuration: measurement_frequency (got: 200, expected: ≤ steps (100))",

@@ -7,10 +7,15 @@
 //! that directly imports from the `delaunay` crate (see
 //! `docs/dev/rust.md § Geometry Backend Isolation`).
 
-use crate::errors::{CdtError, CdtResult, GenerationParameterIssue};
+use crate::errors::{
+    CdtError, CdtResult, DelaunayGenerationFailure, DelaunayGenerationStage,
+    GenerationParameterIssue,
+};
 pub use delaunay::TopologyGuarantee;
-use delaunay::geometry::kernel::AdaptiveKernel;
-use delaunay::geometry::util::{try_generate_random_points, try_generate_random_points_seeded};
+use delaunay::geometry::{
+    kernel::AdaptiveKernel,
+    util::{try_generate_random_points, try_generate_random_points_seeded},
+};
 use delaunay::prelude::Vertex;
 pub use delaunay::topology::traits::{GlobalTopology, ToroidalConstructionMode, ToroidalDomain};
 use delaunay::{DelaunayTriangulation, DelaunayTriangulationBuilder};
@@ -142,7 +147,10 @@ pub fn generate_delaunay2(
             vertex_count: number_of_vertices,
             coordinate_range,
             attempt: 1,
-            underlying_error: format!("Point generation failed: {e}"),
+            failure: DelaunayGenerationFailure::Upstream {
+                stage: DelaunayGenerationStage::PointSampling,
+                detail: e.to_string(),
+            },
         })?;
 
     // Explicitly type the vertices as Vertex<u32, 2> so the triangulation
@@ -160,7 +168,10 @@ pub fn generate_delaunay2(
             vertex_count: number_of_vertices,
             coordinate_range,
             attempt: 1,
-            underlying_error: e.to_string(),
+            failure: DelaunayGenerationFailure::Upstream {
+                stage: DelaunayGenerationStage::TriangulationConstruction,
+                detail: e.to_string(),
+            },
         })?;
 
     Ok(dt)
@@ -227,7 +238,10 @@ pub fn build_delaunay2_with_data(
             vertex_count,
             coordinate_range,
             attempt: 1,
-            underlying_error: e.to_string(),
+            failure: DelaunayGenerationFailure::Upstream {
+                stage: DelaunayGenerationStage::TriangulationConstruction,
+                detail: e.to_string(),
+            },
         })
 }
 
@@ -360,7 +374,10 @@ pub fn build_delaunay2_with_topology(
             vertex_count,
             coordinate_range,
             attempt: 1,
-            underlying_error: e.to_string(),
+            failure: DelaunayGenerationFailure::Upstream {
+                stage: DelaunayGenerationStage::TriangulationConstruction,
+                detail: e.to_string(),
+            },
         })?
         .simplex_data_type::<i32>()
         .topology_guarantee(topology_guarantee)
@@ -370,7 +387,10 @@ pub fn build_delaunay2_with_topology(
             vertex_count,
             coordinate_range,
             attempt: 1,
-            underlying_error: e.to_string(),
+            failure: DelaunayGenerationFailure::Upstream {
+                stage: DelaunayGenerationStage::TriangulationConstruction,
+                detail: e.to_string(),
+            },
         })
 }
 
@@ -402,7 +422,7 @@ pub fn build_delaunay2_with_topology(
 /// connectivity to `delaunay`:
 ///
 /// ```
-/// use causal_triangulations::{CdtError, CdtResult};
+/// use causal_triangulations::{CdtError, CdtResult, DelaunayGenerationFailure};
 /// use causal_triangulations::prelude::geometry::*;
 /// use std::assert_matches;
 ///
@@ -435,8 +455,10 @@ pub fn build_delaunay2_with_topology(
 ///     let result = build_toroidal_delaunay2(&vertices, &simplices, [1.0, 1.0]);
 ///     assert_matches!(
 ///         result,
-///         Err(CdtError::DelaunayGenerationFailed { ref underlying_error, .. })
-///             if underlying_error.contains("Explicit non-Euclidean connectivity")
+///         Err(CdtError::DelaunayGenerationFailed {
+///             failure: DelaunayGenerationFailure::Upstream { ref detail, .. },
+///             ..
+///         }) if detail.contains("Explicit non-Euclidean connectivity")
 ///     );
 ///     Ok(())
 /// }
@@ -559,7 +581,10 @@ pub fn build_periodic_toroidal_delaunay2(
             vertex_count,
             coordinate_range,
             attempt: 1,
-            underlying_error: e.to_string(),
+            failure: DelaunayGenerationFailure::Upstream {
+                stage: DelaunayGenerationStage::TriangulationConstruction,
+                detail: e.to_string(),
+            },
         })?
         .topology_guarantee(TopologyGuarantee::PLManifold)
         .build()
@@ -567,7 +592,10 @@ pub fn build_periodic_toroidal_delaunay2(
             vertex_count,
             coordinate_range,
             attempt: 1,
-            underlying_error: e.to_string(),
+            failure: DelaunayGenerationFailure::Upstream {
+                stage: DelaunayGenerationStage::TriangulationConstruction,
+                detail: e.to_string(),
+            },
         })
 }
 
@@ -609,8 +637,8 @@ pub(crate) fn seeded_delaunay2(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::CdtError;
     use crate::geometry::DelaunayBackend2D;
+    use crate::geometry::traits::TriangulationQuery;
     use std::assert_matches;
     use std::collections::HashMap;
 
@@ -647,6 +675,17 @@ mod tests {
         simplices.sort();
 
         (vertex_coords, simplices)
+    }
+
+    fn assert_coordinates_in_range(dt: &DelaunayTriangulation2D, coordinate_range: (f64, f64)) {
+        for (_, vertex) in dt.vertices() {
+            for coordinate in vertex.point().coords() {
+                assert!(
+                    (coordinate_range.0..=coordinate_range.1).contains(coordinate),
+                    "coordinate {coordinate} should lie in {coordinate_range:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -715,14 +754,15 @@ mod tests {
         let error = build_delaunay2_from_simplices(&vertices, &simplices)
             .expect_err("crossing non-adjacent edges must fail embedding validation");
         let CdtError::DelaunayGenerationFailed {
-            underlying_error, ..
+            failure: DelaunayGenerationFailure::Upstream { detail, .. },
+            ..
         } = error
         else {
             panic!("expected a Delaunay generation failure");
         };
         assert!(
-            underlying_error.contains("intersect outside their shared face"),
-            "unexpected crossing-edge diagnostic: {underlying_error}"
+            detail.contains("intersect outside their shared face"),
+            "unexpected crossing-edge diagnostic: {detail}"
         );
     }
 
@@ -734,14 +774,15 @@ mod tests {
         let error = build_delaunay2_from_simplices(&vertices, &simplices)
             .expect_err("collinear triangle must fail embedding validation");
         let CdtError::DelaunayGenerationFailed {
-            underlying_error, ..
+            failure: DelaunayGenerationFailure::Upstream { detail, .. },
+            ..
         } = error
         else {
             panic!("expected a Delaunay generation failure");
         };
         assert!(
-            underlying_error.to_ascii_lowercase().contains("degenerate"),
-            "unexpected degenerate-triangle diagnostic: {underlying_error}"
+            detail.to_ascii_lowercase().contains("degenerate"),
+            "unexpected degenerate-triangle diagnostic: {detail}"
         );
     }
 
@@ -809,9 +850,9 @@ mod tests {
             error,
             CdtError::DelaunayGenerationFailed {
                 vertex_count: 9,
-                ref underlying_error,
+                failure: DelaunayGenerationFailure::Upstream { ref detail, .. },
                 ..
-            } if underlying_error.contains(
+            } if detail.contains(
                 "Explicit non-Euclidean connectivity is not supported for Toroidal"
             ),
             "explicit toroidal mesh should fail with the upstream topology limitation"
@@ -903,13 +944,8 @@ mod tests {
 
     #[test]
     fn test_generate_delaunay2_valid_parameters() {
-        let result = generate_delaunay2(4, (0.0, 10.0), None);
-        assert!(
-            result.is_ok(),
-            "Should successfully generate triangulation with valid parameters"
-        );
-
-        let dt = result.unwrap();
+        let dt = generate_delaunay2(4, (0.0, 10.0), None)
+            .expect("Should successfully generate triangulation with valid parameters");
         assert_eq!(dt.number_of_vertices(), 4, "Should have 4 vertices");
         assert!(
             dt.number_of_simplices() > 0,
@@ -1116,13 +1152,16 @@ mod tests {
         let test_cases = [(3, "minimal"), (5, "small"), (10, "medium"), (20, "large")];
 
         for (vertex_count, description) in test_cases {
-            let result = generate_delaunay2(vertex_count, (0.0, 100.0), None);
-            assert!(
-                result.is_ok(),
-                "Should generate {description} triangulation with {vertex_count} vertices"
-            );
-
-            let dt = result.unwrap();
+            let dt = generate_delaunay2(
+                vertex_count,
+                (0.0, 100.0),
+                Some(u64::from(vertex_count)),
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "Should generate {description} triangulation with {vertex_count} vertices: {error}"
+                )
+            });
             assert_eq!(
                 dt.number_of_vertices(),
                 vertex_count as usize,
@@ -1139,15 +1178,13 @@ mod tests {
     fn test_generate_delaunay2_different_ranges() {
         let ranges = [(0.0, 1.0), (-10.0, 10.0), (100.0, 200.0), (-50.0, 0.0)];
 
-        for range in ranges {
-            let result = generate_delaunay2(4, range, None);
-            assert!(
-                result.is_ok(),
-                "Should generate triangulation with range {range:?}"
-            );
-
-            let dt = result.unwrap();
+        for (index, range) in ranges.into_iter().enumerate() {
+            let seed = u64::try_from(index).expect("range index should fit u64") + 100;
+            let dt = generate_delaunay2(4, range, Some(seed)).unwrap_or_else(|error| {
+                panic!("Should generate triangulation with range {range:?}: {error}")
+            });
             assert_eq!(dt.number_of_vertices(), 4, "Should have 4 vertices");
+            assert_coordinates_in_range(&dt, range);
         }
     }
 
@@ -1162,11 +1199,11 @@ mod tests {
     }
 
     #[test]
-    fn test_random_delaunay2_various_sizes() {
+    fn test_seeded_delaunay2_various_sizes() {
         let sizes = [3, 4, 6, 8, 12];
 
         for size in sizes {
-            let dt = random_delaunay2(size, (0.0, 50.0));
+            let dt = seeded_delaunay2(size, (0.0, 50.0), 200 + u64::from(size));
             assert_eq!(
                 dt.number_of_vertices(),
                 size as usize,
@@ -1208,6 +1245,7 @@ mod tests {
             dt2.number_of_simplices(),
             "Should have same simplex count"
         );
+        assert_eq!(triangulation_signature(&dt1), triangulation_signature(&dt2));
 
         // Verify expected properties
         assert_eq!(dt1.number_of_vertices(), 6, "Should have 6 vertices");
@@ -1222,9 +1260,11 @@ mod tests {
         // Both should succeed and have same vertex count
         assert_eq!(dt1.number_of_vertices(), 5, "First should have 5 vertices");
         assert_eq!(dt2.number_of_vertices(), 5, "Second should have 5 vertices");
-
-        // With different seeds, they should potentially have different structures
-        // (though this is probabilistic and not guaranteed)
+        assert_ne!(
+            triangulation_signature(&dt1),
+            triangulation_signature(&dt2),
+            "different seeds should change generated coordinates or connectivity"
+        );
     }
 
     #[test]
@@ -1263,29 +1303,14 @@ mod tests {
 
     #[test]
     fn test_euler_characteristic_properties() {
-        // Test that generated triangulations satisfy basic topological properties
-        let dt = random_delaunay2(8, (0.0, 10.0));
+        let dt = seeded_delaunay2(5, (0.0, 10.0), 53);
+        let backend = DelaunayBackend2D::from_triangulation(dt)
+            .expect("seed 53 should produce a valid backend");
 
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_possible_wrap,
-            reason = "test triangulation sizes are tiny and fit in i32"
-        )]
-        let v = dt.number_of_vertices() as i32;
-        #[expect(
-            clippy::cast_possible_truncation,
-            clippy::cast_possible_wrap,
-            reason = "test triangulation sizes are tiny and fit in i32"
-        )]
-        let c = dt.number_of_simplices() as i32; // faces in 2D
-
-        // Basic sanity checks
-        assert!(v >= 3, "Should have at least 3 vertices");
-        assert!(c >= 1, "Should have at least 1 simplex/face");
-
-        // For a 2D triangulation, we can estimate edge count
-        // In a typical triangulation: E ≈ 3V - 6 for planar graphs
-        // But this is an approximation since the delaunay crate may handle boundaries differently
+        assert_eq!(backend.vertex_count(), 5);
+        assert_eq!(backend.edge_count(), 8);
+        assert_eq!(backend.face_count(), 4);
+        assert_eq!(backend.euler_characteristic(), 1);
     }
 
     #[test]
@@ -1301,8 +1326,11 @@ mod tests {
         ];
 
         for range in ranges {
-            let result = generate_delaunay2(4, range, Some(789));
-            assert!(result.is_ok(), "Should handle coordinate range {range:?}");
+            let dt = generate_delaunay2(4, range, Some(789)).unwrap_or_else(|error| {
+                panic!("Should handle coordinate range {range:?}: {error}")
+            });
+            assert_eq!(dt.number_of_vertices(), 4);
+            assert_coordinates_in_range(&dt, range);
         }
     }
 
@@ -1315,16 +1343,13 @@ mod tests {
         // we just verify it doesn't panic.
         match result {
             Ok(dt) => assert_eq!(dt.number_of_vertices(), 0),
-            Err(e) => {
-                // Should be a generation error, not a panic
-                let msg = e.to_string();
-                assert!(
-                    msg.contains("generation")
-                        || msg.contains("failed")
-                        || msg.contains("Delaunay"),
-                    "Error should be descriptive: {msg}"
-                );
-            }
+            Err(error) => assert_matches!(
+                error,
+                CdtError::DelaunayGenerationFailed {
+                    vertex_count: 0,
+                    ..
+                }
+            ),
         }
     }
 
@@ -1333,8 +1358,15 @@ mod tests {
         // A single point is insufficient for a triangulation.
         let result = build_delaunay2_with_data(&[([0.0, 0.0], 0)]);
         // May succeed with degenerate DT or fail — no panic.
-        if let Ok(dt) = result {
-            assert_eq!(dt.number_of_vertices(), 1);
+        match result {
+            Ok(dt) => assert_eq!(dt.number_of_vertices(), 1),
+            Err(error) => assert_matches!(
+                error,
+                CdtError::DelaunayGenerationFailed {
+                    vertex_count: 1,
+                    ..
+                }
+            ),
         }
     }
 
@@ -1344,7 +1376,7 @@ mod tests {
         let dt = build_delaunay2_with_data(&coords)
             .expect("Should build triangulation from 3 non-degenerate points");
         assert_eq!(dt.number_of_vertices(), 3);
-        assert!(dt.number_of_simplices() >= 1);
+        assert_eq!(dt.number_of_simplices(), 1);
     }
 
     #[test]
@@ -1370,20 +1402,13 @@ mod tests {
             );
         }
 
-        // All results should be identical in structure
-        let first_vertex_count = results[0].number_of_vertices();
-        let first_simplex_count = results[0].number_of_simplices();
+        let first_signature = triangulation_signature(&results[0]);
 
         for (i, dt) in results.iter().enumerate().skip(1) {
             assert_eq!(
-                dt.number_of_vertices(),
-                first_vertex_count,
-                "Result {i} vertex count should match first result"
-            );
-            assert_eq!(
-                dt.number_of_simplices(),
-                first_simplex_count,
-                "Result {i} simplex count should match first result"
+                triangulation_signature(dt),
+                first_signature,
+                "Result {i} coordinates and connectivity should match the first result"
             );
         }
     }

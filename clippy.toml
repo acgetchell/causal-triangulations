@@ -4,6 +4,6 @@
 # Minimum Supported Rust Version
 msrv = "1.97.1"
 
-# Allow multiple crate versions - this is common in Rust dependency trees
-# and not something we can easily control without major refactoring
+# Permit Clippy suggestions that change exported APIs when they improve
+# correctness, performance, or orthogonality.
 avoid-breaking-exported-api = false

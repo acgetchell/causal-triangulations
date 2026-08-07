@@ -294,6 +294,7 @@ fn validate_coupling(setting: ConfigurationSetting, value: f64) -> CdtResult<()>
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
+    use serde_json::from_str;
 
     #[test]
     fn test_regge_action_calculation() {
@@ -342,7 +343,7 @@ mod tests {
     #[test]
     fn action_config_deserialization_rejects_non_finite_couplings() {
         let payload = r#"{"coupling_0":null,"coupling_2":0.0,"cosmological_constant":0.0}"#;
-        let error = serde_json::from_str::<ActionConfig>(payload)
+        let error = from_str::<ActionConfig>(payload)
             .expect_err("non-finite action coupling should be rejected");
 
         assert!(
@@ -351,7 +352,7 @@ mod tests {
         );
 
         let payload = r#"{"coupling_0":1e999,"coupling_2":0.0,"cosmological_constant":0.0}"#;
-        let error = serde_json::from_str::<ActionConfig>(payload)
+        let error = from_str::<ActionConfig>(payload)
             .expect_err("infinite action coupling should be rejected");
 
         assert!(

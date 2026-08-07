@@ -22,6 +22,12 @@ use std::hint::black_box;
 
 use benchmark_support::OrAbort;
 
+const BENCH_SEED: u64 = 0xCD7_BEC4;
+
+fn benchmark_seed(vertex_count: u32) -> u64 {
+    BENCH_SEED.wrapping_add(u64::from(vertex_count))
+}
+
 #[derive(Clone, Copy)]
 enum SetupOperation {
     CreateTriangulation,
@@ -62,10 +68,11 @@ fn bench_triangulation_creation(c: &mut Criterion) {
             &vertex_count,
             |b, &vertex_count| {
                 b.iter(|| {
-                    let triangulation = CdtTriangulation2D::from_random_points(
+                    let triangulation = CdtTriangulation2D::from_seeded_points(
                         black_box(vertex_count),
                         black_box(1),
                         black_box(2),
+                        black_box(benchmark_seed(vertex_count)),
                     )
                     .or_abort(SetupOperation::CreateTriangulation);
                     black_box(triangulation)
@@ -82,11 +89,12 @@ fn bench_edge_counting(c: &mut Criterion) {
 
     // Pre-create triangulations of different sizes
     let triangulations: Vec<(usize, CdtTriangulation2D)> = [10, 25, 50, 100, 200]
-        .iter()
-        .filter_map(|&size| {
-            CdtTriangulation2D::from_random_points(size, 1, 2)
-                .ok()
-                .map(|tri| (size as usize, tri))
+        .into_iter()
+        .map(|size| {
+            let triangulation =
+                CdtTriangulation2D::from_seeded_points(size, 1, 2, benchmark_seed(size))
+                    .or_abort(SetupOperation::CreateTriangulation);
+            (size as usize, triangulation)
         })
         .collect();
 
@@ -123,7 +131,7 @@ fn bench_edge_counting(c: &mut Criterion) {
 
 /// Benchmark geometry query operations
 fn bench_geometry_queries(c: &mut Criterion) {
-    let triangulation = CdtTriangulation2D::from_random_points(50, 1, 2)
+    let triangulation = CdtTriangulation2D::from_seeded_points(50, 1, 2, benchmark_seed(50))
         .or_abort(SetupOperation::CreateTestTriangulation);
 
     let geometry = triangulation.geometry();
@@ -237,7 +245,7 @@ fn bench_ergodic_moves(c: &mut Criterion) {
             &move_type,
             |b, &move_type| {
                 b.iter_batched(
-                    || (ErgodicsSystem::new(), seed_triangulation()),
+                    || (ErgodicsSystem::with_seed(BENCH_SEED), seed_triangulation()),
                     |(mut ergodics, mut triangulation)| {
                         let result = match move_type {
                             MoveType::Move22 => ergodics.attempt_22_move(&mut triangulation),
@@ -256,7 +264,7 @@ fn bench_ergodic_moves(c: &mut Criterion) {
     // Benchmark random move selection (stateless, no reset needed)
     group.bench_function("random_move_selection", |b| {
         b.iter_batched(
-            ErgodicsSystem::new,
+            || ErgodicsSystem::with_seed(BENCH_SEED),
             |mut ergodics| {
                 let move_type = ergodics.select_random_move();
                 black_box(move_type)
@@ -268,7 +276,7 @@ fn bench_ergodic_moves(c: &mut Criterion) {
     // Benchmark random move attempt (needs fresh triangulation each time)
     group.bench_function("random_move_attempt", |b| {
         b.iter_batched(
-            || (ErgodicsSystem::new(), seed_triangulation()),
+            || (ErgodicsSystem::with_seed(BENCH_SEED), seed_triangulation()),
             |(mut ergodics, mut triangulation)| {
                 let result = ergodics.attempt_random_move(&mut triangulation);
                 black_box(result)
@@ -418,7 +426,7 @@ fn bench_cache_operations(c: &mut Criterion) {
 
 /// Benchmark embedding validation for an unfoliated geometry fixture.
 fn bench_validation(c: &mut Criterion) {
-    let triangulation = CdtTriangulation2D::from_random_points(30, 1, 2)
+    let triangulation = CdtTriangulation2D::from_seeded_points(30, 1, 2, benchmark_seed(30))
         .or_abort(SetupOperation::CreateTriangulation);
 
     let mut group = c.benchmark_group("validation");

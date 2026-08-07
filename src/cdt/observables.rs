@@ -6,7 +6,9 @@
 //! triangulations or simulation outputs without owning the simulation loop.
 
 use crate::cdt::triangulation::CdtTriangulation2D;
-use crate::errors::{CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure};
+use crate::errors::{
+    CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, ObservableQuantity,
+};
 use crate::geometry::traits::TriangulationQuery;
 use crate::util::usize_to_f64;
 use std::collections::{HashMap, VecDeque};
@@ -203,7 +205,7 @@ fn average_dual_ball_volumes_from_adjacency(adjacency: &[Vec<usize>]) -> CdtResu
         {
             ball_volume += shell_count;
             sums[radius] += usize_to_f64(ball_volume).ok_or_else(|| {
-                observable_numeric_error("dual ball volume cannot be represented as f64")
+                observable_numeric_error(ObservableQuantity::DualBallVolume, ball_volume)
             })?;
             counts[radius] += 1;
         }
@@ -215,7 +217,7 @@ fn average_dual_ball_volumes_from_adjacency(adjacency: &[Vec<usize>]) -> CdtResu
             usize_to_f64(count)
                 .map(|count_f64| sum / count_f64)
                 .ok_or_else(|| {
-                    observable_numeric_error("dual ball sample count cannot be represented as f64")
+                    observable_numeric_error(ObservableQuantity::DualBallSampleCount, count)
                 })
         })
         .collect()
@@ -261,7 +263,7 @@ fn fit_log_log_slope(ball_volumes: &[f64]) -> CdtResult<Option<f64>> {
         // Exclude root-only samples: ln(1.0) = 0 biases the slope toward zero.
         if volume > 1.0 && volume.is_finite() {
             let radius_f64 = usize_to_f64(radius).ok_or_else(|| {
-                observable_numeric_error("dual graph radius cannot be represented as f64")
+                observable_numeric_error(ObservableQuantity::DualGraphRadius, radius)
             })?;
             samples.push((radius_f64.ln(), volume.ln()));
         }
@@ -323,7 +325,8 @@ fn average_return_probabilities(adjacency: &[Vec<usize>], max_step: usize) -> Cd
 
                 let neighbor_count = usize_to_f64(live_neighbor_count).ok_or_else(|| {
                     observable_numeric_error(
-                        "live dual-neighbor count cannot be represented as f64",
+                        ObservableQuantity::LiveDualNeighborCount,
+                        live_neighbor_count,
                     )
                 })?;
                 let share = move_probability / neighbor_count;
@@ -342,7 +345,7 @@ fn average_return_probabilities(adjacency: &[Vec<usize>], max_step: usize) -> Cd
     }
 
     let node_count_f64 = usize_to_f64(node_count).ok_or_else(|| {
-        observable_numeric_error("dual graph node count cannot be represented as f64")
+        observable_numeric_error(ObservableQuantity::DualGraphNodeCount, node_count)
     })?;
     Ok(sums.into_iter().map(|sum| sum / node_count_f64).collect())
 }
@@ -356,9 +359,8 @@ fn fit_spectral_dimension(return_probabilities: &[f64]) -> CdtResult<Option<f64>
         .skip(MIN_SPECTRAL_DIFFUSION_STEP)
     {
         if probability > 0.0 && probability < 1.0 && probability.is_finite() {
-            let step_f64 = usize_to_f64(step).ok_or_else(|| {
-                observable_numeric_error("diffusion step cannot be represented as f64")
-            })?;
+            let step_f64 = usize_to_f64(step)
+                .ok_or_else(|| observable_numeric_error(ObservableQuantity::DiffusionStep, step))?;
             samples.push((step_f64.ln(), probability.ln()));
         }
     }
@@ -399,14 +401,9 @@ fn fit_linear_slope(samples: impl IntoIterator<Item = (f64, f64)>) -> Option<f64
     Some(count_f64.mul_add(product_total, -x_total * y_total) / denominator)
 }
 
-/// Maps impossible-sized observable counters into the public validation error contract.
-fn observable_numeric_error(detail: &'static str) -> CdtError {
-    CdtError::ValidationFailed {
-        check: CdtValidationCheck::Geometry,
-        failure: CdtValidationFailure::BackendGeometry {
-            detail: detail.to_string(),
-        },
-    }
+/// Maps impossible-sized observable counters into the public conversion error contract.
+const fn observable_numeric_error(quantity: ObservableQuantity, value: usize) -> CdtError {
+    CdtError::ObservableNumericConversionFailed { quantity, value }
 }
 
 #[cfg(test)]
@@ -414,6 +411,17 @@ mod tests {
     use super::*;
     use crate::cdt::triangulation::CdtTriangulation;
     use approx::assert_relative_eq;
+
+    #[test]
+    fn observable_numeric_errors_preserve_quantity_and_value() {
+        assert_eq!(
+            observable_numeric_error(ObservableQuantity::DualGraphRadius, usize::MAX),
+            CdtError::ObservableNumericConversionFailed {
+                quantity: ObservableQuantity::DualGraphRadius,
+                value: usize::MAX,
+            }
+        );
+    }
 
     #[test]
     fn hausdorff_estimate_uses_dual_graph_ball_growth() {
@@ -428,8 +436,8 @@ mod tests {
 
     #[test]
     fn hausdorff_estimate_returns_none_for_too_little_dual_growth() {
-        let triangulation =
-            CdtTriangulation::from_random_points(3, 1, 2).expect("create minimal triangulation");
+        let triangulation = CdtTriangulation::from_seeded_points(3, 1, 2, 0x000B_5E2A)
+            .expect("create minimal triangulation");
 
         assert_eq!(
             estimate_hausdorff_dimension(&triangulation)

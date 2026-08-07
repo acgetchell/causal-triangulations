@@ -290,6 +290,10 @@ with narrow `# fmt: skip` pragmas; this keeps strict Semgrep scans complete with
 Cargo tool refresh raises the repository's rumdl pin from 0.2.51 to the installed 0.2.52 release. CI continues to consume that single `justfile` variable
 through the shared version resolver, so no workflow-local rumdl literal changes.
 
+The 7 August follow-up advances the command-layer uv pin from 0.12.2 to 0.12.3 after the installed Homebrew version and Homebrew stable formula metadata moved
+to 0.12.3. The `justfile` remains the single source of truth, and CI, performance, and Semgrep workflows continue to resolve it dynamically, so no duplicated
+workflow literals or project dependency-lock changes are required.
+
 ## Issue #205 Orthogonal CI And Notebook Checker Alignment
 
 Issue #205 compares CDT's validation shape with the completed `markov-chain-monte-carlo` issue #95 implementation while preserving CDT's stronger notebook
@@ -301,7 +305,7 @@ quickstart and visualization notebooks in routine CI and reserves the analysis-c
   Python, notebooks, Rust linting, runnable Rust tests, doctests, benchmarks, and examples independently selectable and makes target-class overlap explicit.
 - `test-rust-ci` runs library unit tests and integration-test crates together with
   `cargo nextest run --release --profile ci --lib --tests --verbose`; `test-rust` adds the separate rustdoc bucket because nextest does not execute doctests.
-  `test-unit`, `test-doc`, and `test-integration` remain debug-profile focused recipes for changed-surface work, with `test-lib` retained as a compatibility
+  `test-unit`, `test-doc`, and `test-integration` remain debug-profile-focused recipes for changed-surface work, with `test-lib` retained as a compatibility
   alias. `.config/nextest.toml` defines the named CI profile with no retries, non-fail-fast execution, immediate final failure output, and a bounded slow-test
   timeout so the command behaves consistently on every platform.
 - The fast `clippy` recipe remains scoped to production library and binary targets, while `just ci` uses `clippy-all-targets` to match

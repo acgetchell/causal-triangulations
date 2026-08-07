@@ -23,8 +23,7 @@ use delaunay::topology::traits::{GlobalTopology, TopologyKind, ToroidalConstruct
 use delaunay::{
     DelaunayCheckPolicy, DelaunayTriangulation, SimplexBarycenterError, TopologyGuarantee,
 };
-use serde::de::Error as DeError;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use std::collections::HashMap;
 use std::fmt::{self, Display};
 use std::num::NonZeroUsize;
@@ -369,6 +368,55 @@ impl fmt::Display for NonFlippableEdgeReason {
     }
 }
 
+/// Structured contract failure returned by a successful upstream flip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DelaunayFlipOutputFailure {
+    /// The replacement edge reported by a k=2 flip was not live afterward.
+    ReplacementEdgeUnavailable {
+        /// Upstream lookup diagnostic.
+        detail: String,
+    },
+    /// The flip reported the wrong number of vertices opposite its inserted faces.
+    InsertedVertexCountMismatch {
+        /// Number of inserted-face vertices required by the wrapper contract.
+        expected: usize,
+        /// Number of inserted-face vertices returned by the upstream flip.
+        actual: usize,
+        /// First unexpected vertex handle when the upstream result was oversized.
+        first_unexpected: Option<String>,
+    },
+}
+
+impl fmt::Display for DelaunayFlipOutputFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReplacementEdgeUnavailable { detail } => {
+                write!(
+                    formatter,
+                    "replacement edge is unavailable after the flip: {detail}"
+                )
+            }
+            Self::InsertedVertexCountMismatch {
+                expected,
+                actual,
+                first_unexpected,
+            } => {
+                write!(
+                    formatter,
+                    "reported {actual} inserted-face vertices, expected {expected}"
+                )?;
+                if let Some(vertex) = first_unexpected {
+                    write!(formatter, "; first unexpected vertex {vertex}")?;
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+impl std::error::Error for DelaunayFlipOutputFailure {}
+
 /// Delaunay backend errors preserving typed mutation and validation context.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
@@ -486,18 +534,15 @@ pub enum DelaunayError {
     },
 
     /// A successful upstream flip returned data that violates this backend's contract.
-    #[error(
-        "{operation} returned unexpected output for {target}: expected {expected}, got {actual}"
-    )]
+    #[error("{operation} returned unexpected output for {target}: {failure}")]
     UnexpectedFlipOutput {
         /// Flip operation that returned malformed output.
         operation: DelaunayOperation,
         /// Human-readable target passed to the flip operation.
         target: String,
-        /// Contract expected by the backend wrapper.
-        expected: &'static str,
-        /// Output shape or detail observed from the upstream result.
-        actual: String,
+        /// Structured contract failure in the upstream result.
+        #[source]
+        failure: DelaunayFlipOutputFailure,
     },
 
     /// Upstream Delaunay backend validation failed.
@@ -626,8 +671,9 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
                 Err(DelaunayError::UnexpectedFlipOutput {
                     operation: DelaunayOperation::FlipK2,
                     target: format!("replacement edge {v0:?} -- {v1:?}"),
-                    expected: "a live replacement edge after the k=2 flip",
-                    actual: err.to_string(),
+                    failure: DelaunayFlipOutputFailure::ReplacementEdgeUnavailable {
+                        detail: err.to_string(),
+                    },
                 })
             }
         }
@@ -775,8 +821,9 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
 
     /// Check if the triangulation is valid and satisfies the Delaunay property.
     ///
-    /// Uses the upstream cumulative validation (`DelaunayTriangulation::validate`) which
-    /// checks structural and topological validity (Levels 1–3), straight-line
+    /// Uses the upstream cumulative
+    /// [`DelaunayTriangulation::validate`] operation, which checks structural
+    /// and topological validity (Levels 1–3), straight-line
     /// embedding validity (Level 4), and the Delaunay empty-circumsphere property
     /// (Level 5).
     ///
@@ -992,14 +1039,16 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
     /// Returns `true` when the current Delaunay check policy is due.
     ///
     /// CDT passes the accepted local-mutation count here to reuse the same
-    /// `EveryN` cadence semantics as the upstream Delaunay crate.
+    /// [`DelaunayCheckPolicy::EveryN`] cadence semantics as the upstream
+    /// Delaunay crate.
     #[must_use]
     pub(crate) fn should_check_delaunay_after(&self, completed_mutations: u64) -> bool {
         usize::try_from(completed_mutations)
             .is_ok_and(|count| self.dt.delaunay_check_policy().should_check(count))
     }
 
-    /// Returns the high-level topology kind (`Euclidean`, `Toroidal`, etc.) of the
+    /// Returns the high-level topology kind, such as
+    /// [`TopologyKind::Euclidean`] or [`TopologyKind::Toroidal`], of the
     /// underlying triangulation.
     ///
     /// This exposes the [`GlobalTopology`]
@@ -1688,8 +1737,11 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             return Err(DelaunayError::UnexpectedFlipOutput {
                 operation: DelaunayOperation::FlipK2,
                 target: format!("edge {:?} -- {:?}", edge.key.v0(), edge.key.v1()),
-                expected: "exactly two inserted-face vertices for the replacement edge",
-                actual: "0 inserted-face vertices".to_string(),
+                failure: DelaunayFlipOutputFailure::InsertedVertexCountMismatch {
+                    expected: 2,
+                    actual: 0,
+                    first_unexpected: None,
+                },
             });
         };
         let Some(v1) = inserted.next() else {
@@ -1697,8 +1749,11 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             return Err(DelaunayError::UnexpectedFlipOutput {
                 operation: DelaunayOperation::FlipK2,
                 target: format!("edge {:?} -- {:?}", edge.key.v0(), edge.key.v1()),
-                expected: "exactly two inserted-face vertices for the replacement edge",
-                actual: "1 inserted-face vertices".to_string(),
+                failure: DelaunayFlipOutputFailure::InsertedVertexCountMismatch {
+                    expected: 2,
+                    actual: 1,
+                    first_unexpected: None,
+                },
             });
         };
         if let Some(extra) = inserted.next() {
@@ -1707,8 +1762,11 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             return Err(DelaunayError::UnexpectedFlipOutput {
                 operation: DelaunayOperation::FlipK2,
                 target: format!("edge {:?} -- {:?}", edge.key.v0(), edge.key.v1()),
-                expected: "exactly two inserted-face vertices for the replacement edge",
-                actual: format!("{actual} inserted-face vertices including unexpected {extra:?}"),
+                failure: DelaunayFlipOutputFailure::InsertedVertexCountMismatch {
+                    expected: 2,
+                    actual,
+                    first_unexpected: Some(format!("{extra:?}")),
+                },
             });
         }
         let replacement_edge =
@@ -1774,8 +1832,11 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             return Err(DelaunayError::UnexpectedFlipOutput {
                 operation: DelaunayOperation::FlipK1Insert,
                 target: format!("face {:?} at point {:?}", face.key, point),
-                expected: "exactly one inserted-face vertex for the inserted point",
-                actual: "0 inserted-face vertices".to_string(),
+                failure: DelaunayFlipOutputFailure::InsertedVertexCountMismatch {
+                    expected: 1,
+                    actual: 0,
+                    first_unexpected: None,
+                },
             });
         };
         if let Some(extra) = inserted.next() {
@@ -1784,8 +1845,11 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             return Err(DelaunayError::UnexpectedFlipOutput {
                 operation: DelaunayOperation::FlipK1Insert,
                 target: format!("face {:?} at point {:?}", face.key, point),
-                expected: "exactly one inserted-face vertex for the inserted point",
-                actual: format!("{actual} inserted-face vertices including unexpected {extra:?}"),
+                failure: DelaunayFlipOutputFailure::InsertedVertexCountMismatch {
+                    expected: 1,
+                    actual,
+                    first_unexpected: Some(format!("{extra:?}")),
+                },
             });
         }
         self.rebuild_interior_facet_index();
@@ -1817,6 +1881,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::CdtError;
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{
         DelaunayTriangulation2D, build_delaunay2_from_simplices, build_delaunay2_with_data,
@@ -1826,7 +1891,7 @@ mod tests {
     use approx::assert_relative_eq;
     use delaunay::DelaunayRepairPolicy;
     use delaunay::prelude::construction::{ConstructionOptions, DelaunayTriangulationBuilder};
-    use serde_json::{Value, error::Category};
+    use serde_json::{Error as JsonError, Value, error::Category, from_str, to_string, to_value};
     use slotmap::KeyData;
     use std::assert_matches;
     use std::collections::HashSet;
@@ -1865,7 +1930,7 @@ mod tests {
 
     /// `serde_json` wraps custom visitor failures as data errors; assert that
     /// structured category first, then keep detail matching in one place.
-    fn assert_json_data_error(error: &serde_json::Error, expected_details: &[&str]) {
+    fn assert_json_data_error(error: &JsonError, expected_details: &[&str]) {
         assert_eq!(error.classify(), Category::Data);
         let message = error.to_string();
         for expected_detail in expected_details {
@@ -2039,13 +2104,13 @@ mod tests {
             build_delaunay2_with_data(&[([0.0, 0.0], 0_u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
                 .expect("labeled triangle should build");
         let backend = validated_backend(dt);
-        let json = serde_json::to_string(&backend).expect("backend should serialize");
+        let json = to_string(&backend).expect("backend should serialize");
         let invalid_json = json.replace(
             r#""delaunay_check_policy":"EndOnly""#,
             r#""delaunay_check_policy":{"EveryN":0}"#,
         );
 
-        let error = serde_json::from_str::<DelaunayBackend2D>(&invalid_json)
+        let error = from_str::<DelaunayBackend2D>(&invalid_json)
             .expect_err("zero validation cadence must be rejected during deserialization");
 
         assert_json_data_error(&error, &["delaunay check interval must be non-zero"]);
@@ -2113,23 +2178,29 @@ mod tests {
         let malformed = DelaunayError::UnexpectedFlipOutput {
             operation: DelaunayOperation::FlipK2,
             target: "edge VertexKey(1v1) -- VertexKey(2v1)".to_string(),
-            expected: "exactly two inserted-face vertices for the replacement edge",
-            actual: "1 inserted-face vertices".to_string(),
+            failure: DelaunayFlipOutputFailure::InsertedVertexCountMismatch {
+                expected: 2,
+                actual: 1,
+                first_unexpected: None,
+            },
         };
         assert_eq!(
             malformed.to_string(),
-            "flip_k2 returned unexpected output for edge VertexKey(1v1) -- VertexKey(2v1): expected exactly two inserted-face vertices for the replacement edge, got 1 inserted-face vertices"
+            "flip_k2 returned unexpected output for edge VertexKey(1v1) -- VertexKey(2v1): reported 1 inserted-face vertices, expected 2"
         );
 
         let malformed_insert = DelaunayError::UnexpectedFlipOutput {
             operation: DelaunayOperation::FlipK1Insert,
             target: "face SimplexKey(3v1) at point [0.5, 0.5]".to_string(),
-            expected: "exactly one inserted-face vertex for the inserted point",
-            actual: "2 inserted-face vertices including unexpected VertexKey(4v1)".to_string(),
+            failure: DelaunayFlipOutputFailure::InsertedVertexCountMismatch {
+                expected: 1,
+                actual: 2,
+                first_unexpected: Some("VertexKey(4v1)".to_string()),
+            },
         };
         assert_eq!(
             malformed_insert.to_string(),
-            "flip_k1_insert returned unexpected output for face SimplexKey(3v1) at point [0.5, 0.5]: expected exactly one inserted-face vertex for the inserted point, got 2 inserted-face vertices including unexpected VertexKey(4v1)"
+            "flip_k1_insert returned unexpected output for face SimplexKey(3v1) at point [0.5, 0.5]: reported 2 inserted-face vertices, expected 1; first unexpected vertex VertexKey(4v1)"
         );
 
         let validation = DelaunayError::ValidationFailed {
@@ -2197,7 +2268,7 @@ mod tests {
             .expect("quad labels should form a strict causal foliation");
         assert_matches!(
             initial_triangulation.validate_initial_delaunay_cdt(),
-            Err(crate::CdtError::DelaunayValidationFailed {
+            Err(CdtError::DelaunayValidationFailed {
                 level: DelaunayValidationLevel::Five,
                 ..
             })
@@ -2216,7 +2287,7 @@ mod tests {
             .expect("evolved CDT validation should not require Level 5 Delaunay-ness");
         assert_matches!(
             triangulation.validate_with_profile(CdtValidationProfile::StrictDelaunay),
-            Err(crate::CdtError::DelaunayValidationFailed {
+            Err(CdtError::DelaunayValidationFailed {
                 level: DelaunayValidationLevel::Five,
                 ..
             })
@@ -2246,8 +2317,7 @@ mod tests {
                 build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 0)])
                     .expect("triangle should build");
             let mut backend = validated_backend(dt);
-            let serialized_before =
-                serde_json::to_value(&backend).expect("backend should serialize");
+            let serialized_before = to_value(&backend).expect("backend should serialize");
             let dt_before = backend.dt.clone();
             let facets_before = backend.interior_facets_by_edge.clone();
             let expected_facets = facets_before.clone();
@@ -2262,7 +2332,7 @@ mod tests {
                 .validate_embedding()
                 .expect("inside-point insertion should preserve the embedding");
             assert_ne!(
-                serde_json::to_value(&backend).expect("mutated backend should serialize"),
+                to_value(&backend).expect("mutated backend should serialize"),
                 serialized_before,
                 "test setup should mutate the triangulation before injecting failure"
             );
@@ -2285,7 +2355,7 @@ mod tests {
                 } if detail == expected_detail
             );
             assert_eq!(
-                serde_json::to_value(&backend).expect("restored backend should serialize"),
+                to_value(&backend).expect("restored backend should serialize"),
                 serialized_before
             );
             assert_eq!(backend.interior_facets_by_edge, expected_facets);
@@ -2980,8 +3050,9 @@ mod tests {
             .find(|edge| backend.can_flip_edge(edge))
             .expect("square has an interior edge");
         assert!(backend.can_flip_edge(&edge));
-        let flip = backend.flip_edge(edge);
-        assert!(flip.is_ok());
+        backend
+            .flip_edge(edge)
+            .expect("interior square edge should flip");
         assert_eq!(backend.vertex_count(), original_vertex_count);
         assert_eq!(backend.face_count(), original_face_count);
         assert!(backend.is_valid());
@@ -3018,8 +3089,9 @@ mod tests {
         assert_eq!(backend.face_count(), original_face_count);
         assert!(backend.is_valid());
 
-        let inserted = backend.insert_vertex(&[0.25, 0.75]);
-        assert!(inserted.is_ok());
+        backend
+            .insert_vertex(&[0.25, 0.75])
+            .expect("valid interior point should insert");
         assert_eq!(backend.vertex_count(), original_vertex_count + 1);
         assert!(backend.is_valid());
 
@@ -3110,7 +3182,7 @@ mod tests {
                     .is_ok_and(|coordinates| coordinates == [0.18, 0.42])
             })
             .expect("rollback fixture vertex should be present");
-        let serialized_before = serde_json::to_value(&backend).expect("backend should serialize");
+        let serialized_before = to_value(&backend).expect("backend should serialize");
         let facets_before = backend.interior_facets_by_edge.clone();
 
         let error = backend
@@ -3125,7 +3197,7 @@ mod tests {
             }
         );
         assert_eq!(
-            serde_json::to_value(&backend).expect("restored backend should serialize"),
+            to_value(&backend).expect("restored backend should serialize"),
             serialized_before
         );
         assert_eq!(backend.interior_facets_by_edge, facets_before);
@@ -3176,11 +3248,11 @@ mod tests {
         ])
         .expect("convex quad should build");
         let backend = validated_backend(dt);
-        let mut value = serde_json::to_value(&backend).expect("backend should serialize");
+        let mut value = to_value(&backend).expect("backend should serialize");
         set_non_delaunay_quad_diagonal(&mut value);
-        let invalid_json = serde_json::to_string(&value).expect("corrupt backend should serialize");
+        let invalid_json = to_string(&value).expect("corrupt backend should serialize");
 
-        let error = serde_json::from_str::<DelaunayBackend2D>(&invalid_json)
+        let error = from_str::<DelaunayBackend2D>(&invalid_json)
             .expect_err("non-Delaunay connectivity must be rejected");
 
         assert!(
@@ -3266,7 +3338,7 @@ mod tests {
         )
         .expect("explicit square should build");
         let mut backend = validated_backend(dt);
-        let serialized_before = serde_json::to_value(&backend).expect("backend should serialize");
+        let serialized_before = to_value(&backend).expect("backend should serialize");
         let dt_before = backend.dt.clone();
         let facets_before = backend.interior_facets_by_edge.clone();
         let expected_facets = facets_before.clone();
@@ -3281,7 +3353,7 @@ mod tests {
             .expect("interior edge should flip");
         backend.rebuild_interior_facet_index();
         assert_ne!(
-            serde_json::to_value(&backend).expect("mutated backend should serialize"),
+            to_value(&backend).expect("mutated backend should serialize"),
             serialized_before,
             "test setup should mutate the triangulation before injecting failure"
         );
@@ -3300,7 +3372,7 @@ mod tests {
             }
         );
         assert_eq!(
-            serde_json::to_value(&backend).expect("restored backend should serialize"),
+            to_value(&backend).expect("restored backend should serialize"),
             serialized_before
         );
         assert_eq!(backend.interior_facets_by_edge, expected_facets);

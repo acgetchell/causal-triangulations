@@ -6,8 +6,8 @@ use super::CdtTriangulation;
 use crate::cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType, classify_simplex};
 use crate::config::CdtTopology;
 use crate::errors::{
-    BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
-    MeasurementCountField, TriangulationMetadataField,
+    BackendMutationOperation, BackendRollbackFailure, BackendRollbackFailures, CdtError, CdtResult,
+    CdtValidationCheck, CdtValidationFailure, MeasurementCountField, TriangulationMetadataField,
 };
 use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
@@ -232,6 +232,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
     }
 
     /// Validates that every open-boundary spatial slice forms one interval.
+    ///
+    /// This topology-specific pass underpins [`Self::validate_foliation`]. It
+    /// checks spacelike degrees, path connectivity, coordinate order, and
+    /// adjacent-slab crossings so a successful public validation proves that
+    /// each stored slice is one consistently embedded open interval.
     #[expect(
         clippy::too_many_lines,
         reason = "open-boundary interval validation keeps the slice-degree, path-order, coordinate-order, and slab-crossing diagnostics in one invariant pass"
@@ -675,22 +680,30 @@ impl CdtTriangulation<DelaunayBackend2D> {
             .map(|&(key, _)| (key, self.geometry.vertex_data_by_key(key)))
             .collect();
 
-        let rollback_payloads = |geometry: &mut DelaunayBackend2D| -> Vec<String> {
-            let mut rollback_errors = Vec::new();
+        let rollback_payloads = |geometry: &mut DelaunayBackend2D| {
+            let mut rollback_failures = Vec::new();
 
             for &(key, data) in &previous_simplex_data {
                 if let Err(err) = geometry.set_simplex_data_by_key(key, data) {
-                    rollback_errors.push(format!("face {key:?}: {err}"));
+                    rollback_failures.push(BackendRollbackFailure {
+                        operation: BackendMutationOperation::SetSimplexDataByKey,
+                        target: format!("face {key:?}"),
+                        detail: err.to_string(),
+                    });
                 }
             }
 
             for &(key, data) in &previous_vertex_data {
                 if let Err(err) = geometry.set_vertex_data_by_key(key, data) {
-                    rollback_errors.push(format!("vertex {key:?}: {err}"));
+                    rollback_failures.push(BackendRollbackFailure {
+                        operation: BackendMutationOperation::SetVertexDataByKey,
+                        target: format!("vertex {key:?}"),
+                        detail: err.to_string(),
+                    });
                 }
             }
 
-            rollback_errors
+            BackendRollbackFailures::new(rollback_failures)
         };
 
         for &key in &face_keys {
@@ -698,8 +711,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 let operation = BackendMutationOperation::SetSimplexDataByKey;
                 let target = format!("face {key:?}");
                 let detail = err.to_string();
-                let rollback_errors = rollback_payloads(&mut self.geometry);
-                return if rollback_errors.is_empty() {
+                let rollback_failures = rollback_payloads(&mut self.geometry);
+                return if rollback_failures.is_empty() {
                     Err(CdtError::BackendMutationFailed {
                         operation,
                         target,
@@ -710,7 +723,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                         operation,
                         target,
                         detail,
-                        rollback_errors: rollback_errors.join("; "),
+                        rollback_failures,
                     })
                 };
             }
@@ -721,8 +734,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 let operation = BackendMutationOperation::SetVertexDataByKey;
                 let target = format!("vertex {vertex_key:?}");
                 let detail = format!("failed while assigning time label {t}: {err}");
-                let rollback_errors = rollback_payloads(&mut self.geometry);
-                return if rollback_errors.is_empty() {
+                let rollback_failures = rollback_payloads(&mut self.geometry);
+                return if rollback_failures.is_empty() {
                     Err(CdtError::BackendMutationFailed {
                         operation,
                         target,
@@ -733,7 +746,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                         operation,
                         target,
                         detail,
-                        rollback_errors: rollback_errors.join("; "),
+                        rollback_failures,
                     })
                 };
             }
@@ -1182,8 +1195,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Counts top-dimensional simplices that are not strict causal CDT simplices.
     ///
     /// In the current 1+1 implementation, the top-dimensional simplices are
-    /// triangle faces, and a strict causal CDT triangle must classify as `Up`
-    /// `(2,1)` or `Down` `(1,2)`. Purely spacelike faces, purely
+    /// triangle faces, and a strict causal CDT triangle must classify as
+    /// [`SimplexType::Up`] `(2,1)` or [`SimplexType::Down`] `(1,2)`. Purely
+    /// spacelike faces, purely
     /// timelike/non-spacelike faces, multi-slice faces, missing-label faces,
     /// and malformed faces all contribute to this count. A valid foliated CDT
     /// initial state has count zero.
@@ -1274,16 +1288,20 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 (key, self.geometry.simplex_data_by_key(key))
             })
             .collect();
-        let rollback_simplex_payloads = |geometry: &mut DelaunayBackend2D| -> Vec<String> {
-            let mut rollback_errors = Vec::new();
+        let rollback_simplex_payloads = |geometry: &mut DelaunayBackend2D| {
+            let mut rollback_failures = Vec::new();
 
             for &(key, data) in &previous_simplex_data {
                 if let Err(err) = geometry.set_simplex_data_by_key(key, data) {
-                    rollback_errors.push(format!("face {key:?}: {err}"));
+                    rollback_failures.push(BackendRollbackFailure {
+                        operation: BackendMutationOperation::SetSimplexDataByKey,
+                        target: format!("face {key:?}"),
+                        detail: err.to_string(),
+                    });
                 }
             }
 
-            rollback_errors
+            BackendRollbackFailures::new(rollback_failures)
         };
 
         for face in &faces {
@@ -1294,8 +1312,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 let detail = format!(
                     "failed to clear existing simplex payload before classification: {err}"
                 );
-                let rollback_errors = rollback_simplex_payloads(&mut self.geometry);
-                return if rollback_errors.is_empty() {
+                let rollback_failures = rollback_simplex_payloads(&mut self.geometry);
+                return if rollback_failures.is_empty() {
                     Err(CdtError::BackendMutationFailed {
                         operation,
                         target,
@@ -1306,7 +1324,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                         operation,
                         target,
                         detail,
-                        rollback_errors: rollback_errors.join("; "),
+                        rollback_failures,
                     })
                 };
             }
@@ -1322,8 +1340,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     "failed to store classified simplex payload {}: {err}",
                     ct.to_i32()
                 );
-                let rollback_errors = rollback_simplex_payloads(&mut self.geometry);
-                return if rollback_errors.is_empty() {
+                let rollback_failures = rollback_simplex_payloads(&mut self.geometry);
+                return if rollback_failures.is_empty() {
                     Err(CdtError::BackendMutationFailed {
                         operation,
                         target,
@@ -1334,7 +1352,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                         operation,
                         target,
                         detail,
-                        rollback_errors: rollback_errors.join("; "),
+                        rollback_failures,
                     })
                 };
             }
@@ -1473,8 +1491,9 @@ mod tests {
     use crate::errors::TriangulationMetadataField;
     use crate::geometry::generators::build_delaunay2_with_data;
     use std::assert_matches;
-    use std::thread;
     use std::time::Duration;
+
+    const TEST_POINT_SEED: u64 = 0xF011_A710;
 
     fn slice_count(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).expect("test slice count should be nonzero")
@@ -1652,8 +1671,8 @@ mod tests {
 
     #[test]
     fn validate_foliation_is_vacuous_without_foliation() {
-        let triangulation =
-            CdtTriangulation::from_random_points(5, 3, 2).expect("Failed to create triangulation");
+        let triangulation = CdtTriangulation::from_seeded_points(5, 3, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
 
         triangulation
             .validate_foliation()
@@ -1746,20 +1765,25 @@ mod tests {
     fn assign_foliation_by_y_updates_metadata_invalidates_cache_and_writes_labels() {
         let mut tri = CdtTriangulation::from_seeded_points(15, 3, 2, 42)
             .expect("Failed to create deterministic triangulation");
-        let initial_last_modified = tri.metadata().last_modified;
         let initial_modification_count = tri.metadata().modification_count;
         let initial_edge_count = tri.edge_count();
         tri.refresh_cache();
         assert!(tri.cache.edge_count.is_some());
 
-        thread::sleep(Duration::from_millis(5));
+        let old_last_modified = tri
+            .metadata()
+            .last_modified
+            .checked_sub(Duration::from_secs(1))
+            .expect("test timestamp should permit a one-second offset");
+        tri.metadata.last_modified = old_last_modified;
+        let before_assignment = std::time::Instant::now();
         tri.assign_foliation_by_y(slice_count(3))
             .expect("Should assign foliation");
 
         assert!(tri.has_foliation());
         assert_eq!(tri.time_slices().get(), 3);
         assert_eq!(tri.slice_sizes().iter().sum::<usize>(), tri.vertex_count());
-        assert!(tri.metadata().last_modified > initial_last_modified);
+        assert!(tri.metadata().last_modified >= before_assignment);
         assert_eq!(
             tri.metadata().modification_count,
             initial_modification_count + 1
@@ -1773,8 +1797,8 @@ mod tests {
 
     #[test]
     fn assign_foliation_by_y_error_paths_preserve_state() {
-        let mut tri =
-            CdtTriangulation::from_random_points(6, 2, 2).expect("Failed to create triangulation");
+        let mut tri = CdtTriangulation::from_seeded_points(6, 2, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
         let initial_time_slices = tri.time_slices();
         let initial_modification_count = tri.metadata().modification_count;
         let vertex_keys: Vec<_> = tri
@@ -1836,8 +1860,8 @@ mod tests {
 
     #[test]
     fn foliation_queries_report_current_labels_only() {
-        let mut tri =
-            CdtTriangulation::from_random_points(6, 1, 2).expect("Failed to create triangulation");
+        let mut tri = CdtTriangulation::from_seeded_points(6, 1, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
         assert!(!tri.has_foliation());
         assert!(tri.foliation().is_none());
         assert!(tri.slice_sizes().is_empty());
@@ -1908,7 +1932,7 @@ mod tests {
 
     #[test]
     fn face_and_simplex_classification_cover_foliated_and_unfoliated_states() {
-        let tri = CdtTriangulation::from_random_points(5, 2, 2)
+        let tri = CdtTriangulation::from_seeded_points(5, 2, 2, TEST_POINT_SEED)
             .expect("create triangulation without foliation");
         for face in tri.geometry().faces() {
             assert!(tri.face_edge_types(&face).is_none());
@@ -2066,8 +2090,8 @@ mod tests {
 
     #[test]
     fn volume_profile_is_empty_without_current_foliation() {
-        let triangulation =
-            CdtTriangulation::from_random_points(5, 3, 2).expect("create unfoliated triangulation");
+        let triangulation = CdtTriangulation::from_seeded_points(5, 3, 2, TEST_POINT_SEED)
+            .expect("create unfoliated triangulation");
 
         assert!(
             triangulation

@@ -1132,8 +1132,8 @@ impl ErgodicsSystem {
     ///
     /// Clones a snapshot, subdivides the selected face, applies the inserted
     /// vertex label, and finishes CDT bookkeeping. Once the snapshot exists,
-    /// every early return must pass a `MoveResult` through `rollback_if_failed`
-    /// or restore state itself.
+    /// every early return must pass a [`MoveResult`] through
+    /// [`rollback_if_failed`] or restore state itself.
     fn attempt_13_move_mutating(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         let selection = self.select_proposal_site(triangulation, MoveType::Move13Add);
         let Some(site) = selection.site else {
@@ -1198,7 +1198,7 @@ impl ErgodicsSystem {
     ///
     /// Clones a snapshot, removes the selected vertex, and finishes CDT
     /// bookkeeping. Once the snapshot exists, every early return must pass a
-    /// `MoveResult` through `rollback_if_failed` or restore state itself.
+    /// [`MoveResult`] through [`rollback_if_failed`] or restore state itself.
     fn attempt_31_move_mutating(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         let selection = self.select_proposal_site(triangulation, MoveType::Move31Remove);
         let Some(site) = selection.site else {
@@ -1212,7 +1212,7 @@ impl ErgodicsSystem {
     ///
     /// In 2D this is the same bistellar k=2 operation as [`Self::attempt_22_move`].
     /// The separate method is retained for API compatibility and records
-    /// `EdgeFlip` statistics.
+    /// [`MoveType::EdgeFlip`] statistics.
     ///
     /// # Examples
     ///
@@ -1294,7 +1294,8 @@ impl ErgodicsSystem {
         }
     }
 
-    /// Applies the shared 2D k=2 edge-flip implementation for `Move22` and `EdgeFlip`.
+    /// Applies the shared 2D k=2 edge-flip implementation for
+    /// [`MoveType::Move22`] and [`MoveType::EdgeFlip`].
     fn attempt_causal_edge_flip(
         &mut self,
         triangulation: &mut CdtTriangulation2D,
@@ -1310,8 +1311,8 @@ impl ErgodicsSystem {
 
     /// Applies a selected edge-flip site and rolls back any failed mutation.
     ///
-    /// This is shared by `Move22` and `EdgeFlip`, which are public names for the
-    /// same 2D k=2 bistellar flip kernel.
+    /// This is shared by [`MoveType::Move22`] and [`MoveType::EdgeFlip`], which
+    /// are public names for the same 2D k=2 bistellar flip kernel.
     fn apply_edge_flip_site(
         &mut self,
         triangulation: &mut CdtTriangulation2D,
@@ -2583,7 +2584,7 @@ mod tests {
 
     #[test]
     fn move_22_uses_real_tri() {
-        let mut system = ErgodicsSystem::new();
+        let mut system = ErgodicsSystem::with_seed(0);
         let mut triangulation = square_two_triangles();
 
         let result = system.attempt_22_move(&mut triangulation);
@@ -2607,7 +2608,7 @@ mod tests {
 
     #[test]
     fn move_22_rejects_boundary_edge() {
-        let mut system = ErgodicsSystem::new();
+        let mut system = ErgodicsSystem::with_seed(0);
         let mut triangulation = single_triangle();
         let counts_before = (
             triangulation.vertex_count(),
@@ -2632,7 +2633,7 @@ mod tests {
 
     #[test]
     fn open_boundary_move_13_rolls_back_slab_embedding_violation() {
-        let mut system = ErgodicsSystem::new();
+        let mut system = ErgodicsSystem::with_seed(0);
         let mut triangulation = single_triangle();
         let counts_before = (
             triangulation.vertex_count(),
@@ -2812,7 +2813,7 @@ mod tests {
 
     #[test]
     fn proposal_site_count_matches_open_boundary_move_availability() {
-        let mut system = ErgodicsSystem::new();
+        let mut system = ErgodicsSystem::with_seed(0);
         let mut triangulation = single_triangle();
 
         assert_eq!(proposal_site_count(&triangulation, MoveType::Move22), 0);
@@ -3316,7 +3317,7 @@ mod tests {
 
     #[test]
     fn open_boundary_move_31_reports_unavailable_without_inverse_site() {
-        let mut system = ErgodicsSystem::new();
+        let mut system = ErgodicsSystem::with_seed(0);
         let mut triangulation = single_triangle();
         let result = system.attempt_13_move(&mut triangulation);
         assert_matches!(result, MoveResult::GeometricViolation);
@@ -3353,7 +3354,7 @@ mod tests {
 
     #[test]
     fn move_31_requires_degree_three() {
-        let mut system = ErgodicsSystem::new();
+        let mut system = ErgodicsSystem::with_seed(0);
         let mut triangulation = single_triangle();
         let counts_before = (
             triangulation.vertex_count(),
@@ -3598,7 +3599,7 @@ mod tests {
 
     #[test]
     fn edge_flip_uses_own_stats() {
-        let mut system = ErgodicsSystem::new();
+        let mut system = ErgodicsSystem::with_seed(0);
         let mut triangulation = square_two_triangles();
 
         let result = system.attempt_edge_flip(&mut triangulation);
@@ -3612,7 +3613,7 @@ mod tests {
 
     #[test]
     fn test_random_move_selection() {
-        let mut system = ErgodicsSystem::new();
+        let mut system = ErgodicsSystem::with_seed(0);
 
         let mut move_types = HashSet::new();
         for _ in 0..100 {

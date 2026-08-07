@@ -11,6 +11,7 @@ use causal_triangulations::prelude::simulation::{
     UniformCdtMoveFamilyPolicy,
 };
 use serde::Serialize;
+use std::iter::empty;
 
 struct ExactCoordinate;
 struct MinimalVertexHandle;
@@ -53,15 +54,15 @@ impl TriangulationQuery for MinimalBackend {
     }
 
     fn vertices(&self) -> impl Iterator<Item = Self::VertexHandle> + '_ {
-        std::iter::empty()
+        empty()
     }
 
     fn edges(&self) -> impl Iterator<Item = Self::EdgeHandle> + '_ {
-        std::iter::empty()
+        empty()
     }
 
     fn faces(&self) -> impl Iterator<Item = Self::FaceHandle> + '_ {
-        std::iter::empty()
+        empty()
     }
 
     fn vertex_coordinates(
@@ -190,7 +191,9 @@ fn simulation_policy_arguments_accept_trait_objects() -> CdtResult<()> {
         ActionConfig::default(),
     );
 
-    let results = algorithm.run_with_policy(CdtTriangulation::from_cdt_strip(4, 3)?, policy)?;
+    let results = algorithm
+        .with_policy(policy)
+        .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
     assert_eq!(results.steps().len(), 1);
     Ok(())
 }
