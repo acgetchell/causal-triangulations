@@ -5,9 +5,9 @@
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::results::Measurement;
+use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::config::validate_schedule;
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
-use crate::geometry::CdtTriangulation2D;
 use std::num::NonZeroU32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -47,7 +47,8 @@ pub const fn invalid_sim_config(
 /// # Errors
 ///
 /// Returns [`CdtError::InvalidSimulationConfiguration`] when `temperature` is
-/// not finite and positive, when `steps` or `measurement_frequency` is zero,
+/// not finite and positive with a finite reciprocal, when `steps` or
+/// `measurement_frequency` is zero,
 /// when thermalization exceeds the step count, or when the schedule cannot
 /// produce a post-thermalization measurement.
 pub fn validate_metropolis_schedule(
@@ -65,20 +66,23 @@ pub fn validate_metropolis_schedule(
     )
 }
 
-/// Rejects temperatures that would make target log probabilities non-finite.
+/// Rejects temperatures that are non-finite, non-positive, or have a non-finite reciprocal.
+///
+/// [`CdtTarget`](super::CdtTarget) additionally validates the temperature
+/// against the action-coupling magnitude so its target values remain finite.
 ///
 /// # Errors
 ///
 /// Returns [`CdtError::InvalidSimulationConfiguration`] when `temperature` is
-/// non-finite, zero, or negative.
+/// non-finite, non-positive, or too small to have a finite reciprocal.
 pub fn validate_temperature(temperature: f64) -> CdtResult<()> {
-    if temperature.is_finite() && temperature > 0.0 {
+    if temperature.is_finite() && temperature > 0.0 && temperature.recip().is_finite() {
         Ok(())
     } else {
         Err(invalid_sim_config(
             ConfigurationSetting::Temperature,
             temperature.to_string(),
-            "finite and positive".to_string(),
+            "finite and positive with a finite reciprocal".to_string(),
         ))
     }
 }
@@ -116,7 +120,7 @@ pub fn action_for(action_config: &ActionConfig, triangulation: &CdtTriangulation
 /// [`CdtError::MeasurementCountOverflow`] if any live count cannot fit compact
 /// measurement storage, [`CdtError::InvalidMeasurementAction`] if `action` is
 /// not finite, or the validation error reported by
-/// [`CdtTriangulation2D::volume_profile`].
+/// [`CdtTriangulation2D::slab_triangle_profile`].
 pub fn measurement_for(
     step: u32,
     action: f64,
@@ -124,7 +128,7 @@ pub fn measurement_for(
 ) -> CdtResult<Measurement> {
     let counts = triangulation.simplex_counts()?;
     Measurement::try_from_simplex_counts(step, action, counts)?
-        .try_with_volume_profile(triangulation.volume_profile()?)
+        .try_with_slab_triangle_profile(triangulation.slab_triangle_profile()?)
 }
 
 /// Returns true when a completed step is on the post-thermalization measurement cadence.
@@ -201,24 +205,26 @@ pub fn proposed_delta_action(
     before: SimplexCounts,
     move_type: MoveType,
 ) -> Option<f64> {
-    let after = match move_type {
-        MoveType::Move22 | MoveType::EdgeFlip => before,
-        MoveType::Move13Add => SimplexCounts {
-            vertices: before.vertices.checked_add(1)?,
-            edges: before.edges.checked_add(3)?,
-            triangles: before.triangles.checked_add(2)?,
-        },
-        MoveType::Move31Remove => SimplexCounts {
-            vertices: before.vertices.checked_sub(1)?,
-            edges: before.edges.checked_sub(3)?,
-            triangles: before.triangles.checked_sub(2)?,
-        },
+    let insertion_delta = action_config.cosmological_constant().mul_add(
+        3.0,
+        (-action_config.coupling_0()).mul_add(1.0, -(action_config.coupling_2() * 2.0)),
+    );
+    let delta = match move_type {
+        MoveType::Move22 | MoveType::EdgeFlip => 0.0,
+        MoveType::Move13Add => {
+            before.vertices.checked_add(1)?;
+            before.edges.checked_add(3)?;
+            before.triangles.checked_add(2)?;
+            insertion_delta
+        }
+        MoveType::Move31Remove => {
+            before.vertices.checked_sub(1)?;
+            before.edges.checked_sub(3)?;
+            before.triangles.checked_sub(2)?;
+            -insertion_delta
+        }
     };
-
-    let action_before =
-        action_config.calculate_action(before.vertices, before.edges, before.triangles);
-    let action_after = action_config.calculate_action(after.vertices, after.edges, after.triangles);
-    Some(action_after - action_before)
+    delta.is_finite().then_some(delta)
 }
 
 /// Compares action values with a scale-aware tolerance for checkpoint validation.
@@ -230,12 +236,35 @@ pub fn actions_match(left: f64, right: f64) -> bool {
     (left - right).abs() <= f64::EPSILON * scale * 8.0
 }
 
+/// Checks an action delta without subtracting two extensive action values.
+pub fn action_delta_matches(action_before: f64, delta_action: f64, action_after: f64) -> bool {
+    action_before.is_finite()
+        && delta_action.is_finite()
+        && action_after.is_finite()
+        && actions_match(action_after, action_before + delta_action)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn frequency(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).expect("test measurement frequency should be nonzero")
+    }
+
+    #[test]
+    fn action_delta_comparison_avoids_extensive_action_cancellation() {
+        let cosmological_constant = 0.462_098_120_373_296_84;
+        let action_before = cosmological_constant * 46.0;
+        let action_after = cosmological_constant * 43.0;
+        let delta_action = -3.0 * cosmological_constant;
+
+        assert!(!actions_match(delta_action, action_after - action_before));
+        assert!(action_delta_matches(
+            action_before,
+            delta_action,
+            action_after
+        ));
     }
 
     #[test]

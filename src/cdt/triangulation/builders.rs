@@ -7,7 +7,8 @@ use crate::cdt::foliation::{Foliation, FoliationError};
 use crate::config::CdtTopology;
 use crate::errors::{
     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
-    DelaunayValidationLevel, GenerationParameterIssue,
+    DelaunayGenerationFailure, DelaunayGenerationQuantity, DelaunayValidationLevel,
+    GenerationParameterIssue,
 };
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::DelaunayVertexHandle;
@@ -34,13 +35,13 @@ pub(super) fn remap_toroidal_generation_error(
     match error {
         CdtError::DelaunayGenerationFailed {
             coordinate_range,
-            underlying_error,
+            failure,
             ..
         } => CdtError::DelaunayGenerationFailed {
             vertex_count: total_vertices,
             coordinate_range,
             attempt,
-            underlying_error,
+            failure,
         },
         other => other,
     }
@@ -61,13 +62,11 @@ fn remap_strip_generation_error(
     coordinate_max: f64,
 ) -> CdtError {
     match error {
-        CdtError::DelaunayGenerationFailed {
-            underlying_error, ..
-        } => CdtError::DelaunayGenerationFailed {
+        CdtError::DelaunayGenerationFailed { failure, .. } => CdtError::DelaunayGenerationFailed {
             vertex_count: total_vertices,
             coordinate_range: (0.0, coordinate_max),
             attempt: 1,
-            underlying_error,
+            failure,
         },
         other => other,
     }
@@ -77,55 +76,34 @@ fn remap_strip_generation_error(
 const fn strip_generation_error(
     total_vertices: u32,
     coordinate_max: f64,
-    underlying_error: String,
+    failure: DelaunayGenerationFailure,
 ) -> CdtError {
     CdtError::DelaunayGenerationFailed {
         vertex_count: total_vertices,
         coordinate_range: (0.0, coordinate_max),
         attempt: 1,
-        underlying_error,
+        failure,
     }
 }
 
 /// Verifies that the Delaunay strip builder returned the requested mesh size.
-#[expect(
-    clippy::too_many_arguments,
-    reason = "count mismatch diagnostics preserve both requested CDT parameters and expected builder counts"
-)]
 pub(super) fn validate_strip_counts(
     backend: &DelaunayBackend2D,
     total_vertices: u32,
-    total_simplices: u32,
     expected_vertices: usize,
     expected_faces: usize,
-    vertices_per_slice: u32,
-    num_slices: u32,
     coordinate_max: f64,
 ) -> CdtResult<()> {
-    if backend.vertex_count() != expected_vertices {
+    if backend.vertex_count() != expected_vertices || backend.face_count() != expected_faces {
         return Err(strip_generation_error(
             total_vertices,
             coordinate_max,
-            format!(
-                "build_delaunay2_with_data()/from_cdt_strip() produced {} vertices, expected {} for vertices_per_slice={} and num_slices={}",
-                backend.vertex_count(),
-                total_vertices,
-                vertices_per_slice,
-                num_slices,
-            ),
-        ));
-    }
-    if backend.face_count() != expected_faces {
-        return Err(strip_generation_error(
-            total_vertices,
-            coordinate_max,
-            format!(
-                "build_delaunay2_with_data()/from_cdt_strip() produced {} faces, expected {} for vertices_per_slice={} and num_slices={}",
-                backend.face_count(),
-                total_simplices,
-                vertices_per_slice,
-                num_slices,
-            ),
+            DelaunayGenerationFailure::MeshSizeMismatch {
+                actual_vertices: backend.vertex_count(),
+                expected_vertices,
+                actual_faces: backend.face_count(),
+                expected_faces,
+            },
         ));
     }
 
@@ -141,7 +119,7 @@ fn open_profile_face_count(profile: &[u32]) -> CdtResult<u32> {
         profile
             .split_first()
             .ok_or_else(|| CdtError::InvalidGenerationParameters {
-                issue: GenerationParameterIssue::EmptyVolumeProfile,
+                issue: GenerationParameterIssue::EmptySpatialVertexProfile,
                 provided_value: "[]".to_string(),
                 expected_range: "at least one time slice".to_string(),
             })?;
@@ -157,7 +135,7 @@ fn open_profile_face_count(profile: &[u32]) -> CdtResult<u32> {
     })?;
     let slice_count =
         u32::try_from(profile.len()).map_err(|err| CdtError::InvalidGenerationParameters {
-            issue: GenerationParameterIssue::VolumeProfileLengthOverflow,
+            issue: GenerationParameterIssue::SpatialVertexProfileLengthOverflow,
             provided_value: profile.len().to_string(),
             expected_range: format!("length must fit in u32: {err}"),
         })?;
@@ -177,9 +155,9 @@ fn open_profile_face_count(profile: &[u32]) -> CdtResult<u32> {
 
 /// Verifies that a profiled open-boundary builder returned the requested mesh size.
 ///
-/// This protects [`CdtTriangulation::from_cdt_strip_profile`] from constructing
+/// This protects [`CdtTriangulation::from_cdt_strip_spatial_vertex_profile`] from constructing
 /// foliation metadata for a backend whose vertex or face topology does not
-/// match the requested spatial volume profile.
+/// match the requested spatial-vertex profile.
 fn validate_profile_strip_counts(
     backend: &DelaunayBackend2D,
     total_vertices: u32,
@@ -191,13 +169,12 @@ fn validate_profile_strip_counts(
         return Err(strip_generation_error(
             total_vertices,
             coordinate_max,
-            format!(
-                "build_delaunay2_with_data()/from_cdt_strip_profile() produced {} vertices and {} faces, expected {} vertices and {} faces",
-                backend.vertex_count(),
-                backend.face_count(),
+            DelaunayGenerationFailure::MeshSizeMismatch {
+                actual_vertices: backend.vertex_count(),
                 expected_vertices,
+                actual_faces: backend.face_count(),
                 expected_faces,
-            ),
+            },
         ));
     }
 
@@ -209,13 +186,13 @@ const fn toroidal_generation_error(
     total_vertices: u32,
     coordinate_range: (f64, f64),
     attempt: u32,
-    underlying_error: String,
+    failure: DelaunayGenerationFailure,
 ) -> CdtError {
     CdtError::DelaunayGenerationFailed {
         vertex_count: total_vertices,
         coordinate_range,
         attempt,
-        underlying_error,
+        failure,
     }
 }
 
@@ -233,13 +210,12 @@ pub(super) fn validate_toroidal_counts(
             total_vertices,
             coordinate_range,
             attempt,
-            format!(
-                "periodic toroidal builder produced {} vertices and {} faces, expected {} vertices and {} faces",
-                backend.vertex_count(),
-                backend.face_count(),
-                total_vertices,
+            DelaunayGenerationFailure::MeshSizeMismatch {
+                actual_vertices: backend.vertex_count(),
+                expected_vertices,
+                actual_faces: backend.face_count(),
                 expected_faces,
-            ),
+            },
         ));
     }
 
@@ -270,7 +246,7 @@ fn build_validated_toroidal_backend(
     Ok(backend)
 }
 
-/// Validates an explicit per-slice spatial volume profile.
+/// Validates an explicit per-slice spatial-vertex profile.
 fn validate_spatial_profile(
     profile: &[u32],
     minimum_slices: u32,
@@ -279,7 +255,7 @@ fn validate_spatial_profile(
 ) -> CdtResult<(u32, u32)> {
     if profile.is_empty() {
         return Err(CdtError::InvalidGenerationParameters {
-            issue: GenerationParameterIssue::EmptyVolumeProfile,
+            issue: GenerationParameterIssue::EmptySpatialVertexProfile,
             provided_value: "[]".to_string(),
             expected_range: "at least one time slice".to_string(),
         });
@@ -287,7 +263,7 @@ fn validate_spatial_profile(
 
     let num_slices =
         u32::try_from(profile.len()).map_err(|err| CdtError::InvalidGenerationParameters {
-            issue: GenerationParameterIssue::VolumeProfileLengthOverflow,
+            issue: GenerationParameterIssue::SpatialVertexProfileLengthOverflow,
             provided_value: profile.len().to_string(),
             expected_range: format!("length must fit in u32: {err}"),
         })?;
@@ -303,7 +279,7 @@ fn validate_spatial_profile(
     for (slice, &vertices) in profile.iter().enumerate() {
         if vertices < minimum_vertices_per_slice {
             return Err(CdtError::InvalidGenerationParameters {
-                issue: GenerationParameterIssue::InsufficientVerticesInVolumeProfileSlice,
+                issue: GenerationParameterIssue::InsufficientVerticesInSpatialVertexProfileSlice,
                 provided_value: format!("slice {slice} has {vertices}"),
                 expected_range: format!(
                     "each slice ≥ {minimum_vertices_per_slice} for {topology_label}"
@@ -322,15 +298,29 @@ fn validate_spatial_profile(
     Ok((total_vertices, num_slices))
 }
 
-/// Converts a spatial volume profile to `usize` slice sizes.
+/// Converts a spatial-vertex profile to `usize` slice sizes.
 fn profile_slice_sizes(
     profile: &[u32],
-    mut generation_failed: impl FnMut(String) -> CdtError,
+    mut generation_failed: impl FnMut(DelaunayGenerationFailure) -> CdtError,
 ) -> CdtResult<Vec<usize>> {
     profile
         .iter()
-        .map(|&volume| usize::try_from(volume).map_err(|err| generation_failed(err.to_string())))
+        .map(|&vertices| {
+            generation_count_to_usize(vertices, DelaunayGenerationQuantity::SliceVertexCount)
+                .map_err(&mut generation_failed)
+        })
         .collect()
+}
+
+/// Converts one validated generation count to the platform index type.
+fn generation_count_to_usize(
+    value: u32,
+    quantity: DelaunayGenerationQuantity,
+) -> Result<usize, DelaunayGenerationFailure> {
+    usize::try_from(value).map_err(|err| DelaunayGenerationFailure::NumericConversion {
+        quantity,
+        detail: err.to_string(),
+    })
 }
 
 /// Carries constructor-validated slice counts into foliation construction.
@@ -413,25 +403,44 @@ fn toroidal_profile_vertices(
     attempt: u32,
 ) -> CdtResult<Vec<([f64; 2], u32)>> {
     let expected_vertices = usize::try_from(total_vertices).map_err(|err| {
-        toroidal_generation_error(total_vertices, (0.0, 0.0), attempt, err.to_string())
+        toroidal_generation_error(
+            total_vertices,
+            (0.0, 0.0),
+            attempt,
+            DelaunayGenerationFailure::NumericConversion {
+                quantity: DelaunayGenerationQuantity::TotalVertices,
+                detail: err.to_string(),
+            },
+        )
     })?;
     let max_slice_volume = profile.iter().copied().max().unwrap_or(1);
     let domain_x = f64::from(max_slice_volume);
     let mut vertex_specs = Vec::new();
-    vertex_specs.try_reserve_exact(expected_vertices).map_err(|err| {
-        toroidal_generation_error(
-            total_vertices,
-            (0.0, domain_x),
-            attempt,
-            format!(
-                "from_toroidal_cdt_profile() failed to reserve {expected_vertices} vertex specs: {err}"
-            ),
-        )
-    })?;
+    vertex_specs
+        .try_reserve_exact(expected_vertices)
+        .map_err(|err| {
+            toroidal_generation_error(
+                total_vertices,
+                (0.0, domain_x),
+                attempt,
+                DelaunayGenerationFailure::StorageReservation {
+                    requested_capacity: expected_vertices,
+                    detail: err.to_string(),
+                },
+            )
+        })?;
 
     for (slice, &vertices) in profile.iter().enumerate() {
         let label = u32::try_from(slice).map_err(|err| {
-            toroidal_generation_error(total_vertices, (0.0, domain_x), attempt, err.to_string())
+            toroidal_generation_error(
+                total_vertices,
+                (0.0, domain_x),
+                attempt,
+                DelaunayGenerationFailure::NumericConversion {
+                    quantity: DelaunayGenerationQuantity::SliceIndex,
+                    detail: err.to_string(),
+                },
+            )
         })?;
         let spacing = domain_x / f64::from(vertices);
         for index in 0..vertices {
@@ -508,10 +517,24 @@ fn open_strip_vertex_spec(
 /// Builds labeled open-boundary coordinates for a CDT strip profile.
 fn open_profile_vertices(profile: &[u32], total_vertices: u32) -> CdtResult<Vec<([f64; 2], u32)>> {
     let expected_vertices = usize::try_from(total_vertices).map_err(|err| {
-        strip_generation_error(total_vertices, f64::from(total_vertices), err.to_string())
+        strip_generation_error(
+            total_vertices,
+            f64::from(total_vertices),
+            DelaunayGenerationFailure::NumericConversion {
+                quantity: DelaunayGenerationQuantity::TotalVertices,
+                detail: err.to_string(),
+            },
+        )
     })?;
     let profile_len = u32::try_from(profile.len()).map_err(|err| {
-        strip_generation_error(total_vertices, f64::from(total_vertices), err.to_string())
+        strip_generation_error(
+            total_vertices,
+            f64::from(total_vertices),
+            DelaunayGenerationFailure::NumericConversion {
+                quantity: DelaunayGenerationQuantity::TimeSlices,
+                detail: err.to_string(),
+            },
+        )
     })?;
     let max_slice_volume = profile.iter().copied().max().unwrap_or(2);
     let min_spacing = 1.0_f64 / f64::from(max_slice_volume - 1);
@@ -521,19 +544,29 @@ fn open_profile_vertices(profile: &[u32], total_vertices: u32) -> CdtResult<Vec<
     let vertical_jitter = 1.0e-9;
     let coordinate_max = f64::from(profile_len).max(2.0);
     let mut vertex_specs = Vec::new();
-    vertex_specs.try_reserve_exact(expected_vertices).map_err(|err| {
-        strip_generation_error(
-            total_vertices,
-            coordinate_max,
-            format!(
-                "from_cdt_strip_profile() failed to reserve {expected_vertices} vertex specs: {err}"
-            ),
-        )
-    })?;
+    vertex_specs
+        .try_reserve_exact(expected_vertices)
+        .map_err(|err| {
+            strip_generation_error(
+                total_vertices,
+                coordinate_max,
+                DelaunayGenerationFailure::StorageReservation {
+                    requested_capacity: expected_vertices,
+                    detail: err.to_string(),
+                },
+            )
+        })?;
 
     for (slice, &vertices) in profile.iter().enumerate() {
         let label = u32::try_from(slice).map_err(|err| {
-            strip_generation_error(total_vertices, coordinate_max, err.to_string())
+            strip_generation_error(
+                total_vertices,
+                coordinate_max,
+                DelaunayGenerationFailure::NumericConversion {
+                    quantity: DelaunayGenerationQuantity::SliceIndex,
+                    detail: err.to_string(),
+                },
+            )
         })?;
         for index in 0..vertices {
             vertex_specs.push(open_strip_vertex_spec(
@@ -623,8 +656,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Returns [`CdtError::UnsupportedDimension`] if `dimension != 2`.
     /// Returns [`CdtError::InvalidGenerationParameters`] if `vertices < 3`.
     /// Returns [`CdtError::DelaunayGenerationFailed`] if random point generation
-    /// or Delaunay construction fails. Propagates metadata validation errors
-    /// from [`CdtTriangulation::try_new`], including `time_slices == 0`.
+    /// or Delaunay construction fails, [`CdtError::VertexBuildFailed`] if an
+    /// upstream vertex cannot be built, or [`CdtError::DelaunayValidationFailed`]
+    /// if the generated backend fails Level 1-5 validation. Propagates metadata
+    /// validation errors from [`CdtTriangulation::try_new`], including
+    /// `time_slices == 0`.
     ///
     /// # Examples
     ///
@@ -670,9 +706,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Returns [`CdtError::UnsupportedDimension`] if `dimension != 2`.
     /// Returns [`CdtError::InvalidGenerationParameters`] if `vertices < 3`.
     /// Returns [`CdtError::DelaunayGenerationFailed`] if seeded point
-    /// generation or Delaunay construction fails. Propagates metadata
-    /// validation errors from [`CdtTriangulation::try_new`], including
-    /// `time_slices == 0`.
+    /// generation or Delaunay construction fails, [`CdtError::VertexBuildFailed`]
+    /// if an upstream vertex cannot be built, or
+    /// [`CdtError::DelaunayValidationFailed`] if the generated backend fails
+    /// Level 1-5 validation. Propagates metadata validation errors from
+    /// [`CdtTriangulation::try_new`], including `time_slices == 0`.
     ///
     /// # Examples
     ///
@@ -798,7 +836,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let slice_sizes = self.slice_sizes();
 
         for face in self.geometry.faces() {
-            if self.simplex_type(&face).is_some() {
+            if self.simplex_type(&face)?.is_some() {
                 continue;
             }
 
@@ -861,10 +899,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 vertex_count: total_vertices,
                 coordinate_range: (0.0, coordinate_max),
                 attempt: 1,
-                underlying_error: format!(
-                    "filtered Delaunay construction found non-strict face {:?}, but every offending slice is already at the minimum size {minimum_slice_size}",
-                    face.simplex_key(),
-                ),
+                failure: DelaunayGenerationFailure::MinimumSliceSizeReached {
+                    face: format!("{:?}", face.simplex_key()),
+                    minimum_slice_size,
+                },
             });
         }
 
@@ -903,9 +941,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     vertex_count: total_vertices,
                     coordinate_range: (0.0, coordinate_max),
                     attempt: pass + 1,
-                    underlying_error: format!(
-                        "filtered Delaunay construction exhausted {max_passes} causal-filtering passes with {violations} non-strict simplices remaining"
-                    ),
+                    failure: DelaunayGenerationFailure::FilterPassBudgetExhausted {
+                        max_passes,
+                        remaining_violations: violations,
+                    },
                 });
             }
 
@@ -919,9 +958,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     vertex_count: total_vertices,
                     coordinate_range: (0.0, coordinate_max),
                     attempt: pass + 1,
-                    underlying_error: format!(
-                        "filtered Delaunay construction found {violations} non-strict simplices but no removable offending vertex"
-                    ),
+                    failure: DelaunayGenerationFailure::NoRemovableFilterVertex {
+                        remaining_violations: violations,
+                    },
                 });
             };
 
@@ -957,6 +996,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// [`CdtError::DelaunayGenerationFailed`] if the overcomplete Delaunay
     /// construction fails, filtering cannot make progress without violating the
     /// requested per-slice minimum, or the 50-pass filtering budget is exhausted.
+    /// Returns [`CdtError::VertexBuildFailed`] if an upstream vertex cannot be
+    /// built, or [`CdtError::DelaunayValidationFailed`] if the constructed
+    /// backend fails Level 1-5 validation.
     /// Returns [`CdtError::BackendMutationFailed`] if backend vertex removal
     /// fails. Returns validation errors if the filtered triangulation does not
     /// satisfy CDT topology, foliation, causality, and simplex-classification
@@ -1011,19 +1053,34 @@ impl CdtTriangulation<DelaunayBackend2D> {
         })?;
 
         let coordinate_max = f64::from(num_slices).max(2.0);
-        let mut vertex_specs = open_profile_vertices(
-            &vec![vertices_per_slice; num_slices as usize],
-            core_vertices,
-        )?;
-        vertex_specs.try_reserve_exact(surplus_vertices as usize).map_err(|err| {
-            strip_generation_error(
-                total_vertices,
-                coordinate_max,
-                format!(
-                    "from_filtered_delaunay_strip() failed to reserve {surplus_vertices} surplus vertex specs: {err}"
-                ),
-            )
-        })?;
+        let profile_len = num_slices as usize;
+        let mut spatial_vertex_profile = Vec::new();
+        spatial_vertex_profile
+            .try_reserve_exact(profile_len)
+            .map_err(|err| {
+                strip_generation_error(
+                    total_vertices,
+                    coordinate_max,
+                    DelaunayGenerationFailure::StorageReservation {
+                        requested_capacity: profile_len,
+                        detail: err.to_string(),
+                    },
+                )
+            })?;
+        spatial_vertex_profile.resize(profile_len, vertices_per_slice);
+        let mut vertex_specs = open_profile_vertices(&spatial_vertex_profile, core_vertices)?;
+        vertex_specs
+            .try_reserve_exact(surplus_vertices as usize)
+            .map_err(|err| {
+                strip_generation_error(
+                    total_vertices,
+                    coordinate_max,
+                    DelaunayGenerationFailure::StorageReservation {
+                        requested_capacity: surplus_vertices as usize,
+                        detail: err.to_string(),
+                    },
+                )
+            })?;
 
         if num_slices > 2 {
             let midpoint = 0.5;
@@ -1036,7 +1093,14 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let backend = validated_backend(dt)?;
         let mut tri = Self::try_new(backend, num_slices, 2)?;
         let minimum_vertices_per_slice = usize::try_from(vertices_per_slice).map_err(|err| {
-            strip_generation_error(total_vertices, coordinate_max, err.to_string())
+            strip_generation_error(
+                total_vertices,
+                coordinate_max,
+                DelaunayGenerationFailure::NumericConversion {
+                    quantity: DelaunayGenerationQuantity::VerticesPerSlice,
+                    detail: err.to_string(),
+                },
+            )
         })?;
         tri.filter_invalid_open_delaunay_simplices(
             minimum_vertices_per_slice,
@@ -1062,8 +1126,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// `num_slices < 2`, or the derived vertex or simplex count overflows `u32`.
     /// Returns [`CdtError::DelaunayGenerationFailed`] if constructor storage cannot
     /// be reserved, if the underlying Delaunay builder rejects the points, if
-    /// `build_delaunay2_with_data()` returns a vertex or face count that does not
-    /// match the requested strip. Returns [`CdtError::DelaunayValidationFailed`]
+    /// [`build_delaunay2_with_data`] returns a vertex or face count that does not
+    /// match the requested strip. Returns [`CdtError::VertexBuildFailed`] if an
+    /// upstream vertex cannot be built, or [`CdtError::DelaunayValidationFailed`]
     /// if the constructed backend does not satisfy the Level 1-5 Delaunay
     /// validator. Returns [`CdtError::Foliation`],
     /// [`CdtError::CausalityViolation`], or [`CdtError::ValidationFailed`] if the
@@ -1125,19 +1190,23 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 })?;
 
         let coordinate_max = f64::from(num_slices).max(2.0);
-        let generation_failed = |underlying_error: String| {
-            strip_generation_error(total_vertices, coordinate_max, underlying_error)
+        let generation_failed = |failure: DelaunayGenerationFailure| {
+            strip_generation_error(total_vertices, coordinate_max, failure)
         };
 
         let expected_vertices =
-            usize::try_from(total_vertices).map_err(|err| generation_failed(err.to_string()))?;
+            generation_count_to_usize(total_vertices, DelaunayGenerationQuantity::TotalVertices)
+                .map_err(generation_failed)?;
         let expected_faces =
-            usize::try_from(total_simplices).map_err(|err| generation_failed(err.to_string()))?;
-
-        let n = usize::try_from(vertices_per_slice)
-            .map_err(|err| generation_failed(err.to_string()))?;
-        let t_count =
-            usize::try_from(num_slices).map_err(|err| generation_failed(err.to_string()))?;
+            generation_count_to_usize(total_simplices, DelaunayGenerationQuantity::TotalFaces)
+                .map_err(generation_failed)?;
+        let n = generation_count_to_usize(
+            vertices_per_slice,
+            DelaunayGenerationQuantity::VerticesPerSlice,
+        )
+        .map_err(generation_failed)?;
+        let t_count = generation_count_to_usize(num_slices, DelaunayGenerationQuantity::TimeSlices)
+            .map_err(generation_failed)?;
 
         let min_spacing = 1.0_f64 / f64::from(vertices_per_slice - 1);
         let side_jitter = min_spacing / 4.0;
@@ -1148,9 +1217,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
         vertex_specs
             .try_reserve_exact(expected_vertices)
             .map_err(|err| {
-                generation_failed(format!(
-                    "from_cdt_strip() failed to reserve {expected_vertices} vertex specs for vertices_per_slice={vertices_per_slice}, num_slices={num_slices}: {err}"
-                ))
+                generation_failed(DelaunayGenerationFailure::StorageReservation {
+                    requested_capacity: expected_vertices,
+                    detail: err.to_string(),
+                })
             })?;
         for t in 0..num_slices {
             for i in 0..vertices_per_slice {
@@ -1173,11 +1243,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         validate_strip_counts(
             &backend,
             total_vertices,
-            total_simplices,
             expected_vertices,
             expected_faces,
-            vertices_per_slice,
-            num_slices,
             coordinate_max,
         )?;
         let slice_sizes = vec![n; t_count];
@@ -1193,11 +1260,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(tri)
     }
 
-    /// Construct a Delaunay-backed open-boundary 1+1 CDT strip from a spatial volume profile.
+    /// Construct a Delaunay-backed open-boundary 1+1 CDT strip from a spatial-vertex profile.
     ///
-    /// Each entry in `volume_profile` is the number of vertices on that time
+    /// Each entry in `spatial_vertex_profile` is the number of vertices on that time
     /// slice. Unlike [`Self::from_cdt_strip`], adjacent slices may have different
-    /// spatial volumes; this represents a general nonuniform CDT initial
+    /// spatial vertex counts; this represents a general nonuniform CDT initial
     /// geometry rather than a regular fixture.
     /// The triangulation itself is delegated to
     /// [`crate::geometry::generators::build_delaunay2_with_data`].
@@ -1210,7 +1277,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Returns [`CdtError::DelaunayGenerationFailed`] if coordinate storage cannot
     /// be reserved, if the Delaunay constructor rejects the profiled point data,
     /// or if the generated backend vertex or face count does not match the
-    /// requested profile.
+    /// requested profile. Returns [`CdtError::VertexBuildFailed`] if an upstream
+    /// vertex cannot be built.
     /// Returns [`CdtError::DelaunayValidationFailed`] if the constructed backend
     /// fails the Level 1-5 Delaunay validator. Returns [`CdtError::TopologyMismatch`],
     /// [`CdtError::Foliation`], [`CdtError::CausalityViolation`], or
@@ -1223,24 +1291,40 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::from_cdt_strip_profile(&[4, 6, 5])?;
+    ///     let tri = CdtTriangulation::from_cdt_strip_spatial_vertex_profile(&[4, 6, 5])?;
     ///     assert_eq!(tri.slice_sizes(), &[4, 6, 5]);
     ///     assert!(tri.validate_simplex_classification().is_ok());
     ///     Ok(())
     /// }
     /// ```
-    pub fn from_cdt_strip_profile(volume_profile: &[u32]) -> CdtResult<Self> {
+    pub fn from_cdt_strip_spatial_vertex_profile(
+        spatial_vertex_profile: &[u32],
+    ) -> CdtResult<Self> {
         let (total_vertices, num_slices) =
-            validate_spatial_profile(volume_profile, 2, 4, "open-boundary topology")?;
+            validate_spatial_profile(spatial_vertex_profile, 2, 4, "open-boundary topology")?;
         let coordinate_max = f64::from(num_slices);
         let expected_vertices = usize::try_from(total_vertices).map_err(|err| {
-            strip_generation_error(total_vertices, coordinate_max, err.to_string())
+            strip_generation_error(
+                total_vertices,
+                coordinate_max,
+                DelaunayGenerationFailure::NumericConversion {
+                    quantity: DelaunayGenerationQuantity::TotalVertices,
+                    detail: err.to_string(),
+                },
+            )
         })?;
-        let expected_faces =
-            usize::try_from(open_profile_face_count(volume_profile)?).map_err(|err| {
-                strip_generation_error(total_vertices, coordinate_max, err.to_string())
+        let expected_faces = usize::try_from(open_profile_face_count(spatial_vertex_profile)?)
+            .map_err(|err| {
+                strip_generation_error(
+                    total_vertices,
+                    coordinate_max,
+                    DelaunayGenerationFailure::NumericConversion {
+                        quantity: DelaunayGenerationQuantity::TotalFaces,
+                        detail: err.to_string(),
+                    },
+                )
             })?;
-        let vertex_specs = open_profile_vertices(volume_profile, total_vertices)?;
+        let vertex_specs = open_profile_vertices(spatial_vertex_profile, total_vertices)?;
         let dt = build_delaunay2_with_data(&vertex_specs)
             .map_err(|error| remap_strip_generation_error(error, total_vertices, coordinate_max))?;
         let backend = validated_backend(dt)?;
@@ -1251,7 +1335,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             expected_faces,
             coordinate_max,
         )?;
-        let slice_sizes = profile_slice_sizes(volume_profile, |err| {
+        let slice_sizes = profile_slice_sizes(spatial_vertex_profile, |err| {
             strip_generation_error(total_vertices, coordinate_max, err)
         })?;
 
@@ -1301,7 +1385,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Returns [`CdtError::DelaunayGenerationFailed`] if upstream periodic
     /// Delaunay construction rejects the mesh, if constructor storage cannot be
     /// reserved, or if the builder returns a vertex or face count that does not
-    /// match the requested toroidal CDT. Returns
+    /// match the requested toroidal CDT. Returns [`CdtError::VertexBuildFailed`]
+    /// if an upstream vertex cannot be built. Returns
     /// [`CdtError::DelaunayValidationFailed`] if full Delaunay validation fails.
     /// Returns [`CdtError::Foliation`],
     /// [`CdtError::CausalityViolation`], or [`CdtError::ValidationFailed`] if the
@@ -1355,25 +1440,24 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     expected_range: "product ≤ u32::MAX".to_string(),
                 })?;
 
-        let generation_failed = |attempt: u32, underlying_error: String| {
+        let generation_failed = |attempt: u32, failure: DelaunayGenerationFailure| {
             let coordinate_max = f64::from(vertices_per_slice.max(num_slices) - 1);
-            toroidal_generation_error(
-                total_vertices,
-                (0.0, coordinate_max),
-                attempt,
-                underlying_error,
-            )
+            toroidal_generation_error(total_vertices, (0.0, coordinate_max), attempt, failure)
         };
 
         let expected_vertices =
-            usize::try_from(total_vertices).map_err(|err| generation_failed(1, err.to_string()))?;
-        let expected_faces = usize::try_from(total_simplices)
-            .map_err(|err| generation_failed(1, err.to_string()))?;
-
-        let n = usize::try_from(vertices_per_slice)
-            .map_err(|err| generation_failed(1, err.to_string()))?;
-        let t_count =
-            usize::try_from(num_slices).map_err(|err| generation_failed(1, err.to_string()))?;
+            generation_count_to_usize(total_vertices, DelaunayGenerationQuantity::TotalVertices)
+                .map_err(|failure| generation_failed(1, failure))?;
+        let expected_faces =
+            generation_count_to_usize(total_simplices, DelaunayGenerationQuantity::TotalFaces)
+                .map_err(|failure| generation_failed(1, failure))?;
+        let n = generation_count_to_usize(
+            vertices_per_slice,
+            DelaunayGenerationQuantity::VerticesPerSlice,
+        )
+        .map_err(|failure| generation_failed(1, failure))?;
+        let t_count = generation_count_to_usize(num_slices, DelaunayGenerationQuantity::TimeSlices)
+            .map_err(|failure| generation_failed(1, failure))?;
 
         // --- Vertex coordinates (S¹ × S¹) ---
         //
@@ -1389,9 +1473,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
             .map_err(|err| {
                 generation_failed(
                     1,
-                    format!(
-                        "from_toroidal_cdt() failed to reserve {expected_vertices} vertex specs for vertices_per_slice={vertices_per_slice}, num_slices={num_slices}: {err}"
-                    ),
+                    DelaunayGenerationFailure::StorageReservation {
+                        requested_capacity: expected_vertices,
+                        detail: err.to_string(),
+                    },
                 )
             })?;
         let domain = [n_f, t_f];
@@ -1420,12 +1505,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     attempt,
                 )
             },
-            || {
-                generation_failed(
-                    0,
-                    "no deterministic toroidal embedding candidates were attempted".to_string(),
-                )
-            },
+            || generation_failed(0, DelaunayGenerationFailure::NoEmbeddingCandidates),
         )?;
 
         let slice_sizes = vec![n; t_count];
@@ -1441,12 +1521,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(tri)
     }
 
-    /// Construct a periodic 1+1 CDT torus from a spatial volume profile.
+    /// Construct a periodic 1+1 CDT torus from a spatial-vertex profile.
     ///
     /// Each profile entry gives the number of vertices on one closed S¹ spatial
     /// slice. Time wraps periodically, so the final slice is adjacent to slice
     /// zero. Unlike [`Self::from_toroidal_cdt`], adjacent slices may have
-    /// different spatial volumes.
+    /// different spatial vertex counts.
     /// The triangulation itself is delegated to
     /// [`crate::geometry::generators::build_periodic_toroidal_delaunay2`].
     ///
@@ -1458,8 +1538,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Returns [`CdtError::DelaunayGenerationFailed`] if coordinate storage cannot
     /// be reserved, if the periodic Delaunay constructor rejects the profiled point
     /// data, or if the resulting vertex or face counts do not match the requested
-    /// profile. Returns [`CdtError::DelaunayValidationFailed`] if the constructed
-    /// backend fails the Level 1-5 Delaunay validator. Returns
+    /// profile. Returns [`CdtError::VertexBuildFailed`] if an upstream vertex
+    /// cannot be built. Returns [`CdtError::DelaunayValidationFailed`] if the
+    /// constructed backend fails the Level 1-5 Delaunay validator. Returns
     /// [`CdtError::TopologyMismatch`], [`CdtError::Foliation`],
     /// [`CdtError::CausalityViolation`], or [`CdtError::ValidationFailed`] if the
     /// constructed mesh violates CDT invariants.
@@ -1470,15 +1551,17 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::from_toroidal_cdt_profile(&[3, 4, 5, 4])?;
+    ///     let tri = CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&[3, 4, 5, 4])?;
     ///     assert_eq!(tri.slice_sizes(), &[3, 4, 5, 4]);
     ///     assert_eq!(tri.time_slices().get(), 4);
     ///     Ok(())
     /// }
     /// ```
-    pub fn from_toroidal_cdt_profile(volume_profile: &[u32]) -> CdtResult<Self> {
+    pub fn from_toroidal_cdt_spatial_vertex_profile(
+        spatial_vertex_profile: &[u32],
+    ) -> CdtResult<Self> {
         let (total_vertices, num_slices) =
-            validate_spatial_profile(volume_profile, 3, 3, "toroidal topology")?;
+            validate_spatial_profile(spatial_vertex_profile, 3, 3, "toroidal topology")?;
         let total_simplices =
             total_vertices
                 .checked_mul(2)
@@ -1488,23 +1571,39 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     expected_range: "product ≤ u32::MAX".to_string(),
                 })?;
         let expected_vertices = usize::try_from(total_vertices).map_err(|err| {
-            toroidal_generation_error(total_vertices, (0.0, 0.0), 1, err.to_string())
+            toroidal_generation_error(
+                total_vertices,
+                (0.0, 0.0),
+                1,
+                DelaunayGenerationFailure::NumericConversion {
+                    quantity: DelaunayGenerationQuantity::TotalVertices,
+                    detail: err.to_string(),
+                },
+            )
         })?;
         let expected_faces = usize::try_from(total_simplices).map_err(|err| {
-            toroidal_generation_error(total_vertices, (0.0, 0.0), 1, err.to_string())
+            toroidal_generation_error(
+                total_vertices,
+                (0.0, 0.0),
+                1,
+                DelaunayGenerationFailure::NumericConversion {
+                    quantity: DelaunayGenerationQuantity::TotalFaces,
+                    detail: err.to_string(),
+                },
+            )
         })?;
-        let max_slice_volume = volume_profile.iter().copied().max().unwrap_or(1);
-        let domain = [f64::from(max_slice_volume), f64::from(num_slices)];
+        let max_slice_vertices = spatial_vertex_profile.iter().copied().max().unwrap_or(1);
+        let domain = [f64::from(max_slice_vertices), f64::from(num_slices)];
         let coordinate_range = (0.0, domain[0].max(domain[1]) - 1.0);
-        let generation_failed = |attempt: u32, underlying_error: String| {
-            toroidal_generation_error(total_vertices, coordinate_range, attempt, underlying_error)
+        let generation_failed = |attempt: u32, failure: DelaunayGenerationFailure| {
+            toroidal_generation_error(total_vertices, coordinate_range, attempt, failure)
         };
 
         let backend = first_valid_toroidal_candidate(
             1..TOROIDAL_EMBEDDING_ATTEMPTS,
             |candidate, attempt| {
                 let vertex_specs = toroidal_profile_vertices(
-                    volume_profile,
+                    spatial_vertex_profile,
                     total_vertices,
                     num_slices,
                     candidate,
@@ -1520,15 +1619,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     attempt,
                 )
             },
-            || {
-                generation_failed(
-                    0,
-                    "no deterministic toroidal embedding candidates were attempted".to_string(),
-                )
-            },
+            || generation_failed(0, DelaunayGenerationFailure::NoEmbeddingCandidates),
         )?;
 
-        let slice_sizes = profile_slice_sizes(volume_profile, |error| generation_failed(1, error))?;
+        let slice_sizes =
+            profile_slice_sizes(spatial_vertex_profile, |error| generation_failed(1, error))?;
         let foliation =
             Foliation::from_slice_sizes(slice_sizes, checked_nonzero_slice_count(num_slices))
                 .map_err(CdtError::from)?;
@@ -1545,11 +1640,30 @@ impl CdtTriangulation<DelaunayBackend2D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType};
+    use crate::cdt::foliation::{EdgeType, SimplexType};
     use crate::errors::TriangulationMetadataField;
-    use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
+    use crate::geometry::generators::build_delaunay2_from_simplices;
     use approx::assert_relative_eq;
     use std::assert_matches;
+
+    fn coordinate_signature(triangulation: &CdtTriangulation<DelaunayBackend2D>) -> Vec<Vec<u64>> {
+        let mut coordinates = triangulation
+            .geometry()
+            .vertices()
+            .map(|vertex| {
+                triangulation
+                    .geometry()
+                    .vertex_coordinates(&vertex)
+                    .expect("generated vertex coordinates should be readable")
+                    .iter()
+                    .copied()
+                    .map(f64::to_bits)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        coordinates.sort_unstable();
+        coordinates
+    }
 
     /// Builds a minimal labeled Delaunay backend for constructor tests.
     fn labeled_triangle_backend(labels: [u32; 3]) -> DelaunayBackend2D {
@@ -1604,8 +1718,11 @@ mod tests {
         tri.validate_simplex_classification()
             .expect("all Delaunay strip simplices should classify");
         for face in tri.geometry().faces() {
-            assert!(tri.simplex_type(&face).is_some());
-            assert!(tri.simplex_type_from_data(&face).is_some());
+            assert!(tri.simplex_type(&face).is_ok_and(|kind| kind.is_some()));
+            assert!(
+                tri.simplex_type_from_data(&face)
+                    .is_ok_and(|kind| kind.is_some())
+            );
         }
         tri
     }
@@ -1617,7 +1734,10 @@ mod tests {
                 vertex_count: 3,
                 coordinate_range: (-1.0, 1.0),
                 attempt: 7,
-                underlying_error: "builder failed".to_string(),
+                failure: DelaunayGenerationFailure::Upstream {
+                    stage: crate::errors::DelaunayGenerationStage::TriangulationConstruction,
+                    detail: "builder failed".to_string(),
+                },
             },
             12,
             4,
@@ -1629,8 +1749,8 @@ mod tests {
                 vertex_count: 12,
                 coordinate_range: (-1.0, 1.0),
                 attempt: 4,
-                ref underlying_error,
-            } if underlying_error == "builder failed"
+                failure: DelaunayGenerationFailure::Upstream { ref detail, .. },
+            } if detail == "builder failed"
         );
     }
 
@@ -1659,7 +1779,11 @@ mod tests {
                         12,
                         (0.0, 3.0),
                         attempt,
-                        format!("candidate {candidate} failed"),
+                        DelaunayGenerationFailure::Upstream {
+                            stage:
+                                crate::errors::DelaunayGenerationStage::TriangulationConstruction,
+                            detail: format!("candidate {candidate} failed"),
+                        },
                     ))
                 } else {
                     Ok((candidate, attempt))
@@ -1682,7 +1806,10 @@ mod tests {
                     12,
                     (0.0, 3.0),
                     attempt,
-                    format!("candidate {candidate} failed"),
+                    DelaunayGenerationFailure::Upstream {
+                        stage: crate::errors::DelaunayGenerationStage::TriangulationConstruction,
+                        detail: format!("candidate {candidate} failed"),
+                    },
                 ))
             },
             || unreachable!("nonempty candidate range should be attempted"),
@@ -1693,9 +1820,9 @@ mod tests {
             error,
             CdtError::DelaunayGenerationFailed {
                 attempt: 3,
-                ref underlying_error,
+                failure: DelaunayGenerationFailure::Upstream { ref detail, .. },
                 ..
-            } if underlying_error == "candidate 6 failed"
+            } if detail == "candidate 6 failed"
         );
     }
 
@@ -1706,13 +1833,13 @@ mod tests {
 
         assert_eq!(triangulation.dimension(), 2);
         assert_eq!(triangulation.time_slices().get(), 3);
-        assert!(triangulation.vertex_count() > 0);
+        assert_eq!(triangulation.vertex_count(), 10);
         assert!(triangulation.edge_count() > 0);
         assert!(triangulation.face_count() > 0);
     }
 
     #[test]
-    fn test_from_random_points_various_sizes() {
+    fn test_from_seeded_points_various_sizes() {
         let test_cases = [
             (3, 1, "minimal"),
             (5, 2, "small"),
@@ -1721,8 +1848,11 @@ mod tests {
         ];
 
         for (vertices, time_slices, description) in test_cases {
-            let triangulation = CdtTriangulation::from_random_points(vertices, time_slices, 2)
-                .unwrap_or_else(|e| panic!("Failed to create {description} triangulation: {e}"));
+            let triangulation =
+                CdtTriangulation::from_seeded_points(vertices, time_slices, 2, u64::from(vertices))
+                    .unwrap_or_else(|e| {
+                        panic!("Failed to create {description} triangulation: {e}")
+                    });
 
             assert_eq!(
                 triangulation.dimension(),
@@ -1734,9 +1864,10 @@ mod tests {
                 time_slices,
                 "Time slices should match for {description}"
             );
-            assert!(
-                triangulation.vertex_count() >= 3,
-                "Should have at least 3 vertices for {description}"
+            assert_eq!(
+                triangulation.vertex_count(),
+                usize::try_from(vertices).expect("u32 vertex count should fit usize"),
+                "Vertex count should match for {description}"
             );
             assert!(
                 triangulation.edge_count() > 0,
@@ -1757,7 +1888,7 @@ mod tests {
 
         assert_eq!(triangulation.dimension(), 2);
         assert_eq!(triangulation.time_slices().get(), 2);
-        assert!(triangulation.vertex_count() > 0);
+        assert_eq!(triangulation.vertex_count(), 8);
         assert!(triangulation.edge_count() > 0);
         assert!(triangulation.face_count() > 0);
     }
@@ -1779,6 +1910,11 @@ mod tests {
         assert_eq!(triangulation1.face_count(), triangulation2.face_count());
         assert_eq!(triangulation1.dimension(), triangulation2.dimension());
         assert_eq!(triangulation1.time_slices(), triangulation2.time_slices());
+        assert_eq!(
+            coordinate_signature(&triangulation1),
+            coordinate_signature(&triangulation2),
+            "the same seed should reproduce every generated coordinate"
+        );
     }
 
     #[test]
@@ -1793,6 +1929,11 @@ mod tests {
         assert_eq!(tri1.time_slices(), tri2.time_slices());
         assert_eq!(tri1.vertex_count(), 7);
         assert_eq!(tri2.vertex_count(), 7);
+        assert_ne!(
+            coordinate_signature(&tri1),
+            coordinate_signature(&tri2),
+            "different seeds should change generated coordinates"
+        );
     }
 
     #[test]
@@ -1800,13 +1941,11 @@ mod tests {
         let invalid_dimensions = [0, 1, 3, 4, 5];
         for dim in invalid_dimensions {
             let result = CdtTriangulation::from_random_points(10, 3, dim);
-            assert!(result.is_err(), "Should fail with dimension {dim}");
-
-            if let Err(CdtError::UnsupportedDimension(d)) = result {
-                assert_eq!(d, u32::from(dim), "Error should report correct dimension");
-            } else {
-                panic!("Expected UnsupportedDimension error for dimension {dim}");
-            }
+            assert_matches!(
+                result,
+                Err(CdtError::UnsupportedDimension(d)) if d == u32::from(dim),
+                "error should report unsupported dimension {dim}"
+            );
         }
     }
 
@@ -1837,40 +1976,29 @@ mod tests {
         let invalid_counts = [0, 1, 2];
         for count in invalid_counts {
             let result = CdtTriangulation::from_random_points(count, 2, 2);
-            assert!(result.is_err(), "Should fail with {count} vertices");
-
-            match result {
+            assert_matches!(
+                result,
                 Err(CdtError::InvalidGenerationParameters {
-                    issue,
-                    provided_value,
-                    ..
-                }) => {
-                    assert_eq!(issue, GenerationParameterIssue::InsufficientVertexCount);
-                    assert_eq!(provided_value, count.to_string());
-                }
-                other => panic!(
-                    "Expected InvalidGenerationParameters for {count} vertices, got {other:?}"
-                ),
-            }
+                    issue: GenerationParameterIssue::InsufficientVertexCount,
+                    ref provided_value,
+                    ref expected_range,
+                }) if provided_value == &count.to_string() && expected_range == "≥ 3",
+                "error should report insufficient vertex count {count}"
+            );
         }
     }
 
     #[test]
     fn test_invalid_vertex_count_seeded() {
         let result = CdtTriangulation::from_seeded_points(2, 2, 2, 123);
-        assert!(result.is_err(), "Should fail with 2 vertices");
-
-        match result {
+        assert_matches!(
+            result,
             Err(CdtError::InvalidGenerationParameters {
-                issue,
-                provided_value,
-                ..
-            }) => {
-                assert_eq!(issue, GenerationParameterIssue::InsufficientVertexCount);
-                assert_eq!(provided_value, "2");
-            }
-            other => panic!("Expected InvalidGenerationParameters, got {other:?}"),
-        }
+                issue: GenerationParameterIssue::InsufficientVertexCount,
+                ref provided_value,
+                ref expected_range,
+            }) if provided_value == "2" && expected_range == "≥ 3"
+        );
     }
 
     #[test]
@@ -1886,7 +2014,7 @@ mod tests {
         assert!(tri.validate_simplex_classification().is_ok());
 
         for vh in tri.geometry().vertices() {
-            assert!(tri.time_label(&vh).is_some());
+            assert!(tri.time_label(&vh).is_ok_and(|label| label.is_some()));
         }
     }
 
@@ -2003,7 +2131,7 @@ mod tests {
     fn test_from_cdt_strip_all_vertices_labeled() {
         let tri = strict_strip(5, 3);
         for vertex in tri.geometry().vertices() {
-            assert!(tri.time_label(&vertex).is_some());
+            assert!(tri.time_label(&vertex).is_ok_and(|label| label.is_some()));
         }
     }
 
@@ -2013,7 +2141,7 @@ mod tests {
         for edge in tri.geometry().edges() {
             assert_matches!(
                 tri.edge_type(&edge),
-                Some(EdgeType::Spacelike | EdgeType::Timelike)
+                Ok(Some(EdgeType::Spacelike | EdgeType::Timelike))
             );
         }
     }
@@ -2172,8 +2300,11 @@ mod tests {
                 vertex_count: 3,
                 coordinate_range: (0.0, 2.0),
                 attempt: 1,
-                ref underlying_error,
-            } if underlying_error.contains("minimum size 3")
+                failure: DelaunayGenerationFailure::MinimumSliceSizeReached {
+                    minimum_slice_size: 3,
+                    ..
+                },
+            }
         );
     }
 
@@ -2221,9 +2352,11 @@ mod tests {
                 vertex_count: 3,
                 coordinate_range: (0.0, 2.0),
                 attempt: 1,
-                ref underlying_error,
-            } if underlying_error.contains("exhausted 0 causal-filtering passes")
-                && underlying_error.contains("1 non-strict simplices remaining")
+                failure: DelaunayGenerationFailure::FilterPassBudgetExhausted {
+                    max_passes: 0,
+                    remaining_violations: 1,
+                },
+            }
         );
     }
 
@@ -2270,15 +2403,15 @@ mod tests {
     }
 
     #[test]
-    fn test_from_cdt_strip_profile_builds_nonuniform_valid_mesh() {
-        let tri = CdtTriangulation::from_cdt_strip_profile(&[4, 6, 5])
+    fn test_from_cdt_strip_spatial_vertex_profile_builds_nonuniform_valid_mesh() {
+        let tri = CdtTriangulation::from_cdt_strip_spatial_vertex_profile(&[4, 6, 5])
             .expect("nonuniform Delaunay strip should build");
 
         assert_eq!(tri.vertex_count(), 15);
         assert_eq!(tri.face_count(), 17);
         assert_eq!(tri.slice_sizes(), &[4, 6, 5]);
         assert_eq!(
-            tri.volume_profile()
+            tri.slab_triangle_profile()
                 .expect("nonuniform strip profile should be valid")
                 .len(),
             3
@@ -2315,7 +2448,7 @@ mod tests {
                 ref issue,
                 ref provided_value,
                 ref expected_range,
-            }) if *issue == GenerationParameterIssue::EmptyVolumeProfile
+            }) if *issue == GenerationParameterIssue::EmptySpatialVertexProfile
                 && provided_value == "[]"
                 && expected_range == "at least one time slice"
         );
@@ -2323,7 +2456,7 @@ mod tests {
 
     #[test]
     fn test_profile_strip_count_validation_rejects_backend_count_mismatch() {
-        let tri = CdtTriangulation::from_cdt_strip_profile(&[4, 6, 5])
+        let tri = CdtTriangulation::from_cdt_strip_spatial_vertex_profile(&[4, 6, 5])
             .expect("nonuniform Delaunay strip should build");
         let result = validate_profile_strip_counts(tri.geometry(), 15, 16, 18, 3.0);
 
@@ -2333,17 +2466,19 @@ mod tests {
                 vertex_count: 15,
                 coordinate_range: (0.0, 3.0),
                 attempt: 1,
-                ref underlying_error,
-            }) if underlying_error
-                .contains("build_delaunay2_with_data()/from_cdt_strip_profile()")
-                && underlying_error.contains("produced 15 vertices and 17 faces")
-                && underlying_error.contains("expected 16 vertices and 18 faces")
+                failure: DelaunayGenerationFailure::MeshSizeMismatch {
+                    actual_vertices: 15,
+                    expected_vertices: 16,
+                    actual_faces: 17,
+                    expected_faces: 18,
+                },
+            })
         );
     }
 
     #[test]
-    fn test_from_cdt_strip_profile_rejects_invalid_profile() {
-        let result = CdtTriangulation::from_cdt_strip_profile(&[4, 3, 5]);
+    fn test_from_cdt_strip_spatial_vertex_profile_rejects_invalid_profile() {
+        let result = CdtTriangulation::from_cdt_strip_spatial_vertex_profile(&[4, 3, 5]);
 
         assert_matches!(
             result,
@@ -2351,15 +2486,15 @@ mod tests {
                 ref issue,
                 ref provided_value,
                 ref expected_range,
-            }) if *issue == GenerationParameterIssue::InsufficientVerticesInVolumeProfileSlice
+            }) if *issue == GenerationParameterIssue::InsufficientVerticesInSpatialVertexProfileSlice
                 && provided_value == "slice 1 has 3"
                 && expected_range == "each slice ≥ 4 for open-boundary topology"
         );
     }
 
     #[test]
-    fn test_from_cdt_strip_profile_rejects_too_few_slices() {
-        let result = CdtTriangulation::from_cdt_strip_profile(&[4]);
+    fn test_from_cdt_strip_spatial_vertex_profile_rejects_too_few_slices() {
+        let result = CdtTriangulation::from_cdt_strip_spatial_vertex_profile(&[4]);
 
         assert_matches!(
             result,
@@ -2376,7 +2511,7 @@ mod tests {
     #[test]
     fn test_explicit_strip_count_validation_rejects_face_mismatch() {
         let tri = CdtTriangulation::from_cdt_strip(4, 2).expect("Delaunay strip should build");
-        let result = validate_strip_counts(tri.geometry(), 8, 7, 8, 7, 4, 2, 1.0);
+        let result = validate_strip_counts(tri.geometry(), 8, 8, 7, 1.0);
 
         assert_matches!(
             result,
@@ -2384,11 +2519,13 @@ mod tests {
                 vertex_count: 8,
                 coordinate_range: (0.0, 1.0),
                 attempt: 1,
-                ref underlying_error,
-            }) if underlying_error.contains("build_delaunay2_with_data()/from_cdt_strip()")
-                && underlying_error.contains("produced 6 faces, expected 7")
-                && underlying_error.contains("vertices_per_slice=4")
-                && underlying_error.contains("num_slices=2")
+                failure: DelaunayGenerationFailure::MeshSizeMismatch {
+                    actual_vertices: 8,
+                    expected_vertices: 8,
+                    actual_faces: 6,
+                    expected_faces: 7,
+                },
+            })
         );
     }
 
@@ -2398,7 +2535,7 @@ mod tests {
         for face in tri.geometry().faces() {
             assert_matches!(
                 tri.simplex_type(&face),
-                Some(SimplexType::Up | SimplexType::Down)
+                Ok(Some(SimplexType::Up | SimplexType::Down))
             );
         }
     }
@@ -2438,7 +2575,7 @@ mod tests {
         assert_eq!(tri.slice_sizes(), &[5, 5, 5, 5]);
         for t in 0..4 {
             assert_eq!(
-                tri.vertices_at_time(t).len(),
+                tri.vertices_at_time(t).count(),
                 5,
                 "slice {t} should contain N=5 vertices"
             );
@@ -2446,8 +2583,8 @@ mod tests {
     }
 
     #[test]
-    fn test_from_toroidal_cdt_profile_builds_nonuniform_valid_mesh() {
-        let tri = CdtTriangulation::from_toroidal_cdt_profile(&[3, 4, 5, 4])
+    fn test_from_toroidal_cdt_spatial_vertex_profile_builds_nonuniform_valid_mesh() {
+        let tri = CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&[3, 4, 5, 4])
             .expect("nonuniform toroidal CDT should build");
 
         assert_eq!(tri.vertex_count(), 16);
@@ -2464,8 +2601,8 @@ mod tests {
     }
 
     #[test]
-    fn test_from_toroidal_cdt_profile_rejects_invalid_profile() {
-        let few_slices = CdtTriangulation::from_toroidal_cdt_profile(&[3, 4]);
+    fn test_from_toroidal_cdt_spatial_vertex_profile_rejects_invalid_profile() {
+        let few_slices = CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&[3, 4]);
         assert_matches!(
             few_slices,
             Err(CdtError::InvalidGenerationParameters {
@@ -2477,14 +2614,14 @@ mod tests {
                 && expected_range == "≥ 3 for toroidal topology"
         );
 
-        let small_slice = CdtTriangulation::from_toroidal_cdt_profile(&[3, 2, 3]);
+        let small_slice = CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&[3, 2, 3]);
         assert_matches!(
             small_slice,
             Err(CdtError::InvalidGenerationParameters {
                 ref issue,
                 ref provided_value,
                 ref expected_range,
-            }) if *issue == GenerationParameterIssue::InsufficientVerticesInVolumeProfileSlice
+            }) if *issue == GenerationParameterIssue::InsufficientVerticesInSpatialVertexProfileSlice
                 && provided_value == "slice 1 has 2"
                 && expected_range == "each slice ≥ 3 for toroidal topology"
         );
@@ -2572,10 +2709,13 @@ mod tests {
                 vertex_count: 12,
                 coordinate_range: (0.0, 3.0),
                 attempt: 5,
-                ref underlying_error,
-            }) if underlying_error.contains("periodic toroidal builder")
-                && underlying_error.contains("produced 12 vertices and 24 faces")
-                && underlying_error.contains("expected 12 vertices and 23 faces")
+                failure: DelaunayGenerationFailure::MeshSizeMismatch {
+                    actual_vertices: 12,
+                    expected_vertices: 12,
+                    actual_faces: 24,
+                    expected_faces: 23,
+                },
+            })
         );
     }
 
@@ -2592,7 +2732,6 @@ mod tests {
                 .face_vertices(&face)
                 .expect("toroidal face vertices should resolve");
             let labels: Vec<_> = vertices
-                .iter()
                 .map(|vh| {
                     tri.geometry()
                         .vertex_data_by_key(vh.vertex_key())
@@ -2603,9 +2742,11 @@ mod tests {
             if labels.contains(&0) && labels.contains(&2) {
                 let simplex_type = tri
                     .simplex_type(&face)
+                    .expect("wrap-around toroidal face query should succeed")
                     .expect("wrap-around toroidal face should classify");
                 let edge_types = tri
                     .face_edge_types(&face)
+                    .expect("wrap-around toroidal face query should succeed")
                     .expect("wrap-around toroidal face should expose edge types");
                 saw_wrap_timelike_edge |= edge_types
                     .iter()

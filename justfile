@@ -18,7 +18,7 @@ rumdl_version := "0.2.52"
 sarif_fmt_version := "0.8.0"
 taplo_version := "0.10.0"
 typos_version := "1.49.0"
-uv_version := "0.12.2"
+uv_version := "0.12.3"
 zizmor_version := "1.29.0"
 
 # Common cargo-llvm-cov arguments for all coverage runs.
@@ -208,7 +208,10 @@ action-lint: _ensure-actionlint
 bench:
     cargo bench --workspace
 
-bench-ci:
+allocation-check:
+    cargo bench --profile perf --bench allocation_profile
+
+bench-ci: allocation-check
     cargo bench --profile perf --bench ci_performance_suite
 
 # Compile benchmarks without running them, treating warnings as errors.
@@ -287,9 +290,9 @@ check-fast:
     cargo check
 
 # CI simulation: flat union of GitHub-equivalent focused validators.
-# Runnable Rust unit and integration tests share one release-profile nextest pass;
-# rustdoc doctests remain separate because nextest does not execute them.
-ci: action-lint zizmor markdown-check spell-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check test-python notebook-check shell-check semgrep semgrep-test fmt-check clippy doc-check test-rust-ci test-doc bench-compile examples-validate
+# All Cargo targets receive the same Clippy coverage as the SARIF workflow;
+# runnable Rust tests and rustdoc doctests remain separate execution evidence.
+ci: action-lint zizmor markdown-check spell-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check test-python notebook-check shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check test-rust-ci test-doc bench-compile allocation-check examples-validate
     @echo "🎯 CI checks complete!"
 
 # CI with performance baseline
@@ -312,11 +315,11 @@ clean:
     rm -rf coverage_report
     rm -rf coverage
 
-# Core production Rust linting used by default validation gates.
+# Fast production Rust linting used by `just check`.
 clippy:
     cargo clippy --workspace --all-features --lib --bins -- -D warnings -W clippy::pedantic -W clippy::nursery -W clippy::cargo
 
-# Optional broad Clippy sweep; focused CI buckets compile tests, examples, and benches.
+# Full Cargo-target Clippy sweep used by `just ci` and the GitHub SARIF workflow.
 clippy-all-targets:
     cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic -W clippy::nursery -W clippy::cargo
 
@@ -407,7 +410,8 @@ help-workflows:
     @echo ""
     @echo "Benchmark System:"
     @echo "  just bench              # Run all benchmarks"
-    @echo "  just bench-ci           # Run CI regression benchmarks with the perf profile"
+    @echo "  just allocation-check   # Run deterministic allocation assertions"
+    @echo "  just bench-ci           # Run allocation assertions and CI regression benchmarks"
     @echo "  just bench-compile      # Compile benchmarks without running"
     @echo "  just bench-smoke        # Smoke-test benchmark harnesses with minimal samples"
     @echo "  just bench-test-compile # Compile benches + release integration tests without running"

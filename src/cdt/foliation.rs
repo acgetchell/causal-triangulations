@@ -9,11 +9,11 @@
 //!
 //! Time labels are stored directly as vertex data in the Delaunay triangulation
 //! (`Vertex<f64, u32, 2>` — the `u32` is the time-slice index). This mirrors
-//! CGAL's `vertex->info()` used in CDT-plusplus.  The `Foliation` struct
-//! tracks only aggregate bookkeeping (per-slice counts and total slices).
+//! CGAL's `vertex->info()` used in CDT-plusplus.  The
+//! [`Foliation`](crate::cdt::foliation::Foliation) struct tracks only aggregate
+//! bookkeeping (per-slice counts and total slices).
 
-use serde::de::Error as DeError;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as DeError};
 use std::num::NonZeroU32;
 use std::{error::Error, fmt};
 
@@ -202,6 +202,18 @@ pub enum FoliationError {
     EmptySlice {
         /// The index of the empty slice.
         slice: usize,
+    },
+    /// Incrementing one slice would exceed the platform's addressable count.
+    SliceSizeOverflow {
+        /// Slice whose count could not be incremented.
+        slice: usize,
+    },
+    /// A local bookkeeping receipt named a slice outside this foliation.
+    SliceIndexOutOfRange {
+        /// Requested slice index.
+        slice: u32,
+        /// Number of slices in the foliation.
+        num_slices: usize,
     },
     /// The sum of per-slice sizes does not match the labeled vertex count.
     SliceSizeSumMismatch {
@@ -422,6 +434,13 @@ impl fmt::Display for FoliationError {
                  {synced_at_modification:?}, current modification {current_modification_count}"
             ),
             Self::EmptySlice { slice } => write!(f, "time slice {slice} is empty"),
+            Self::SliceSizeOverflow { slice } => {
+                write!(f, "time slice {slice} vertex count overflowed")
+            }
+            Self::SliceIndexOutOfRange { slice, num_slices } => write!(
+                f,
+                "time slice {slice} is outside the foliation range 0..{num_slices}"
+            ),
             Self::SliceSizeSumMismatch { sum, labeled } => write!(
                 f,
                 "slice_sizes sum ({sum}) does not match labeled vertex count ({labeled})"
@@ -648,6 +667,38 @@ impl Foliation {
         &self.slice_sizes
     }
 
+    /// Applies a proof-carrying local vertex-count change to one slice.
+    pub(crate) fn apply_local_vertex_delta(
+        &mut self,
+        slice: u32,
+        delta: FoliationVertexDelta,
+    ) -> Result<(), FoliationError> {
+        let raw_slice = slice;
+        let slice = usize::try_from(slice).map_err(|_| FoliationError::SliceIndexOutOfRange {
+            slice: raw_slice,
+            num_slices: self.slice_sizes.len(),
+        })?;
+        let num_slices = self.slice_sizes.len();
+        let count =
+            self.slice_sizes
+                .get_mut(slice)
+                .ok_or(FoliationError::SliceIndexOutOfRange {
+                    slice: raw_slice,
+                    num_slices,
+                })?;
+        let next = match delta {
+            FoliationVertexDelta::Insert => count
+                .checked_add(1)
+                .ok_or(FoliationError::SliceSizeOverflow { slice })?,
+            FoliationVertexDelta::Remove => count
+                .checked_sub(1)
+                .filter(|&next| next != 0)
+                .ok_or(FoliationError::EmptySlice { slice })?,
+        };
+        *count = next;
+        Ok(())
+    }
+
     /// Returns the total number of time slices.
     ///
     /// # Examples
@@ -699,6 +750,15 @@ impl Foliation {
     }
 }
 
+/// Direction of a locally proven foliation vertex-count change.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FoliationVertexDelta {
+    /// One labeled vertex was inserted.
+    Insert,
+    /// One labeled vertex was removed.
+    Remove,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -740,9 +800,8 @@ mod tests {
 
     #[test]
     fn test_foliation_slice_size_mismatch() {
-        let result = Foliation::from_slice_sizes(vec![3, 3], slice_count(3));
-        assert!(result.is_err());
-        let err = result.unwrap_err();
+        let err = Foliation::from_slice_sizes(vec![3, 3], slice_count(3))
+            .expect_err("mismatched slice counts should be rejected");
         assert_eq!(
             err,
             FoliationError::SliceSizeMismatch {

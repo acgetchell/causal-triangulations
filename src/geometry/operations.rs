@@ -6,11 +6,10 @@
 //! geometry backends.
 
 use super::traits::TriangulationQuery;
-use std::collections::hash_map::DefaultHasher;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 
-/// Produces comparable endpoint hashes so unordered keys can avoid requiring `Ord`.
+/// Produces comparable endpoint hashes so unordered keys can avoid requiring [`Ord`].
 fn stable_hash<T: Hash>(value: &T) -> u64 {
     let mut hasher = DefaultHasher::new();
     value.hash(&mut hasher);
@@ -19,7 +18,7 @@ fn stable_hash<T: Hash>(value: &T) -> u64 {
 
 /// An unordered (undirected) pair key.
 ///
-/// Used to treat edges as undirected without requiring an `Ord` bound on the handle type.
+/// Used to treat edges as undirected without requiring an [`Ord`] bound on the handle type.
 #[derive(Clone, Debug)]
 struct UnorderedPair<V>(V, V);
 
@@ -84,15 +83,20 @@ impl<V: Hash> Hash for UnorderedSet<V> {
 ///
 /// For Delaunay simplices, a facet is the set of all simplex vertices excluding one vertex.
 /// Any facet that appears in exactly one simplex is on the boundary.
-fn boundary_facets<B: TriangulationQuery>(tri: &B) -> Vec<Vec<B::VertexHandle>> {
-    // Map: facet key -> (occurrence count, representative vertex list)
-    type FacetCounts<V> = HashMap<UnorderedSet<V>, (usize, Vec<V>)>;
+fn boundary_facets<B>(tri: &B) -> Vec<Vec<B::VertexHandle>>
+where
+    B: TriangulationQuery + ?Sized,
+    B::VertexHandle: Clone + Eq + Hash,
+{
+    // Map: facet key -> occurrence count. The key retains the representative vertices.
+    type FacetCounts<V> = HashMap<UnorderedSet<V>, usize>;
     let mut facet_counts: FacetCounts<B::VertexHandle> = HashMap::new();
 
     for face in tri.faces() {
         let Ok(vertices) = tri.face_vertices(&face) else {
             continue;
         };
+        let vertices: Vec<_> = vertices.collect();
 
         if vertices.len() < 2 {
             continue;
@@ -102,11 +106,10 @@ fn boundary_facets<B: TriangulationQuery>(tri: &B) -> Vec<Vec<B::VertexHandle>> 
         if vertices.len() == 2 {
             for v in &vertices {
                 let facet = vec![v.clone()];
-                let key = UnorderedSet(facet.clone());
                 facet_counts
-                    .entry(key)
-                    .and_modify(|(count, _)| *count += 1)
-                    .or_insert((1, facet));
+                    .entry(UnorderedSet(facet))
+                    .and_modify(|count| *count += 1)
+                    .or_insert(1);
             }
             continue;
         }
@@ -120,22 +123,25 @@ fn boundary_facets<B: TriangulationQuery>(tri: &B) -> Vec<Vec<B::VertexHandle>> 
                 .map(|(_, v)| v.clone())
                 .collect();
 
-            let key = UnorderedSet(facet.clone());
             facet_counts
-                .entry(key)
-                .and_modify(|(count, _)| *count += 1)
-                .or_insert((1, facet));
+                .entry(UnorderedSet(facet))
+                .and_modify(|count| *count += 1)
+                .or_insert(1);
         }
     }
 
     facet_counts
-        .into_values()
-        .filter_map(|(count, facet)| (count == 1).then_some(facet))
+        .into_iter()
+        .filter_map(|(facet, count)| (count == 1).then_some(facet.0))
         .collect()
 }
 
-/// Common utility operations for triangulations
-pub trait TriangulationOps: TriangulationQuery + Sized {
+/// Common utility operations for triangulations.
+///
+/// Handle capabilities are constrained on individual operations so every
+/// [`TriangulationQuery`] implementation receives the extension trait without
+/// inheriting cloning, equality, or hashing requirements it does not use.
+pub trait TriangulationOps: TriangulationQuery {
     /// Check if the triangulation satisfies Delaunay property (if applicable)
     ///
     /// # Examples
@@ -171,7 +177,10 @@ pub trait TriangulationOps: TriangulationQuery + Sized {
     /// let hull = backend.convex_hull();
     /// assert_eq!(hull.len(), 3);
     /// ```
-    fn convex_hull(&self) -> Vec<Self::VertexHandle> {
+    fn convex_hull(&self) -> Vec<Self::VertexHandle>
+    where
+        Self::VertexHandle: Clone + Eq + Hash,
+    {
         let mut hull_vertices: HashSet<Self::VertexHandle> = HashSet::new();
 
         for facet in boundary_facets(self) {
@@ -200,18 +209,22 @@ pub trait TriangulationOps: TriangulationQuery + Sized {
     /// let boundary = backend.boundary_edges();
     /// assert_eq!(boundary.len(), 3);
     /// ```
-    fn boundary_edges(&self) -> Vec<Self::EdgeHandle> {
+    fn boundary_edges(&self) -> Vec<Self::EdgeHandle>
+    where
+        Self::VertexHandle: Clone + Eq + Hash,
+        Self::EdgeHandle: Clone + Eq + Hash,
+    {
         // Build a lookup from an (unordered) vertex pair to the corresponding edge handle.
         let mut edge_by_vertices: HashMap<UnorderedPair<Self::VertexHandle>, Self::EdgeHandle> =
             HashMap::new();
 
         for edge in self.edges() {
             match self.edge_endpoints(&edge) {
-                Some((v1, v2)) => {
+                Ok((v1, v2)) => {
                     edge_by_vertices.insert(UnorderedPair(v1, v2), edge);
                 }
-                None => {
-                    log::trace!("boundary_edges: skipping unresolved edge {edge:?}");
+                Err(error) => {
+                    log::trace!("boundary_edges: skipping unresolved edge: {error}");
                 }
             }
         }
@@ -236,15 +249,14 @@ pub trait TriangulationOps: TriangulationQuery + Sized {
 }
 
 // Blanket implementation for all types that implement TriangulationQuery
-impl<T: TriangulationQuery> TriangulationOps for T {}
+impl<T: TriangulationQuery + ?Sized> TriangulationOps for T {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::geometry::backends::mock::MockBackend;
-    use crate::geometry::traits::{EdgeAdjacentFacesResult, GeometryBackend, TriangulationQuery};
+    use crate::geometry::traits::{EdgeAdjacentFacesResult, GeometryBackend};
     use std::assert_matches;
-    use std::collections::HashSet;
 
     #[derive(Debug, Clone)]
     struct FixtureBackend {
@@ -304,35 +316,37 @@ mod tests {
             self.faces.iter().map(|(face, _)| *face)
         }
 
-        fn vertex_coordinates(
-            &self,
+        fn vertex_coordinates<'a>(
+            &'a self,
             vertex: &Self::VertexHandle,
-        ) -> Result<Vec<Self::Coordinate>, Self::Error> {
+        ) -> Result<&'a [Self::Coordinate], Self::Error> {
             self.vertices
                 .contains(vertex)
-                .then_some(vec![0.0])
+                .then_some(&[0.0][..])
                 .ok_or(FixtureError::Vertex)
         }
 
-        fn face_vertices(
-            &self,
+        fn face_vertices<'a>(
+            &'a self,
             face: &Self::FaceHandle,
-        ) -> Result<Vec<Self::VertexHandle>, Self::Error> {
+        ) -> Result<impl ExactSizeIterator<Item = Self::VertexHandle> + 'a, Self::Error> {
             self.faces
                 .iter()
                 .find(|(candidate, _)| candidate == face)
-                .and_then(|(_, vertices)| vertices.clone())
+                .and_then(|(_, vertices)| vertices.as_deref())
+                .map(|vertices| vertices.iter().copied())
                 .ok_or(FixtureError::Face)
         }
 
         fn edge_endpoints(
             &self,
             edge: &Self::EdgeHandle,
-        ) -> Option<(Self::VertexHandle, Self::VertexHandle)> {
+        ) -> Result<(Self::VertexHandle, Self::VertexHandle), Self::Error> {
             self.edges
                 .iter()
                 .find(|(candidate, _)| candidate == edge)
                 .and_then(|(_, endpoints)| *endpoints)
+                .ok_or(FixtureError::Edge)
         }
 
         fn edge_adjacent_faces(
@@ -346,34 +360,34 @@ mod tests {
                 .ok_or(FixtureError::Edge)
         }
 
-        fn adjacent_faces(
-            &self,
+        fn adjacent_faces<'a>(
+            &'a self,
             vertex: &Self::VertexHandle,
-        ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
+        ) -> Result<impl Iterator<Item = Self::FaceHandle> + 'a, Self::Error> {
             self.vertices
                 .contains(vertex)
-                .then_some(Vec::new())
+                .then_some(std::iter::empty())
                 .ok_or(FixtureError::Vertex)
         }
 
-        fn incident_edges(
-            &self,
+        fn incident_edges<'a>(
+            &'a self,
             vertex: &Self::VertexHandle,
-        ) -> Result<Vec<Self::EdgeHandle>, Self::Error> {
+        ) -> Result<impl Iterator<Item = Self::EdgeHandle> + 'a, Self::Error> {
             self.vertices
                 .contains(vertex)
-                .then_some(Vec::new())
+                .then_some(std::iter::empty())
                 .ok_or(FixtureError::Vertex)
         }
 
-        fn face_neighbors(
-            &self,
+        fn face_neighbors<'a>(
+            &'a self,
             face: &Self::FaceHandle,
-        ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
+        ) -> Result<impl Iterator<Item = Self::FaceHandle> + 'a, Self::Error> {
             self.faces
                 .iter()
                 .any(|(candidate, _)| candidate == face)
-                .then_some(Vec::new())
+                .then_some(std::iter::empty())
                 .ok_or(FixtureError::Face)
         }
 
@@ -416,14 +430,23 @@ mod tests {
         assert_eq!(backend.face_count(), 3);
         assert_eq!(backend.dimension(), 1);
         assert_eq!(backend.vertices().collect::<Vec<_>>(), vec![0, 1, 2]);
-        assert_eq!(backend.vertex_coordinates(&0), Ok(vec![0.0]));
+        assert_eq!(backend.vertex_coordinates(&0), Ok(&[0.0][..]));
         assert_matches!(backend.vertex_coordinates(&99), Err(FixtureError::Vertex));
-        assert_eq!(backend.adjacent_faces(&0), Ok(Vec::new()));
-        assert_matches!(backend.adjacent_faces(&99), Err(FixtureError::Vertex));
-        assert_eq!(backend.incident_edges(&0), Ok(Vec::new()));
-        assert_matches!(backend.incident_edges(&99), Err(FixtureError::Vertex));
-        assert_eq!(backend.face_neighbors(&0), Ok(Vec::new()));
-        assert_matches!(backend.face_neighbors(&99), Err(FixtureError::Face));
+        assert_eq!(backend.adjacent_faces(&0).map(Iterator::count), Ok(0));
+        let Err(error) = backend.adjacent_faces(&99) else {
+            panic!("unknown vertex should fail adjacency lookup");
+        };
+        assert_matches!(error, FixtureError::Vertex);
+        assert_eq!(backend.incident_edges(&0).map(Iterator::count), Ok(0));
+        let Err(error) = backend.incident_edges(&99) else {
+            panic!("unknown vertex should fail incidence lookup");
+        };
+        assert_matches!(error, FixtureError::Vertex);
+        assert_eq!(backend.face_neighbors(&0).map(Iterator::count), Ok(0));
+        let Err(error) = backend.face_neighbors(&99) else {
+            panic!("unknown face should fail neighbor lookup");
+        };
+        assert_matches!(error, FixtureError::Face);
 
         let hull: HashSet<_> = backend.convex_hull().into_iter().collect();
         assert_eq!(hull, HashSet::from([0, 1]));

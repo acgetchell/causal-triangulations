@@ -5,28 +5,31 @@
 use super::CdtTriangulation;
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::{
-    DelaunayEdgeHandle, DelaunayError, DelaunayFaceHandle, DelaunayVertexHandle,
+    DelaunayEdgeHandle, DelaunayError, DelaunayFaceHandle, DelaunayRemovalResult,
+    DelaunayVertexHandle,
 };
 use crate::geometry::traits::{FlipResult, SubdivisionResult, TriangulationMut};
 
 impl CdtTriangulation<DelaunayBackend2D> {
-    /// Flips an edge and marks CDT-derived state stale when the backend mutation succeeds.
-    pub(crate) fn flip_edge(
+    /// Flips an edge when the caller owns rollback for the enclosing CDT edit.
+    pub(crate) fn flip_edge_in_caller_transaction(
         &mut self,
-        edge: DelaunayEdgeHandle,
+        edge: &DelaunayEdgeHandle,
     ) -> Result<FlipResult<DelaunayEdgeHandle, DelaunayFaceHandle>, DelaunayError> {
-        let result = self.geometry.flip_edge(edge)?;
+        let result = self.geometry.flip_edge_in_caller_transaction(edge)?;
         self.bump_modification_count();
         Ok(result)
     }
 
-    /// Subdivides a face and marks CDT-derived state stale when the backend mutation succeeds.
-    pub(crate) fn subdivide_face(
+    /// Subdivides a face when the caller owns rollback for the enclosing CDT edit.
+    pub(crate) fn subdivide_face_in_caller_transaction(
         &mut self,
         face: DelaunayFaceHandle,
         point: &[f64],
     ) -> Result<SubdivisionResult<DelaunayVertexHandle, DelaunayFaceHandle>, DelaunayError> {
-        let result = self.geometry.subdivide_face(face, point)?;
+        let result = self
+            .geometry
+            .subdivide_face_in_caller_transaction(face, point)?;
         self.bump_modification_count();
         Ok(result)
     }
@@ -39,6 +42,16 @@ impl CdtTriangulation<DelaunayBackend2D> {
         self.geometry.remove_vertex(vertex)?;
         self.bump_modification_count();
         Ok(())
+    }
+
+    /// Removes a vertex when the caller owns rollback for the enclosing CDT edit.
+    pub(crate) fn remove_vertex_in_caller_transaction(
+        &mut self,
+        vertex: &DelaunayVertexHandle,
+    ) -> Result<DelaunayRemovalResult, DelaunayError> {
+        let result = self.geometry.remove_vertex_in_caller_transaction(vertex)?;
+        self.bump_modification_count();
+        Ok(result)
     }
 
     /// Updates a vertex time label and marks CDT-derived state stale on success.
@@ -57,9 +70,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geometry::CdtTriangulation2D;
+    use crate::cdt::triangulation::CdtTriangulation2D;
     use crate::geometry::generators::build_delaunay2_from_simplices;
-    use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
+    use crate::geometry::traits::TriangulationQuery;
 
     /// Computes the centroid of a live triangular face.
     fn face_centroid(triangulation: &CdtTriangulation<DelaunayBackend2D>) -> Vec<f64> {
@@ -116,7 +129,7 @@ mod tests {
             .expect("strip vertices should be labeled");
 
         tri.refresh_cache();
-        assert!(tri.cache.edge_count.is_some());
+        assert!(tri.cache.edge_count.get().is_some());
         let initial_modification_count = tri.metadata().modification_count;
 
         tri.set_vertex_data(&vertex, Some(label))
@@ -126,7 +139,7 @@ mod tests {
             tri.metadata().modification_count,
             initial_modification_count + 1
         );
-        assert!(tri.cache.edge_count.is_none());
+        assert!(tri.cache.edge_count.get().is_none());
         assert!(!tri.has_foliation());
         assert!(tri.slice_sizes().is_empty());
     }
@@ -147,7 +160,7 @@ mod tests {
         let initial_modification_count = tri.metadata().modification_count;
 
         let subdivision = tri
-            .subdivide_face(face, &point)
+            .subdivide_face_in_caller_transaction(face, &point)
             .expect("centroid subdivision should succeed");
 
         assert_eq!(tri.vertex_count(), initial_vertices + 1);
@@ -155,10 +168,10 @@ mod tests {
             tri.metadata().modification_count,
             initial_modification_count + 1
         );
-        assert!(tri.cache.edge_count.is_none());
+        assert!(tri.cache.edge_count.get().is_none());
 
         tri.refresh_cache();
-        assert!(tri.cache.edge_count.is_some());
+        assert!(tri.cache.edge_count.get().is_some());
         let after_subdivision_count = tri.metadata().modification_count;
 
         let (): () = tri
@@ -170,7 +183,7 @@ mod tests {
             tri.metadata().modification_count,
             after_subdivision_count + 1
         );
-        assert!(tri.cache.edge_count.is_none());
+        assert!(tri.cache.edge_count.get().is_none());
 
         let after_removal_count = tri.metadata().modification_count;
         assert!(
@@ -192,12 +205,13 @@ mod tests {
         tri.refresh_cache();
         let initial_modification_count = tri.metadata().modification_count;
 
-        tri.flip_edge(edge).expect("flippable edge should flip");
+        tri.flip_edge_in_caller_transaction(&edge)
+            .expect("flippable edge should flip");
 
         assert_eq!(
             tri.metadata().modification_count,
             initial_modification_count + 1
         );
-        assert!(tri.cache.edge_count.is_none());
+        assert!(tri.cache.edge_count.get().is_none());
     }
 }

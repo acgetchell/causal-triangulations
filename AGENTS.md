@@ -112,6 +112,14 @@ When using the `gh` CLI to view issues, PRs, or other GitHub objects:
 - Keep production module preambles free of test-only imports; place `#[cfg(test)]` imports inside the relevant `tests` module instead
 - Detailed import guidance lives in `docs/dev/rust.md`
 
+### Geometry Validation Ownership
+
+- Delegate structural geometry validation—including incidence, orientation, manifold, embedding, and Euler-topology checks—to `delaunay` through the
+  `src/geometry/` adapter whenever its API supports the check. Do not reimplement those algorithms in `src/cdt/`.
+- CDT validation owns only domain invariants that the geometry backend cannot express, such as foliation, causality, and agreement between CDT metadata and
+  backend geometry. Add a narrow geometry trait/adapter method when CDT needs access to an upstream check.
+- Detailed validation-boundary guidance lives in `docs/dev/rust.md`.
+
 ### Public API Preludes
 
 - Keep `prelude::*` small and focused on common quick-start workflows.

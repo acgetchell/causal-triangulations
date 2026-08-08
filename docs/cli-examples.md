@@ -10,11 +10,11 @@ The examples use the installed `cdt` binary. From a repository clone, build with
 
 ## Argument Groups
 
-Initial spatial volume can be specified in one of three ways:
+Initial spatial-vertex counts can be specified in one of three ways:
 
 - `--vertices-per-slice <N>` with `--timeslices <T>`: regular equal-slice initial data; total vertices are `N × T`.
 - `--vertices <N>` with `--timeslices <T>`: total regular initial vertex count; `N` must divide evenly by `T`.
-- `--volume-profile <N0,N1,...>`: explicit nonuniform initial spatial volumes. If `--timeslices` is omitted, the profile length sets it.
+- `--spatial-vertex-profile <N0,N1,...>`: explicit nonuniform initial spatial vertex counts. If `--timeslices` is omitted, the profile length sets it.
 
 Core simulation flags:
 
@@ -28,7 +28,8 @@ Core simulation flags:
 
 Physics and sampler flags:
 
-- `--temperature <T>`: Metropolis sampler temperature; keep `1.0` unless deliberately studying sampler behavior.
+- `--temperature <T>`: overall action-scaling parameter in `exp(-S/T)`; changing it changes every effective coupling and therefore the sampled ensemble. Keep
+  `1.0` for quoted λ calibrations unless all effective couplings are deliberately retuned.
 - `--coupling-0 <κ₀>` and `--coupling-2 <κ₂>`: vertex and triangle action couplings.
 - `--cosmological-constant <λ>`: edge-count cosmological coupling. In unfixed-volume runs it controls volume growth or shrinkage.
 
@@ -89,11 +90,11 @@ cdt \
 Toroidal runs require at least 3 vertices per slice and at least 3 time slices. The constructor builds periodic S¹×S¹ initial data and validates topology,
 foliation, causality, and simplex classification before simulation.
 
-### Nonuniform Initial Volume Profile
+### Nonuniform Initial Spatial-Vertex Profile
 
 ```bash
 cdt \
-  --volume-profile 4,6,5 \
+  --spatial-vertex-profile 4,6,5 \
   --steps 100 \
   --thermalization-steps 10 \
   --measurement-frequency 10 \
@@ -103,8 +104,8 @@ cdt \
   --output-json profile-summary.json
 ```
 
-Use `--volume-profile` for explicit initial slice volumes `N(t)`. The run remains an unfixed-volume run unless a future volume-fixing action term is added
-explicitly.
+Use `--spatial-vertex-profile` for explicit initial slice vertex counts `N₀(t)`. The run remains an unfixed-volume run unless a future volume-fixing
+action term is added explicitly.
 
 ## Output Patterns
 

@@ -39,6 +39,7 @@ causal-triangulations/
 │   ├── support/
 │   │   └── or_abort.rs
 │   ├── README.md
+│   ├── allocation_profile.rs
 │   ├── cdt_benchmarks.rs
 │   └── ci_performance_suite.rs
 ├── docs/
@@ -164,7 +165,8 @@ causal-triangulations/
 │   ├── proposal_policy.rs
 │   ├── proptest_foliation.rs
 │   ├── proptest_metropolis.rs
-│   └── regressions.rs
+│   ├── regressions.rs
+│   └── trait_bound_ergonomics.rs
 ├── .bencher.toml
 ├── .codecov.yml
 ├── .coderabbit.yml
@@ -202,17 +204,18 @@ causal-triangulations/
 The crate is split into two intentionally different layers:
 
 - `src/geometry/` is the backend interface layer. It is the only layer that talks directly to the `delaunay` crate, wrapping upstream types behind crate-owned
-  traits, opaque handles, generators, and backend adapters.
-- `src/cdt/` is the CDT domain layer. It owns causal triangulation semantics: foliation, topology and causality checks, ergodic moves, Regge action, Metropolis
-  sampling adapters, measurements, and observables.
+  traits, opaque handles, generators, and backend adapters. Structural incidence, orientation, manifold, embedding, and Euler-topology validation delegate to
+  upstream Delaunay checks whenever available.
+- `src/cdt/` is the CDT domain layer. It owns causal triangulation semantics: foliation and causality checks, CDT topology metadata, ergodic moves, Regge
+  action, Metropolis sampling adapters, measurements, and observables. It does not reimplement backend geometry validators.
 
 Code outside `src/geometry/` must not import `delaunay::` directly. CDT modules should depend on `TriangulationQuery` / `TriangulationMut`, crate-owned Delaunay
 handle wrappers, `DelaunayBackend2D`, and generator functions from `crate::geometry`.
 
 Generic MCMC mechanics should be delegated to `markov-chain-monte-carlo` through thin CDT adapters. CDT owns domain state, proposal-site enumeration,
-foliation/topology validation, measurements, and result translation; the upstream MCMC crate owns Metropolis-Hastings acceptance, proposal-ratio application,
-chain counters, planned-proposal commit ordering, and reusable sampler continuation behavior. Repository-owned Semgrep rules enforce the issue #155 boundary
-against new CDT-local generic acceptance draws or manual accepted/rejected sampler counters.
+foliation/causality validation, topology metadata checks, measurements, and result translation; the upstream MCMC crate owns Metropolis-Hastings acceptance,
+proposal-ratio application, chain counters, planned-proposal commit ordering, and reusable sampler continuation behavior. Repository-owned Semgrep rules
+enforce the issue #155 boundary against new CDT-local generic acceptance draws or manual accepted/rejected sampler counters.
 
 ## Repository Areas
 
@@ -242,8 +245,9 @@ design details.
 This is CDT domain logic layered over the geometry backend interface. It may use `DelaunayBackend2D` and crate-owned Delaunay handles, but it does not reach
 through to upstream `delaunay::` APIs directly.
 
-- Owns the `CdtTriangulation` state, `CdtMetadata`, `SimulationEvent`, metadata validation, cached simplex-count accessors, and common backend-agnostic state
+- Owns the `CdtTriangulation` state, `CdtMetadata`, creation metadata, metadata validation, cached simplex-count accessors, and common backend-agnostic state
   methods
+- Defines `CdtTriangulation2D`, the CDT-domain alias that binds `CdtTriangulation` to the supported 2D Delaunay backend
 - `CdtSimplexCounts` carries the CDT-domain proof that constructed triangulations have positive vertex, edge, and triangle counts as `NonZeroUsize`, while
   raw geometry queries remain `usize` so backend construction, clearing, and collection-style count APIs can represent zero
 - `from_cdt_strip(vertices_per_slice, num_slices)` — Delaunay-built open-boundary 1+1 CDT strip with strict Up/Down simplex classification and upstream Level
@@ -251,12 +255,12 @@ through to upstream `delaunay::` APIs directly.
 - `from_filtered_delaunay_strip(vertices_per_slice, num_slices)` — open-boundary 1+1 CDT initial-state constructor that starts from surplus labeled Delaunay
   points, removes vertices incident to non-strict CDT simplices through the backend `remove_vertex` path, and returns only after the strict causal simplex
   violation count converges to zero and full initial validation passes
-- `from_cdt_strip_profile(volume_profile)` — open-boundary 1+1 CDT strip from explicit nonuniform per-slice vertex counts; builds labeled point data and
-  delegates triangulation to the Delaunay constructor before strict initial validation
+- `from_cdt_strip_spatial_vertex_profile(profile)` — open-boundary 1+1 CDT strip from explicit nonuniform per-slice vertex counts; builds labeled point
+  data and delegates triangulation to the Delaunay constructor before strict initial validation
 - `from_toroidal_cdt(vertices_per_slice, num_slices)` — periodic Delaunay S¹×S¹ toroidal CDT (χ = 0) with upstream Level 1–5 validation before wrapping;
   requires `vertices_per_slice ≥ 3` and `num_slices ≥ 3`
-- `from_toroidal_cdt_profile(volume_profile)` — periodic S¹×S¹ toroidal CDT from explicit per-slice vertex counts, preserving closed spatial slices and
-  periodic time
+- `from_toroidal_cdt_spatial_vertex_profile(profile)` — periodic S¹×S¹ toroidal CDT from explicit per-slice vertex counts, preserving closed spatial
+  slices and periodic time
 - `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`, `strict_causal_simplex_violation_count`
 - Validation: `CdtValidationProfile` names initial-Delaunay, evolved, and optional strict-Delaunay contracts. Constructors require Level 1–5 for initial
@@ -269,32 +273,36 @@ through to upstream `delaunay::` APIs directly.
 The implementation lives under `src/cdt/triangulation/` and is wired from `src/lib.rs` to avoid `mod.rs` files:
 
 - `builders.rs` — Delaunay-backed random/seeded/labeled builders plus strip and periodic toroidal CDT builders
-- `foliation.rs` — foliation assignment, slice and label queries, volume profiles, simplex/edge classification, and foliation synchronization
+- `foliation.rs` — foliation assignment, slice and label queries, slab-triangle profiles, simplex/edge classification, and foliation synchronization
 - `moves.rs` — narrow crate-internal Delaunay mutation hooks used by ergodic moves
-- `state.rs` — module entry point, `CdtTriangulation`, `CdtMetadata`, `SimulationEvent`, serialization, cached geometry accessors, and backend-agnostic
-  state methods
+- `state.rs` — module entry point, `CdtTriangulation`, `CdtMetadata`, triangulation serialization, cached geometry accessors, and backend-agnostic state
+  methods; it does not store a duplicate simulation event log
 - `validation.rs` — named CDT validation profiles, whole-state validation, and Delaunay-backed causality checks
 
 ### `config.rs` — `CdtTopology` enum
 
-- `OpenBoundary` (default) — finite strip with boundary, χ ∈ {1, 2}
+- `OpenBoundary` (default) — finite connected strip with boundary, χ = 1
 - `Toroidal` — periodic in space and time, S¹×S¹, χ = 0
 - Wired through `CdtConfig.topology`, `CdtConfigOverrides.topology`, the CLI `--topology` flag, and `CdtMetadata.topology`
 - `run_simulation()` accepts `ValidatedCdtConfig` and dispatches on topology and profile mode: regular `Toroidal` → `from_toroidal_cdt`, regular
-  `OpenBoundary` → `from_cdt_strip`, and explicit `CdtConfig.volume_profile` → the matching profile constructor; `vertices` is always the total vertex count
+  `OpenBoundary` → `from_cdt_strip`, and explicit `CdtConfig.spatial_vertex_profile` → the matching profile constructor; `vertices` is always the total
+  vertex count
 
 ### `cdt/metropolis/` — Metropolis move ordering
 
 `MetropolisAlgorithm::run()` is the current CDT production runner for proposal-before-mutation sampling. It proposes a move type, samples an explicit local
 proposal site from the same universe used for proposal counts, plans that site on a cloned triangulation, computes `ΔS` and the forward/reverse
-Metropolis-Hastings site-count ratio, accepts or rejects the concrete proposal, and only replaces the live triangulation after acceptance. Ordinary causal,
-geometric, and backend edit failures are self-loop proposal outcomes recorded in `ProposalStatistics`; hard backend failures remain structured errors.
+Metropolis-Hastings family-probability and site-count ratio, accepts or rejects the concrete proposal, and only replaces the live triangulation after
+acceptance. Ordinary causal, geometric, and backend edit failures are self-loop proposal outcomes recorded in `ProposalStatistics`; hard backend failures
+remain structured errors. `MetropolisAlgorithm::with_policy()` binds a family policy once so fresh-run, result-plus-checkpoint, checkpoint-only, and resume
+terminals share one orthogonal execution surface rather than separate policy-suffixed methods.
 Toroidal move finalization rejects and rolls back candidate sites that would violate χ = 0 or the closed-S¹ per-slice foliation invariant.
 
 The module tree is declared from `src/lib.rs` to avoid the `metropolis.rs` plus `metropolis/` layout pattern. `adapter.rs` is the single CDT adapter boundary
 for `markov-chain-monte-carlo` proposal and target traits. `runner.rs` owns `MetropolisAlgorithm::run_steps`, which rebuilds the upstream `Chain`/`Sampler`
 continuation view, delegates generic acceptance, proposal-ratio application, chain counters, and planned-proposal commit ordering to the upstream MCMC crate,
-then records CDT-specific telemetry, measurements, and result state. `checkpoint.rs` owns resumable checkpoint state and resume validation, `telemetry.rs` owns
+then consumes the chain state back into the CDT result without cloning topology per step or per chunk. CDT-owned telemetry and RNG state travel beside that
+single canonical triangulation owner. `checkpoint.rs` owns resumable checkpoint state and resume validation, `telemetry.rs` owns
 public step/proposal telemetry, and `helpers.rs` holds shared CDT-domain calculations.
 
 See `docs/metropolis.md` for the current planned-proposal ordering and
@@ -302,15 +310,22 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
 
 ### `cdt/results.rs` — Simulation outputs
 
-- `Measurement` records per-step action, simplex counts, and optional per-slice volume profiles.
+- `Measurement` records per-step action, simplex counts, and optional per-slab triangle profiles `N₂(t)`.
+- `SimulationEvent` is the public value type for reconstructed history entries.
 - `SimulationResultsBackend` owns the final triangulation, Monte Carlo step telemetry, upstream scalar trace rows, move statistics, and measurement history.
-- Result methods summarize acceptance rate, average action, post-thermalization volume profiles, sample volume fluctuations, and final-state Hausdorff/spectral
-  dimension estimates.
+- `SimulationHistory` is an allocation-free, exact-size borrowed iterator that reconstructs creation, attempted-move, accepted-move, and measurement events
+  from immutable creation metadata plus the canonical step and measurement streams; results and checkpoints do not serialize a duplicate event vector.
+- Result methods summarize acceptance rate, average action, post-thermalization slab-triangle profiles, sample slab-triangle fluctuations, and final-state
+  finite-graph effective Hausdorff/spectral estimates.
 - `scalar_trace()` and `write_trace_csv()` expose step diagnostics through `markov-chain-monte-carlo::Trace`, using a rectangular CSV table suitable for Polars
   and other downstream dataframe tools.
 
-### `cdt/proposal_policy.rs` — Borrowed Proposal-Policy Inspection
+### `cdt/proposal_policy.rs` — Checked Family Policies And Borrowed Inspection
 
+- `CdtMoveFamilyPolicy` evaluates finite nonnegative relative weights from one invariant-safe family view at a time; CDT normalizes state-dependent output,
+  while `UniformCdtMoveFamilyPolicy` and `CdtMoveFamilyDistribution` provide checked static distributions that avoid unrelated family-cache refreshes.
+- Family probabilities are quantized to the proposal RNG's exact 53-bit categorical grid, preserving positive support and keeping sampled mass identical to
+  the probabilities used in the Hastings correction.
 - `CdtProposalPolicyView` borrows a validated triangulation and one synchronized family cache without exposing mutable geometry or cloning the triangulation.
 - `MoveType::REVERSIBLE_1P1`, `MoveType::identifier`, and `MoveType::reverse` define the stable family order, external identifiers, and reverse mapping.
 - `CdtProposalSiteId` is an opaque family ordinal with triangulation-instance and modification-version provenance; fresh views reject foreign, stale,
@@ -318,25 +333,30 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
 - Offered-site counts and deterministic ID iteration share `MoveSiteCache` and the exact visitor used by conventional sampler selection and reverse-site
   accounting. These sites belong to the actual proposal support but are not an eligible/executable-site mask: later backend edits or CDT validation may still
   reject an offered site as an ordinary self-loop proposal.
-- `tests/proposal_policy.rs` verifies the public boundary, including empty families, ordering, state facts, invalidation, and representative accepted toroidal
-  inverse moves.
+- `tests/proposal_policy.rs` verifies the public boundary, including empty families, ordering, state facts, invalidation, independent concrete-pair
+  detailed-balance calculations, fixed-policy checkpoint reproducibility, and representative accepted toroidal inverse moves.
 
 ### `cdt/observables.rs` — User-facing estimators
 
-- `estimate_hausdorff_dimension` — estimates Hausdorff dimension from combinatorial dual-graph geodesic ball growth, returning `None` when the triangulation
-  is too small or live face adjacency cannot be resolved
-- `estimate_spectral_dimension` — estimates spectral dimension from dual-graph diffusion return probability, returning `None` when the graph is too small or
-  lacks enough positive return-probability samples for a fit
-- `CdtTriangulation::volume_profile` measures per-slice triangle counts on a triangulation; `SimulationResultsBackend` provides aggregate volume-profile
+- `estimate_all_scale_effective_hausdorff_slope` — fits an explicitly finite-graph all-scale slope from combinatorial dual-graph geodesic ball growth,
+  returning `None` when the triangulation is too small or live face adjacency cannot be resolved
+- `estimate_short_time_effective_spectral_dimension` — fits an explicitly finite-window effective spectral dimension from dual-graph diffusion return
+  probability, returning `None` when the graph is too small or lacks enough positive return-probability samples for a fit
+- `average_dual_ball_volume_curve` and `average_dual_return_probability_curve` expose the underlying radius- and diffusion-time-indexed curves so callers can
+  choose and report fit windows instead of relying only on scalar summaries
+- `CdtTriangulation::slab_triangle_profile` measures per-slab triangle counts on a triangulation; `SimulationResultsBackend` provides aggregate slab-profile
   summaries for simulation outputs
 - Import triangulation-focused analysis APIs through `prelude::observables`; use `prelude::simulation` when constructing or inspecting simulation result
   containers
 
 ### `geometry/traits.rs` — Backend-neutral interface
 
-- `GeometryBackend` defines associated coordinate, handle, and error types for a geometry implementation
-- `TriangulationQuery` is the read-only surface used by CDT logic for counts, handles, adjacency, coordinates, face vertices, and validation
+- `GeometryBackend` defines unconstrained associated coordinate and handle types plus the backend error type; algorithms place numeric, cloning, identity, and
+  hashing bounds only on the methods that use those capabilities
+- `TriangulationQuery` is the read-only surface used by CDT logic for counts, handles, adjacency, coordinates, face vertices, and validation. Entity and
+  adjacency scans are lazy borrowed iterators, face vertices are exact-size iterators, and coordinates are borrowed slices over canonical storage.
 - `TriangulationMut` is the narrow mutation surface used by CDT-owned move kernels through CDT state mutation methods, not broad mutable backend exposure
+- `TriangulationOps` supplies blanket high-level operations to sized and unsized query implementations, with handle capabilities constrained per operation
 - Result structs such as `FlipResult`, `EdgeAdjacentFaces`, and `SubdivisionResult` keep local topology operations backend-neutral
 - Use `prelude::geometry` for real backend construction and geometry traits; use `prelude::testing` for mock-backend doctests or downstream fixture code
 
@@ -349,7 +369,9 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
 ### `geometry/backends/delaunay.rs` — Delaunay adapter
 
 - Wraps the upstream `delaunay` triangulation in `DelaunayBackend`
-- Defines crate-owned opaque handles (`DelaunayVertexHandle`, `DelaunayEdgeHandle`, `DelaunayFaceHandle`) so CDT code does not depend on upstream key types
+- Defines crate-owned opaque handles (`DelaunayVertexHandle`, `DelaunayEdgeHandle`, `DelaunayFaceHandle`) so CDT code does not depend on upstream key types.
+  Handles are hashable for runtime maps and sets, but owner and topology-generation provenance makes them non-durable; clones, deserialization, and topology
+  mutation reject old handles with typed foreign/stale errors.
 - Translates upstream Delaunay operations and errors into this crate's trait contracts
 - Exposes named validation adapters for Level 1–3 structure, Level 1–4 embedding/realization, and Level 1–5 Delaunay validity
 - Together with `geometry/generators.rs`, this is the only place that directly imports from the `delaunay` crate
@@ -371,13 +393,12 @@ Together with `backends/delaunay.rs`, this module is the only place that directl
 The toroidal CDT constructor builds from labeled lattice vertices and delegates to the upstream periodic image-point constructor, then validates the resulting
 Delaunay triangulation before CDT foliation, causality, topology, and simplex-classification checks run.
 
-### `util.rs` — Numeric helpers
+### `util.rs` — Crate-private numeric helpers
 
-- `saturating_usize_to_i32` — crate-internal usize→i32 conversion for Euler characteristic arithmetic
+- `usize_to_f64` — checked `usize`→`f64` conversion for observable estimators
+- `f64_band_to_u32` — clamped `f64`→`u32` conversion for internal y-coordinate binning
 - Simulation action inputs use native `usize` topology counts; validated CDT count snapshots use `NonZeroUsize`; measurement and trace telemetry downcasts to
   `u32` are checked at construction boundaries
-- `y_to_time_bucket` — f64→Option<u32> via round(), for time-slice assignment
-- `f64_band_to_u32` — f64→u32 clamped, for y-coordinate binning
 
 ## Notebooks
 
@@ -388,7 +409,7 @@ Notebook files live in `notebooks/` and should wrap the CLI or consume generated
 - `notebooks/01_spacetime_visualization.ipynb` — runs a small 1+1 CDT simulation, reads the exported final triangulation mesh from the JSON summary, and
   generates a static example spacetime visualization under `target/notebooks/visualization/`.
 - `notebooks/02_analysis_caches.ipynb` — runs moderate deterministic CDT simulations for debugging, reads stable trace CSV and summary JSON outputs with
-  Polars, materializes local Parquet caches, flattens volume profiles into long-form tables with run metadata, and plots exploratory run diagnostics.
+  Polars, materializes local Parquet caches, flattens slab-triangle profiles into long-form tables with run metadata, and plots exploratory run diagnostics.
 
 ## Key Dependencies
 

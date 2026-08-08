@@ -10,17 +10,17 @@ use super::telemetry::{MonteCarloStep, ProposalStatistics};
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveStatistics, MoveType};
 use crate::cdt::results::{
-    CdtScalarTraceRow, Measurement, SimulationResultsBackend, SimulationResultsParts,
-    validate_scalar_trace_rows,
+    CdtScalarTraceRow, Measurement, SimulationHistory, SimulationResultsBackend,
+    SimulationResultsParts, scalar_trace_no_proposal_count, validate_scalar_trace_row_slice,
+    validate_scalar_trace_rows, validate_trajectory_observables,
 };
+use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::errors::{
     CdtError, CdtResult, CheckpointMoveCounter, CheckpointResumeFailure, ProposalTelemetryCounter,
 };
-use crate::geometry::CdtTriangulation2D;
 use markov_chain_monte_carlo::ChainCheckpoint;
 use rand::rngs::Xoshiro256PlusPlus;
-use serde::de::Error as DeError;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as DeError};
 use std::num::NonZeroU32;
 use std::time::Duration;
 
@@ -40,6 +40,18 @@ pub(crate) struct CdtMcmcCheckpointParts {
     pub(crate) elapsed_time: Duration,
     pub(crate) acceptance_rng: Xoshiro256PlusPlus,
     pub(crate) ergodics: ErgodicsSystem,
+}
+
+/// Length and outcome evidence for an already fully validated checkpoint prefix.
+#[derive(Clone, Copy)]
+pub(crate) struct ValidatedCheckpointPrefix {
+    steps: usize,
+    measurements: usize,
+    scalar_trace_rows: usize,
+    accepted_steps: usize,
+    scalar_accepted: u64,
+    scalar_rejected_proposal: u64,
+    scalar_no_proposal: u64,
 }
 
 /// Finite action value stored in resumable checkpoint state.
@@ -173,8 +185,25 @@ impl<'de> Deserialize<'de> for CdtMcmcCheckpoint {
 
 impl CdtMcmcCheckpoint {
     pub(crate) fn from_parts(parts: CdtMcmcCheckpointParts) -> CdtResult<Self> {
+        let checkpoint = Self::assemble(parts)?;
+        validate_checkpoint_counters(&checkpoint)?;
+        Ok(checkpoint)
+    }
+
+    /// Constructs a checkpoint by validating only telemetry appended to a trusted prefix.
+    pub(crate) fn from_parts_after_validated_prefix(
+        parts: CdtMcmcCheckpointParts,
+        prefix: ValidatedCheckpointPrefix,
+    ) -> CdtResult<Self> {
+        let checkpoint = Self::assemble(parts)?;
+        validate_checkpoint_after_prefix(&checkpoint, prefix)?;
+        Ok(checkpoint)
+    }
+
+    /// Assembles typed checkpoint storage before cross-stream validation.
+    fn assemble(parts: CdtMcmcCheckpointParts) -> CdtResult<Self> {
         let current_action = CheckpointAction::new(parts.current_action)?;
-        let checkpoint = Self {
+        Ok(Self {
             chain: ChainCheckpoint::new(parts.triangulation, parts.accepted, parts.rejected),
             config: parts.config,
             action_config: parts.action_config,
@@ -188,9 +217,20 @@ impl CdtMcmcCheckpoint {
             elapsed_time: parts.elapsed_time,
             acceptance_rng: parts.acceptance_rng,
             ergodics: parts.ergodics,
-        };
-        validate_checkpoint_counters(&checkpoint)?;
-        Ok(checkpoint)
+        })
+    }
+
+    /// Captures the boundary already proven by a full checkpoint validation.
+    pub(crate) fn validated_prefix(&self) -> CdtResult<ValidatedCheckpointPrefix> {
+        Ok(ValidatedCheckpointPrefix {
+            steps: self.steps.len(),
+            measurements: self.measurements.len(),
+            scalar_trace_rows: self.scalar_trace_rows.len(),
+            accepted_steps: self.chain.accepted(),
+            scalar_accepted: self.proposal_stats.accepted_transitions(),
+            scalar_rejected_proposal: self.proposal_stats.metropolis_rejections(),
+            scalar_no_proposal: scalar_trace_no_proposal_count(&self.proposal_stats)?,
+        })
     }
 
     /// Returns the generic MCMC chain checkpoint for upstream interop.
@@ -470,6 +510,40 @@ impl CdtMcmcCheckpoint {
         &self.measurements
     }
 
+    /// Reconstructs the chronological simulation history without allocating.
+    ///
+    /// The returned iterator borrows the checkpoint's canonical step,
+    /// measurement, and triangulation metadata instead of reading a duplicate
+    /// serialized event log.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtResult, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    ///     SimulationEvent,
+    /// };
+    /// use std::assert_matches;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let checkpoint = MetropolisAlgorithm::new(
+    ///         MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(13),
+    ///         ActionConfig::default(),
+    ///     )
+    ///     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    ///
+    ///     assert_matches!(
+    ///         checkpoint.simulation_history().next(),
+    ///         Some(SimulationEvent::Created { .. })
+    ///     );
+    ///     Ok(())
+    /// }
+    /// ```
+    #[must_use]
+    pub fn simulation_history(&self) -> SimulationHistory<'_> {
+        SimulationHistory::new(self.triangulation(), &self.steps, &self.measurements)
+    }
+
     /// Converts the checkpoint into a complete simulation result snapshot.
     ///
     /// This consumes the checkpoint and keeps all accumulated steps,
@@ -543,8 +617,8 @@ const fn checkpoint_current_step(step: u32) -> CdtResult<NonZeroU32> {
 /// Returns [`CdtError::CheckpointResumeFailed`] when physics settings or
 /// sampling schedule settings differ from the checkpoint, or when the
 /// checkpoint counters and telemetry fail validation.
-pub(crate) fn validate_resume_compatible(
-    algorithm: &MetropolisAlgorithm,
+pub(crate) fn validate_resume_compatible<P>(
+    algorithm: &MetropolisAlgorithm<P>,
     checkpoint: &CdtMcmcCheckpoint,
 ) -> CdtResult<()> {
     ResumeCompatibleActionConfig::new(algorithm.action_config(), &checkpoint.action_config)?;
@@ -615,12 +689,32 @@ const fn ordered_f64_bits(value: f64) -> u64 {
 ///
 /// # Errors
 ///
-/// Returns [`CdtError::InvalidSimulationConfiguration`] for invalid
-/// Metropolis settings, [`CdtError::InvalidConfiguration`] for invalid action
-/// couplings, or [`CdtError::CheckpointResumeFailed`] when serialized chain
-/// counters, step telemetry, measurements, or stored action do not match the
-/// configured sampling schedule and restored triangulation state.
+/// Returns [`CdtError::CheckpointResumeFailed`] when serialized chain counters,
+/// step telemetry, measurements, scalar trace rows, or stored action do not
+/// match the configured sampling schedule and restored triangulation state.
+/// [`MetropolisConfig`] and [`ActionConfig`] validate before storage, so this
+/// helper only audits relationships among their checkpointed data.
 pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
+    validate_checkpoint_summary(checkpoint)?;
+    validate_checkpoint_steps(checkpoint)?;
+    validate_checkpoint_measurements(checkpoint)?;
+    validate_scalar_trace_rows(
+        &checkpoint.config,
+        &checkpoint.proposal_stats,
+        &checkpoint.steps,
+        &checkpoint.scalar_trace_rows,
+    )?;
+    validate_trajectory_observables(
+        &checkpoint.action_config,
+        &checkpoint.steps,
+        &checkpoint.measurements,
+        &checkpoint.scalar_trace_rows,
+        checkpoint.triangulation(),
+    )
+}
+
+/// Checks aggregate checkpoint state without replaying its telemetry streams.
+fn validate_checkpoint_summary(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
     checkpoint.config.validate();
     checkpoint.action_config.validate();
     validate_checkpoint_current_action(checkpoint)?;
@@ -655,15 +749,53 @@ pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> Cd
         ));
     }
     validate_checkpoint_proposal_stats(checkpoint, accepted, rejected)?;
-    validate_checkpoint_steps(checkpoint)?;
-    validate_checkpoint_measurements(checkpoint)?;
-    validate_scalar_trace_rows(
-        &checkpoint.config,
-        &checkpoint.proposal_stats,
-        &checkpoint.steps,
-        &checkpoint.scalar_trace_rows,
-    )?;
     Ok(())
+}
+
+/// Validates telemetry generated after one trusted in-process checkpoint boundary.
+fn validate_checkpoint_after_prefix(
+    checkpoint: &CdtMcmcCheckpoint,
+    prefix: ValidatedCheckpointPrefix,
+) -> CdtResult<()> {
+    validate_checkpoint_summary(checkpoint)?;
+    validate_checkpoint_step_suffix(checkpoint, prefix)?;
+    validate_checkpoint_measurement_suffix(checkpoint, prefix)?;
+    validate_checkpoint_scalar_trace_suffix(checkpoint, prefix)?;
+
+    let steps = checkpoint.steps.get(prefix.steps..).ok_or_else(|| {
+        checkpoint_resume_failed(CheckpointResumeFailure::StepTelemetryLengthMismatch {
+            actual: checkpoint.steps.len(),
+            expected: prefix.steps,
+        })
+    })?;
+    let measurements = checkpoint
+        .measurements
+        .get(prefix.measurements..)
+        .ok_or_else(|| {
+            checkpoint_resume_failed(CheckpointResumeFailure::MeasurementCountMismatch {
+                actual: checkpoint.measurements.len(),
+                expected: prefix.measurements,
+            })
+        })?;
+    let scalar_trace_rows = checkpoint
+        .scalar_trace_rows
+        .get(prefix.scalar_trace_rows..)
+        .ok_or_else(|| {
+            checkpoint_resume_failed(CheckpointResumeFailure::ScalarTraceLengthMismatch {
+                actual: checkpoint.scalar_trace_rows.len(),
+                expected: prefix.scalar_trace_rows,
+            })
+        })?;
+    // These three streams contain only entries appended after the trusted
+    // prefix. Trajectory validation rewinds the suffix steps from the final
+    // triangulation to reconstruct and validate the prefix-boundary state.
+    validate_trajectory_observables(
+        &checkpoint.action_config,
+        steps,
+        measurements,
+        scalar_trace_rows,
+        checkpoint.triangulation(),
+    )
 }
 
 /// Verifies that the stored checkpoint action is finite and matches the restored state.
@@ -775,6 +907,49 @@ fn validate_checkpoint_steps(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
     Ok(())
 }
 
+/// Checks only steps appended after an already validated checkpoint prefix.
+fn validate_checkpoint_step_suffix(
+    checkpoint: &CdtMcmcCheckpoint,
+    prefix: ValidatedCheckpointPrefix,
+) -> CdtResult<()> {
+    let suffix = checkpoint.steps.get(prefix.steps..).ok_or_else(|| {
+        checkpoint_resume_failed(CheckpointResumeFailure::StepTelemetryLengthMismatch {
+            actual: checkpoint.steps.len(),
+            expected: prefix.steps,
+        })
+    })?;
+    let suffix_accepted = suffix.iter().filter(|step| step.accepted()).count();
+    let actual_accepted = prefix.accepted_steps.saturating_add(suffix_accepted);
+    if actual_accepted != checkpoint.chain.accepted() {
+        return Err(checkpoint_resume_failed(
+            CheckpointResumeFailure::StepTelemetryAcceptedCountMismatch {
+                actual: actual_accepted,
+                expected: checkpoint.chain.accepted(),
+            },
+        ));
+    }
+
+    for (offset, step) in suffix.iter().enumerate() {
+        let expected_step = prefix
+            .steps
+            .checked_add(offset)
+            .and_then(|index| index.checked_add(1))
+            .and_then(|index| u32::try_from(index).ok())
+            .ok_or_else(|| {
+                checkpoint_resume_failed(CheckpointResumeFailure::StepTelemetryIndexOverflow)
+            })?;
+        if step.step().get() != expected_step {
+            return Err(checkpoint_resume_failed(
+                CheckpointResumeFailure::StepTelemetrySequenceMismatch {
+                    actual: step.step().get(),
+                    expected: expected_step,
+                },
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Checks that serialized measurements match the configured post-thermalization schedule.
 fn validate_checkpoint_measurements(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
     let expected_measurements = expected_measurement_count(
@@ -811,6 +986,130 @@ fn validate_checkpoint_measurements(checkpoint: &CdtMcmcCheckpoint) -> CdtResult
         }
     }
     Ok(())
+}
+
+/// Checks only measurements appended after an already validated checkpoint prefix.
+fn validate_checkpoint_measurement_suffix(
+    checkpoint: &CdtMcmcCheckpoint,
+    prefix: ValidatedCheckpointPrefix,
+) -> CdtResult<()> {
+    let expected_measurements = expected_measurement_count(
+        checkpoint.current_step.get(),
+        checkpoint.config.thermalization_steps(),
+        checkpoint.config.measurement_frequency(),
+    )
+    .ok_or_else(|| checkpoint_resume_failed(CheckpointResumeFailure::MeasurementCountOverflow))?;
+    if checkpoint.measurements.len() != expected_measurements {
+        return Err(checkpoint_resume_failed(
+            CheckpointResumeFailure::MeasurementCountMismatch {
+                actual: checkpoint.measurements.len(),
+                expected: expected_measurements,
+            },
+        ));
+    }
+
+    let suffix = checkpoint
+        .measurements
+        .get(prefix.measurements..)
+        .ok_or_else(|| {
+            checkpoint_resume_failed(CheckpointResumeFailure::MeasurementCountMismatch {
+                actual: checkpoint.measurements.len(),
+                expected: prefix.measurements,
+            })
+        })?;
+    for (offset, measurement) in suffix.iter().enumerate() {
+        let index = prefix.measurements.checked_add(offset).ok_or_else(|| {
+            checkpoint_resume_failed(CheckpointResumeFailure::MeasurementStepOverflow)
+        })?;
+        let expected_step = expected_measurement_step(
+            index,
+            checkpoint.config.thermalization_steps(),
+            checkpoint.config.measurement_frequency(),
+        )
+        .ok_or_else(|| {
+            checkpoint_resume_failed(CheckpointResumeFailure::MeasurementStepOverflow)
+        })?;
+        if measurement.step() != expected_step {
+            return Err(checkpoint_resume_failed(
+                CheckpointResumeFailure::MeasurementStepMismatch {
+                    actual: measurement.step(),
+                    expected: expected_step,
+                },
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Checks only scalar rows appended after an already validated checkpoint prefix.
+fn validate_checkpoint_scalar_trace_suffix(
+    checkpoint: &CdtMcmcCheckpoint,
+    prefix: ValidatedCheckpointPrefix,
+) -> CdtResult<()> {
+    if checkpoint.scalar_trace_rows.len() != checkpoint.steps.len() {
+        return Err(checkpoint_resume_failed(
+            CheckpointResumeFailure::ScalarTraceLengthMismatch {
+                actual: checkpoint.scalar_trace_rows.len(),
+                expected: checkpoint.steps.len(),
+            },
+        ));
+    }
+    let steps = checkpoint.steps.get(prefix.steps..).ok_or_else(|| {
+        checkpoint_resume_failed(CheckpointResumeFailure::StepTelemetryLengthMismatch {
+            actual: checkpoint.steps.len(),
+            expected: prefix.steps,
+        })
+    })?;
+    let rows = checkpoint
+        .scalar_trace_rows
+        .get(prefix.scalar_trace_rows..)
+        .ok_or_else(|| {
+            checkpoint_resume_failed(CheckpointResumeFailure::ScalarTraceLengthMismatch {
+                actual: checkpoint.scalar_trace_rows.len(),
+                expected: prefix.scalar_trace_rows,
+            })
+        })?;
+    let accepted = checkpoint
+        .proposal_stats
+        .accepted_transitions()
+        .checked_sub(prefix.scalar_accepted)
+        .ok_or_else(|| {
+            checkpoint_resume_failed(CheckpointResumeFailure::ScalarTraceAcceptedCountMismatch {
+                actual: checkpoint.proposal_stats.accepted_transitions(),
+                expected: prefix.scalar_accepted,
+            })
+        })?;
+    let rejected_proposal = checkpoint
+        .proposal_stats
+        .metropolis_rejections()
+        .checked_sub(prefix.scalar_rejected_proposal)
+        .ok_or_else(|| {
+            checkpoint_resume_failed(
+                CheckpointResumeFailure::ScalarTraceRejectedProposalCountMismatch {
+                    actual: checkpoint.proposal_stats.metropolis_rejections(),
+                    expected: prefix.scalar_rejected_proposal,
+                },
+            )
+        })?;
+    let total_no_proposal = scalar_trace_no_proposal_count(&checkpoint.proposal_stats)?;
+    let no_proposal = total_no_proposal
+        .checked_sub(prefix.scalar_no_proposal)
+        .ok_or_else(|| {
+            checkpoint_resume_failed(
+                CheckpointResumeFailure::ScalarTraceNoProposalCountMismatch {
+                    actual: total_no_proposal,
+                    expected: prefix.scalar_no_proposal,
+                },
+            )
+        })?;
+    validate_scalar_trace_row_slice(
+        &checkpoint.config,
+        steps,
+        rows,
+        accepted,
+        rejected_proposal,
+        no_proposal,
+    )
 }
 
 /// Sums move counters without allowing invalid serialized telemetry to wrap.

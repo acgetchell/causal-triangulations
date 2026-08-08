@@ -185,9 +185,9 @@ validate_example_output() {
 		require_marker "$example" "$output" "Example completed successfully!"
 		;;
 	observables)
-		require_marker "$example" "$output" "Initial volume profile"
-		require_marker "$example" "$output" "Final Hausdorff-dimension estimate"
-		require_marker "$example" "$output" "Final spectral-dimension estimate"
+		require_marker "$example" "$output" "Initial slab-triangle profile"
+		require_marker "$example" "$output" "Final all-scale effective Hausdorff slope"
+		require_marker "$example" "$output" "Final short-time effective spectral dimension"
 		;;
 	output_and_checkpoint)
 		require_marker "$example" "$output" "Trace CSV rows"

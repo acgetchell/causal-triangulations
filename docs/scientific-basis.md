@@ -54,6 +54,15 @@ Automated λ-scan utilities for finding practical finite-volume windows are plan
 [`causal-triangulations#143`](https://github.com/acgetchell/causal-triangulations/issues/143). For the current release, tune `--cosmological-constant`
 manually and inspect volume, action, and acceptance diagnostics.
 
+## Profile Conventions
+
+Initial-data configuration uses a **spatial-vertex profile** `N₀(t)`: each entry is the number of vertices on one spatial slice. Simulation measurements and
+trace columns use a **slab-triangle profile** `N₂(t)`: each entry counts two-dimensional simplices in the spacetime slab associated with that time label.
+These are different combinatorial observables and are deliberately named differently in the Rust API, CLI, JSON, and CSV schemas.
+
+Assigning normalized edge lengths makes each simplex of a given causal type carry a fixed geometric volume factor; it does not make a vertex count equal to a
+triangle count. Convert counts to physical volumes only after choosing lattice spacings and the relevant simplex-volume normalization.
+
 ## Action Calibration
 
 The default 1+1 action constants use:
@@ -70,6 +79,19 @@ CDT model has critical cosmological coupling `lambda_c = ln 2` in the triangle-v
 This crate's historical action writes the cosmological term as `lambda_edge N1`. For closed toroidal 1+1 triangulations, `N1 = 3 N2 / 2`, so
 `lambda_edge = (2 / 3) ln 2` maps the edge-count convention to the standard critical triangle-volume coupling. Open-boundary strips have boundary-count
 corrections, so the same default should be treated as a practical baseline rather than an exact open-boundary critical value.
+
+The sampler targets `exp(-S / T)`. Temperature is therefore an overall action-scaling parameter, not merely an algorithmic acceptance knob: changing `T`
+changes every effective coupling to its configured value divided by `T`. The quoted critical-coupling calibration assumes `T = 1`; other temperatures require
+deliberate retuning if the same target ensemble is intended.
+
+## Effective Dimensional Observables
+
+The public scalar dimensional routines are intentionally named
+`estimate_all_scale_effective_hausdorff_slope` and `estimate_short_time_effective_spectral_dimension`. The first fits all usable radii of the finite dual graph;
+the second fits a bounded early-diffusion window. Neither scalar alone demonstrates a scale-independent continuum dimension or a plateau.
+
+Use `average_dual_ball_volume_curve` and `average_dual_return_probability_curve` to inspect the underlying curves, select scientifically justified windows,
+and attach uncertainty estimates across independent samples. The crate does not claim those choices or uncertainties on behalf of downstream analyses.
 
 ## Geometry Backend Role
 

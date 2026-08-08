@@ -2,9 +2,8 @@
 
 //! End-to-end physics integration tests for 1+1 CDT simulations.
 
-use causal_triangulations::{
-    CdtConfig, CdtTopology, TestConfig, ValidatedCdtConfig, run_simulation,
-};
+use causal_triangulations::prelude::testing::TestConfig;
+use causal_triangulations::{CdtConfig, CdtTopology, ValidatedCdtConfig, run_simulation};
 
 /// Enables real simulation mode on canned test configs with a deterministic seed.
 const fn simulated_config(mut config: CdtConfig, seed: u64) -> CdtConfig {
@@ -47,11 +46,11 @@ fn assert_physics_pipeline(config: CdtConfig) {
         "accepted moves should mutate the triangulation even when the count-based action is unchanged"
     );
 
-    let profile = results.average_volume_profile();
+    let profile = results.average_slab_triangle_profile();
     assert_eq!(
         profile.len(),
         usize::try_from(config.timeslices().get()).expect("timeslices should fit usize"),
-        "volume profile should cover every time slice"
+        "slab-triangle profile should cover every time slice"
     );
     assert!(
         profile

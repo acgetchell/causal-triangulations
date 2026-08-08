@@ -5,34 +5,38 @@
 //! This module defines the trait-based interface that completely isolates
 //! CDT algorithms from specific geometry implementations.
 
-use num_traits::Float;
 use std::error::Error as StdError;
-use std::fmt::Debug;
-use std::hash::Hash;
 
-/// Core numeric trait for coordinates in geometric calculations.
-///
-/// `num_traits::Float` already implies `Copy`, `Clone`, `PartialEq`, and `PartialOrd`.
-pub trait CoordinateScalar: Float {}
-
-impl<T: Float> CoordinateScalar for T {}
-
-/// Handle types for geometry entities - completely opaque to prevent coupling
-pub trait GeometryHandle: Clone + Eq + Hash + Debug {}
-
-// Blanket implementation for any type satisfying the constraints
-impl<T: Clone + Eq + Hash + Debug> GeometryHandle for T {}
+/// Converts an exact-size iterator into a three-element array without allocating.
+pub(crate) fn exactly_three<T>(mut values: impl ExactSizeIterator<Item = T>) -> Option<[T; 3]> {
+    if values.len() != 3 {
+        return None;
+    }
+    let first = values.next()?;
+    let second = values.next()?;
+    let third = values.next()?;
+    values.next().is_none().then_some([first, second, third])
+}
 
 /// Core geometry backend trait - completely abstracted from implementation details.
+///
+/// Coordinate and handle types are deliberately unconstrained here. Read-only
+/// count and topology consumers do not need numeric coordinates or cloneable,
+/// hashable handles; algorithms add those capabilities only where they use them.
 pub trait GeometryBackend {
-    /// Coordinate type used by this backend
-    type Coordinate: CoordinateScalar;
-    /// Opaque handle type for vertices
-    type VertexHandle: GeometryHandle;
-    /// Opaque handle type for edges
-    type EdgeHandle: GeometryHandle;
-    /// Opaque handle type for faces
-    type FaceHandle: GeometryHandle;
+    /// Coordinate type used by this backend.
+    type Coordinate;
+    /// Opaque handle type for vertices.
+    ///
+    /// Detached handles are scoped to the backend instance and topology
+    /// generation that created them. Implementations must reject handles from a
+    /// different owner or an earlier generation before interpreting their local
+    /// storage key.
+    type VertexHandle;
+    /// Opaque handle type for edges.
+    type EdgeHandle;
+    /// Opaque handle type for faces.
+    type FaceHandle;
     /// Error type for backend operations
     type Error: StdError;
 
@@ -40,7 +44,30 @@ pub trait GeometryBackend {
     fn backend_name(&self) -> &'static str;
 }
 
-/// Read-only triangulation operations
+/// Read-only queries over a geometry backend's triangulation.
+///
+/// Generic CDT and analysis code can depend on this trait to inspect counts,
+/// connectivity, and coordinates without naming a concrete backend.
+/// Entity iterators borrow the backend while yielding detached, owned handles;
+/// coordinate slices borrow canonical payload storage directly. Topology
+/// mutation therefore cannot overlap a live borrowed coordinate or iterator.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::testing::*;
+///
+/// fn simplex_counts(backend: &impl TriangulationQuery) -> (usize, usize, usize) {
+///     (
+///         backend.vertex_count(),
+///         backend.edge_count(),
+///         backend.face_count(),
+///     )
+/// }
+///
+/// let backend = MockBackend::create_triangle();
+/// assert_eq!(simplex_counts(&backend), (3, 3, 1));
+/// ```
 pub trait TriangulationQuery: GeometryBackend {
     /// Get the number of vertices in the triangulation
     fn vertex_count(&self) -> usize;
@@ -74,14 +101,30 @@ pub trait TriangulationQuery: GeometryBackend {
 
     /// Returns the coordinate vector for a vertex handle.
     ///
+    /// The returned slice is a zero-copy view into canonical backend storage and
+    /// remains valid only for the shared borrow of `self`.
+    ///
+    /// ```compile_fail
+    /// use causal_triangulations::prelude::testing::*;
+    ///
+    /// let mut backend = MockBackend::create_triangle();
+    /// let Some(vertex) = backend.vertices().next() else {
+    ///     return Ok(());
+    /// };
+    /// let coordinates = backend.vertex_coordinates(&vertex)?;
+    /// backend.insert_vertex(&[2.0, 2.0])?;
+    /// assert_eq!(coordinates.len(), 2);
+    /// # Ok::<(), MockError>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns the backend error when the vertex handle is invalid or when the
     /// backend cannot resolve the coordinate payload for that vertex.
-    fn vertex_coordinates(
-        &self,
+    fn vertex_coordinates<'a>(
+        &'a self,
         vertex: &Self::VertexHandle,
-    ) -> Result<Vec<Self::Coordinate>, Self::Error>;
+    ) -> Result<&'a [Self::Coordinate], Self::Error>;
 
     /// Returns the vertices that form a face.
     ///
@@ -89,15 +132,14 @@ pub trait TriangulationQuery: GeometryBackend {
     ///
     /// Returns the backend error when the face handle is invalid or when the
     /// backend cannot resolve the face connectivity.
-    fn face_vertices(
-        &self,
+    fn face_vertices<'a>(
+        &'a self,
         face: &Self::FaceHandle,
-    ) -> Result<Vec<Self::VertexHandle>, Self::Error>;
+    ) -> Result<impl ExactSizeIterator<Item = Self::VertexHandle> + 'a, Self::Error>;
 
     /// Get the two vertices that form an edge.
     ///
-    /// Returns `Some((v0, v1))` when endpoint resolution succeeds, or `None`
-    /// if the edge handle is invalid or endpoints are unavailable.
+    /// Returns the two current endpoint handles for a live edge.
     ///
     /// # Examples
     ///
@@ -108,12 +150,17 @@ pub trait TriangulationQuery: GeometryBackend {
     /// assert!(backend
     ///     .edges()
     ///     .next()
-    ///     .is_some_and(|edge| backend.edge_endpoints(&edge).is_some()));
+    ///     .is_some_and(|edge| backend.edge_endpoints(&edge).is_ok()));
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the backend error when the edge is foreign, stale, or no longer
+    /// present in the current topology.
     fn edge_endpoints(
         &self,
         edge: &Self::EdgeHandle,
-    ) -> Option<(Self::VertexHandle, Self::VertexHandle)>;
+    ) -> Result<(Self::VertexHandle, Self::VertexHandle), Self::Error>;
 
     /// Get the two faces adjacent to an edge and their opposite vertices.
     ///
@@ -132,19 +179,18 @@ pub trait TriangulationQuery: GeometryBackend {
 
     /// Get all faces adjacent to a vertex.
     ///
-    /// Backend implementations may build an adjacency index for this query.
-    /// The Delaunay backend caches that index between topology mutations, so the
-    /// first query after a mutation is `O(F)` in the number of finite faces and
-    /// later queries reuse the same snapshot.
+    /// Implementations return a lazy borrowed view over their canonical
+    /// incidence representation. Consumers that need random access or ownership
+    /// beyond this borrow may explicitly collect it.
     ///
     /// # Errors
     ///
     /// Returns the backend error when the vertex handle is invalid or adjacency
     /// information cannot be resolved.
-    fn adjacent_faces(
-        &self,
+    fn adjacent_faces<'a>(
+        &'a self,
         vertex: &Self::VertexHandle,
-    ) -> Result<Vec<Self::FaceHandle>, Self::Error>;
+    ) -> Result<impl Iterator<Item = Self::FaceHandle> + 'a, Self::Error>;
 
     /// Get all edges incident to a vertex
     ///
@@ -152,10 +198,10 @@ pub trait TriangulationQuery: GeometryBackend {
     ///
     /// Returns the backend error when the vertex handle is invalid or incident
     /// edge information cannot be resolved.
-    fn incident_edges(
-        &self,
+    fn incident_edges<'a>(
+        &'a self,
         vertex: &Self::VertexHandle,
-    ) -> Result<Vec<Self::EdgeHandle>, Self::Error>;
+    ) -> Result<impl Iterator<Item = Self::EdgeHandle> + 'a, Self::Error>;
 
     /// Get all faces neighboring a given face
     ///
@@ -163,8 +209,10 @@ pub trait TriangulationQuery: GeometryBackend {
     ///
     /// Returns the backend error when the face handle is invalid or neighboring
     /// face information cannot be resolved.
-    fn face_neighbors(&self, face: &Self::FaceHandle)
-    -> Result<Vec<Self::FaceHandle>, Self::Error>;
+    fn face_neighbors<'a>(
+        &'a self,
+        face: &Self::FaceHandle,
+    ) -> Result<impl Iterator<Item = Self::FaceHandle> + 'a, Self::Error>;
 
     /// Check if the triangulation is valid
     fn is_valid(&self) -> bool;
@@ -276,7 +324,29 @@ impl<V, F> SubdivisionResult<V, F> {
     }
 }
 
-/// Mutable triangulation operations
+/// Topology and coordinate mutations supported by a geometry backend.
+///
+/// Implementations return backend-specific errors and preserve their structural
+/// invariants across successful mutations.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::testing::*;
+///
+/// fn insert_origin<B>(backend: &mut B) -> Result<B::VertexHandle, B::Error>
+/// where
+///     B: TriangulationMut<Coordinate = f64>,
+/// {
+///     backend.reserve_capacity(1, 0)?;
+///     backend.insert_vertex(&[0.0, 0.0])
+/// }
+///
+/// let mut backend = MockBackend::new_2d();
+/// let _vertex = insert_origin(&mut backend)?;
+/// assert_eq!(backend.vertex_count(), 1);
+/// # Ok::<(), MockError>(())
+/// ```
 pub trait TriangulationMut: TriangulationQuery {
     /// Insert a new vertex at the given coordinates
     ///

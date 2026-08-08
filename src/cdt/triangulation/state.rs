@@ -6,17 +6,18 @@
 //! CDT metadata, cached derived quantities, foliation bookkeeping, and the
 //! underlying geometry backend behind validated construction and mutation paths.
 
-use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::{Foliation, FoliationError};
 use crate::config::CdtTopology;
 use crate::errors::{CdtError, CdtResult, SimplexCountField, TriangulationMetadataField};
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::traits::TriangulationQuery;
-use serde::de::Error as DeError;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use std::fmt;
 use std::num::{NonZeroU32, NonZeroUsize};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Instant;
 
 mod builders;
@@ -24,6 +25,7 @@ mod foliation;
 mod moves;
 mod validation;
 
+pub(crate) use foliation::{LocalMoveBaseline, LocalMoveDelta};
 pub use validation::CdtValidationProfile;
 
 static NEXT_TRIANGULATION_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
@@ -47,7 +49,7 @@ pub struct CdtTriangulation<B> {
     /// Process-local identity used only to reject stale transient caches.
     instance_id: u64,
     geometry: B,
-    /// CDT metadata (time slices, dimension, history)
+    /// CDT metadata (time slices, dimension, topology, and creation facts)
     metadata: CdtMetadata,
     cache: GeometryCache,
     /// Optional foliation assigning each vertex to a time slice.
@@ -55,6 +57,17 @@ pub struct CdtTriangulation<B> {
     /// Modification counter value when foliation bookkeeping was last synchronized.
     foliation_synced_at_modification: Option<u64>,
 }
+
+/// CDT triangulation using the crate's supported 2D Delaunay backend.
+///
+/// ```
+/// use causal_triangulations::CdtTriangulation2D;
+///
+/// let triangulation = CdtTriangulation2D::from_cdt_strip(4, 3)?;
+/// assert_eq!(triangulation.slice_sizes(), &[4, 4, 4]);
+/// # Ok::<(), causal_triangulations::CdtError>(())
+/// ```
+pub type CdtTriangulation2D = CdtTriangulation<DelaunayBackend2D>;
 
 /// Strictly positive simplex counts for a CDT triangulation.
 ///
@@ -253,7 +266,7 @@ impl<B: Clone> Clone for CdtTriangulation<B> {
     }
 }
 
-/// Metadata describing the CDT foliation, topology, and simulation history.
+/// Metadata describing the CDT foliation, topology, and creation state.
 #[derive(Debug, Clone)]
 pub struct CdtMetadata {
     /// Nonzero number of time slices in the CDT foliation
@@ -268,10 +281,8 @@ pub struct CdtMetadata {
     last_modified: Instant,
     /// Count of modifications made to the triangulation
     modification_count: u64,
-    /// Ordered simulation event history recorded for this triangulation.
-    ///
-    /// Move events identify proposals and acceptances with [`MoveType`].
-    simulation_history: Vec<SimulationEvent>,
+    /// Vertex count when the triangulation was constructed.
+    initial_vertex_count: usize,
 }
 
 impl CdtMetadata {
@@ -389,7 +400,7 @@ impl CdtMetadata {
         self.modification_count
     }
 
-    /// Returns the ordered simulation event history.
+    /// Returns the vertex count captured when this triangulation was constructed.
     ///
     /// # Examples
     ///
@@ -399,103 +410,43 @@ impl CdtMetadata {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::try_new(MockBackend::create_triangle(), 2, 2)?;
-    ///     assert_eq!(tri.metadata().simulation_history().len(), 1);
+    ///     assert_eq!(tri.metadata().initial_vertex_count(), 3);
     ///     Ok(())
     /// }
     /// ```
     #[must_use]
-    pub fn simulation_history(&self) -> &[SimulationEvent] {
-        &self.simulation_history
+    pub const fn initial_vertex_count(&self) -> usize {
+        self.initial_vertex_count
     }
 }
 
 /// Cached geometry measurements
 #[derive(Debug, Clone, Default)]
 struct GeometryCache {
-    edge_count: Option<CachedValue<usize>>,
-    euler_char: Option<CachedValue<i128>>,
+    edge_count: OnceLock<CachedValue<usize>>,
+    slab_triangle_profile: OnceLock<CachedValue<Vec<u32>>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct CachedValue<T> {
     value: T,
     modification_count: u64,
 }
 
-/// Event recorded in a CDT simulation history.
-///
-/// The history is exposed by [`CdtMetadata::simulation_history`]. Move events
-/// use [`MoveType`] to keep history, checkpoint serialization, and move
-/// statistics aligned with the crate's supported ergodic move set.
-///
-/// # Examples
-///
-/// ```
-/// use causal_triangulations::prelude::moves::MoveType;
-/// use causal_triangulations::prelude::triangulation::SimulationEvent;
-/// use std::assert_matches;
-///
-/// let event = SimulationEvent::MoveAttempted {
-///     move_type: MoveType::Move13Add,
-///     step: 7,
-/// };
-///
-/// assert_matches!(
-///     event,
-///     SimulationEvent::MoveAttempted {
-///         move_type: MoveType::Move13Add,
-///         step: 7,
-///     }
-/// );
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SimulationEvent {
-    /// Triangulation creation event.
-    Created {
-        /// Initial number of vertices.
-        vertex_count: usize,
-        /// Number of time slices.
-        time_slices: u32,
-    },
-    /// Ergodic move proposal event.
-    MoveAttempted {
-        /// Type of move attempted.
-        move_type: MoveType,
-        /// Simulation step number.
-        step: u64,
-    },
-    /// Accepted ergodic move event.
-    MoveAccepted {
-        /// Type of move accepted.
-        move_type: MoveType,
-        /// Simulation step number.
-        step: u64,
-        /// Change in action from this move.
-        action_change: f64,
-    },
-    /// Observable measurement event.
-    MeasurementTaken {
-        /// Simulation step number.
-        step: u64,
-        /// Action value measured.
-        action: f64,
-    },
-}
-
 #[derive(Serialize)]
 struct SerializedCdtTriangulation<'a> {
     geometry: &'a DelaunayBackend2D,
-    metadata: SerializedCdtMetadata<'a>,
+    metadata: SerializedCdtMetadata,
     foliation: &'a Option<Foliation>,
 }
 
 #[derive(Serialize)]
-struct SerializedCdtMetadata<'a> {
+struct SerializedCdtMetadata {
     time_slices: u32,
     dimension: u8,
     topology: CdtTopology,
     modification_count: u64,
-    simulation_history: &'a [SimulationEvent],
+    initial_vertex_count: usize,
 }
 
 #[derive(Deserialize)]
@@ -511,7 +462,7 @@ struct DeserializedCdtMetadata {
     dimension: u8,
     topology: CdtTopology,
     modification_count: u64,
-    simulation_history: Vec<SimulationEvent>,
+    initial_vertex_count: usize,
 }
 
 impl Serialize for CdtTriangulation<DelaunayBackend2D> {
@@ -526,7 +477,7 @@ impl Serialize for CdtTriangulation<DelaunayBackend2D> {
                 dimension: self.metadata.dimension,
                 topology: self.metadata.topology,
                 modification_count: self.metadata.modification_count,
-                simulation_history: &self.metadata.simulation_history,
+                initial_vertex_count: self.metadata.initial_vertex_count,
             },
             foliation: &self.foliation,
         }
@@ -559,7 +510,7 @@ impl<'de> Deserialize<'de> for CdtTriangulation<DelaunayBackend2D> {
                 creation_time: now,
                 last_modified: now,
                 modification_count: serialized.metadata.modification_count,
-                simulation_history: serialized.metadata.simulation_history,
+                initial_vertex_count: serialized.metadata.initial_vertex_count,
             },
             cache: GeometryCache::default(),
             foliation: serialized.foliation,
@@ -731,6 +682,41 @@ impl<B> CdtTriangulation<B> {
             .map(|_| self.metadata.modification_count);
     }
 
+    /// Returns a cached slab-triangle profile for the current geometry revision.
+    fn cached_slab_triangle_profile(&self) -> Option<Vec<u32>> {
+        self.cache
+            .slab_triangle_profile
+            .get()
+            .filter(|cached| cached.modification_count == self.metadata.modification_count)
+            .map(|cached| cached.value.clone())
+    }
+
+    /// Stores a derived slab-triangle profile for the current geometry revision.
+    ///
+    /// `OnceLock::set` is intentionally first-writer-wins: the stored value must
+    /// remain valid for this `metadata.modification_count`, and callers must not
+    /// expect same-revision replacement. [`Self::bump_modification_count`] calls
+    /// `invalidate_cache` before a new revision writes another value.
+    fn cache_slab_triangle_profile(&self, value: Vec<u32>) {
+        let _ = self.cache.slab_triangle_profile.set(CachedValue {
+            value,
+            modification_count: self.metadata.modification_count,
+        });
+    }
+
+    /// Stores a proven edge count for the current geometry revision.
+    ///
+    /// `OnceLock::set` is intentionally first-writer-wins: the stored value must
+    /// remain valid for this `metadata.modification_count`, and callers must not
+    /// expect same-revision replacement. [`Self::bump_modification_count`] calls
+    /// `invalidate_cache` before a new revision writes another value.
+    fn cache_edge_count(&self, value: usize) {
+        let _ = self.cache.edge_count.set(CachedValue {
+            value,
+            modification_count: self.metadata.modification_count,
+        });
+    }
+
     /// Builds the typed error used when callers try to trust stale foliation data.
     fn stale_foliation_error(&self) -> CdtError {
         FoliationError::StaleBookkeeping {
@@ -811,15 +797,10 @@ impl<B> CdtTriangulation<B> {
         }
     }
 
-    /// Records a simulation event without marking the geometry as mutated.
-    pub(crate) fn record_event(&mut self, event: SimulationEvent) {
-        self.metadata.simulation_history.push(event);
-        self.metadata.last_modified = Instant::now();
-    }
-
     /// Clears derived geometry counts so later queries recompute from the backend.
     fn invalidate_cache(&mut self) {
-        self.cache = GeometryCache::default();
+        self.cache.edge_count.take();
+        self.cache.slab_triangle_profile.take();
     }
 }
 
@@ -1004,11 +985,6 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ) -> CdtResult<Self> {
         let parsed_time_slices = Self::parse_time_slices(topology, time_slices)?;
         let vertex_count = geometry.vertex_count();
-        let creation_event = SimulationEvent::Created {
-            vertex_count,
-            time_slices,
-        };
-
         Ok(Self {
             instance_id: next_triangulation_instance_id(),
             geometry,
@@ -1019,7 +995,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
                 creation_time: Instant::now(),
                 last_modified: Instant::now(),
                 modification_count: 0,
-                simulation_history: vec![creation_event],
+                initial_vertex_count: vertex_count,
             },
             cache: GeometryCache::default(),
             foliation: None,
@@ -1083,10 +1059,8 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// Cached edge count with automatic invalidation.
     ///
     /// Returns the cached edge count if the cache is valid (i.e., no mutations since last refresh).
-    /// Otherwise, computes the edge count directly **without updating the cache**.
-    ///
-    /// Call [`refresh_cache()`](Self::refresh_cache) to explicitly populate the cache before
-    /// performance-critical loops that frequently query edge counts.
+    /// Otherwise, computes the edge count once and stores it for later reads of
+    /// the same geometry revision.
     ///
     /// # Performance
     ///
@@ -1106,13 +1080,18 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// }
     /// ```
     pub fn edge_count(&self) -> usize {
-        if let Some(cached) = &self.cache.edge_count
+        if let Some(cached) = self.cache.edge_count.get()
             && cached.modification_count == self.metadata.modification_count
         {
             return cached.value;
         }
 
-        self.geometry.edge_count()
+        let value = self.geometry.edge_count();
+        let _ = self.cache.edge_count.set(CachedValue {
+            value,
+            modification_count: self.metadata.modification_count,
+        });
+        value
     }
 
     /// Returns strictly positive CDT simplex counts for the current state.
@@ -1162,14 +1141,9 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// ```
     pub fn refresh_cache(&mut self) {
         let mod_count = self.metadata.modification_count;
-
-        self.cache.edge_count = Some(CachedValue {
+        self.cache.edge_count.take();
+        let _ = self.cache.edge_count.set(CachedValue {
             value: self.geometry.edge_count(),
-            modification_count: mod_count,
-        });
-
-        self.cache.euler_char = Some(CachedValue {
-            value: self.geometry.euler_characteristic(),
             modification_count: mod_count,
         });
     }
@@ -1199,12 +1173,15 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     pub fn validate_topology(&self) -> CdtResult<()> {
         self.validate_metadata()?;
 
-        let euler_char = self.geometry.euler_characteristic();
+        let vertices = self.geometry.vertex_count() as i128;
+        let edges = self.edge_count() as i128;
+        let faces = self.geometry.face_count() as i128;
+        let euler_char = vertices - edges + faces;
 
         if self.dimension() == 2 {
             let expected = match self.metadata.topology {
-                // Open boundary: planar with boundary χ=1, closed surface χ=2
-                CdtTopology::OpenBoundary => [1, 2].as_slice(),
+                // Open-boundary CDT is a connected planar strip with χ=1.
+                CdtTopology::OpenBoundary => [1].as_slice(),
                 // Toroidal (S¹×S¹): Euler characteristic must be 0
                 CdtTopology::Toroidal => [0].as_slice(),
             };
@@ -1215,8 +1192,8 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
                     euler_characteristic: euler_char,
                     expected_euler_characteristics: expected.to_vec(),
                     vertices: self.geometry.vertex_count(),
-                    edges: self.geometry.edge_count(),
-                    faces: self.geometry.face_count(),
+                    edges: self.edge_count(),
+                    faces: self.face_count(),
                 });
             }
         }
@@ -1230,17 +1207,16 @@ mod tests {
     use super::*;
     use crate::geometry::backends::mock::MockBackend;
     use crate::geometry::generators::build_delaunay2_with_data;
-    use serde_json::error::Category;
-    use serde_json::{from_str, from_value, json, to_string, to_value};
+    use serde_json::{Error as JsonError, error::Category, from_str, to_string};
     use std::assert_matches;
-    use std::num::NonZeroUsize;
-    use std::thread;
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
+
+    const TEST_POINT_SEED: u64 = 0xCD7_5EED;
 
     /// Serde custom deserialization errors expose only a data/error category,
     /// so keep message checks behind one helper while still asserting the
     /// structured classification that `serde_json` provides.
-    fn assert_checkpoint_data_error(error: &serde_json::Error, expected_details: &[&str]) {
+    fn assert_checkpoint_data_error(error: &JsonError, expected_details: &[&str]) {
         assert_eq!(error.classify(), Category::Data);
         let message = error.to_string();
         for expected_detail in expected_details {
@@ -1303,7 +1279,7 @@ mod tests {
                 creation_time: now,
                 last_modified: now,
                 modification_count: 0,
-                simulation_history: Vec::new(),
+                initial_vertex_count: 0,
             },
             cache: GeometryCache::default(),
             foliation: None,
@@ -1389,7 +1365,7 @@ mod tests {
                 ref expected_euler_characteristics,
                 ..
             }) if topology == CdtTopology::OpenBoundary
-                && expected_euler_characteristics.as_slice() == [1, 2]
+                && expected_euler_characteristics.as_slice() == [1]
         );
     }
 
@@ -1414,20 +1390,20 @@ mod tests {
 
     #[test]
     fn test_geometry_access() {
-        let triangulation =
-            CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
+        let triangulation = CdtTriangulation::from_seeded_points(5, 2, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
 
         // Test immutable access
         let geometry = triangulation.geometry();
-        assert!(geometry.vertex_count() > 0);
+        assert_eq!(geometry.vertex_count(), 5);
         assert!(geometry.is_valid());
         assert_eq!(geometry.dimension(), 2);
     }
 
     #[test]
     fn test_basic_properties() {
-        let triangulation =
-            CdtTriangulation::from_random_points(8, 4, 2).expect("Failed to create triangulation");
+        let triangulation = CdtTriangulation::from_seeded_points(8, 4, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
 
         // Test basic property getters
         assert_eq!(triangulation.dimension(), 2);
@@ -1450,8 +1426,8 @@ mod tests {
 
     #[test]
     fn test_metadata_initialization() {
-        let triangulation =
-            CdtTriangulation::from_random_points(6, 3, 2).expect("Failed to create triangulation");
+        let triangulation = CdtTriangulation::from_seeded_points(6, 3, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
 
         // Check that metadata is properly initialized
         assert_eq!(triangulation.dimension(), 2);
@@ -1464,29 +1440,18 @@ mod tests {
     }
 
     #[test]
-    fn test_creation_history() {
-        let triangulation =
-            CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
+    fn test_creation_metadata() {
+        let triangulation = CdtTriangulation::from_seeded_points(5, 2, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
 
-        // Should have at least one creation event
-        assert!(!triangulation.metadata().simulation_history.is_empty());
-
-        match &triangulation.metadata().simulation_history[0] {
-            SimulationEvent::Created {
-                vertex_count,
-                time_slices,
-            } => {
-                assert_eq!(*vertex_count, 5);
-                assert_eq!(*time_slices, 2);
-            }
-            _ => panic!("First event should be Creation"),
-        }
+        assert_eq!(triangulation.metadata().initial_vertex_count(), 5);
+        assert_eq!(triangulation.metadata().time_slices().get(), 2);
     }
 
     #[test]
     fn test_metadata_mutation_invalidates_cache() {
-        let mut triangulation =
-            CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
+        let mut triangulation = CdtTriangulation::from_seeded_points(5, 2, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
 
         // Get initial edge count
         let initial_edge_count = triangulation.edge_count();
@@ -1509,11 +1474,15 @@ mod tests {
 
     #[test]
     fn test_cache_refresh_functionality() {
-        let mut triangulation =
-            CdtTriangulation::from_random_points(6, 2, 2).expect("Failed to create triangulation");
+        let mut triangulation = CdtTriangulation::from_seeded_points(6, 2, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
 
-        // Get initial counts without cache
+        triangulation.bump_modification_count();
+        assert!(triangulation.cache.edge_count.get().is_none());
+
+        // A cache miss computes and populates the current revision.
         let edge_count_1 = triangulation.edge_count();
+        assert!(triangulation.cache.edge_count.get().is_some());
 
         // Refresh cache
         triangulation.refresh_cache();
@@ -1535,8 +1504,8 @@ mod tests {
 
     #[test]
     fn test_cache_invalidation_on_mutation() {
-        let mut triangulation =
-            CdtTriangulation::from_random_points(6, 2, 2).expect("Failed to create triangulation");
+        let mut triangulation = CdtTriangulation::from_seeded_points(6, 2, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
 
         // Populate cache
         triangulation.refresh_cache();
@@ -1554,21 +1523,26 @@ mod tests {
 
     #[test]
     fn test_euler_characteristic() {
-        // Use fixed seed to ensure deterministic closed triangulation with Euler=2
-        // Seed 53 produces V=5, E=9, F=6, Euler=2 for this configuration
+        // Seed 53 produces a deterministic planar triangulation with boundary.
         const TRIANGULATION_SEED: u64 = 53;
 
         let triangulation = CdtTriangulation::from_seeded_points(5, 2, 2, TRIANGULATION_SEED)
             .expect("Failed to create triangulation with fixed seed");
 
-        let result = triangulation.geometry().is_valid();
-        assert!(result, "Validation should succeed for closed triangulation");
+        assert!(
+            triangulation.geometry().is_valid(),
+            "Validation should succeed for closed triangulation"
+        );
+        assert_eq!(triangulation.vertex_count(), 5);
+        assert_eq!(triangulation.edge_count(), 8);
+        assert_eq!(triangulation.face_count(), 4);
+        assert_eq!(triangulation.geometry().euler_characteristic(), 1);
     }
 
     #[test]
     fn test_validate_topology() {
         // Test with various configurations to check topology validation
-        let seeds = [53, 87, 203]; // Known good seeds that produce Euler=2
+        let seeds = [53, 87, 203]; // Known valid open-boundary topology fixtures.
 
         for seed in seeds {
             let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, seed)
@@ -1583,119 +1557,11 @@ mod tests {
     }
 
     #[test]
-    fn test_simulation_event_recording() {
-        let mut triangulation =
-            CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
-
-        let initial_history_len = triangulation.metadata().simulation_history.len();
-        let initial_last_modified = triangulation.metadata().last_modified;
-        thread::sleep(Duration::from_millis(5));
-
-        triangulation.record_event(SimulationEvent::MoveAttempted {
-            move_type: MoveType::Move22,
-            step: 1,
-        });
-
-        triangulation.record_event(SimulationEvent::MoveAccepted {
-            move_type: MoveType::Move22,
-            step: 1,
-            action_change: -0.5,
-        });
-
-        triangulation.record_event(SimulationEvent::MeasurementTaken {
-            step: 2,
-            action: 10.5,
-        });
-
-        // Should have 3 more events
-        assert_eq!(
-            triangulation.metadata().simulation_history.len(),
-            initial_history_len + 3
-        );
-        assert!(triangulation.metadata().last_modified > initial_last_modified);
-
-        // Check the recorded events
-        let history = &triangulation.metadata().simulation_history;
-        match &history[initial_history_len] {
-            SimulationEvent::MoveAttempted { move_type, step } => {
-                assert_eq!(*move_type, MoveType::Move22);
-                assert_eq!(*step, 1);
-            }
-            _ => panic!("Expected MoveAttempted event"),
-        }
-
-        match &history[initial_history_len + 1] {
-            SimulationEvent::MoveAccepted {
-                move_type,
-                step,
-                action_change,
-            } => {
-                assert_eq!(*move_type, MoveType::Move22);
-                assert_eq!(*step, 1);
-                approx::assert_relative_eq!(*action_change, -0.5);
-            }
-            _ => panic!("Expected MoveAccepted event"),
-        }
-
-        match &history[initial_history_len + 2] {
-            SimulationEvent::MeasurementTaken { step, action } => {
-                assert_eq!(*step, 2);
-                approx::assert_relative_eq!(*action, 10.5);
-            }
-            _ => panic!("Expected MeasurementTaken event"),
-        }
-    }
-
-    #[test]
-    fn test_record_event_keeps_foliation_synchronized() {
-        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.5, 1.0], 1)])
-            .expect("Should build labeled triangle");
-        let backend = DelaunayBackend2D::from_triangulation(dt)
-            .expect("test Delaunay triangle should validate");
-        let mut tri = CdtTriangulation::from_labeled_delaunay(backend, 2, 2)
-            .expect("Should preserve labels as foliation");
-
-        let vertex = tri
-            .geometry()
-            .vertices()
-            .next()
-            .expect("Triangle should contain a vertex");
-        let edge = tri
-            .geometry()
-            .edges()
-            .next()
-            .expect("Triangle should contain an edge");
-        let face = tri
-            .geometry()
-            .faces()
-            .next()
-            .expect("Triangle should contain a face");
-
-        let initial_modification_count = tri.metadata().modification_count;
-        let initial_slice_sizes = tri.slice_sizes().to_vec();
-
-        tri.record_event(SimulationEvent::MoveAttempted {
-            move_type: MoveType::EdgeFlip,
-            step: 7,
-        });
-
-        assert_eq!(
-            tri.metadata().modification_count,
-            initial_modification_count
-        );
-        assert!(tri.has_foliation());
-        assert_eq!(tri.slice_sizes(), initial_slice_sizes.as_slice());
-        assert!(tri.time_label(&vertex).is_some());
-        assert!(tri.edge_type(&edge).is_some());
-        assert!(tri.simplex_type(&face).is_some());
-    }
-
-    #[test]
     fn test_metadata_timestamps() {
         let start_time = Instant::now();
 
-        let mut triangulation =
-            CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
+        let mut triangulation = CdtTriangulation::from_seeded_points(5, 2, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
 
         let creation_time = triangulation.metadata().creation_time;
         let initial_last_modified = triangulation.metadata().last_modified;
@@ -1703,19 +1569,20 @@ mod tests {
         // Creation time should be after our start time
         assert!(creation_time >= start_time);
 
-        // Initially, creation_time and last_modified should be very close
-        let time_diff = initial_last_modified.duration_since(creation_time);
-        assert!(time_diff < Duration::from_millis(10));
+        assert!(initial_last_modified >= creation_time);
 
-        // Make a small delay then modify
-        thread::sleep(Duration::from_millis(5));
+        let old_last_modified = initial_last_modified
+            .checked_sub(Duration::from_secs(1))
+            .expect("test timestamp should permit a one-second offset");
+        triangulation.metadata.last_modified = old_last_modified;
+        let before_mutation = Instant::now();
 
         triangulation.bump_modification_count();
 
         let new_last_modified = triangulation.metadata().last_modified;
 
         // last_modified should have been updated
-        assert!(new_last_modified > initial_last_modified);
+        assert!(new_last_modified >= before_mutation);
 
         // creation_time should remain unchanged
         assert_eq!(triangulation.metadata().creation_time, creation_time);
@@ -1723,8 +1590,8 @@ mod tests {
 
     #[test]
     fn test_modification_count() {
-        let mut triangulation =
-            CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
+        let mut triangulation = CdtTriangulation::from_seeded_points(5, 2, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
 
         // Initial modification count should be 0
         assert_eq!(triangulation.metadata().modification_count, 0);
@@ -1754,7 +1621,7 @@ mod tests {
 
     #[test]
     fn test_zero_time_slices_rejected() {
-        let result = CdtTriangulation::from_random_points(5, 0, 2);
+        let result = CdtTriangulation::from_seeded_points(5, 0, 2, TEST_POINT_SEED);
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
@@ -1768,8 +1635,8 @@ mod tests {
 
     #[test]
     fn test_set_time_slices_noop_preserves_metadata() {
-        let mut triangulation =
-            CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
+        let mut triangulation = CdtTriangulation::from_seeded_points(5, 2, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
         let initial_modification_count = triangulation.metadata().modification_count;
         let initial_last_modified = triangulation.metadata().last_modified;
 
@@ -1809,17 +1676,15 @@ mod tests {
 
     #[test]
     fn test_large_time_slices() {
-        let result = CdtTriangulation::from_random_points(5, 100, 2);
-        assert!(result.is_ok(), "Should allow large time slice count");
-
-        let triangulation = result.unwrap();
+        let triangulation = CdtTriangulation::from_seeded_points(5, 100, 2, TEST_POINT_SEED)
+            .expect("Should allow large time slice count");
         assert_eq!(triangulation.time_slices().get(), 100);
     }
 
     #[test]
     fn test_consistency_across_methods() {
-        let triangulation =
-            CdtTriangulation::from_random_points(8, 3, 2).expect("Failed to create triangulation");
+        let triangulation = CdtTriangulation::from_seeded_points(8, 3, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
 
         // Test consistency between different access methods
         let direct_vertex_count = triangulation.vertex_count();
@@ -1846,8 +1711,8 @@ mod tests {
 
     #[test]
     fn test_debug_formatting() {
-        let triangulation =
-            CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
+        let triangulation = CdtTriangulation::from_seeded_points(5, 2, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
 
         let debug_str = format!("{triangulation:?}");
 
@@ -1859,85 +1724,9 @@ mod tests {
     }
 
     #[test]
-    fn test_simulation_event_debug() {
-        let events = vec![
-            SimulationEvent::Created {
-                vertex_count: 5,
-                time_slices: 2,
-            },
-            SimulationEvent::MoveAttempted {
-                move_type: MoveType::EdgeFlip,
-                step: 1,
-            },
-            SimulationEvent::MoveAccepted {
-                move_type: MoveType::EdgeFlip,
-                step: 1,
-                action_change: 0.5,
-            },
-            SimulationEvent::MeasurementTaken {
-                step: 2,
-                action: 15.5,
-            },
-        ];
-
-        for event in events {
-            let debug_str = format!("{event:?}");
-            // Should not panic and should contain meaningful content
-            assert!(!debug_str.is_empty());
-        }
-    }
-
-    #[test]
-    fn simulation_event_move_type_serializes_as_enum_variant() {
-        let event = SimulationEvent::MoveAccepted {
-            move_type: MoveType::Move31Remove,
-            step: 9,
-            action_change: -1.25,
-        };
-
-        let value = to_value(&event).expect("event should serialize");
-
-        assert_eq!(
-            value,
-            json!({
-                "MoveAccepted": {
-                    "move_type": "Move31Remove",
-                    "step": 9,
-                    "action_change": -1.25
-                }
-            })
-        );
-
-        let restored: SimulationEvent =
-            from_value(value).expect("typed move event should deserialize");
-        match restored {
-            SimulationEvent::MoveAccepted {
-                move_type,
-                step,
-                action_change,
-            } => {
-                assert_eq!(move_type, MoveType::Move31Remove);
-                assert_eq!(step, 9);
-                approx::assert_relative_eq!(action_change, -1.25);
-            }
-            other => panic!("expected MoveAccepted event, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn simulation_event_rejects_free_form_move_type_strings() {
-        let invalid_json = r#"{"MoveAttempted":{"move_type":"test_move","step":1}}"#;
-
-        let error = from_str::<SimulationEvent>(invalid_json)
-            .expect_err("move history should reject unsupported move strings");
-
-        assert_checkpoint_data_error(&error, &["unknown variant `test_move`", "Move22"]);
-    }
-
-    #[test]
     fn test_cdt_metadata_clone() {
-        let triangulation =
-            CdtTriangulation::from_random_points(5, 2, 2).expect("Failed to create triangulation");
+        let triangulation = CdtTriangulation::from_seeded_points(5, 2, 2, TEST_POINT_SEED)
+            .expect("Failed to create triangulation");
 
         let metadata1 = triangulation.metadata().clone();
         let metadata2 = metadata1.clone();
@@ -1946,20 +1735,20 @@ mod tests {
         assert_eq!(metadata1.dimension, metadata2.dimension);
         assert_eq!(metadata1.modification_count, metadata2.modification_count);
         assert_eq!(
-            metadata1.simulation_history.len(),
-            metadata2.simulation_history.len()
+            metadata1.initial_vertex_count,
+            metadata2.initial_vertex_count
         );
     }
 
     #[test]
     fn test_extreme_vertex_counts() {
         // Test minimum valid count
-        let min_tri = CdtTriangulation::from_random_points(3, 1, 2)
+        let min_tri = CdtTriangulation::from_seeded_points(3, 1, 2, TEST_POINT_SEED)
             .expect("Should create triangulation with 3 vertices");
         assert_eq!(min_tri.vertex_count(), 3);
 
         // Test larger count (within reasonable bounds for testing)
-        let large_tri = CdtTriangulation::from_random_points(50, 1, 2)
+        let large_tri = CdtTriangulation::from_seeded_points(50, 1, 2, TEST_POINT_SEED)
             .expect("Should create triangulation with 50 vertices");
         assert_eq!(large_tri.vertex_count(), 50);
         assert!(
@@ -1994,7 +1783,7 @@ mod tests {
                 euler_characteristic: 0,
                 ref expected_euler_characteristics,
                 ..
-            }) if topology == CdtTopology::OpenBoundary && expected_euler_characteristics == &[1, 2]
+            }) if topology == CdtTopology::OpenBoundary && expected_euler_characteristics == &[1]
         );
     }
 
@@ -2080,7 +1869,7 @@ mod tests {
             restored
                 .geometry()
                 .faces()
-                .filter(|face| restored.simplex_type(face).is_some())
+                .filter(|face| restored.simplex_type(face).is_ok_and(|kind| kind.is_some()))
                 .count(),
             restored.face_count(),
             "all strip simplices should keep Up/Down classification"
@@ -2138,17 +1927,9 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_roundtrip_keeps_history_valid() {
-        let mut triangulation =
+    fn checkpoint_roundtrip_keeps_creation_metadata_valid() {
+        let triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay CDT strip should build");
-        triangulation.record_event(SimulationEvent::MoveAttempted {
-            move_type: MoveType::Move22,
-            step: 1,
-        });
-        triangulation.record_event(SimulationEvent::MeasurementTaken {
-            step: 1,
-            action: 0.0,
-        });
 
         let json = to_string(&triangulation).expect("checkpoint should serialize");
         let restored: CdtTriangulation<DelaunayBackend2D> =
@@ -2158,8 +1939,8 @@ mod tests {
             .validate_checkpoint_invariants()
             .expect("restored MCMC checkpoint should validate invariants");
         assert_eq!(
-            restored.metadata().simulation_history.len(),
-            triangulation.metadata().simulation_history.len()
+            restored.metadata().initial_vertex_count(),
+            triangulation.metadata().initial_vertex_count()
         );
         assert_eq!(
             restored.metadata().modification_count,
@@ -2177,6 +1958,25 @@ mod tests {
 mod prop_tests {
     use super::*;
     use proptest::prelude::*;
+
+    fn coordinate_signature(triangulation: &CdtTriangulation<DelaunayBackend2D>) -> Vec<Vec<u64>> {
+        let mut coordinates = triangulation
+            .geometry()
+            .vertices()
+            .map(|vertex| {
+                triangulation
+                    .geometry()
+                    .vertex_coordinates(&vertex)
+                    .expect("generated vertex coordinates should be readable")
+                    .iter()
+                    .copied()
+                    .map(f64::to_bits)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        coordinates.sort_unstable();
+        coordinates
+    }
 
     proptest! {
         /// Property: deterministic CDT strips preserve the expected disk Euler characteristic.
@@ -2201,9 +2001,10 @@ mod prop_tests {
         #[test]
         fn triangulation_positive_simplex_counts(
             vertices in 3u32..30,
-            timeslices in 1u32..5
+            timeslices in 1u32..5,
+            seed in any::<u64>()
         ) {
-            let triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
+            let triangulation = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
             let counts = triangulation.simplex_counts()?;
 
             prop_assert!(counts.vertices().get() >= 3, "Must have at least 3 vertices");
@@ -2214,9 +2015,10 @@ mod prop_tests {
         #[test]
         fn triangulation_validity_invariant(
             vertices in 4u32..15,  // Smaller, more stable range
-            timeslices in 1u32..3  // Even smaller range
+            timeslices in 1u32..3,  // Even smaller range
+            seed in any::<u64>()
         ) {
-            let triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
+            let triangulation = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
 
             // Random point generation can create degenerate cases.
             // At minimum, check that basic geometry is valid
@@ -2230,9 +2032,10 @@ mod prop_tests {
         #[test]
         fn cache_consistency(
             vertices in 4u32..25,
-            timeslices in 1u32..4
+            timeslices in 1u32..4,
+            seed in any::<u64>()
         ) {
-            let mut triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
+            let mut triangulation = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
 
             let count1 = triangulation.edge_count();
             let count2 = triangulation.edge_count();
@@ -2247,40 +2050,42 @@ mod prop_tests {
         /// Property: Dimension consistency
         #[test]
         fn dimension_consistency(
-            vertices in 3u32..15
+            vertices in 3u32..15,
+            seed in any::<u64>()
         ) {
-            let triangulation = CdtTriangulation::from_random_points(vertices, 2, 2)?;
+            let triangulation = CdtTriangulation::from_seeded_points(vertices, 2, 2, seed)?;
             prop_assert_eq!(triangulation.dimension(), 2, "Dimension should be 2 for 2D triangulation");
         }
 
-        /// Property: Vertex count scaling - more input vertices should generally lead to more triangulation vertices
-        /// (though not always exact due to duplicate removal in random generation)
+        /// Property: generated vertex counts match the requested size and scale exactly.
         #[test]
         fn vertex_count_scaling(
-            base_vertices in 5u32..15
+            base_vertices in 5u32..15,
+            seed in any::<u64>()
         ) {
-            let small_tri = CdtTriangulation::from_random_points(base_vertices, 2, 2)?;
-            let large_tri = CdtTriangulation::from_random_points(base_vertices * 2, 2, 2)?;
+            let small_tri = CdtTriangulation::from_seeded_points(base_vertices, 2, 2, seed)?;
+            let large_vertices = base_vertices * 2;
+            let large_tri = CdtTriangulation::from_seeded_points(large_vertices, 2, 2, seed)?;
 
-            // Larger input should generally produce more vertices (allowing for some randomness)
             let small_count = small_tri.vertex_count();
             let large_count = large_tri.vertex_count();
+            let expected_small = usize::try_from(base_vertices)
+                .expect("property vertex count should fit usize");
+            let expected_large = usize::try_from(large_vertices)
+                .expect("property vertex count should fit usize");
 
-            // Allow for some variation due to randomness in point generation
-            let threshold = small_count.saturating_sub(small_count / 5); // 80% of small_count
-            prop_assert!(
-                large_count >= small_count || large_count >= threshold,
-                "Larger input should produce comparable or more vertices: small={}, large={}, threshold={}",
-                small_count, large_count, threshold
-            );
+            prop_assert_eq!(small_count, expected_small);
+            prop_assert_eq!(large_count, expected_large);
+            prop_assert!(large_count > small_count);
         }
 
         #[test]
         fn face_edge_relationship(
             vertices in 4u32..12,  // Even smaller range
-            timeslices in 1u32..3
+            timeslices in 1u32..3,
+            seed in any::<u64>()
         ) {
-            let triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
+            let triangulation = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
 
             let v = i32::try_from(triangulation.vertex_count()).unwrap_or(i32::MAX);
             let e = i32::try_from(triangulation.edge_count()).unwrap_or(i32::MAX);
@@ -2304,11 +2109,12 @@ mod prop_tests {
         #[test]
         fn timeslice_parameter_consistency(
             vertices in 4u32..20,
-            timeslices in 1u32..8
+            timeslices in 1u32..8,
+            seed in any::<u64>()
         ) {
-            let triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
+            let triangulation = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
 
-            // Should successfully create triangulation with any valid timeslice count
+            prop_assert_eq!(triangulation.time_slices().get(), timeslices);
             prop_assert!(triangulation.vertex_count() > 0);
             prop_assert!(triangulation.edge_count() > 0);
             prop_assert!(triangulation.face_count() > 0);
@@ -2334,23 +2140,25 @@ mod prop_tests {
             prop_assert_eq!(tri1.face_count(), tri2.face_count(), "Face counts should match");
             prop_assert_eq!(tri1.time_slices(), tri2.time_slices(), "Time slices should match");
             prop_assert_eq!(tri1.dimension(), tri2.dimension(), "Dimensions should match");
+            prop_assert_eq!(coordinate_signature(&tri1), coordinate_signature(&tri2));
         }
 
         /// Property: Metadata consistency and tracking
         #[test]
         fn metadata_tracking_property(
             vertices in 4u32..15,
-            timeslices in 1u32..5
+            timeslices in 1u32..5,
+            seed in any::<u64>()
         ) {
-            let mut triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
+            let mut triangulation = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
 
             // Initial metadata should be consistent
             prop_assert_eq!(triangulation.time_slices().get(), timeslices, "Time slices should match input");
             prop_assert_eq!(triangulation.dimension(), 2, "Dimension should be 2");
             prop_assert_eq!(triangulation.metadata().modification_count, 0, "Initial modification count should be 0");
 
-            // Should have creation event
-            prop_assert!(!triangulation.metadata().simulation_history.is_empty(), "Should have creation event");
+            prop_assert_eq!(triangulation.metadata().initial_vertex_count(), vertices as usize,
+                            "Initial vertex count should match construction input");
 
             let initial_mod_count = triangulation.metadata().modification_count;
 
@@ -2364,9 +2172,10 @@ mod prop_tests {
         #[test]
         fn cache_invalidation_property(
             vertices in 4u32..15,
-            timeslices in 1u32..4
+            timeslices in 1u32..4,
+            seed in any::<u64>()
         ) {
-            let mut triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
+            let mut triangulation = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
 
             // Cache the edge count
             triangulation.refresh_cache();
@@ -2401,33 +2210,6 @@ mod prop_tests {
             prop_assert!(triangulation.vertex_count() >= 3, "Should have >= 3 vertices");
             prop_assert!(triangulation.edge_count() > 0, "Should have > 0 edges");
             prop_assert!(triangulation.face_count() > 0, "Should have > 0 faces");
-        }
-
-        /// Property: Simulation event recording consistency
-        #[test]
-        fn simulation_event_recording_property(
-            vertices in 4u32..12,
-            timeslices in 1u32..4
-        ) {
-            let mut triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
-
-            let initial_history_len = triangulation.metadata().simulation_history.len();
-            let initial_mod_count = triangulation.metadata().modification_count;
-            prop_assert!(initial_history_len >= 1, "Should have at least creation event");
-
-            triangulation.record_event(SimulationEvent::MoveAttempted {
-                move_type: MoveType::Move22,
-                step: 1,
-            });
-            triangulation.record_event(SimulationEvent::MeasurementTaken {
-                step: 2,
-                action: 5.0,
-            });
-
-            prop_assert_eq!(triangulation.metadata().simulation_history.len(), initial_history_len + 2,
-                          "Should have 2 additional events after recording");
-            prop_assert_eq!(triangulation.metadata().modification_count, initial_mod_count,
-                          "History-only operations should not count as backend mutations");
         }
 
         /// Property: Geometric invariants for triangulated structures
@@ -2469,9 +2251,10 @@ mod prop_tests {
         #[test]
         fn parameter_bounds_property(
             vertices in 0u32..30, // Include invalid range (0..3) to exercise error branch
-            timeslices in 0u32..6
+            timeslices in 0u32..6,
+            seed in any::<u64>()
         ) {
-            let result = CdtTriangulation::from_random_points(vertices, timeslices, 2);
+            let result = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed);
 
             if vertices >= 3 && timeslices >= 1 {
                 prop_assert!(
@@ -2501,9 +2284,10 @@ mod prop_tests {
         #[test]
         fn access_method_consistency_property(
             vertices in 4u32..15,
-            timeslices in 1u32..4
+            timeslices in 1u32..4,
+            seed in any::<u64>()
         ) {
-            let triangulation = CdtTriangulation::from_random_points(vertices, timeslices, 2)?;
+            let triangulation = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
 
             // Test that different ways of accessing the same data give consistent results
             let direct_vertex_count = triangulation.vertex_count();

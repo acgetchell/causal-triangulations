@@ -50,7 +50,7 @@ path integral over causally triangulated spacetimes and evaluating it using Mark
 - Resumable serde-backed CDT/MCMC checkpoints for continuation within a compatible build; serialized checkpoint files are
   [version-bound](docs/metropolis.md#serialized-checkpoint-compatibility)
 - Trace CSV simulation output for external analysis workflows; JSON summary/metadata for CLI/config export
-- Volume-profile, Hausdorff-dimension, and spectral-dimension observables for CDT analysis
+- Spatial-vertex input profiles, slab-triangle output profiles, and explicitly finite-window effective dimensional observables
 
 See [CHANGELOG.md](CHANGELOG.md) for release history and [`docs/roadmap.md`](docs/roadmap.md) for current direction, near-term candidates, and non-goals.
 

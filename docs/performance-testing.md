@@ -12,13 +12,15 @@ The performance workflow uses Criterion benchmark output plus `scripts/performan
 - generate Markdown reports for PR or release review;
 - keep local and CI checks using the same benchmark contract.
 
-The default CI contract is `benches/ci_performance_suite.rs`. It is intentionally smaller than the full exploratory benchmark suite so it can provide a stable
-regression signal across platforms.
+The default CI contract combines `benches/ci_performance_suite.rs` with the deterministic assertions in `benches/allocation_profile.rs`. The Criterion suite is
+intentionally smaller than the full exploratory benchmark suite so it can provide a stable regression signal across platforms; the allocation check is a
+blocking correctness gate rather than a timing baseline.
 
 ## Local Commands
 
 ```bash
-just bench-ci          # Run the CI regression benchmark contract
+just allocation-check  # Run the deterministic allocation contract
+just bench-ci          # Run the allocation contract and CI Criterion suite
 just perf-check        # Compare current results against the latest baseline
 just perf-check 5.0    # Use a stricter 5% regression threshold
 just perf-baseline     # Save current results as a timestamped baseline
@@ -43,6 +45,7 @@ but does not by itself fail the PR workflow.
 
 The performance workflow:
 
+- blocks on the deterministic allocation contract;
 - runs the CI benchmark suite on pull requests;
 - compares PR results with the main-branch baseline;
 - comments with regressions, improvements, stable benchmarks, and new benchmarks;
@@ -60,7 +63,7 @@ The CI suite focuses on release-relevant CDT paths:
 - topology, foliation, causality, and simplex-classification validation;
 - individual ergodic move attempts;
 - proposal-site iteration and single-step Metropolis proposal planning;
-- short random-move sweeps;
+- fixed random-move attempt budgets sized as ten initial sweeps;
 - short Metropolis simulations.
 
 The broader Criterion suite includes exploratory groups for geometry queries, cache behavior, action calculations, simulation analysis, and validation. Those
@@ -136,6 +139,7 @@ Need deeper timing data
 
 - `benches/ci_performance_suite.rs`: stable CI regression contract
 - `benches/cdt_benchmarks.rs`: broader Criterion benchmark groups
+- `benches/allocation_profile.rs`: deterministic cached-observable allocation counts
 - `scripts/performance_analysis.py`: baseline comparison and report generation
 - `.github/workflows/performance.yml`: CI performance workflow
 - `performance_baselines/`: saved local and CI baselines

@@ -4,10 +4,10 @@
 
 use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::FoliationError;
-use crate::cdt::results::CdtScalarTraceOutcome;
+use crate::cdt::proposal_policy::CdtMoveFamilyPolicyError;
 use crate::config::CdtTopology;
 use crate::geometry::{SpacetimeCoordinateComponent, SpacetimeCoordinateError};
-use markov_chain_monte_carlo::{McmcError, StepOutcome};
+use markov_chain_monte_carlo::{DiscreteProposalRatioError, McmcError, StepOutcome};
 use std::fmt;
 
 /// Highest cumulative upstream Delaunay validation level being enforced.
@@ -88,8 +88,10 @@ pub enum ConfigurationSetting {
     Coupling2,
     /// Cosmological constant setting.
     CosmologicalConstant,
-    /// Explicit per-slice volume profile setting.
-    VolumeProfile,
+    /// Combined action-coupling magnitude constraint.
+    ActionCouplings,
+    /// Explicit per-slice spatial vertex profile setting.
+    SpatialVertexProfile,
 }
 
 impl fmt::Display for ConfigurationSetting {
@@ -106,7 +108,8 @@ impl fmt::Display for ConfigurationSetting {
             Self::Coupling0 => formatter.write_str("coupling_0"),
             Self::Coupling2 => formatter.write_str("coupling_2"),
             Self::CosmologicalConstant => formatter.write_str("cosmological_constant"),
-            Self::VolumeProfile => formatter.write_str("volume_profile"),
+            Self::ActionCouplings => formatter.write_str("action couplings"),
+            Self::SpatialVertexProfile => formatter.write_str("spatial_vertex_profile"),
         }
     }
 }
@@ -151,12 +154,12 @@ pub enum GenerationParameterIssue {
     InsufficientNumberOfTimeSlices,
     /// A slice count was zero where at least one slice is required.
     NonPositiveSliceCount,
-    /// Explicit volume profile has no slices.
-    EmptyVolumeProfile,
-    /// Explicit volume profile length cannot fit in supported counters.
-    VolumeProfileLengthOverflow,
-    /// A volume-profile slice has too few vertices.
-    InsufficientVerticesInVolumeProfileSlice,
+    /// Explicit spatial-vertex profile has no slices.
+    EmptySpatialVertexProfile,
+    /// Explicit spatial-vertex profile length cannot fit in supported counters.
+    SpatialVertexProfileLengthOverflow,
+    /// A spatial-vertex-profile slice has too few vertices.
+    InsufficientVerticesInSpatialVertexProfileSlice,
     /// Total vertex count cannot fit in supported counters.
     VertexCountOverflow,
     /// Simplex count cannot fit in supported counters.
@@ -177,17 +180,140 @@ impl fmt::Display for GenerationParameterIssue {
                 formatter.write_str("Insufficient number of time slices")
             }
             Self::NonPositiveSliceCount => formatter.write_str("Number of slices must be positive"),
-            Self::EmptyVolumeProfile => formatter.write_str("Empty volume profile"),
-            Self::VolumeProfileLengthOverflow => {
-                formatter.write_str("Volume profile length overflow")
+            Self::EmptySpatialVertexProfile => formatter.write_str("Empty spatial-vertex profile"),
+            Self::SpatialVertexProfileLengthOverflow => {
+                formatter.write_str("Spatial-vertex profile length overflow")
             }
-            Self::InsufficientVerticesInVolumeProfileSlice => {
-                formatter.write_str("Insufficient vertices in volume-profile slice")
+            Self::InsufficientVerticesInSpatialVertexProfileSlice => {
+                formatter.write_str("Insufficient vertices in spatial-vertex-profile slice")
             }
             Self::VertexCountOverflow => formatter.write_str("Vertex count overflow"),
             Self::SimplexCountOverflow => formatter.write_str("Simplex count overflow"),
         }
     }
+}
+
+/// Operation performed when upstream Delaunay generation failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DelaunayGenerationStage {
+    /// Sampling random input points.
+    PointSampling,
+    /// Constructing a Delaunay triangulation from validated input vertices.
+    TriangulationConstruction,
+}
+
+impl fmt::Display for DelaunayGenerationStage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::PointSampling => formatter.write_str("point sampling"),
+            Self::TriangulationConstruction => formatter.write_str("triangulation construction"),
+        }
+    }
+}
+
+/// Count converted while preparing Delaunay generation state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DelaunayGenerationQuantity {
+    /// Total requested vertex count.
+    TotalVertices,
+    /// Total expected finite-face count.
+    TotalFaces,
+    /// Requested vertices per spatial slice.
+    VerticesPerSlice,
+    /// Requested number of time slices.
+    TimeSlices,
+    /// One time-slice index.
+    SliceIndex,
+    /// One entry in a spatial-vertex profile.
+    SliceVertexCount,
+}
+
+impl fmt::Display for DelaunayGenerationQuantity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TotalVertices => formatter.write_str("total vertex count"),
+            Self::TotalFaces => formatter.write_str("total face count"),
+            Self::VerticesPerSlice => formatter.write_str("vertices per slice"),
+            Self::TimeSlices => formatter.write_str("time-slice count"),
+            Self::SliceIndex => formatter.write_str("time-slice index"),
+            Self::SliceVertexCount => formatter.write_str("slice vertex count"),
+        }
+    }
+}
+
+/// Structured reason that Delaunay generation failed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum DelaunayGenerationFailure {
+    /// An upstream point sampler or triangulation constructor failed.
+    #[error("{stage} failed: {detail}")]
+    Upstream {
+        /// Generation stage that failed.
+        stage: DelaunayGenerationStage,
+        /// Upstream diagnostic retained for debugging.
+        detail: String,
+    },
+    /// A validated generation count could not fit the platform index type.
+    #[error("could not convert {quantity} to usize: {detail}")]
+    NumericConversion {
+        /// Count being converted.
+        quantity: DelaunayGenerationQuantity,
+        /// Conversion diagnostic.
+        detail: String,
+    },
+    /// Storage for generated vertex specifications could not be reserved.
+    #[error("could not reserve {requested_capacity} vertex specifications: {detail}")]
+    StorageReservation {
+        /// Capacity requested from the vertex-specification buffer.
+        requested_capacity: usize,
+        /// Allocation diagnostic.
+        detail: String,
+    },
+    /// A completed builder returned a mesh with unexpected live counts.
+    #[error(
+        "generated mesh has {actual_vertices} vertices and {actual_faces} faces; expected {expected_vertices} vertices and {expected_faces} faces"
+    )]
+    MeshSizeMismatch {
+        /// Live vertices returned by the builder.
+        actual_vertices: usize,
+        /// Vertices requested by the constructor.
+        expected_vertices: usize,
+        /// Live finite faces returned by the builder.
+        actual_faces: usize,
+        /// Finite faces requested by the constructor.
+        expected_faces: usize,
+    },
+    /// Causal filtering found an invalid face whose slices cannot lose another vertex.
+    #[error(
+        "non-strict face {face} cannot be filtered because every offending slice is at the minimum size {minimum_slice_size}"
+    )]
+    MinimumSliceSizeReached {
+        /// Backend face key whose incident vertices cannot be removed.
+        face: String,
+        /// Minimum permitted number of vertices per slice.
+        minimum_slice_size: usize,
+    },
+    /// Causal filtering exhausted its bounded pass budget.
+    #[error(
+        "exhausted {max_passes} causal-filtering passes with {remaining_violations} non-strict simplices remaining"
+    )]
+    FilterPassBudgetExhausted {
+        /// Maximum filtering passes permitted by the constructor.
+        max_passes: u32,
+        /// Non-strict simplices remaining after the final pass.
+        remaining_violations: usize,
+    },
+    /// Causal filtering found violations but no removable incident vertex.
+    #[error("found {remaining_violations} non-strict simplices but no removable offending vertex")]
+    NoRemovableFilterVertex {
+        /// Non-strict simplices remaining when filtering stopped.
+        remaining_violations: usize,
+    },
+    /// The deterministic toroidal candidate iterator was empty.
+    #[error("no deterministic toroidal embedding candidates were attempted")]
+    NoEmbeddingCandidates,
 }
 
 /// Identifies the CDT triangulation metadata field that failed validation.
@@ -243,6 +369,65 @@ pub enum OutputFormat {
     Csv,
     /// JSON simulation summary output.
     Json,
+}
+
+/// In-memory preparation step performed before an output file is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum OutputPreparationStage {
+    /// Constructing the scalar trace written to CSV.
+    ScalarTrace,
+    /// Exporting the final triangulation mesh for a JSON summary.
+    MeshExport,
+}
+
+impl fmt::Display for OutputPreparationStage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ScalarTrace => formatter.write_str("scalar trace construction"),
+            Self::MeshExport => formatter.write_str("mesh export"),
+        }
+    }
+}
+
+/// Filesystem or serialization step that failed while coordinating or writing output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum OutputWriteStage {
+    /// Creating a missing parent directory.
+    CreateParentDirectory,
+    /// Opening and exclusively locking the destination's coordination file.
+    AcquireLock,
+    /// Creating or truncating the output file.
+    CreateFile,
+    /// Encoding and writing the primary output payload.
+    Serialize,
+    /// Writing a trailing record terminator.
+    WriteTerminator,
+    /// Flushing buffered output to the operating system.
+    Flush,
+    /// Verifying that an existing destination can be replaced safely.
+    ValidateDestination,
+    /// Moving an existing destination aside before publishing replacements.
+    BackupExisting,
+    /// Publishing a fully written staged file at its configured path.
+    Persist,
+}
+
+impl fmt::Display for OutputWriteStage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::CreateParentDirectory => formatter.write_str("create parent directory"),
+            Self::AcquireLock => formatter.write_str("acquire output lock"),
+            Self::CreateFile => formatter.write_str("create file"),
+            Self::Serialize => formatter.write_str("serialize output"),
+            Self::WriteTerminator => formatter.write_str("write record terminator"),
+            Self::Flush => formatter.write_str("flush output"),
+            Self::ValidateDestination => formatter.write_str("validate output destination"),
+            Self::BackupExisting => formatter.write_str("back up existing output"),
+            Self::Persist => formatter.write_str("persist staged output"),
+        }
+    }
 }
 
 impl fmt::Display for OutputFormat {
@@ -301,6 +486,70 @@ impl fmt::Display for BackendMutationOperation {
             Self::RemoveVertex => formatter.write_str("remove_vertex"),
             Self::FlipEdge => formatter.write_str("flip_edge"),
         }
+    }
+}
+
+/// One failed attempt to restore a backend payload during rollback.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub struct BackendRollbackFailure {
+    /// Backend operation used for the restoration attempt.
+    pub operation: BackendMutationOperation,
+    /// Human-readable backend handle targeted by the restoration attempt.
+    pub target: String,
+    /// Backend diagnostic returned by the failed restoration attempt.
+    pub detail: String,
+}
+
+impl fmt::Display for BackendRollbackFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} on {}: {}",
+            self.operation, self.target, self.detail
+        )
+    }
+}
+
+/// Ordered rollback failures retained after a primary backend mutation error.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BackendRollbackFailures(Vec<BackendRollbackFailure>);
+
+impl BackendRollbackFailures {
+    /// Preserves rollback failures in the order their restoration attempts ran.
+    #[must_use]
+    pub const fn new(failures: Vec<BackendRollbackFailure>) -> Self {
+        Self(failures)
+    }
+
+    /// Returns the structured rollback failure records.
+    #[must_use]
+    pub fn as_slice(&self) -> &[BackendRollbackFailure] {
+        &self.0
+    }
+
+    /// Returns whether every restoration attempt succeeded.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl fmt::Display for BackendRollbackFailures {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (index, failure) in self.0.iter().enumerate() {
+            if index != 0 {
+                formatter.write_str("; ")?;
+            }
+            failure.fmt(formatter)?;
+        }
+        Ok(())
+    }
+}
+
+impl From<Vec<BackendRollbackFailure>> for BackendRollbackFailures {
+    fn from(failures: Vec<BackendRollbackFailure>) -> Self {
+        Self::new(failures)
     }
 }
 
@@ -423,7 +672,7 @@ pub enum CdtValidationFailure {
         vertex: String,
         /// Component that was non-finite.
         component: SpacetimeCoordinateComponent,
-        /// Observed non-finite value, stored as text because `f64` is not `Eq`.
+        /// Observed non-finite value, stored as text because `f64` is not [`Eq`].
         value: String,
     },
     /// A foliated face was not classifiable as a strict Up or Down CDT simplex.
@@ -529,6 +778,39 @@ impl fmt::Display for CdtValidationFailure {
                 formatter,
                 "face {face} is not a strict CDT simplex (expected Up or Down)"
             ),
+        }
+    }
+}
+
+impl std::error::Error for CdtValidationFailure {}
+
+/// Observable counter converted to floating point for numerical estimation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ObservableQuantity {
+    /// Accumulated volume of a dual-graph ball.
+    DualBallVolume,
+    /// Number of dual-ball samples contributing to an average.
+    DualBallSampleCount,
+    /// Radius in the dual graph.
+    DualGraphRadius,
+    /// Live neighbors of one dual-graph node.
+    LiveDualNeighborCount,
+    /// Live dual-graph node count.
+    DualGraphNodeCount,
+    /// Diffusion step used in a spectral-dimension fit.
+    DiffusionStep,
+}
+
+impl fmt::Display for ObservableQuantity {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DualBallVolume => formatter.write_str("dual ball volume"),
+            Self::DualBallSampleCount => formatter.write_str("dual ball sample count"),
+            Self::DualGraphRadius => formatter.write_str("dual graph radius"),
+            Self::LiveDualNeighborCount => formatter.write_str("live dual-neighbor count"),
+            Self::DualGraphNodeCount => formatter.write_str("dual graph node count"),
+            Self::DiffusionStep => formatter.write_str("diffusion step"),
         }
     }
 }
@@ -802,6 +1084,52 @@ pub enum CheckpointResumeFailure {
         /// Expected sequential step value.
         expected: u32,
     },
+    /// A step's pre-move action disagrees with its reconstructed simplex-count state.
+    #[error(
+        "step {step} action_before does not match the reconstructed state: got {actual}, expected {expected}"
+    )]
+    StepActionBeforeStateMismatch {
+        /// Step with inconsistent action telemetry.
+        step: u32,
+        /// Serialized pre-move action.
+        actual: f64,
+        /// Action recomputed from the reconstructed pre-move simplex counts.
+        expected: f64,
+    },
+    /// A step's effective post-move action disagrees with its reconstructed state.
+    #[error(
+        "step {step} action does not match the reconstructed state: got {actual}, expected {expected}"
+    )]
+    StepActionStateMismatch {
+        /// Step with inconsistent action telemetry.
+        step: u32,
+        /// Serialized effective post-move action.
+        actual: f64,
+        /// Action recomputed from the reconstructed post-move simplex counts.
+        expected: f64,
+    },
+    /// A scored proposal delta disagrees with the move family's count-level action change.
+    #[error(
+        "step {step} delta_action does not match the reconstructed proposal: got {actual}, expected {expected}"
+    )]
+    StepDeltaActionStateMismatch {
+        /// Step with inconsistent proposal telemetry.
+        step: u32,
+        /// Serialized proposal action delta.
+        actual: f64,
+        /// Action delta recomputed from the move's simplex-count transition.
+        expected: f64,
+    },
+    /// A move's simplex-count transition cannot be reconstructed without overflow or zero counts.
+    #[error("step {step} {move_type:?} transition cannot produce a positive {field} simplex count")]
+    StepSimplexCountTransitionInvalid {
+        /// Step with an impossible count transition.
+        step: u32,
+        /// Move family whose count delta is invalid.
+        move_type: MoveType,
+        /// Simplex-count field that would overflow, underflow, or become zero.
+        field: SimplexCountField,
+    },
     /// Step telemetry contains a non-finite pre-move action.
     #[error("step {step} has non-finite action_before")]
     NonFiniteStepActionBefore {
@@ -860,13 +1188,13 @@ pub enum CheckpointResumeFailure {
     },
     /// Scalar trace outcome disagrees with step telemetry.
     #[error("step {step} scalar trace outcome mismatch: got {actual:?}, expected {expected:?}")]
-    ScalarTraceAcceptedMismatch {
+    ScalarTraceOutcomeMismatch {
         /// Step with invalid scalar trace telemetry.
         step: u32,
         /// Outcome reconstructed from scalar trace telemetry.
-        actual: CdtScalarTraceOutcome,
+        actual: StepOutcome,
         /// Outcome reconstructed from step telemetry.
-        expected: CdtScalarTraceOutcome,
+        expected: StepOutcome,
     },
     /// Scalar trace optional action delta disagrees with step telemetry.
     #[error("step {step} scalar trace delta_action does not match step telemetry")]
@@ -908,17 +1236,47 @@ pub enum CheckpointResumeFailure {
         /// Seed from simulation configuration.
         expected: Option<u64>,
     },
-    /// Scalar trace volume profile exceeds the stored triangle count.
+    /// Scalar trace slab-triangle profile exceeds the stored triangle count.
     #[error(
-        "step {step} scalar trace volume profile total {profile_total} exceeds triangle count {triangles}"
+        "step {step} scalar trace slab-triangle profile total {profile_total} exceeds triangle count {triangles}"
     )]
-    ScalarTraceVolumeProfileExceedsTriangles {
+    ScalarTraceSlabTriangleProfileExceedsTriangles {
         /// Step with invalid scalar trace telemetry.
         step: u32,
-        /// Sum of the serialized volume profile entries.
+        /// Sum of the serialized slab-triangle profile entries.
         profile_total: u64,
-        /// Stored scalar trace triangle count.
-        triangles: u32,
+        /// Reconstructed triangle count for the profile's state.
+        triangles: u64,
+    },
+    /// A reconstructed scalar-trace triangle count cannot fit its comparison type.
+    #[error("reconstructed scalar trace triangle count {triangles} exceeds u64::MAX")]
+    ScalarTraceTriangleCountOverflow {
+        /// Reconstructed nonzero triangle count that could not be widened.
+        triangles: usize,
+    },
+    /// A scalar trace simplex count disagrees with the reconstructed post-step state.
+    #[error(
+        "step {step} scalar trace {field} count does not match the reconstructed state: got {actual}, expected {expected}"
+    )]
+    ScalarTraceSimplexCountStateMismatch {
+        /// Step with inconsistent scalar trace telemetry.
+        step: u32,
+        /// Simplex-count field that disagrees with the trajectory.
+        field: MeasurementCountField,
+        /// Serialized scalar trace count.
+        actual: u32,
+        /// Count reconstructed from the accepted move trajectory.
+        expected: usize,
+    },
+    /// A scalar trace slab-triangle profile disagrees with the restored final triangulation.
+    #[error("step {step} scalar trace slab-triangle profile does not match the restored state")]
+    ScalarTraceSlabTriangleProfileStateMismatch {
+        /// Step with inconsistent scalar trace telemetry.
+        step: u32,
+        /// Serialized scalar trace slab-triangle profile.
+        actual: Vec<u32>,
+        /// Slab-triangle profile recomputed from the restored final triangulation.
+        expected: Vec<u32>,
     },
     /// Scalar trace contains a non-finite numeric value.
     #[error("step {step} scalar trace field {field} is non-finite")]
@@ -973,6 +1331,42 @@ pub enum CheckpointResumeFailure {
         actual: u32,
         /// Expected measurement step from the sampling schedule.
         expected: u32,
+    },
+    /// A measurement action disagrees with the reconstructed state at its step.
+    #[error(
+        "step {step} measurement action does not match the reconstructed state: got {actual}, expected {expected}"
+    )]
+    MeasurementActionStateMismatch {
+        /// Step with inconsistent measurement telemetry.
+        step: u32,
+        /// Serialized measurement action.
+        actual: f64,
+        /// Action recomputed from the reconstructed simplex counts.
+        expected: f64,
+    },
+    /// A measurement simplex count disagrees with the reconstructed state at its step.
+    #[error(
+        "step {step} measurement {field} count does not match the reconstructed state: got {actual}, expected {expected}"
+    )]
+    MeasurementSimplexCountStateMismatch {
+        /// Step with inconsistent measurement telemetry.
+        step: u32,
+        /// Simplex-count field that disagrees with the trajectory.
+        field: MeasurementCountField,
+        /// Serialized measurement count.
+        actual: u32,
+        /// Count reconstructed from the accepted move trajectory.
+        expected: usize,
+    },
+    /// A measurement slab-triangle profile disagrees with the trace or restored final state.
+    #[error("step {step} measurement slab-triangle profile does not match the reconstructed state")]
+    MeasurementSlabTriangleProfileStateMismatch {
+        /// Step with inconsistent measurement telemetry.
+        step: u32,
+        /// Serialized measurement slab-triangle profile.
+        actual: Vec<u32>,
+        /// Profile stored for the same trace state or recomputed from final geometry.
+        expected: Vec<u32>,
     },
     /// A per-move counter sum overflowed.
     #[error("{counter} move count exceeds u64::MAX")]
@@ -1122,7 +1516,7 @@ pub enum MetropolisMoveApplicationFailure {
     },
     /// A backend mutation failed, then rollback of staged payloads also failed.
     #[error(
-        "backend mutation failed [{operation}] on {target}: {detail}; rollback failed: {rollback_errors}"
+        "backend mutation failed [{operation}] on {target}: {detail}; rollback failed: {rollback_failures}"
     )]
     BackendRollback {
         /// Mutation operation being attempted when the first failure occurred.
@@ -1131,8 +1525,8 @@ pub enum MetropolisMoveApplicationFailure {
         target: String,
         /// Primary mutation failure detail.
         detail: String,
-        /// Rollback failure details for one or more payloads.
-        rollback_errors: String,
+        /// Structured failures from one or more restoration attempts.
+        rollback_failures: BackendRollbackFailures,
     },
     /// Upstream Delaunay validation rejected the evolved geometry.
     #[error("Delaunay validation failed [{level}]: {detail}")]
@@ -1148,6 +1542,7 @@ pub enum MetropolisMoveApplicationFailure {
         /// Validation check that failed.
         check: CdtValidationCheck,
         /// Structured validation failure detail.
+        #[source]
         failure: CdtValidationFailure,
     },
     /// Topology metadata did not match the evolved backend Euler characteristic.
@@ -1170,7 +1565,7 @@ pub enum MetropolisMoveApplicationFailure {
     },
     /// Foliation bookkeeping or validation failed.
     #[error("foliation validation failed: {0}")]
-    Foliation(FoliationError),
+    Foliation(#[source] FoliationError),
     /// A post-mutation edge violated CDT causality.
     #[error("{}", format_causality_violation(*time_0, *time_1, *step_distance))]
     CausalityViolation {
@@ -1182,10 +1577,11 @@ pub enum MetropolisMoveApplicationFailure {
         step_distance: u32,
     },
     /// A hard failure reached the Metropolis boundary through an unexpected error category.
-    #[error("unexpected accepted-move failure: {detail}")]
+    #[error("unexpected accepted-move failure: {source}")]
     Unexpected {
-        /// Lower-level error text retained for diagnostics.
-        detail: String,
+        /// Lower-level typed error retained for inspection and source chaining.
+        #[source]
+        source: Box<CdtError>,
     },
 }
 
@@ -1205,12 +1601,12 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
                 operation,
                 target,
                 detail,
-                rollback_errors,
+                rollback_failures,
             } => Self::BackendRollback {
                 operation,
                 target,
                 detail,
-                rollback_errors,
+                rollback_failures,
             },
             CdtError::DelaunayValidationFailed { level, detail } => {
                 Self::DelaunayValidation { level, detail }
@@ -1250,23 +1646,30 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             | CdtError::InvalidSimplexCount { .. }
             | CdtError::InvalidMeasurementAction { .. }
             | CdtError::InvalidMeasurementCount { .. }
-            | CdtError::InvalidMeasurementVolumeProfile { .. }
+            | CdtError::InvalidMeasurementSlabTriangleProfile { .. }
             | CdtError::InvalidScalarTraceCount { .. }
             | CdtError::MeasurementCountOverflow { .. }
             | CdtError::InvalidSimulationConfiguration { .. }
+            | CdtError::ProposalPolicyFailed { .. }
+            | CdtError::MetropolisProposalPolicyFailed { .. }
+            | CdtError::ProposalRatioFailed { .. }
+            | CdtError::MetropolisProposalRatioFailed { .. }
             | CdtError::PlannedProposalStepFailed { .. }
             | CdtError::UnexpectedPlannedStepOutcome { .. }
             | CdtError::PlannedProposalTelemetryMissing { .. }
             | CdtError::InvalidTriangulationMetadata { .. }
             | CdtError::VertexBuildFailed { .. }
             | CdtError::Mcmc(_)
+            | CdtError::ObservableNumericConversionFailed { .. }
+            | CdtError::OutputPreparationFailed { .. }
             | CdtError::OutputWriteFailed { .. }
             | CdtError::OutputPathResolutionFailed { .. }
             | CdtError::OutputPathConflict { .. }
+            | CdtError::OutputPathBusy { .. }
             | CdtError::OutputReadFailed { .. }
             | CdtError::CheckpointSerializationFailed { .. }
             | CdtError::CheckpointResumeFailed { .. }) => Self::Unexpected {
-                detail: unexpected.to_string(),
+                source: Box::new(unexpected),
             },
         }
     }
@@ -1279,9 +1682,9 @@ pub enum CdtError {
     /// Invalid dimension specified
     #[error("Unsupported dimension: {0}. Only 2D is currently supported")]
     UnsupportedDimension(u32),
-    /// Delaunay triangulation generation failed with detailed context
+    /// Delaunay triangulation generation failed with detailed context.
     #[error(
-        "Delaunay triangulation generation failed: {vertex_count} vertices, range [{}, {}], attempt {attempt}: {underlying_error}",
+        "Delaunay triangulation generation failed: {vertex_count} vertices, range [{}, {}], attempt {attempt}: {failure}",
         coordinate_range.0,
         coordinate_range.1
     )]
@@ -1292,8 +1695,9 @@ pub enum CdtError {
         coordinate_range: (f64, f64),
         /// Attempt number when the failure occurred
         attempt: u32,
-        /// Description of the underlying error that caused the failure
-        underlying_error: String,
+        /// Structured generation failure category.
+        #[source]
+        failure: DelaunayGenerationFailure,
     },
     /// Upstream Delaunay validation rejected a geometry backend.
     #[error("Delaunay validation failed [{level}]: {detail}")]
@@ -1359,14 +1763,14 @@ pub enum CdtError {
         provided_value: u32,
     },
     /// [`Measurement`](crate::cdt::results::Measurement) construction failed
-    /// because a per-slice volume profile could not fit the stored triangle count.
+    /// because a per-slab triangle profile could not fit the stored triangle count.
     #[error(
-        "Invalid measurement volume profile at step {step}: total {profile_total} exceeds triangle count {triangles}"
+        "Invalid measurement slab-triangle profile at step {step}: total {profile_total} exceeds triangle count {triangles}"
     )]
-    InvalidMeasurementVolumeProfile {
-        /// Measurement step with invalid volume-profile telemetry.
+    InvalidMeasurementSlabTriangleProfile {
+        /// Measurement step with invalid slab-triangle-profile telemetry.
         step: u32,
-        /// Sum of the supplied volume profile entries.
+        /// Sum of the supplied slab-triangle profile entries.
         profile_total: u64,
         /// Stored measurement triangle count.
         triangles: u32,
@@ -1430,6 +1834,38 @@ pub enum CdtError {
         /// Most specific lower-level rejection or failure observed.
         source: MetropolisMoveApplicationFailure,
     },
+    /// A standalone planned proposal could not evaluate a checked family distribution.
+    #[error("CDT proposal policy failed: {source}")]
+    ProposalPolicyFailed {
+        /// Typed policy evaluation or normalization failure.
+        source: CdtMoveFamilyPolicyError,
+    },
+    /// A Metropolis run could not evaluate a checked family distribution.
+    #[error("CDT proposal policy failed at Metropolis step {step}: {source}")]
+    MetropolisProposalPolicyFailed {
+        /// Monte Carlo step whose pre-state or reverse-state policy evaluation failed.
+        step: u32,
+        /// Typed policy evaluation or normalization failure.
+        source: CdtMoveFamilyPolicyError,
+    },
+    /// A standalone planned proposal carried invalid family/site ratio components.
+    #[error("CDT proposal ratio failed for {move_type:?}: {source}")]
+    ProposalRatioFailed {
+        /// Selected forward family.
+        move_type: MoveType,
+        /// Typed upstream ratio-construction failure.
+        source: DiscreteProposalRatioError,
+    },
+    /// A Metropolis run received invalid family/site ratio components.
+    #[error("CDT proposal ratio failed for {move_type:?} at Metropolis step {step}: {source}")]
+    MetropolisProposalRatioFailed {
+        /// Monte Carlo step whose planned ratio was invalid.
+        step: u32,
+        /// Selected forward family.
+        move_type: MoveType,
+        /// Typed upstream ratio-construction failure.
+        source: DiscreteProposalRatioError,
+    },
     /// A planned CDT proposal step completed without required proposal telemetry.
     #[error("planned CDT proposal step {step} completed without required proposal telemetry")]
     PlannedProposalTelemetryMissing {
@@ -1476,6 +1912,7 @@ pub enum CdtError {
         /// Validation check that failed.
         check: CdtValidationCheck,
         /// Structured validation failure detail.
+        #[source]
         failure: CdtValidationFailure,
     },
     /// Topology metadata does not match the backend Euler characteristic.
@@ -1519,7 +1956,7 @@ pub enum CdtError {
     },
     /// Backend mutation failed and restoring previously staged payloads also failed.
     #[error(
-        "Backend mutation failed [{operation}] on {target}: {detail}; rollback failed: {rollback_errors}"
+        "Backend mutation failed [{operation}] on {target}: {detail}; rollback failed: {rollback_failures}"
     )]
     BackendRollbackFailed {
         /// Mutation operation being attempted when the first failure occurred.
@@ -1528,8 +1965,8 @@ pub enum CdtError {
         target: String,
         /// Primary mutation failure detail.
         detail: String,
-        /// Rollback failure details for one or more payloads.
-        rollback_errors: String,
+        /// Structured failures from one or more restoration attempts.
+        rollback_failures: BackendRollbackFailures,
     },
     /// An edge violates the causal structure by spanning more than one time slice
     /// (or, on toroidal topology, more than one *circular* slice step).
@@ -1541,8 +1978,9 @@ pub enum CdtError {
         time_1: u32,
         /// Topology-aware temporal step distance between the two labels.
         ///
-        /// On `OpenBoundary` topology this equals `time_0.abs_diff(time_1)`.
-        /// On `Toroidal` topology it is the circular distance
+        /// On [`CdtTopology::OpenBoundary`] this equals
+        /// `time_0.abs_diff(time_1)`. On [`CdtTopology::Toroidal`] it is the
+        /// circular distance
         /// `min(d, T − d)`, so the wrap-around edge between slice `T − 1`
         /// and slice `0` reads as `1` rather than `T − 1`.  This is the
         /// quantity that triggers the violation (`step_distance > 1`).
@@ -1551,13 +1989,35 @@ pub enum CdtError {
     /// Upstream MCMC framework error, such as a non-finite log-probability.
     #[error("MCMC error: {0}")]
     Mcmc(#[from] McmcError),
-    /// Writing CSV/JSON simulation output failed.
-    #[error("Failed to write {format} output to {path}: {detail}")]
+    /// An observable counter could not be represented as `f64`.
+    #[error("Cannot convert {quantity} value {value} to f64")]
+    ObservableNumericConversionFailed {
+        /// Observable quantity being converted.
+        quantity: ObservableQuantity,
+        /// Integer value that could not be represented.
+        value: usize,
+    },
+    /// Preparing in-memory data for CSV/JSON output failed before file I/O began.
+    #[error("Failed to prepare {format} output for {path} during {stage}: {detail}")]
+    OutputPreparationFailed {
+        /// Target output path, retained to identify the requested artifact.
+        path: String,
+        /// Output format being prepared.
+        format: OutputFormat,
+        /// In-memory preparation step that failed.
+        stage: OutputPreparationStage,
+        /// Lower-level preparation diagnostic.
+        detail: String,
+    },
+    /// Coordinating or writing CSV/JSON simulation output failed.
+    #[error("Failed to write {format} output to {path} during {stage}: {detail}")]
     OutputWriteFailed {
         /// Target output path.
         path: String,
         /// Output format being written.
         format: OutputFormat,
+        /// Filesystem or serialization step that failed.
+        stage: OutputWriteStage,
         /// Lower-level I/O or serialization error.
         detail: String,
     },
@@ -1576,6 +2036,14 @@ pub enum CdtError {
         csv_path: String,
         /// Resolved JSON output path.
         json_path: String,
+    },
+    /// A configured output path is locked by another simulation.
+    #[error("{format} output path {path} is already in use by another simulation")]
+    OutputPathBusy {
+        /// Resolved output path whose exclusive lock could not be acquired.
+        path: String,
+        /// Output format associated with the locked destination.
+        format: OutputFormat,
     },
     /// Reading or decoding CSV/JSON simulation output failed.
     #[error("Failed to read {format} output from {path}: {detail}")]
@@ -1608,6 +2076,12 @@ pub enum CdtError {
         #[source]
         failure: CheckpointResumeFailure,
     },
+}
+
+impl From<CdtMoveFamilyPolicyError> for CdtError {
+    fn from(source: CdtMoveFamilyPolicyError) -> Self {
+        Self::ProposalPolicyFailed { source }
+    }
 }
 
 impl CdtError {
@@ -1725,12 +2199,19 @@ mod tests {
             vertex_count: 10,
             coordinate_range: (-1.0, 1.0),
             attempt: 5,
-            underlying_error: "Too many duplicate points".to_string(),
+            failure: DelaunayGenerationFailure::Upstream {
+                stage: DelaunayGenerationStage::TriangulationConstruction,
+                detail: "Too many duplicate points".to_string(),
+            },
         };
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Delaunay triangulation generation failed: 10 vertices, range [-1, 1], attempt 5: Too many duplicate points"
+            "Delaunay triangulation generation failed: 10 vertices, range [-1, 1], attempt 5: triangulation construction failed: Too many duplicate points"
+        );
+        assert_eq!(
+            Error::source(&error).map(ToString::to_string),
+            Some("triangulation construction failed: Too many duplicate points".to_string())
         );
     }
 
@@ -1800,7 +2281,11 @@ mod tests {
                 ConfigurationSetting::CosmologicalConstant,
                 "cosmological_constant",
             ),
-            (ConfigurationSetting::VolumeProfile, "volume_profile"),
+            (ConfigurationSetting::ActionCouplings, "action couplings"),
+            (
+                ConfigurationSetting::SpatialVertexProfile,
+                "spatial_vertex_profile",
+            ),
         ];
 
         for (setting, expected) in cases {
@@ -1840,16 +2325,16 @@ mod tests {
                 "Number of slices must be positive",
             ),
             (
-                GenerationParameterIssue::EmptyVolumeProfile,
-                "Empty volume profile",
+                GenerationParameterIssue::EmptySpatialVertexProfile,
+                "Empty spatial-vertex profile",
             ),
             (
-                GenerationParameterIssue::VolumeProfileLengthOverflow,
-                "Volume profile length overflow",
+                GenerationParameterIssue::SpatialVertexProfileLengthOverflow,
+                "Spatial-vertex profile length overflow",
             ),
             (
-                GenerationParameterIssue::InsufficientVerticesInVolumeProfileSlice,
-                "Insufficient vertices in volume-profile slice",
+                GenerationParameterIssue::InsufficientVerticesInSpatialVertexProfileSlice,
+                "Insufficient vertices in spatial-vertex-profile slice",
             ),
             (
                 GenerationParameterIssue::VertexCountOverflow,
@@ -2051,6 +2536,10 @@ mod tests {
             display,
             "Validation failed [geometry]: backend reported invalid triangulation structure"
         );
+        assert_eq!(
+            Error::source(&error).map(ToString::to_string),
+            Some("backend reported invalid triangulation structure".to_string())
+        );
     }
 
     #[test]
@@ -2187,13 +2676,16 @@ mod tests {
             operation: BackendMutationOperation::SetVertexDataByKey,
             target: "vertex VertexKey(123v1)".to_string(),
             detail: "backend reported invalid vertex key".to_string(),
-            rollback_errors: "vertex VertexKey(7v1): backend reported invalid vertex key"
-                .to_string(),
+            rollback_failures: BackendRollbackFailures::new(vec![BackendRollbackFailure {
+                operation: BackendMutationOperation::SetVertexDataByKey,
+                target: "vertex VertexKey(7v1)".to_string(),
+                detail: "backend reported invalid vertex key".to_string(),
+            }]),
         };
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Backend mutation failed [set_vertex_data_by_key] on vertex VertexKey(123v1): backend reported invalid vertex key; rollback failed: vertex VertexKey(7v1): backend reported invalid vertex key"
+            "Backend mutation failed [set_vertex_data_by_key] on vertex VertexKey(123v1): backend reported invalid vertex key; rollback failed: set_vertex_data_by_key on vertex VertexKey(7v1): backend reported invalid vertex key"
         );
     }
 
@@ -2333,13 +2825,21 @@ mod tests {
                     operation: BackendMutationOperation::FlipEdge,
                     target: "edge EdgeKey(5v1)".to_string(),
                     detail: "flip failed".to_string(),
-                    rollback_errors: "rollback failed".to_string(),
+                    rollback_failures: BackendRollbackFailures::new(vec![BackendRollbackFailure {
+                        operation: BackendMutationOperation::FlipEdge,
+                        target: "edge EdgeKey(5v1)".to_string(),
+                        detail: "rollback failed".to_string(),
+                    }]),
                 },
                 MetropolisMoveApplicationFailure::BackendRollback {
                     operation: BackendMutationOperation::FlipEdge,
                     target: "edge EdgeKey(5v1)".to_string(),
                     detail: "flip failed".to_string(),
-                    rollback_errors: "rollback failed".to_string(),
+                    rollback_failures: BackendRollbackFailures::new(vec![BackendRollbackFailure {
+                        operation: BackendMutationOperation::FlipEdge,
+                        target: "edge EdgeKey(5v1)".to_string(),
+                        detail: "rollback failed".to_string(),
+                    }]),
                 },
             ),
             (
@@ -2416,15 +2916,16 @@ mod tests {
     #[test]
     fn metropolis_move_application_failure_unexpected_retains_diagnostic() {
         let failure = MetropolisMoveApplicationFailure::from(CdtError::UnsupportedDimension(3));
+        assert_eq!(
+            Error::source(&failure).map(ToString::to_string),
+            Some("Unsupported dimension: 3. Only 2D is currently supported".to_string())
+        );
 
-        let MetropolisMoveApplicationFailure::Unexpected { detail } = failure else {
+        let MetropolisMoveApplicationFailure::Unexpected { source } = failure else {
             panic!("expected unexpected failure source");
         };
 
-        assert_eq!(
-            detail,
-            "Unsupported dimension: 3. Only 2D is currently supported"
-        );
+        assert_eq!(*source, CdtError::UnsupportedDimension(3));
     }
 
     #[test]
@@ -2489,11 +2990,13 @@ mod tests {
         let error = CdtError::OutputWriteFailed {
             path: "trace.csv".to_string(),
             format: OutputFormat::Csv,
+            stage: OutputWriteStage::CreateFile,
             detail: "permission denied".to_string(),
         };
         let CdtError::OutputWriteFailed {
             path,
             format,
+            stage,
             detail,
         } = &error
         else {
@@ -2501,11 +3004,31 @@ mod tests {
         };
         assert_eq!(path, "trace.csv");
         assert_eq!(*format, OutputFormat::Csv);
+        assert_eq!(*stage, OutputWriteStage::CreateFile);
         assert_eq!(detail, "permission denied");
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Failed to write CSV output to trace.csv: permission denied"
+            "Failed to write CSV output to trace.csv during create file: permission denied"
+        );
+    }
+
+    #[test]
+    fn output_preparation_failed_preserves_stage() {
+        let error = CdtError::OutputPreparationFailed {
+            path: "summary.json".to_string(),
+            format: OutputFormat::Json,
+            stage: OutputPreparationStage::MeshExport,
+            detail: "invalid mesh".to_string(),
+        };
+
+        assert_matches!(
+            error,
+            CdtError::OutputPreparationFailed {
+                format: OutputFormat::Json,
+                stage: OutputPreparationStage::MeshExport,
+                ..
+            }
         );
     }
 
@@ -2545,6 +3068,26 @@ mod tests {
         assert_eq!(
             format!("{error}"),
             "CSV output path output/results and JSON output path output/results resolve to the same file"
+        );
+    }
+
+    #[test]
+    fn output_path_busy_preserves_destination_context() {
+        let error = CdtError::OutputPathBusy {
+            path: "output/trace.csv".to_string(),
+            format: OutputFormat::Csv,
+        };
+
+        assert_matches!(
+            &error,
+            CdtError::OutputPathBusy {
+                path,
+                format: OutputFormat::Csv,
+            } if path == "output/trace.csv"
+        );
+        assert_eq!(
+            format!("{error}"),
+            "CSV output path output/trace.csv is already in use by another simulation"
         );
     }
 
@@ -2667,9 +3210,15 @@ mod tests {
             expected: "≥ 1".to_string(),
         });
 
-        assert!(success.is_ok());
-        assert!(failure.is_err());
         assert_eq!(success, Ok(42));
+        assert_matches!(
+            failure,
+            Err(CdtError::InvalidConfiguration {
+                setting: ConfigurationSetting::Steps,
+                ref provided_value,
+                ref expected,
+            }) if provided_value == "0" && expected == "≥ 1"
+        );
     }
 
     #[test]

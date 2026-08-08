@@ -14,8 +14,8 @@ use super::adapter::{
     CdtProposal, CdtProposalError, CdtProposalInfo, CdtTarget, restore_checkpoint_state,
 };
 use super::checkpoint::{
-    CdtMcmcCheckpoint, CdtMcmcCheckpointParts, chain_counters, checkpoint_resume_failed,
-    validate_checkpoint_counters, validate_resume_compatible,
+    CdtMcmcCheckpoint, CdtMcmcCheckpointParts, ValidatedCheckpointPrefix, chain_counters,
+    checkpoint_resume_failed, validate_resume_compatible,
 };
 use super::helpers::{
     action_for, actions_match, measurement_for, measurement_is_due, validate_metropolis_schedule,
@@ -24,21 +24,22 @@ use super::helpers::{
 use super::telemetry::{MonteCarloStep, MonteCarloStepOutcome, ProposalStatistics};
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveStatistics, MoveType};
+use crate::cdt::proposal_policy::{CdtMoveFamilyPolicy, UniformCdtMoveFamilyPolicy};
 use crate::cdt::results::{
     CdtScalarTraceOutcome, CdtScalarTraceRow, Measurement, SimulationResultsBackend,
 };
-use crate::cdt::triangulation::SimulationEvent;
+use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::errors::{
     CdtError, CdtResult, CheckpointResumeFailure, ConfigurationSetting,
     MetropolisMoveApplicationFailure,
 };
-use crate::geometry::CdtTriangulation2D;
 use markov_chain_monte_carlo::{
     Chain, ChainCheckpoint, DelayedStep, DelayedStepError, Sampler, StepOutcome,
 };
 use rand::{SeedableRng, rngs::Xoshiro256PlusPlus};
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
+use std::ops::{Deref, DerefMut};
 use std::time::{Duration, Instant};
 
 /// Validated configuration for the Metropolis-Hastings algorithm.
@@ -75,7 +76,7 @@ impl<'de> Deserialize<'de> for MetropolisConfig {
         D: serde::Deserializer<'de>,
     {
         let wire = MetropolisConfigWire::deserialize(deserializer)?;
-        Self::new_with_seed(
+        Self::try_from_parts(
             wire.temperature,
             wire.steps,
             wire.thermalization_steps,
@@ -105,7 +106,8 @@ impl MetropolisConfig {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if `temperature` is
-    /// not finite and positive, if `steps` or `measurement_frequency` is zero, if
+    /// not finite and positive with a finite reciprocal, if `steps` or
+    /// `measurement_frequency` is zero, if
     /// thermalization exceeds the step count, or if the schedule cannot produce a
     /// post-thermalization measurement.
     ///
@@ -125,7 +127,7 @@ impl MetropolisConfig {
         thermalization_steps: u32,
         measurement_frequency: u32,
     ) -> CdtResult<Self> {
-        Self::new_with_seed(
+        Self::try_from_parts(
             temperature,
             steps,
             thermalization_steps,
@@ -134,23 +136,11 @@ impl MetropolisConfig {
         )
     }
 
-    /// Creates a new validated Metropolis configuration with an explicit RNG seed.
+    /// Builds a validated configuration from raw boundary parts.
     ///
-    /// # Errors
-    ///
-    /// Returns [`CdtError::InvalidSimulationConfiguration`] for the same invalid
-    /// temperature or schedule values as [`Self::new`].
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::MetropolisConfig;
-    ///
-    /// let config = MetropolisConfig::new_with_seed(1.0, 100, 10, 5, Some(42))?;
-    /// assert_eq!(config.seed(), Some(42));
-    /// # Ok::<(), causal_triangulations::CdtError>(())
-    /// ```
-    pub fn new_with_seed(
+    /// Keeping optional-seed parsing private leaves [`Self::new`] followed by
+    /// [`Self::with_seed`] as the single public construction workflow.
+    fn try_from_parts(
         temperature: f64,
         steps: u32,
         thermalization_steps: u32,
@@ -370,7 +360,11 @@ impl MetropolisConfig {
     /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     pub fn validate(&self) {
-        debug_assert!(self.temperature.is_finite() && self.temperature > 0.0);
+        debug_assert!(
+            self.temperature.is_finite()
+                && self.temperature > 0.0
+                && self.temperature.recip().is_finite()
+        );
         debug_assert!(self.thermalization_steps <= self.steps.get());
     }
 }
@@ -393,6 +387,11 @@ const fn default_measurement_frequency() -> NonZeroU32 {
 
 struct MetropolisRunState {
     triangulation: CdtTriangulation2D,
+    telemetry: MetropolisRunTelemetry,
+}
+
+/// CDT-owned data streams and RNG state carried beside the canonical chain state.
+struct MetropolisRunTelemetry {
     current_step: u32,
     current_action: f64,
     trace_seed: Option<u64>,
@@ -404,19 +403,39 @@ struct MetropolisRunState {
     measurements: Vec<Measurement>,
     scalar_trace_rows: Vec<CdtScalarTraceRow>,
     elapsed_time: Duration,
+    /// Trusted pre-sampling profile retained until the first scalar row is built.
+    initial_slab_triangle_profile: Option<Vec<u32>>,
+}
+
+impl Deref for MetropolisRunState {
+    type Target = MetropolisRunTelemetry;
+
+    fn deref(&self) -> &Self::Target {
+        &self.telemetry
+    }
+}
+
+impl DerefMut for MetropolisRunState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.telemetry
+    }
 }
 
 /// Metropolis-Hastings algorithm implementation for CDT.
 ///
-/// Accepts or rejects proposed CDT move types before applying them.
-pub struct MetropolisAlgorithm {
+/// Accepts or rejects proposed CDT move types before applying them. The policy
+/// type is part of the runner so fresh runs and checkpoint continuations use the
+/// same configured family-selection workflow.
+pub struct MetropolisAlgorithm<P = UniformCdtMoveFamilyPolicy> {
     /// Algorithm configuration
     config: MetropolisConfig,
     /// Action calculation configuration
     action_config: ActionConfig,
+    /// Family-level proposal policy
+    policy: P,
 }
 
-impl MetropolisAlgorithm {
+impl MetropolisAlgorithm<UniformCdtMoveFamilyPolicy> {
     /// Creates a new Metropolis algorithm instance.
     ///
     /// # Examples
@@ -435,6 +454,47 @@ impl MetropolisAlgorithm {
         Self {
             config,
             action_config,
+            policy: UniformCdtMoveFamilyPolicy,
+        }
+    }
+}
+
+impl<P> MetropolisAlgorithm<P> {
+    /// Returns this runner with a caller-supplied family-level proposal policy.
+    ///
+    /// The policy is retained across fresh-run and checkpoint-resume terminals.
+    /// Borrow the policy when its model state or audit data must remain
+    /// caller-owned.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtMoveFamilyDistribution, CdtResult, CdtTriangulation,
+    ///     MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    ///
+    /// # fn main() -> CdtResult<()> {
+    /// let policy = CdtMoveFamilyDistribution::from_weights([1.0, 2.0, 2.0, 1.0])?;
+    /// let results = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 2, 0, 1)?.with_seed(7),
+    ///     ActionConfig::default(),
+    /// )
+    /// .with_policy(&policy)
+    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    /// assert_eq!(results.steps().len(), 2);
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn with_policy<Q>(self, policy: Q) -> MetropolisAlgorithm<Q>
+    where
+        Q: CdtMoveFamilyPolicy,
+    {
+        MetropolisAlgorithm {
+            config: self.config,
+            action_config: self.action_config,
+            policy,
         }
     }
 
@@ -445,7 +505,12 @@ impl MetropolisAlgorithm {
     pub(crate) const fn action_config(&self) -> &ActionConfig {
         &self.action_config
     }
+}
 
+impl<P> MetropolisAlgorithm<P>
+where
+    P: CdtMoveFamilyPolicy,
+{
     /// Run the Monte Carlo simulation.
     ///
     /// Each step runs through the upstream planned-proposal sampler. CDT plans
@@ -458,8 +523,7 @@ impl MetropolisAlgorithm {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
-    /// configuration is invalid, [`CdtError::InvalidConfiguration`] if the
-    /// action configuration is invalid,
+    /// configuration is invalid,
     /// [`CdtError::MetropolisMoveApplicationFailed`] if an accepted move causes
     /// a hard backend mutation failure,
     /// [`CdtError::PlannedProposalTelemetryMissing`] if the upstream sampler
@@ -468,8 +532,12 @@ impl MetropolisAlgorithm {
     /// vertices, edges, or triangles,
     /// [`CdtError::MeasurementCountOverflow`] if a measurement count cannot fit
     /// compact telemetry storage, [`CdtError::InvalidMeasurementAction`] if a
-    /// measurement action is non-finite, or a validation error for unrecoverable
-    /// triangulation failures.
+    /// measurement action is non-finite,
+    /// [`CdtError::MetropolisProposalPolicyFailed`] if the configured policy
+    /// returns an invalid or empty-support distribution,
+    /// [`CdtError::MetropolisProposalRatioFailed`] if proposal accounting
+    /// produces invalid forward or reverse probabilities, or a validation error
+    /// for unrecoverable triangulation failures.
     ///
     /// # Examples
     ///
@@ -502,8 +570,7 @@ impl MetropolisAlgorithm {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
-    /// configuration is invalid, [`CdtError::InvalidConfiguration`] if the
-    /// action configuration is invalid,
+    /// configuration is invalid,
     /// [`CdtError::MetropolisMoveApplicationFailed`] if an accepted move causes
     /// a hard backend mutation failure,
     /// [`CdtError::PlannedProposalTelemetryMissing`] if the upstream sampler
@@ -512,8 +579,12 @@ impl MetropolisAlgorithm {
     /// vertices, edges, or triangles,
     /// [`CdtError::MeasurementCountOverflow`] if a measurement count cannot fit
     /// compact telemetry storage, [`CdtError::InvalidMeasurementAction`] if a
-    /// measurement action is non-finite, or a validation error for unrecoverable
-    /// triangulation failures.
+    /// measurement action is non-finite,
+    /// [`CdtError::MetropolisProposalPolicyFailed`] if the configured policy
+    /// returns an invalid or empty-support distribution,
+    /// [`CdtError::MetropolisProposalRatioFailed`] if proposal accounting
+    /// produces invalid forward or reverse probabilities, or a validation error
+    /// for unrecoverable triangulation failures.
     ///
     /// # Examples
     ///
@@ -555,12 +626,14 @@ impl MetropolisAlgorithm {
     /// Serialized restore uses checked backend reconstruction, so snapshots
     /// whose evolved geometry is no longer Delaunay-valid may fail to
     /// deserialize even though the in-memory checkpoint can still be resumed.
+    /// The configured policy is used for the complete run but is not serialized
+    /// into the checkpoint; callers remain responsible for persisting external
+    /// model state needed by a later process.
     ///
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
-    /// configuration is invalid, [`CdtError::InvalidConfiguration`] if the
-    /// action configuration is invalid,
+    /// configuration is invalid,
     /// [`CdtError::MetropolisMoveApplicationFailed`] if an accepted move causes
     /// a hard backend mutation failure,
     /// [`CdtError::PlannedProposalTelemetryMissing`] if the upstream sampler
@@ -569,8 +642,12 @@ impl MetropolisAlgorithm {
     /// vertices, edges, or triangles,
     /// [`CdtError::MeasurementCountOverflow`] if a measurement count cannot fit
     /// compact telemetry storage, [`CdtError::InvalidMeasurementAction`] if a
-    /// measurement action is non-finite, or a validation error for unrecoverable
-    /// triangulation failures.
+    /// measurement action is non-finite,
+    /// [`CdtError::MetropolisProposalPolicyFailed`] if the configured policy
+    /// returns an invalid or empty-support distribution,
+    /// [`CdtError::MetropolisProposalRatioFailed`] if proposal accounting
+    /// produces invalid forward or reverse probabilities, or a validation error
+    /// for unrecoverable triangulation failures.
     ///
     /// # Examples
     ///
@@ -598,8 +675,8 @@ impl MetropolisAlgorithm {
         self.config.try_validate()?;
         self.action_config.validate();
 
-        let mut state = self.initial_state(triangulation)?;
-        self.run_steps(&mut state, self.config.steps)?;
+        let state = self.initial_state(triangulation)?;
+        let state = self.run_steps(state, self.config.steps)?;
         state.into_checkpoint(self.config.clone(), self.action_config.clone())
     }
 
@@ -612,8 +689,7 @@ impl MetropolisAlgorithm {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the resumed
-    /// Metropolis configuration is invalid, [`CdtError::InvalidConfiguration`]
-    /// if the action configuration is invalid, or
+    /// Metropolis configuration is invalid, or
     /// [`CdtError::CheckpointResumeFailed`] if the checkpoint is incompatible
     /// with this algorithm or internally inconsistent. Returns
     /// [`CdtError::MetropolisMoveApplicationFailed`],
@@ -624,7 +700,11 @@ impl MetropolisAlgorithm {
     /// [`CdtError::MeasurementCountOverflow`] if a resumed measurement count
     /// cannot fit compact telemetry storage,
     /// [`CdtError::InvalidMeasurementAction`] if a resumed measurement action is
-    /// non-finite, or validation errors for failures during resumed sampling.
+    /// non-finite, [`CdtError::MetropolisProposalPolicyFailed`] if the configured
+    /// policy returns an invalid or empty-support distribution,
+    /// [`CdtError::MetropolisProposalRatioFailed`] if proposal accounting
+    /// produces invalid forward or reverse probabilities, or validation errors
+    /// for failures during resumed sampling.
     ///
     /// # Examples
     ///
@@ -668,12 +748,13 @@ impl MetropolisAlgorithm {
     /// such as sweep-based debug runs that size each chunk from the current
     /// triangulation volume while preserving RNG streams, counters,
     /// measurements, and checkpoint-compatible continuation state.
+    /// The same policy bound through [`Self::with_policy`] is used for the
+    /// resumed chunk.
     ///
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the resumed
-    /// Metropolis configuration is invalid, [`CdtError::InvalidConfiguration`]
-    /// if the action configuration is invalid, or
+    /// Metropolis configuration is invalid, or
     /// [`CdtError::CheckpointResumeFailed`] if the checkpoint is incompatible
     /// with this algorithm or internally inconsistent. Returns
     /// [`CdtError::MetropolisMoveApplicationFailed`],
@@ -684,7 +765,11 @@ impl MetropolisAlgorithm {
     /// [`CdtError::MeasurementCountOverflow`] if a resumed measurement count
     /// cannot fit compact telemetry storage,
     /// [`CdtError::InvalidMeasurementAction`] if a resumed measurement action is
-    /// non-finite, or validation errors for failures during resumed sampling.
+    /// non-finite, [`CdtError::MetropolisProposalPolicyFailed`] if the configured
+    /// policy returns an invalid or empty-support distribution,
+    /// [`CdtError::MetropolisProposalRatioFailed`] if proposal accounting
+    /// produces invalid forward or reverse probabilities, or validation errors
+    /// for failures during resumed sampling.
     ///
     /// # Examples
     ///
@@ -719,6 +804,7 @@ impl MetropolisAlgorithm {
         self.config.try_validate()?;
         self.action_config.validate();
         validate_resume_compatible(self, &checkpoint)?;
+        let validated_prefix = checkpoint.validated_prefix()?;
 
         let mut result_config = checkpoint.config.clone();
         let steps = checkpoint
@@ -729,15 +815,16 @@ impl MetropolisAlgorithm {
         result_config.steps = NonZeroU32::new(steps)
             .ok_or_else(|| checkpoint_resume_failed(CheckpointResumeFailure::StepCountOverflow))?;
 
-        let mut state = MetropolisRunState::from_checkpoint(checkpoint)?;
-        self.run_steps(&mut state, self.config.steps)?;
-        state.into_checkpoint(result_config, self.action_config.clone())
+        let state = MetropolisRunState::from_checkpoint(checkpoint)?;
+        let state = self.run_steps(state, self.config.steps)?;
+        state.into_checkpoint_after_validated_prefix(
+            result_config,
+            self.action_config.clone(),
+            validated_prefix,
+        )
     }
 
-    fn initial_state(
-        &self,
-        mut triangulation: CdtTriangulation2D,
-    ) -> CdtResult<MetropolisRunState> {
+    fn initial_state(&self, triangulation: CdtTriangulation2D) -> CdtResult<MetropolisRunState> {
         let current_action = action_for(&self.action_config, &triangulation);
         let mut measurements = Vec::new();
         if measurement_is_due(
@@ -746,31 +833,31 @@ impl MetropolisAlgorithm {
             self.config.measurement_frequency(),
         ) {
             measurements.push(measurement_for(0, current_action, &triangulation)?);
-            triangulation.record_event(SimulationEvent::MeasurementTaken {
-                step: 0,
-                action: current_action,
-            });
         }
+        let initial_slab_triangle_profile = triangulation.slab_triangle_profile()?;
 
         Ok(MetropolisRunState {
             triangulation,
-            current_step: 0,
-            current_action,
-            trace_seed: self.config.seed,
-            acceptance_rng: simulation_rng(self.config.seed),
-            ergodics: self.config.seed.map_or_else(ErgodicsSystem::new, |seed| {
-                ErgodicsSystem::with_seed(seed.wrapping_add(0x9E37_79B9_7F4A_7C15))
-            }),
-            move_stats: MoveStatistics::new(),
-            proposal_stats: ProposalStatistics::new(),
-            steps: Vec::new(),
-            measurements,
-            scalar_trace_rows: Vec::new(),
-            elapsed_time: Duration::ZERO,
+            telemetry: MetropolisRunTelemetry {
+                current_step: 0,
+                current_action,
+                trace_seed: self.config.seed,
+                acceptance_rng: simulation_rng(self.config.seed),
+                ergodics: self.config.seed.map_or_else(ErgodicsSystem::new, |seed| {
+                    ErgodicsSystem::with_seed(seed.wrapping_add(0x9E37_79B9_7F4A_7C15))
+                }),
+                move_stats: MoveStatistics::new(),
+                proposal_stats: ProposalStatistics::new(),
+                steps: Vec::new(),
+                measurements,
+                scalar_trace_rows: Vec::new(),
+                elapsed_time: Duration::ZERO,
+                initial_slab_triangle_profile: Some(initial_slab_triangle_profile),
+            },
         })
     }
 
-    /// Advances mutable run state through the planned-proposal sampler.
+    /// Advances owned run state through the planned-proposal sampler.
     ///
     /// This is the only step loop used by fresh runs and checkpoint
     /// continuation. It rebuilds the generic chain view from CDT counters,
@@ -778,23 +865,31 @@ impl MetropolisAlgorithm {
     /// telemetry synchronized with upstream planned-proposal outcomes.
     fn run_steps(
         &self,
-        state: &mut MetropolisRunState,
+        state: MetropolisRunState,
         additional_steps: NonZeroU32,
-    ) -> CdtResult<()> {
+    ) -> CdtResult<MetropolisRunState> {
         let start = Instant::now();
+        let MetropolisRunState {
+            triangulation,
+            mut telemetry,
+        } = state;
         let target = CdtTarget::new(self.action_config.clone(), self.config.temperature())?;
-        let (accepted, rejected) = chain_counters(&state.move_stats)?;
-        let checkpoint = ChainCheckpoint::new(state.triangulation.clone(), accepted, rejected);
+        let (accepted, rejected) = chain_counters(&telemetry.move_stats)?;
+        let checkpoint = ChainCheckpoint::new(triangulation, accepted, rejected);
         let chain = Chain::from_checkpoint(checkpoint, &target)?;
-        let mut proposal =
-            CdtProposal::from_ergodics(self.action_config.clone(), state.ergodics.clone());
-        let mut acceptance_rng = state.acceptance_rng.clone();
+        let mut proposal = CdtProposal::from_ergodics_with_policy(
+            self.action_config.clone(),
+            telemetry.ergodics.clone(),
+            &self.policy,
+        );
+        let mut acceptance_rng = telemetry.acceptance_rng.clone();
 
-        {
+        let (triangulation, step_error) = {
             let mut sampler = Sampler::new(chain, &target, &mut proposal, &mut acceptance_rng)?;
+            let mut step_error = None;
 
             for _ in 0..additional_steps.get() {
-                let step = state
+                let step = telemetry
                     .current_step
                     .checked_add(1)
                     .and_then(NonZeroU32::new)
@@ -804,13 +899,8 @@ impl MetropolisAlgorithm {
                 let planned_step = match sampler.step_delayed() {
                     Ok(planned_step) => planned_step,
                     Err(err) => {
-                        let error = planned_step_error(step.get(), err);
-                        state.triangulation = sampler.chain_ref().state().clone();
-                        drop(sampler);
-                        state.acceptance_rng = acceptance_rng;
-                        state.ergodics = proposal.into_ergodics();
-                        state.elapsed_time += start.elapsed();
-                        return Err(error);
+                        step_error = Some(planned_step_error(step.get(), err));
+                        break;
                     }
                 };
                 debug_assert_eq!(
@@ -818,9 +908,9 @@ impl MetropolisAlgorithm {
                     planned_step.info().copied(),
                     "CDT proposal telemetry cache should mirror the upstream planned-step info"
                 );
-                record_planned_step(
+                if let Err(error) = record_planned_step(
                     self,
-                    state,
+                    &mut telemetry,
                     step,
                     &planned_step,
                     planned_step
@@ -829,20 +919,26 @@ impl MetropolisAlgorithm {
                         .ok_or_else(|| missing_planned_step_info(step.get()))?,
                     sampler.proposal_ref().last_proposal_stats(),
                     sampler.chain_ref().state(),
-                )?;
-                // The upstream chain owns the geometry used by later proposals,
-                // while CDT owns simulation metadata/history. Keep them in sync
-                // after annotating the CDT state so final handoff and future
-                // accepted proposals cannot discard recorded events.
-                sampler.replace_state(state.triangulation.clone())?;
-                state.current_step = step.get();
+                ) {
+                    step_error = Some(error);
+                    break;
+                }
+                telemetry.current_step = step.get();
             }
-        }
+            let triangulation = sampler.into_chain().into_state();
+            (triangulation, step_error)
+        };
 
-        state.acceptance_rng = acceptance_rng;
-        state.ergodics = proposal.into_ergodics();
-        state.elapsed_time += start.elapsed();
-        Ok(())
+        telemetry.acceptance_rng = acceptance_rng;
+        telemetry.ergodics = proposal.into_ergodics();
+        telemetry.elapsed_time += start.elapsed();
+        if let Some(error) = step_error {
+            return Err(error);
+        }
+        Ok(MetropolisRunState {
+            triangulation,
+            telemetry,
+        })
     }
 }
 
@@ -851,9 +947,9 @@ impl MetropolisRunState {
     ///
     /// The generic MCMC checkpoint rechecks target compatibility, then CDT
     /// recomputes the action so serialized telemetry cannot silently diverge
-    /// from the invariant-checked triangulation payload.
+    /// from the invariant-checked triangulation payload. The caller must fully
+    /// validate the checkpoint before transferring it here.
     fn from_checkpoint(checkpoint: CdtMcmcCheckpoint) -> CdtResult<Self> {
-        validate_checkpoint_counters(&checkpoint)?;
         let stored_action = checkpoint.current_action();
         let target = CdtTarget::new(
             checkpoint.action_config.clone(),
@@ -873,17 +969,20 @@ impl MetropolisRunState {
 
         Ok(Self {
             triangulation,
-            current_step: checkpoint.current_step.get(),
-            current_action: actual_action,
-            trace_seed: checkpoint.config.seed(),
-            acceptance_rng: checkpoint.acceptance_rng,
-            ergodics: checkpoint.ergodics,
-            move_stats: checkpoint.move_stats,
-            proposal_stats: checkpoint.proposal_stats,
-            steps: checkpoint.steps,
-            measurements: checkpoint.measurements,
-            scalar_trace_rows: checkpoint.scalar_trace_rows,
-            elapsed_time: checkpoint.elapsed_time,
+            telemetry: MetropolisRunTelemetry {
+                current_step: checkpoint.current_step.get(),
+                current_action: actual_action,
+                trace_seed: checkpoint.config.seed(),
+                acceptance_rng: checkpoint.acceptance_rng,
+                ergodics: checkpoint.ergodics,
+                move_stats: checkpoint.move_stats,
+                proposal_stats: checkpoint.proposal_stats,
+                steps: checkpoint.steps,
+                measurements: checkpoint.measurements,
+                scalar_trace_rows: checkpoint.scalar_trace_rows,
+                elapsed_time: checkpoint.elapsed_time,
+                initial_slab_triangle_profile: None,
+            },
         })
     }
 
@@ -897,30 +996,56 @@ impl MetropolisRunState {
         config: MetropolisConfig,
         action_config: ActionConfig,
     ) -> CdtResult<CdtMcmcCheckpoint> {
-        self.triangulation.validate_supported_state()?;
-        let (accepted, rejected) = chain_counters(&self.move_stats)?;
-        let current_step = NonZeroU32::new(self.current_step).ok_or_else(|| {
+        CdtMcmcCheckpoint::from_parts(self.into_checkpoint_parts(config, action_config)?)
+    }
+
+    /// Converts resumed state while replaying only telemetry after the trusted prefix.
+    fn into_checkpoint_after_validated_prefix(
+        self,
+        config: MetropolisConfig,
+        action_config: ActionConfig,
+        prefix: ValidatedCheckpointPrefix,
+    ) -> CdtResult<CdtMcmcCheckpoint> {
+        CdtMcmcCheckpoint::from_parts_after_validated_prefix(
+            self.into_checkpoint_parts(config, action_config)?,
+            prefix,
+        )
+    }
+
+    /// Packages mutable run state for checkpoint validation and storage.
+    fn into_checkpoint_parts(
+        self,
+        config: MetropolisConfig,
+        action_config: ActionConfig,
+    ) -> CdtResult<CdtMcmcCheckpointParts> {
+        let Self {
+            triangulation,
+            telemetry,
+        } = self;
+        triangulation.validate_supported_state()?;
+        let (accepted, rejected) = chain_counters(&telemetry.move_stats)?;
+        let current_step = NonZeroU32::new(telemetry.current_step).ok_or_else(|| {
             checkpoint_resume_failed(CheckpointResumeFailure::StepTelemetryLengthMismatch {
                 actual: 0,
                 expected: 1,
             })
         })?;
-        CdtMcmcCheckpoint::from_parts(CdtMcmcCheckpointParts {
-            triangulation: self.triangulation,
+        Ok(CdtMcmcCheckpointParts {
+            triangulation,
             accepted,
             rejected,
             config,
             action_config,
             current_step,
-            current_action: self.current_action,
-            move_stats: self.move_stats,
-            proposal_stats: self.proposal_stats,
-            steps: self.steps,
-            measurements: self.measurements,
-            scalar_trace_rows: self.scalar_trace_rows,
-            elapsed_time: self.elapsed_time,
-            acceptance_rng: self.acceptance_rng,
-            ergodics: self.ergodics,
+            current_action: telemetry.current_action,
+            move_stats: telemetry.move_stats,
+            proposal_stats: telemetry.proposal_stats,
+            steps: telemetry.steps,
+            measurements: telemetry.measurements,
+            scalar_trace_rows: telemetry.scalar_trace_rows,
+            elapsed_time: telemetry.elapsed_time,
+            acceptance_rng: telemetry.acceptance_rng,
+            ergodics: telemetry.ergodics,
         })
     }
 }
@@ -929,9 +1054,9 @@ impl MetropolisRunState {
 ///
 /// Fresh and resumed simulations use the same upstream sampler path so
 /// checkpoint continuation cannot drift from ordinary sampling behavior.
-fn record_planned_step(
-    algorithm: &MetropolisAlgorithm,
-    state: &mut MetropolisRunState,
+fn record_planned_step<P>(
+    algorithm: &MetropolisAlgorithm<P>,
+    state: &mut MetropolisRunTelemetry,
     step: NonZeroU32,
     planned_step: &DelayedStep<CdtProposalInfo>,
     info: CdtProposalInfo,
@@ -1019,9 +1144,9 @@ fn step_outcome_for_trace(
 /// `delta_action` derived from the same reconstructed action. Missing
 /// accepted-step action evidence is rejected before any run state or telemetry
 /// is mutated.
-fn record_planned_step_parts(
-    algorithm: &MetropolisAlgorithm,
-    state: &mut MetropolisRunState,
+fn record_planned_step_parts<P>(
+    algorithm: &MetropolisAlgorithm<P>,
+    state: &mut MetropolisRunTelemetry,
     step: NonZeroU32,
     record: PlannedStepRecord<'_>,
 ) -> CdtResult<()> {
@@ -1045,31 +1170,21 @@ fn record_planned_step_parts(
     )?;
     let action_after = step_outcome.action_after();
     let delta_action = step_outcome.delta_action();
+    let attach_initial_slab_triangle_profile =
+        step.get() == 1 && state.initial_slab_triangle_profile.is_some();
 
     let mut next_move_stats = state.move_stats.clone();
     next_move_stats.record_attempt(move_type);
-    let mut accepted_candidate = action_after.map(|applied_action| {
+    if action_after.is_some() {
         next_move_stats.record_success(move_type);
-        AcceptedCandidate::new(
-            step,
-            move_type,
-            action_before,
-            applied_action,
-            triangulation,
-        )
-    });
-    if let Some(candidate) = &accepted_candidate {
-        candidate.validate_if_due(next_move_stats.total_accepted())?;
+        validate_supported_state_candidate_if_due(triangulation, next_move_stats.total_accepted())?;
     }
 
-    let trace_action = accepted_candidate
-        .as_ref()
-        .map_or(state.current_action, AcceptedCandidate::action_after);
-    let trace_triangulation = accepted_candidate
-        .as_ref()
-        .map_or(&state.triangulation, AcceptedCandidate::triangulation);
-    let step_entry = MonteCarloStep::new(step, move_type, action_before, step_outcome)?;
-    let scalar_trace_row = CdtScalarTraceRow::new(
+    let trace_action = action_after.unwrap_or(state.current_action);
+    let trace_triangulation = triangulation;
+    let step_entry = MonteCarloStep::new(step, move_type, action_before, step_outcome)?
+        .with_proposal_telemetry(info.proposal_telemetry());
+    let mut scalar_trace_row = CdtScalarTraceRow::new(
         step,
         trace_outcome,
         -trace_action / algorithm.config.temperature(),
@@ -1083,19 +1198,16 @@ fn record_planned_step_parts(
     )?;
     let measurement =
         staged_measurement_for_step(algorithm, step, trace_action, trace_triangulation)?;
+    if attach_initial_slab_triangle_profile
+        && let Some(initial_slab_triangle_profile) = state.initial_slab_triangle_profile.take()
+    {
+        scalar_trace_row =
+            scalar_trace_row.with_initial_slab_triangle_profile(initial_slab_triangle_profile);
+    }
 
     state.move_stats = next_move_stats;
-    if let Some(candidate) = accepted_candidate.take() {
-        let (applied_action, triangulation) = candidate.into_parts();
+    if let Some(applied_action) = action_after {
         state.current_action = applied_action;
-        state.triangulation = triangulation;
-    } else {
-        state
-            .triangulation
-            .record_event(SimulationEvent::MoveAttempted {
-                move_type,
-                step: step.get().into(),
-            });
     }
 
     state.proposal_stats.extend(proposal_stats);
@@ -1112,72 +1224,14 @@ fn record_planned_step_parts(
 
     if let Some(measurement) = measurement {
         state.measurements.push(measurement);
-        state
-            .triangulation
-            .record_event(SimulationEvent::MeasurementTaken {
-                step: step.get().into(),
-                action: state.current_action,
-            });
     }
 
     Ok(())
 }
 
-/// Staged accepted proposal state that has its action and triangulation together.
-struct AcceptedCandidate {
-    action_after: f64,
-    triangulation: CdtTriangulation2D,
-}
-
-impl AcceptedCandidate {
-    /// Builds the accepted-state candidate before it is committed to live run state.
-    fn new(
-        step: NonZeroU32,
-        move_type: MoveType,
-        action_before: f64,
-        action_after: f64,
-        triangulation: &CdtTriangulation2D,
-    ) -> Self {
-        let mut triangulation = triangulation.clone();
-        triangulation.record_event(SimulationEvent::MoveAttempted {
-            move_type,
-            step: step.get().into(),
-        });
-        triangulation.record_event(SimulationEvent::MoveAccepted {
-            move_type,
-            step: step.get().into(),
-            action_change: action_after - action_before,
-        });
-        Self {
-            action_after,
-            triangulation,
-        }
-    }
-
-    /// Returns the accepted action carried with the staged triangulation.
-    const fn action_after(&self) -> f64 {
-        self.action_after
-    }
-
-    /// Borrows the staged accepted triangulation.
-    const fn triangulation(&self) -> &CdtTriangulation2D {
-        &self.triangulation
-    }
-
-    /// Validates the staged triangulation at the configured backend cadence.
-    fn validate_if_due(&self, accepted_moves: u64) -> CdtResult<()> {
-        validate_supported_state_candidate_if_due(&self.triangulation, accepted_moves)
-    }
-
-    /// Splits the validated accepted candidate for commitment to run state.
-    fn into_parts(self) -> (f64, CdtTriangulation2D) {
-        (self.action_after, self.triangulation)
-    }
-}
-
 /// Builds a measurement for a planned step only when the configured cadence is due.
-fn staged_measurement_for_step(
-    algorithm: &MetropolisAlgorithm,
+fn staged_measurement_for_step<P>(
+    algorithm: &MetropolisAlgorithm<P>,
     step: NonZeroU32,
     action: f64,
     triangulation: &CdtTriangulation2D,
@@ -1219,6 +1273,16 @@ fn planned_step_error(step: u32, error: DelayedStepError<CdtProposalError>) -> C
 /// contract for hard move-application failures.
 fn proposal_step_error(step: u32, error: CdtProposalError) -> CdtError {
     match error {
+        CdtProposalError::Policy { source } => {
+            CdtError::MetropolisProposalPolicyFailed { step, source }
+        }
+        CdtProposalError::ProposalRatio { move_type, source } => {
+            CdtError::MetropolisProposalRatioFailed {
+                step,
+                move_type,
+                source,
+            }
+        }
         CdtProposalError::ApplicationFailed {
             move_type,
             attempt,
@@ -1284,27 +1348,51 @@ fn accepted_move_error(
 
 #[cfg(test)]
 mod tests {
-    use super::super::adapter::{
-        CdtProposal, CdtProposalError, CdtProposalPlan, concrete_log_q_ratio, propose_concrete_plan,
-    };
-    use super::super::helpers::{SimplexCounts, proposed_delta_action, simplex_counts};
-    use super::super::telemetry::CdtProposalSiteRejection;
     use super::*;
     use crate::cdt::action::CDT_1P1_CRITICAL_TRIANGLE_COSMOLOGICAL_CONSTANT;
     use crate::cdt::ergodic_moves::proposal_site_count;
     use crate::cdt::foliation::FoliationError;
+    use crate::cdt::metropolis::{
+        adapter::{CdtProposalPlan, ConcretePlanAttempt, propose_concrete_plan},
+        checkpoint::validate_checkpoint_counters,
+        helpers::{SimplexCounts, proposed_delta_action, simplex_counts},
+        telemetry::{CdtProposalPlanningOutcome, CdtProposalSiteRejection},
+    };
+    use crate::cdt::proposal_policy::CdtMoveFamilyPolicyError;
+    use crate::cdt::results::{SimulationEvent, SimulationHistory};
     use crate::cdt::triangulation::CdtTriangulation;
-    use crate::errors::{BackendMutationOperation, CheckpointMoveCounter, ConfigurationSetting};
+    use crate::errors::{BackendMutationOperation, CheckpointMoveCounter};
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
-    use markov_chain_monte_carlo::{
-        Chain, DelayedProposal, DelayedStepError, DiscreteProposalRatio, McmcError, Target,
-    };
-    use rand::{Rng, RngExt, SeedableRng, rngs::StdRng};
+    use markov_chain_monte_carlo::{DelayedProposal, DiscreteProposalRatio, McmcError, Target};
+    use rand::{Rng, RngExt, rngs::StdRng};
     use serde_json::{from_str, to_string, to_value};
     use std::assert_matches;
     use std::error::Error;
-    use std::num::{NonZeroU32, NonZeroUsize};
+    use std::num::NonZeroUsize;
+
+    fn concrete_proposal_info(
+        move_type: MoveType,
+        action_before: f64,
+        action_after: Option<f64>,
+        delta_action: Option<f64>,
+    ) -> CdtProposalInfo {
+        CdtProposalInfo {
+            move_type,
+            action_before,
+            action_after,
+            delta_action,
+            reverse_move_type: move_type.reverse(),
+            forward_family_probability: 0.25,
+            reverse_family_probability: Some(0.25),
+            forward_site_count: 1,
+            reverse_site_count: Some(1),
+            log_family_probability_ratio: Some(0.0),
+            log_site_count_ratio: Some(0.0),
+            log_proposal_ratio: Some(0.0),
+            planning_outcome: CdtProposalPlanningOutcome::ConcretePlan,
+        }
+    }
 
     /// Applies the Metropolis acceptance rule to a proposed action change.
     ///
@@ -1378,7 +1466,8 @@ mod tests {
                 let coordinates = geometry
                     .vertex_coordinates(&vertex)
                     .expect("test vertex coordinates should resolve")
-                    .into_iter()
+                    .iter()
+                    .copied()
                     .map(f64::to_bits)
                     .collect();
                 (
@@ -1401,12 +1490,12 @@ mod tests {
                 let mut vertices = geometry
                     .face_vertices(&face)
                     .expect("test face vertices should resolve")
-                    .into_iter()
                     .map(|vertex| {
                         let coordinates = geometry
                             .vertex_coordinates(&vertex)
                             .expect("test face vertex coordinates should resolve")
-                            .into_iter()
+                            .iter()
+                            .copied()
                             .map(f64::to_bits)
                             .collect();
                         (
@@ -1432,10 +1521,10 @@ mod tests {
         assert_eq!(left.face_count(), right.face_count());
         assert_eq!(left.slice_sizes(), right.slice_sizes());
         assert_eq!(
-            left.volume_profile()
+            left.slab_triangle_profile()
                 .expect("left canonical profile should be valid"),
             right
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("right canonical profile should be valid")
         );
         assert_eq!(
@@ -1449,10 +1538,8 @@ mod tests {
             right.metadata().modification_count()
         );
         assert_eq!(
-            to_value(left.metadata().simulation_history())
-                .expect("left simulation history should serialize"),
-            to_value(right.metadata().simulation_history())
-                .expect("right simulation history should serialize")
+            left.metadata().initial_vertex_count(),
+            right.metadata().initial_vertex_count()
         );
         assert_eq!(
             canonical_vertex_signatures(left),
@@ -1486,14 +1573,14 @@ mod tests {
         measurement_frequency: u32,
         seed: u64,
     ) -> MetropolisConfig {
-        MetropolisConfig::new_with_seed(
+        MetropolisConfig::new(
             temperature,
             steps,
             thermalization_steps,
             measurement_frequency,
-            Some(seed),
         )
         .expect("test Metropolis config should be valid")
+        .with_seed(seed)
     }
 
     fn action_config(coupling_0: f64, coupling_2: f64, cosmological_constant: f64) -> ActionConfig {
@@ -1524,47 +1611,34 @@ mod tests {
         let _acceptance_rng_marker: f64 = state.acceptance_rng.random();
 
         state.move_stats.record_attempt(move_type);
-        state
-            .triangulation
-            .record_event(SimulationEvent::MoveAttempted { move_type, step: 1 });
-        state.steps.push(rejected_proposal_step(
-            1,
+        let current_action = state.current_action;
+        let delta_action = proposed_delta_action(
+            &action_config,
+            simplex_counts(&state.triangulation),
             move_type,
-            state.current_action,
-            proposed_delta_action(
-                &action_config,
-                simplex_counts(&state.triangulation),
-                move_type,
-            ),
-        ));
+        );
+        let step = rejected_proposal_step(1, move_type, current_action, delta_action);
+        state.steps.push(step);
         state.current_step = 1;
         state.proposal_stats.record_move_family(1);
         state.proposal_stats.record_metropolis_rejection();
-        state.scalar_trace_rows.push(
-            CdtScalarTraceRow::new(
-                step_number(1),
-                CdtScalarTraceOutcome::RejectedProposal,
-                -state.current_action / config.temperature(),
-                state.current_action,
-                &state.triangulation,
-                move_type,
-                state.steps[0].delta_action(),
-                state.current_action,
-                None,
-                config.seed(),
-            )
-            .expect("trace row should build"),
-        );
-        state.measurements.push(
-            measurement_for(1, state.current_action, &state.triangulation)
-                .expect("measurement should build"),
-        );
-        state
-            .triangulation
-            .record_event(SimulationEvent::MeasurementTaken {
-                step: 1,
-                action: state.current_action,
-            });
+        let scalar_trace_row = CdtScalarTraceRow::new(
+            step_number(1),
+            CdtScalarTraceOutcome::RejectedProposal,
+            -current_action / config.temperature(),
+            current_action,
+            &state.triangulation,
+            move_type,
+            delta_action,
+            current_action,
+            None,
+            config.seed(),
+        )
+        .expect("trace row should build");
+        state.scalar_trace_rows.push(scalar_trace_row);
+        let measurement = measurement_for(1, current_action, &state.triangulation)
+            .expect("measurement should build");
+        state.measurements.push(measurement);
 
         state
             .into_checkpoint(config, action_config)
@@ -1645,17 +1719,20 @@ mod tests {
     fn empty_run_state(triangulation: CdtTriangulation2D) -> MetropolisRunState {
         MetropolisRunState {
             triangulation,
-            current_step: 0,
-            current_action: 0.0,
-            trace_seed: Some(1),
-            acceptance_rng: simulation_rng(Some(1)),
-            ergodics: ErgodicsSystem::with_seed(2),
-            move_stats: MoveStatistics::new(),
-            proposal_stats: ProposalStatistics::new(),
-            steps: Vec::new(),
-            measurements: Vec::new(),
-            scalar_trace_rows: Vec::new(),
-            elapsed_time: Duration::ZERO,
+            telemetry: MetropolisRunTelemetry {
+                current_step: 0,
+                current_action: 0.0,
+                trace_seed: Some(1),
+                acceptance_rng: simulation_rng(Some(1)),
+                ergodics: ErgodicsSystem::with_seed(2),
+                move_stats: MoveStatistics::new(),
+                proposal_stats: ProposalStatistics::new(),
+                steps: Vec::new(),
+                measurements: Vec::new(),
+                scalar_trace_rows: Vec::new(),
+                elapsed_time: Duration::ZERO,
+                initial_slab_triangle_profile: None,
+            },
         }
     }
 
@@ -1686,7 +1763,7 @@ mod tests {
         let vertex = triangulation
             .geometry()
             .vertices()
-            .find(|vertex| triangulation.time_label(vertex) == Some(1))
+            .find(|vertex| triangulation.time_label(vertex) == Ok(Some(1)))
             .expect("fixture has a slice-1 vertex");
         triangulation
             .set_vertex_data(&vertex, Some(0))
@@ -1709,7 +1786,7 @@ mod tests {
         let vertex = triangulation
             .geometry()
             .vertices()
-            .find(|vertex| triangulation.time_label(vertex) == Some(1))
+            .find(|vertex| triangulation.time_label(vertex) == Ok(Some(1)))
             .expect("fixture has a slice-1 vertex");
         triangulation
             .set_vertex_data(&vertex, Some(0))
@@ -1769,8 +1846,8 @@ mod tests {
 
     #[test]
     fn test_action_calculation() {
-        let triangulation =
-            CdtTriangulation::from_random_points(5, 1, 2).expect("Failed to create triangulation");
+        let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 0x00AC_710A)
+            .expect("Failed to create triangulation");
 
         let config = MetropolisConfig::default();
         let action_config = ActionConfig::default();
@@ -2048,11 +2125,11 @@ mod tests {
         assert_eq!(
             one_shot
                 .triangulation()
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("one-shot profile should be valid"),
             chunked
                 .triangulation()
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("chunked profile should be valid")
         );
     }
@@ -2113,6 +2190,34 @@ mod tests {
 
         assert!(
             error.to_string().contains("checkpoint action mismatch"),
+            "unexpected serde error: {error}"
+        );
+    }
+
+    #[test]
+    fn serialized_checkpoint_rejects_action_history_detached_from_final_geometry() {
+        let checkpoint = serializable_rejected_checkpoint(ActionConfig::default());
+        let mut payload = to_value(&checkpoint).expect("checkpoint should serialize");
+        let tampered_action = checkpoint.current_action() + 1.0;
+        payload["steps"][0]["action_before"] =
+            to_value(tampered_action).expect("action should serialize");
+        payload["scalar_trace_rows"][0]["action_before"] =
+            to_value(tampered_action).expect("action should serialize");
+        payload["scalar_trace_rows"][0]["action"] =
+            to_value(tampered_action).expect("action should serialize");
+        payload["scalar_trace_rows"][0]["log_prob"] =
+            to_value(-tampered_action).expect("log probability should serialize");
+        payload["measurements"][1]["action"] =
+            to_value(tampered_action).expect("action should serialize");
+
+        let Err(error) = from_str::<CdtMcmcCheckpoint>(&payload.to_string()) else {
+            panic!("a self-consistent but detached checkpoint action history should be rejected");
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("action_before does not match the reconstructed state"),
             "unexpected serde error: {error}"
         );
     }
@@ -2745,11 +2850,11 @@ mod tests {
     }
 
     #[test]
-    fn explicit_cdt_volume_profiles_count_time_slabs() {
+    fn explicit_cdt_slab_triangle_profiles_count_time_slabs() {
         let strip = CdtTriangulation::from_cdt_strip(4, 3).expect("create Delaunay strip");
         assert_eq!(
             strip
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("strip profile should be valid"),
             vec![6, 6, 0]
         );
@@ -2757,27 +2862,27 @@ mod tests {
         let torus = CdtTriangulation::from_toroidal_cdt(3, 3).expect("create periodic torus");
         assert_eq!(
             torus
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("torus profile should be valid"),
             vec![6, 6, 6]
         );
     }
 
     #[test]
-    fn measurement_records_volume_profile_for_foliated_triangulation() {
+    fn measurement_records_slab_triangle_profile_for_foliated_triangulation() {
         let triangulation = CdtTriangulation::from_cdt_strip(4, 3).expect("create Delaunay strip");
         let measurement =
             measurement_for(0, 1.0, &triangulation).expect("measurement should build");
 
-        assert_eq!(measurement.volume_profile(), &[6, 6, 0]);
+        assert_eq!(measurement.slab_triangle_profile(), &[6, 6, 0]);
         assert_eq!(
-            measurement.volume_profile().iter().sum::<u32>(),
+            measurement.slab_triangle_profile().iter().sum::<u32>(),
             measurement.triangles().get()
         );
     }
 
     #[test]
-    fn volume_profile_is_empty_without_current_foliation() {
+    fn slab_triangle_profile_is_empty_without_current_foliation() {
         let triangulation =
             CdtTriangulation::from_seeded_points(5, 2, 2, 53).expect("create seeded triangulation");
         let measurement =
@@ -2786,11 +2891,11 @@ mod tests {
         assert!(!triangulation.has_foliation());
         assert!(
             triangulation
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("unfoliated triangulation should report an empty profile")
                 .is_empty()
         );
-        assert!(measurement.volume_profile().is_empty());
+        assert!(measurement.slab_triangle_profile().is_empty());
     }
 
     #[test]
@@ -2904,7 +3009,14 @@ mod tests {
         )
         .expect("site rejection is an ordinary proposal outcome");
 
-        assert!(result.is_none());
+        assert_matches!(
+            result,
+            ConcretePlanAttempt {
+                plan: None,
+                planning_outcome: CdtProposalPlanningOutcome::InvalidCountDelta,
+                forward_site_count: 0,
+            }
+        );
         assert_eq!(proposal_stats.move_family_proposals(), 1);
         assert_eq!(proposal_stats.no_site_proposals(), 1);
         assert_eq!(simplex_counts(&triangulation), counts_before);
@@ -2986,7 +3098,7 @@ mod tests {
     }
 
     #[test]
-    fn accepted_planned_step_records_attempt_on_committed_state() {
+    fn accepted_planned_step_reconstructs_attempt_and_acceptance_events() {
         let config = seeded_metropolis_config(1.0, 1, 0, 1, 2);
         let algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
         let triangulation =
@@ -2997,12 +3109,7 @@ mod tests {
             .expect("initial state should build");
         let action = state.current_action;
         let move_type = MoveType::Move22;
-        let info = CdtProposalInfo {
-            move_type,
-            action_before: action,
-            action_after: Some(action),
-            delta_action: Some(0.0),
-        };
+        let info = concrete_proposal_info(move_type, action, Some(action), Some(0.0));
         let proposal_stats = ProposalStatistics::from_validated_parts(1, 0, 0, 0, 0, 0, 0, 0, 0);
 
         record_planned_step_parts(
@@ -3019,7 +3126,9 @@ mod tests {
         )
         .expect("accepted planned step should record telemetry");
 
-        let history = state.triangulation.metadata().simulation_history();
+        let history =
+            SimulationHistory::new(&state.triangulation, &state.steps, &state.measurements)
+                .collect::<Vec<_>>();
         assert!(
             history.iter().any(|event| matches!(
                 event,
@@ -3028,7 +3137,7 @@ mod tests {
                     step
                 } if *recorded_move == move_type && *step == 1
             )),
-            "attempt event should remain on the committed triangulation"
+            "attempt event should be reconstructed from step telemetry"
         );
         assert!(
             history.iter().any(|event| matches!(
@@ -3039,7 +3148,7 @@ mod tests {
                     ..
                 } if *recorded_move == move_type && *step == 1
             )),
-            "accepted move event should remain on the committed triangulation"
+            "accepted event should be reconstructed from step telemetry"
         );
     }
 
@@ -3066,12 +3175,7 @@ mod tests {
             PlannedStepRecord {
                 outcome: StepOutcome::Accepted,
                 log_prob_after: Some(-reconstructed_action / temperature),
-                info: CdtProposalInfo {
-                    move_type,
-                    action_before,
-                    action_after: None,
-                    delta_action: None,
-                },
+                info: concrete_proposal_info(move_type, action_before, None, None),
                 proposal_stats: &proposal_stats,
                 triangulation: &committed,
             },
@@ -3117,12 +3221,12 @@ mod tests {
             PlannedStepRecord {
                 outcome: StepOutcome::Accepted,
                 log_prob_after: None,
-                info: CdtProposalInfo {
-                    move_type: MoveType::Move22,
+                info: concrete_proposal_info(
+                    MoveType::Move22,
                     action_before,
-                    action_after: Some(action_after),
-                    delta_action: Some(999.0),
-                },
+                    Some(action_after),
+                    Some(999.0),
+                ),
                 proposal_stats: &proposal_stats,
                 triangulation: &committed,
             },
@@ -3164,12 +3268,7 @@ mod tests {
             PlannedStepRecord {
                 outcome: StepOutcome::Accepted,
                 log_prob_after: None,
-                info: CdtProposalInfo {
-                    move_type: MoveType::Move22,
-                    action_before,
-                    action_after: None,
-                    delta_action: None,
-                },
+                info: concrete_proposal_info(MoveType::Move22, action_before, None, None),
                 proposal_stats: &proposal_stats,
                 triangulation: &committed,
             },
@@ -3196,7 +3295,7 @@ mod tests {
         let vertex = invalid_candidate
             .geometry()
             .vertices()
-            .find(|vertex| invalid_candidate.time_label(vertex) == Some(1))
+            .find(|vertex| invalid_candidate.time_label(vertex) == Ok(Some(1)))
             .expect("fixture has a slice-1 vertex");
         invalid_candidate
             .set_vertex_data(&vertex, Some(0))
@@ -3220,12 +3319,12 @@ mod tests {
             PlannedStepRecord {
                 outcome: StepOutcome::Accepted,
                 log_prob_after: Some(-action_before),
-                info: CdtProposalInfo {
-                    move_type: MoveType::Move22,
+                info: concrete_proposal_info(
+                    MoveType::Move22,
                     action_before,
-                    action_after: Some(action_before),
-                    delta_action: Some(0.0),
-                },
+                    Some(action_before),
+                    Some(0.0),
+                ),
                 proposal_stats: &proposal_stats,
                 triangulation: &invalid_candidate,
             },
@@ -3255,18 +3354,13 @@ mod tests {
             .initial_state(triangulation)
             .expect("initial state should build");
         state.current_step = u32::MAX;
-        let steps_before = state.steps.len();
-        let measurements_before = state.measurements.len();
-        let attempted_before = state.move_stats.total_attempted();
-        let accepted_before = state.move_stats.total_accepted();
-        let proposal_stats_before = state.proposal_stats.clone();
 
-        let err = algorithm
-            .run_steps(
-                &mut state,
-                NonZeroU32::new(1).expect("one additional step is nonzero"),
-            )
-            .expect_err("overflowing step counter should reject continuation");
+        let Err(err) = algorithm.run_steps(
+            state,
+            NonZeroU32::new(1).expect("one additional step is nonzero"),
+        ) else {
+            panic!("overflowing step counter should reject continuation");
+        };
 
         assert_matches!(
             err,
@@ -3274,12 +3368,6 @@ mod tests {
                 failure: CheckpointResumeFailure::StepCountOverflow
             }
         );
-        assert_eq!(state.current_step, u32::MAX);
-        assert_eq!(state.steps.len(), steps_before);
-        assert_eq!(state.measurements.len(), measurements_before);
-        assert_eq!(state.move_stats.total_attempted(), attempted_before);
-        assert_eq!(state.move_stats.total_accepted(), accepted_before);
-        assert_eq!(state.proposal_stats, proposal_stats_before);
     }
 
     #[test]
@@ -3328,6 +3416,47 @@ mod tests {
     }
 
     #[test]
+    fn planned_step_error_preserves_policy_step_and_family_context() {
+        let error = CdtProposalError::Policy {
+            source: CdtMoveFamilyPolicyError::InvalidWeight {
+                family: MoveType::Move31Remove,
+                weight: -1.0,
+            },
+        };
+
+        let CdtError::MetropolisProposalPolicyFailed {
+            step,
+            source: CdtMoveFamilyPolicyError::InvalidWeight { family, weight },
+        } = planned_step_error(23, DelayedStepError::Plan(error))
+        else {
+            panic!("policy failures should retain their typed context");
+        };
+
+        assert_eq!(step, 23);
+        assert_eq!(family, MoveType::Move31Remove);
+        assert_relative_eq!(weight, -1.0);
+    }
+
+    #[test]
+    fn planned_step_error_preserves_proposal_ratio_step_and_move_context() {
+        let source = DiscreteProposalRatio::new(0.0, 1, 1.0, 1)
+            .expect_err("zero forward probability should be rejected");
+        let error = CdtProposalError::ProposalRatio {
+            move_type: MoveType::Move13Add,
+            source,
+        };
+
+        assert_matches!(
+            planned_step_error(29, DelayedStepError::LogQRatio(error)),
+            CdtError::MetropolisProposalRatioFailed {
+                step: 29,
+                move_type: MoveType::Move13Add,
+                source: actual,
+            } if actual == source
+        );
+    }
+
+    #[test]
     fn missing_planned_step_info_reports_step_context() {
         assert_matches!(
             missing_planned_step_info(23),
@@ -3354,7 +3483,7 @@ mod tests {
 
     #[test]
     fn run_rejects_bad_temperature() {
-        for bad_temp in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        for bad_temp in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::from_bits(1)] {
             let err =
                 MetropolisConfig::new(bad_temp, 10, 2, 2).expect_err("bad temperature is invalid");
             match err {
@@ -3362,13 +3491,24 @@ mod tests {
                     setting, expected, ..
                 } => {
                     assert_eq!(setting, ConfigurationSetting::Temperature, "T={bad_temp}");
-                    assert_eq!(expected, "finite and positive", "T={bad_temp}");
+                    assert_eq!(
+                        expected, "finite and positive with a finite reciprocal",
+                        "T={bad_temp}"
+                    );
                 }
                 other => panic!(
                     "Expected InvalidSimulationConfiguration for T={bad_temp}, got {other:?}"
                 ),
             }
         }
+    }
+
+    #[test]
+    fn validated_temperature_has_finite_inverse_temperature() {
+        let config = MetropolisConfig::new(f64::MIN_POSITIVE, 10, 2, 2)
+            .expect("smallest normal temperature has a finite reciprocal");
+
+        assert!(config.beta().is_finite());
     }
 
     #[test]
@@ -3468,11 +3608,26 @@ mod tests {
                     expected,
                 } => {
                     assert_eq!(setting, ConfigurationSetting::Temperature);
-                    assert_eq!(expected, "finite and positive");
+                    assert_eq!(expected, "finite and positive with a finite reciprocal");
                 }
                 other => panic!("Expected InvalidSimulationConfiguration, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn cdt_target_rejects_temperature_that_can_overflow_log_probability() {
+        let Err(error) = CdtTarget::new(ActionConfig::default(), f64::MIN_POSITIVE) else {
+            panic!("subnormal action scaling must not create an infinite target");
+        };
+
+        assert!(matches!(
+            error,
+            CdtError::InvalidSimulationConfiguration {
+                setting: ConfigurationSetting::Temperature,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -3527,7 +3682,7 @@ mod tests {
         let action_config = ActionConfig::default();
         let target =
             CdtTarget::new(action_config.clone(), 1.0).expect("valid target configuration");
-        let mut proposal = CdtProposal::with_seed(action_config, 7);
+        let mut proposal = CdtProposal::new(action_config).with_seed(7);
         let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
         let mut rng = StdRng::seed_from_u64(7);
 
@@ -3558,7 +3713,9 @@ mod tests {
         let mut moves = ErgodicsSystem::with_seed(19);
         let mut proposal_stats = ProposalStatistics::new();
         let action_before = action_for(&action_config, &triangulation);
-        let plan = propose_concrete_plan(
+        let ConcretePlanAttempt {
+            plan: Some(plan), ..
+        } = propose_concrete_plan(
             &triangulation,
             &mut moves,
             &mut proposal_stats,
@@ -3567,7 +3724,9 @@ mod tests {
             action_before,
         )
         .expect("planning should not hard-fail")
-        .expect("toroidal triangulation should have a volume-add proposal");
+        else {
+            panic!("toroidal triangulation should have a volume-add proposal");
+        };
 
         let forward_sites = proposal_site_count(&triangulation, MoveType::Move13Add);
         let reverse_sites = proposal_site_count(&plan.proposed_state, MoveType::Move31Remove);
@@ -3577,11 +3736,7 @@ mod tests {
         let expected = DiscreteProposalRatio::from_counts(forward_sites, reverse_sites)
             .expect("positive forward proposal sites should build a ratio")
             .log_q_ratio();
-        assert_relative_eq!(
-            concrete_log_q_ratio(&triangulation, &plan),
-            expected,
-            epsilon = 1e-12
-        );
+        assert_relative_eq!(plan.log_proposal_ratio(), expected, epsilon = 1e-12);
 
         let proposal = CdtProposal::new(action_config);
         assert_relative_eq!(
@@ -3602,7 +3757,9 @@ mod tests {
         let mut proposal_stats = ProposalStatistics::new();
         let action_before = action_for(&action_config, &triangulation);
 
-        let _plan = propose_concrete_plan(
+        let ConcretePlanAttempt {
+            plan: Some(_plan), ..
+        } = propose_concrete_plan(
             &triangulation,
             &mut moves,
             &mut proposal_stats,
@@ -3611,7 +3768,9 @@ mod tests {
             action_before,
         )
         .expect("planning should not hard-fail")
-        .expect("toroidal triangulation should have a volume-add proposal");
+        else {
+            panic!("toroidal triangulation should have a volume-add proposal");
+        };
 
         assert_eq!(moves.stats().total_attempted(), 0);
         assert_eq!(moves.stats().total_accepted(), 0);
@@ -3623,7 +3782,7 @@ mod tests {
         let action_config = ActionConfig::default();
         let target =
             CdtTarget::new(action_config.clone(), 1.0).expect("valid target configuration");
-        let proposal = CdtProposal::with_seed(action_config, 7);
+        let proposal = CdtProposal::new(action_config).with_seed(7);
         let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
         let action_before = action_for(&ActionConfig::default(), &triangulation);
         let plan = CdtProposalPlan {
@@ -3631,8 +3790,11 @@ mod tests {
             action_before,
             action_after: action_before,
             delta_action: 0.0,
+            forward_family_probability: 0.25,
+            reverse_family_probability: 0.25,
             forward_site_count: 0,
             reverse_site_count: 0,
+            log_proposal_ratio: f64::NEG_INFINITY,
             proposed_state: triangulation.clone(),
         };
 
@@ -3651,7 +3813,7 @@ mod tests {
         let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
         let mut chain = Chain::new(triangulation, &target)
             .expect("initial state should have finite log probability");
-        let mut proposal = CdtProposal::with_seed(action_config, 7);
+        let mut proposal = CdtProposal::new(action_config).with_seed(7);
         let mut rng = StdRng::seed_from_u64(11);
 
         let step = chain
@@ -3672,7 +3834,7 @@ mod tests {
     #[test]
     fn cdt_proposal_commit_applies_concrete_planned_state() {
         let action_config = ActionConfig::default();
-        let mut proposal = CdtProposal::with_seed(action_config.clone(), 11);
+        let mut proposal = CdtProposal::new(action_config.clone()).with_seed(11);
         let mut triangulation =
             CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed to create");
         let proposed_state =
@@ -3685,8 +3847,11 @@ mod tests {
             action_before,
             action_after,
             delta_action: action_after - action_before,
+            forward_family_probability: 0.25,
+            reverse_family_probability: 0.25,
             forward_site_count: proposal_site_count(&triangulation, MoveType::Move13Add),
             reverse_site_count: proposal_site_count(&proposed_state, MoveType::Move31Remove),
+            log_proposal_ratio: 0.0,
             proposed_state,
         };
         let mut rng = StdRng::seed_from_u64(11);
@@ -3736,6 +3901,53 @@ mod tests {
         assert_eq!(
             Error::source(&site_rejection).map(ToString::to_string),
             Some(source.to_string())
+        );
+
+        let policy_source = CdtMoveFamilyPolicyError::EmptySupport;
+        let policy_error = CdtProposalError::Policy {
+            source: policy_source.clone(),
+        };
+        assert!(
+            policy_error
+                .to_string()
+                .contains("CDT move-family policy failed")
+        );
+        assert_eq!(
+            Error::source(&policy_error).map(ToString::to_string),
+            Some(policy_source.to_string())
+        );
+        assert_matches!(
+            CdtError::from(policy_error),
+            CdtError::ProposalPolicyFailed {
+                source: CdtMoveFamilyPolicyError::EmptySupport,
+            }
+        );
+
+        let ratio_source = DiscreteProposalRatio::new(0.0, 1, 1.0, 1)
+            .expect_err("zero forward probability should be rejected");
+        let ratio_error = CdtProposalError::ProposalRatio {
+            move_type: MoveType::Move13Add,
+            source: ratio_source,
+        };
+        assert!(ratio_error.to_string().contains("Move13Add"));
+        assert_eq!(
+            Error::source(&ratio_error).map(ToString::to_string),
+            Some(ratio_source.to_string())
+        );
+        assert_matches!(
+            CdtError::from(ratio_error.clone()),
+            CdtError::ProposalRatioFailed {
+                move_type: MoveType::Move13Add,
+                source,
+            } if source == ratio_source
+        );
+        assert_matches!(
+            proposal_step_error(23, ratio_error),
+            CdtError::MetropolisProposalRatioFailed {
+                step: 23,
+                move_type: MoveType::Move13Add,
+                source,
+            } if source == ratio_source
         );
     }
 }

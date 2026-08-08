@@ -14,12 +14,11 @@ Enumerates the available move types:
 
 - `Move22` — (2,2) move: flip the shared edge between two triangles, preserving vertex count; causality-aware — the CDT layer validates and rejects moves
   that break causal layering
-- `Move13Add` — (1,3) move: insert a new vertex by adding local CDT volume; open-boundary and unfoliated runs subdivide one triangle into three, while
-  toroidal foliated runs split a spacelike link by subdividing an adjacent face and flipping the original spacelike link away. Inserted vertices receive the
-  time label needed to keep the replacement simplices causal.
-- `Move31Remove` — (3,1) move: remove a vertex by collapsing local CDT volume; open-boundary and unfoliated runs remove a degree-3 vertex when the replacement
-  triangle is causal and no time slice is emptied, while toroidal foliated runs use the inverse flip-then-collapse path for degree-4 spacelike-link-split
-  configurations.
+- `Move13Add` — (1,3) move: insert a new vertex by adding local CDT volume; every foliated run splits a spacelike link by subdividing an adjacent face and
+  flipping the original spacelike link away. Open-boundary sites are restricted to interior slices, while toroidal time wraps. Unfoliated geometry fixtures
+  retain bare triangle subdivision.
+- `Move31Remove` — (3,1) move: remove a vertex by collapsing local CDT volume; every foliated run uses the inverse flip-then-collapse path for degree-4
+  spacelike-link-split configurations and preserves the topology-specific minimum slice size. Unfoliated geometry fixtures retain direct degree-3 collapse.
 - `EdgeFlip` — API-compatible alias for the 2D k=2 edge flip used by `Move22`; it records separate statistics but uses the same causal prechecks
 
 ### `MoveResult`
@@ -52,7 +51,7 @@ Key methods:
 
 ### `ErgodicsSystem`
 
-Owns a `MoveStatistics` instance and a thread-local RNG. Public API:
+Owns a `MoveStatistics` instance and a serializable seeded RNG stream. Public API:
 
 - `new()` / `Default::default()` — construct
 - `select_random_move() -> MoveType` — samples uniformly from all four move types
@@ -96,7 +95,7 @@ bistellar moves. The `delaunay` crate exposes the geometric 2D operations this c
 Proposal-site scans call the matching immutable Delaunay 0.8 feasibility validators through `TriangulationMut`: `can_flip_edge` delegates to `can_flip_k2`,
 `can_subdivide_face` delegates to `can_flip_k1_insert`, and `can_collapse_vertex` delegates to `can_flip_k1_remove`. These validators were introduced by
 [`delaunay#419`](https://github.com/acgetchell/delaunay/issues/419) and share deterministic pre-mutation checks with the mutating edits. CDT still applies its
-own causal, foliation, and topology predicates, and composite toroidal moves retain rollback because later primitive edits and final CDT validation can fail.
+own causal, foliation, and topology predicates, and composite foliated moves retain rollback because later primitive edits and final CDT validation can fail.
 
 The backend-neutral `TriangulationMut::remove_vertex` lifecycle operation is broader than the focused inverse k=1 move. It may select that fast path for a
 compatible local configuration or perform generic cavity retriangulation, and its `Result<()>` reports only whether the validated mutation committed. CDT
@@ -108,11 +107,10 @@ CDT cannot apply arbitrary geometric k-flips directly. A CDT move must also pres
 maps Delaunay's local edit primitives into foliation-preserving CDT proposals:
 
 - `Move22` / `EdgeFlip` use the k=2 edge flip only when the replacement diagonal preserves adjacent-slice causality and simplex classification.
-- Open-boundary `Move13Add` uses k=1 insertion as a triangle subdivision and assigns the inserted vertex the time label required by the adjacent causal
-  simplex pattern.
-- Open-boundary `Move31Remove` uses k=1 removal only for removable degree-3 vertices whose replacement triangle remains causal and does not empty a time slice.
-- Toroidal `Move13Add` is realized as a spacelike-link split: subdivide an adjacent face, then flip the original spacelike link away so the closed-S¹ spatial
-  slice remains valid.
+- Foliated `Move13Add` is realized as a spacelike-link split: subdivide an adjacent face, label the new vertex on the link's slice, then flip the original
+  spacelike link away. Open-boundary sites require both adjacent time slabs; toroidal sites wrap time.
+- Foliated `Move31Remove` uses the exact inverse flip-then-collapse configuration and preserves open-path or closed-S¹ slice minima as appropriate.
+- Unfoliated geometry experiments use the bare k=1 insertion and degree-3 removal primitives without claiming a CDT causal transition.
 - Toroidal `Move31Remove` uses the inverse flip-then-collapse path for degree-4 configurations produced by the spacelike-link split.
 
 This is why the public move API is expressed in CDT/Pachner language while the backend layer is expressed in Delaunay k-flip language. The local geometric
@@ -129,7 +127,9 @@ see `src/cdt/metropolis/runner.rs` and `src/cdt/metropolis/adapter.rs`. The CDT 
 forward/reverse local-site ratio, then the upstream `markov-chain-monte-carlo` sampler owns the Metropolis-Hastings accept/reject draw and generic chain
 counters; see `docs/metropolis.md`. Only accepted proposals swap the cloned, mutated state into the live simulation. Ordinary causal, geometric, or backend
 edit failures on the cloned state are self-loop proposal outcomes recorded in `ProposalStatistics`; hard backend mutation or invariant-refresh failures still
-return `CdtError::MetropolisMoveApplicationFailed`.
+return `CdtError::MetropolisMoveApplicationFailed`. Because the cloned proposed state already provides isolation, this path uses the draft mutation entry point
+and its backend primitives use caller-owned rollback rather than taking another full-mesh snapshot. Direct public CDT move attempts use the same primitive path
+under their own outer rollback snapshot, while standalone geometry-backend mutations retain a backend-owned transaction guard.
 
 ## Ensemble And Volume Fixing
 

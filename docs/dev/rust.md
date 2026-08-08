@@ -76,6 +76,17 @@ Avoid unnecessary allocations and cloning in public APIs. Prefer returning refer
 
 Only return owned values (`Vec`, `String`, etc.) when necessary.
 
+Geometry query ownership is explicit: entity scans and adjacency queries return
+lazy iterators borrowing the backend, face-vertex queries return exact-size
+iterators, and coordinate lookup returns a slice borrowing canonical payload
+storage. Collect only when a consumer genuinely needs random access or ownership
+beyond the query borrow. Detached public handles are hashable runtime
+capabilities: equality and hashing include the backend owner, topology
+generation, and local key. They are valid for temporary `HashMap`/`HashSet`
+indexes, but they are neither serializable nor durable across mutation, backend
+cloning, or deserialization. Foreign and stale handles must produce typed errors
+before their local keys are interpreted.
+
 Do not expose broad mutable access to invariant-heavy CDT wrappers. Prefer narrow mutation methods that perform one operation, invalidate derived
 caches/bookkeeping, and return a typed `Result`. Tests that need invalid legacy states should use local helpers inside the test module rather than test-only
 constructors or methods on production impl blocks.
@@ -241,9 +252,9 @@ documented:
 - `prelude::errors` for crate error types and typed error-category enums needed to pattern-match failures
 - `prelude::simulation` for Metropolis/action simulation workflows, proposal types, simulation result types, telemetry, and triangulation query traits needed to
   inspect or debug simulations
-- `prelude::observables` for user-facing analysis APIs that measure triangulations or derived physical observables, such as volume profiles, Hausdorff-dimension
-  estimators, and spectral-dimension estimators
-- `prelude::testing` for fixture-only helpers such as the mock backend and its typed error categories
+- `prelude::observables` for user-facing analysis APIs that measure triangulations or derived physical observables, such as slab-triangle profiles and
+  explicitly finite-window effective Hausdorff and spectral estimators
+- `prelude::testing` for fixture-only helpers such as `TestConfig`, the mock backend, and its typed error categories
 
 Keep the simulation and observables boundaries crisp:
 
@@ -324,8 +335,8 @@ Before adding a dependency, consider:
 ## Geometry Backend Isolation
 
 `src/geometry/` is the backend interface layer. It is responsible for wrapping the upstream `delaunay` crate behind this crate's traits, opaque handles,
-generators, and backend adapters. `src/cdt/` is the CDT domain layer: it owns foliation, topology, causality, moves, action, simulation, results, and
-observables.
+generators, backend adapters, and structural geometry validation. `src/cdt/` is the CDT domain layer: it owns foliation, causality, CDT topology metadata,
+moves, action, simulation, results, and observables.
 
 Direct `use delaunay::` imports are **restricted** to the `src/geometry/` subtree:
 
@@ -338,6 +349,18 @@ No module outside `src/geometry/` may import from the `delaunay` crate directly.
 - Handle types from `crate::geometry::backends::delaunay` (`DelaunayVertexHandle`, `DelaunayEdgeHandle`, `DelaunayFaceHandle`)
 - Trait methods from `TriangulationQuery` / `TriangulationMut`
 - Generator utilities from `crate::geometry::generators`
+
+Structural geometry validation belongs to the geometry backend. Whenever `delaunay` provides incidence, orientation, manifold, embedding, Euler-topology,
+or related validation, delegate to that implementation through `src/geometry/`; do not reproduce its algorithm in `src/cdt/`. Rely on documented successful
+mutation postconditions instead of immediately repeating the same whole-mesh scan. If CDT needs an upstream check that the geometry traits do not expose, add
+a narrow trait/adapter method whose Delaunay implementation delegates upstream. CDT remains responsible for domain invariants that `delaunay` cannot express,
+including foliation, causality, move-family constraints, and agreement between CDT metadata and the backend geometry.
+
+Keep `GeometryBackend` associated coordinate and handle types unconstrained.
+Place numeric, cloning, equality, hashing, or formatting requirements on the
+smallest operation that consumes each capability. Likewise, Delaunay adapter
+impls should use upstream narrow payload traits instead of `DataType` unless
+validation, topology mutation, or another operation needs that full contract.
 
 This ensures the `delaunay` crate can be upgraded or replaced without touching CDT logic.
 
@@ -361,7 +384,8 @@ CDT may own thin domain adapters and result plumbing:
 
 - action-to-log-probability mapping (`CdtTarget`)
 - valid CDT proposal-site enumeration and topology/foliation validation (`CdtProposal`)
-- CDT-specific telemetry, measurements, and event history
+- CDT-specific telemetry and measurements, with event history reconstructed as
+  a borrowed view over those canonical streams
 - conversion between upstream sampler state and CDT result/checkpoint types
 
 Do not add new local generic M-H loops, direct `exp(log_alpha)` acceptance draws, one-off proposal schedulers, or generic chain counter logic in `src/cdt/` when

@@ -17,8 +17,8 @@ runs a seeded S¹×S¹ Metropolis simulation, requires at least one accepted per
 and χ = 0 at the end.
 
 Open-boundary simulation entrypoints are covered by crate-root tests that require `run_simulation()` to build a foliated regular CDT strip, preserve
-adjacent-slice causality, classify simplices, and report a non-empty volume profile. Configuration tests also reject open-boundary totals that cannot be split
-into equal-size spatial slices.
+adjacent-slice causality, classify simplices, and report a non-empty slab-triangle profile. Configuration tests also reject open-boundary totals that cannot be
+split into equal-size spatial slices.
 
 ## Remaining Gaps
 
@@ -46,7 +46,7 @@ The Delaunay and mock backends have direct tests for mutation and query paths, b
 
 ### Metropolis Edge Cases
 
-- Temperature extremes near zero and very large values.
+- Additional target-distribution checks that combine extreme but valid action couplings and temperatures.
 - Zero-step and measurement-boundary schedules.
 - Long seeded runs that assert aggregate behavior without becoming slow or brittle.
 - Additional checks that rollback leaves action and simplex counts unchanged after failed accepted applications.

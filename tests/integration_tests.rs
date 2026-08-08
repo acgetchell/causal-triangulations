@@ -9,12 +9,13 @@ use approx::assert_relative_eq;
 use causal_triangulations::prelude::action::{
     ActionConfig, DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
 };
+use causal_triangulations::prelude::errors::{CdtError, GenerationParameterIssue};
 use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveResult, MoveType};
 use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
 use causal_triangulations::prelude::triangulation::{
     CdtTopology, CdtTriangulation, TriangulationQuery,
 };
-use std::time::Instant;
+use std::assert_matches;
 
 #[cfg(test)]
 mod integration_tests {
@@ -72,7 +73,7 @@ mod integration_tests {
         assert_eq!(triangulation.metadata().topology(), CdtTopology::Toroidal);
         assert_eq!(triangulation.geometry().euler_characteristic(), 0);
         let initial_profile = triangulation
-            .volume_profile()
+            .slab_triangle_profile()
             .expect("initial toroidal profile should be valid");
         triangulation
             .validate_topology()
@@ -102,10 +103,10 @@ mod integration_tests {
         assert_ne!(
             results
                 .triangulation()
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("final toroidal profile should be valid"),
             initial_profile,
-            "periodic toroidal volume moves should change the final volume profile"
+            "periodic toroidal volume moves should change the final slab-triangle profile"
         );
         assert_eq!(
             results.triangulation().metadata().topology(),
@@ -211,8 +212,8 @@ mod integration_tests {
 
     #[test]
     fn test_enhanced_caching_behavior() {
-        let mut triangulation =
-            CdtTriangulation::from_random_points(5, 1, 2).expect("Failed to create triangulation");
+        let mut triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 101)
+            .expect("Failed to create triangulation");
 
         // Test cache population
         triangulation.refresh_cache();
@@ -235,24 +236,30 @@ mod integration_tests {
     #[test]
     fn test_error_handling_robustness() {
         // Test parameter validation with enhanced error context
-        let result = CdtTriangulation::from_random_points(2, 1, 2);
-        assert!(result.is_err(), "Should reject < 3 vertices");
+        assert_matches!(
+            CdtTriangulation::from_seeded_points(2, 1, 2, 102),
+            Err(CdtError::InvalidGenerationParameters {
+                issue: GenerationParameterIssue::InsufficientVertexCount,
+                ref provided_value,
+                ref expected_range,
+            }) if provided_value == "2" && expected_range == "≥ 3"
+        );
 
-        let result = CdtTriangulation::from_random_points(5, 1, 3);
-        assert!(result.is_err(), "Should reject non-2D");
+        assert_matches!(
+            CdtTriangulation::from_seeded_points(5, 1, 3, 102),
+            Err(CdtError::UnsupportedDimension(3))
+        );
 
         // Test successful minimum case
-        let min_triangulation = CdtTriangulation::from_random_points(3, 1, 2);
-        assert!(
-            min_triangulation.is_ok(),
-            "Minimum valid parameters should succeed"
-        );
+        let min_triangulation = CdtTriangulation::from_seeded_points(3, 1, 2, 102)
+            .expect("Minimum valid parameters should succeed");
+        assert_eq!(min_triangulation.vertex_count(), 3);
     }
 
     #[test]
     fn test_action_calculation_consistency() {
-        let triangulation =
-            CdtTriangulation::from_random_points(4, 1, 2).expect("Failed to create triangulation");
+        let triangulation = CdtTriangulation::from_seeded_points(4, 1, 2, 103)
+            .expect("Failed to create triangulation");
 
         let config = ActionConfig::default();
         let vertices = triangulation.vertex_count();
@@ -305,9 +312,8 @@ mod integration_tests {
     }
 
     #[test]
-    fn test_memory_efficiency() {
-        // Test that large triangulations can be created and processed efficiently
-        let triangulation = CdtTriangulation::from_random_points(20, 1, 2)
+    fn test_larger_triangulation_preserves_count_relationships() {
+        let triangulation = CdtTriangulation::from_seeded_points(20, 1, 2, 104)
             .expect("Failed to create large triangulation");
 
         // Verify reasonable scaling of components
@@ -315,21 +321,8 @@ mod integration_tests {
         let edges = triangulation.edge_count();
         let faces = triangulation.face_count();
 
-        assert!(
-            (3..=20).contains(&vertices),
-            "Should have reasonable number of vertices (3-20), got {vertices}. Random point generation may create duplicates."
-        );
+        assert_eq!(vertices, 20);
         assert!(edges > vertices, "Should have more edges than vertices");
         assert!(faces > 0, "Should have positive face count");
-
-        // Test that edge counting is efficient (doesn't hang)
-        let start = Instant::now();
-        let _ = triangulation.edge_count();
-        let elapsed = start.elapsed();
-
-        assert!(
-            elapsed.as_millis() < 1000,
-            "Edge counting should complete quickly"
-        );
     }
 }

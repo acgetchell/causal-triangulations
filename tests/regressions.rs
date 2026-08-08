@@ -44,14 +44,14 @@ fn toroidal_observables_run_accepts_periodic_moves_after_offset_support() {
         .expect("accepted periodic moves should preserve evolved toroidal CDT invariants");
     assert!(
         results
-            .hausdorff_dimension_estimate()
+            .all_scale_effective_hausdorff_slope()
             .expect("final triangulation adjacency should be readable")
             .is_some(),
         "observables workflow should still report a Hausdorff estimate"
     );
     assert!(
         results
-            .spectral_dimension_estimate()
+            .short_time_effective_spectral_dimension()
             .expect("final triangulation adjacency should be readable")
             .is_some(),
         "observables workflow should still report a spectral estimate"
@@ -73,10 +73,10 @@ fn accepted_move_history_keeps_matching_attempt_after_planned_proposal_handoff()
     let results =
         MetropolisAlgorithm::new(metropolis_config, ActionConfig::default()).run(triangulation);
     let results = results.expect("history regression run should complete");
-    let history = results.triangulation().metadata().simulation_history();
+    let history = results.simulation_history().collect::<Vec<_>>();
 
     let mut accepted_events = 0_u64;
-    for event in history {
+    for event in &history {
         let SimulationEvent::MoveAccepted {
             move_type, step, ..
         } = event
@@ -186,7 +186,10 @@ fn open_boundary_visualization_seed_preserves_spatial_interval_slices() {
     // Regression for causal-triangulations#191: the README visualization seed
     // exposed accepted open-boundary proposals whose spacelike subgraph branched
     // within a single time slice. Such candidates should be rejected and rolled
-    // back, leaving every spatial slice as one interval.
+    // back, leaving every spatial slice as one interval. The same seed also
+    // evolves beyond its initialization drawing, so combinatorially valid paths
+    // must not be rejected merely because stale backend x-order no longer
+    // matches the abstract spatial interval.
     let triangulation =
         CdtTriangulation::from_cdt_strip(24, 7).expect("visualization fixture should build");
     let metropolis_config = MetropolisConfig::new(1.0, 160, 0, 1)

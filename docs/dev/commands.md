@@ -104,14 +104,15 @@ just ci
 This runs:
 
 - GitHub Actions, Markdown, JSON, TOML, YAML/CFF, Python, shell, and repository-owned Semgrep checks
-- production library/binary formatting, Clippy, and documentation builds
+- Rust formatting, all-target Clippy, and production documentation builds
 - one release-profile nextest pass for library unit tests and integration-test crates
 - a separate rustdoc doctest bucket
 - notebook output hygiene, extracted-code checks, and fast headless execution
-- benchmark harness compilation and validated example runs
+- benchmark harness compilation, the deterministic allocation contract, and validated example runs
 
-The `ci` recipe is a flat union of these focused validators. It does not depend on broad `check`, `lint`, or `test-all` bundles. Each target class is compiled
-by the bucket that owns its validation.
+The `ci` recipe is a flat union of these focused validators. It does not depend on broad `check`, `lint`, or `test-all` bundles. Clippy covers every Cargo
+target to match the GitHub SARIF workflow; the test, benchmark, and example buckets still own their runtime or compile-contract evidence because ordinary
+compilation does not execute Clippy lints.
 
 For heavier stabilization work, run the slow-test wrapper:
 
@@ -376,7 +377,13 @@ Benchmark harnesses can be smoke-tested without producing baseline-quality perfo
 just bench-smoke
 ```
 
-The smaller CI regression benchmark contract runs through the `perf` Cargo profile:
+The deterministic cached-observable allocation contract runs in `just ci` and can be checked independently through the `perf` Cargo profile:
+
+```bash
+just allocation-check
+```
+
+The smaller CI benchmark contract runs the allocation check and the stable Criterion regression suite:
 
 ```bash
 just bench-ci
