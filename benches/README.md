@@ -9,6 +9,7 @@ This document describes the Criterion benchmark suites. For regression workflows
 cargo bench
 just bench-ci
 cargo bench --profile perf --bench ci_performance_suite
+cargo bench --profile perf --bench allocation_profile
 ```
 
 Run a focused group:
@@ -35,11 +36,18 @@ that should stay comparable across releases:
 - generating open-boundary and toroidal CDT triangulations;
 - validating generated triangulations;
 - attempting individual ergodic move types;
+- scaling guaranteed-success inverse volume finalization across increasing toroidal CDT meshes;
 - iterating proposal-site candidates through public move-attempt and single-step Metropolis proposal paths;
-- executing ten random-move sweeps, where each sweep attempts one move per current simplex;
+- evaluating state-dependent family policies that inspect the complete offered-site views;
+- executing fixed random-move attempt budgets equal to ten initial sweeps, so reported throughput exactly matches timed attempts;
 - running short Metropolis simulations sized as ten initial sweeps.
 
 Keep this suite stable and release-relevant. Exploratory or noisy benchmarks belong in `cdt_benchmarks.rs`.
+
+`allocation_profile` is a deterministic heap-allocation contract for cached
+observables. It verifies that a cached edge-count read allocates nothing and a
+borrow-to-owned slab-triangle-profile read performs exactly one vector allocation. The
+contract blocks `just ci`, `just bench-ci`, and the performance workflow.
 
 ## Benchmark Groups
 
@@ -101,7 +109,7 @@ Includes configuration validation, proposal planning, accepted-move application,
 
 ### `simulation_analysis`
 
-Measures post-run analysis such as acceptance rates, average action, and equilibrium measurement extraction.
+Measures post-run analysis such as acceptance rates, average action, and post-thermalization measurement extraction.
 
 Use for output and analysis workflow regressions.
 

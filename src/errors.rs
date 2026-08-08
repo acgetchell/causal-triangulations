@@ -88,8 +88,10 @@ pub enum ConfigurationSetting {
     Coupling2,
     /// Cosmological constant setting.
     CosmologicalConstant,
-    /// Explicit per-slice volume profile setting.
-    VolumeProfile,
+    /// Combined action-coupling magnitude constraint.
+    ActionCouplings,
+    /// Explicit per-slice spatial vertex profile setting.
+    SpatialVertexProfile,
 }
 
 impl fmt::Display for ConfigurationSetting {
@@ -106,7 +108,8 @@ impl fmt::Display for ConfigurationSetting {
             Self::Coupling0 => formatter.write_str("coupling_0"),
             Self::Coupling2 => formatter.write_str("coupling_2"),
             Self::CosmologicalConstant => formatter.write_str("cosmological_constant"),
-            Self::VolumeProfile => formatter.write_str("volume_profile"),
+            Self::ActionCouplings => formatter.write_str("action couplings"),
+            Self::SpatialVertexProfile => formatter.write_str("spatial_vertex_profile"),
         }
     }
 }
@@ -151,12 +154,12 @@ pub enum GenerationParameterIssue {
     InsufficientNumberOfTimeSlices,
     /// A slice count was zero where at least one slice is required.
     NonPositiveSliceCount,
-    /// Explicit volume profile has no slices.
-    EmptyVolumeProfile,
-    /// Explicit volume profile length cannot fit in supported counters.
-    VolumeProfileLengthOverflow,
-    /// A volume-profile slice has too few vertices.
-    InsufficientVerticesInVolumeProfileSlice,
+    /// Explicit spatial-vertex profile has no slices.
+    EmptySpatialVertexProfile,
+    /// Explicit spatial-vertex profile length cannot fit in supported counters.
+    SpatialVertexProfileLengthOverflow,
+    /// A spatial-vertex-profile slice has too few vertices.
+    InsufficientVerticesInSpatialVertexProfileSlice,
     /// Total vertex count cannot fit in supported counters.
     VertexCountOverflow,
     /// Simplex count cannot fit in supported counters.
@@ -177,12 +180,12 @@ impl fmt::Display for GenerationParameterIssue {
                 formatter.write_str("Insufficient number of time slices")
             }
             Self::NonPositiveSliceCount => formatter.write_str("Number of slices must be positive"),
-            Self::EmptyVolumeProfile => formatter.write_str("Empty volume profile"),
-            Self::VolumeProfileLengthOverflow => {
-                formatter.write_str("Volume profile length overflow")
+            Self::EmptySpatialVertexProfile => formatter.write_str("Empty spatial-vertex profile"),
+            Self::SpatialVertexProfileLengthOverflow => {
+                formatter.write_str("Spatial-vertex profile length overflow")
             }
-            Self::InsufficientVerticesInVolumeProfileSlice => {
-                formatter.write_str("Insufficient vertices in volume-profile slice")
+            Self::InsufficientVerticesInSpatialVertexProfileSlice => {
+                formatter.write_str("Insufficient vertices in spatial-vertex-profile slice")
             }
             Self::VertexCountOverflow => formatter.write_str("Vertex count overflow"),
             Self::SimplexCountOverflow => formatter.write_str("Simplex count overflow"),
@@ -223,8 +226,8 @@ pub enum DelaunayGenerationQuantity {
     TimeSlices,
     /// One time-slice index.
     SliceIndex,
-    /// One entry in a spatial volume profile.
-    SliceVolume,
+    /// One entry in a spatial-vertex profile.
+    SliceVertexCount,
 }
 
 impl fmt::Display for DelaunayGenerationQuantity {
@@ -235,7 +238,7 @@ impl fmt::Display for DelaunayGenerationQuantity {
             Self::VerticesPerSlice => formatter.write_str("vertices per slice"),
             Self::TimeSlices => formatter.write_str("time-slice count"),
             Self::SliceIndex => formatter.write_str("time-slice index"),
-            Self::SliceVolume => formatter.write_str("slice volume"),
+            Self::SliceVertexCount => formatter.write_str("slice vertex count"),
         }
     }
 }
@@ -387,12 +390,14 @@ impl fmt::Display for OutputPreparationStage {
     }
 }
 
-/// Filesystem or serialization step that failed while writing output.
+/// Filesystem or serialization step that failed while coordinating or writing output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum OutputWriteStage {
     /// Creating a missing parent directory.
     CreateParentDirectory,
+    /// Opening and exclusively locking the destination's coordination file.
+    AcquireLock,
     /// Creating or truncating the output file.
     CreateFile,
     /// Encoding and writing the primary output payload.
@@ -401,6 +406,10 @@ pub enum OutputWriteStage {
     WriteTerminator,
     /// Flushing buffered output to the operating system.
     Flush,
+    /// Verifying that an existing destination can be replaced safely.
+    ValidateDestination,
+    /// Moving an existing destination aside before publishing replacements.
+    BackupExisting,
     /// Publishing a fully written staged file at its configured path.
     Persist,
 }
@@ -409,10 +418,13 @@ impl fmt::Display for OutputWriteStage {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::CreateParentDirectory => formatter.write_str("create parent directory"),
+            Self::AcquireLock => formatter.write_str("acquire output lock"),
             Self::CreateFile => formatter.write_str("create file"),
             Self::Serialize => formatter.write_str("serialize output"),
             Self::WriteTerminator => formatter.write_str("write record terminator"),
             Self::Flush => formatter.write_str("flush output"),
+            Self::ValidateDestination => formatter.write_str("validate output destination"),
+            Self::BackupExisting => formatter.write_str("back up existing output"),
             Self::Persist => formatter.write_str("persist staged output"),
         }
     }
@@ -1224,17 +1236,23 @@ pub enum CheckpointResumeFailure {
         /// Seed from simulation configuration.
         expected: Option<u64>,
     },
-    /// Scalar trace volume profile exceeds the stored triangle count.
+    /// Scalar trace slab-triangle profile exceeds the stored triangle count.
     #[error(
-        "step {step} scalar trace volume profile total {profile_total} exceeds triangle count {triangles}"
+        "step {step} scalar trace slab-triangle profile total {profile_total} exceeds triangle count {triangles}"
     )]
-    ScalarTraceVolumeProfileExceedsTriangles {
+    ScalarTraceSlabTriangleProfileExceedsTriangles {
         /// Step with invalid scalar trace telemetry.
         step: u32,
-        /// Sum of the serialized volume profile entries.
+        /// Sum of the serialized slab-triangle profile entries.
         profile_total: u64,
-        /// Stored scalar trace triangle count.
-        triangles: u32,
+        /// Reconstructed triangle count for the profile's state.
+        triangles: u64,
+    },
+    /// A reconstructed scalar-trace triangle count cannot fit its comparison type.
+    #[error("reconstructed scalar trace triangle count {triangles} exceeds u64::MAX")]
+    ScalarTraceTriangleCountOverflow {
+        /// Reconstructed nonzero triangle count that could not be widened.
+        triangles: usize,
     },
     /// A scalar trace simplex count disagrees with the reconstructed post-step state.
     #[error(
@@ -1250,14 +1268,14 @@ pub enum CheckpointResumeFailure {
         /// Count reconstructed from the accepted move trajectory.
         expected: usize,
     },
-    /// A scalar trace volume profile disagrees with the restored final triangulation.
-    #[error("step {step} scalar trace volume profile does not match the restored state")]
-    ScalarTraceVolumeProfileStateMismatch {
+    /// A scalar trace slab-triangle profile disagrees with the restored final triangulation.
+    #[error("step {step} scalar trace slab-triangle profile does not match the restored state")]
+    ScalarTraceSlabTriangleProfileStateMismatch {
         /// Step with inconsistent scalar trace telemetry.
         step: u32,
-        /// Serialized scalar trace volume profile.
+        /// Serialized scalar trace slab-triangle profile.
         actual: Vec<u32>,
-        /// Volume profile recomputed from the restored final triangulation.
+        /// Slab-triangle profile recomputed from the restored final triangulation.
         expected: Vec<u32>,
     },
     /// Scalar trace contains a non-finite numeric value.
@@ -1340,12 +1358,12 @@ pub enum CheckpointResumeFailure {
         /// Count reconstructed from the accepted move trajectory.
         expected: usize,
     },
-    /// A measurement volume profile disagrees with the trace or restored final state.
-    #[error("step {step} measurement volume profile does not match the reconstructed state")]
-    MeasurementVolumeProfileStateMismatch {
+    /// A measurement slab-triangle profile disagrees with the trace or restored final state.
+    #[error("step {step} measurement slab-triangle profile does not match the reconstructed state")]
+    MeasurementSlabTriangleProfileStateMismatch {
         /// Step with inconsistent measurement telemetry.
         step: u32,
-        /// Serialized measurement volume profile.
+        /// Serialized measurement slab-triangle profile.
         actual: Vec<u32>,
         /// Profile stored for the same trace state or recomputed from final geometry.
         expected: Vec<u32>,
@@ -1628,7 +1646,7 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             | CdtError::InvalidSimplexCount { .. }
             | CdtError::InvalidMeasurementAction { .. }
             | CdtError::InvalidMeasurementCount { .. }
-            | CdtError::InvalidMeasurementVolumeProfile { .. }
+            | CdtError::InvalidMeasurementSlabTriangleProfile { .. }
             | CdtError::InvalidScalarTraceCount { .. }
             | CdtError::MeasurementCountOverflow { .. }
             | CdtError::InvalidSimulationConfiguration { .. }
@@ -1647,6 +1665,7 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             | CdtError::OutputWriteFailed { .. }
             | CdtError::OutputPathResolutionFailed { .. }
             | CdtError::OutputPathConflict { .. }
+            | CdtError::OutputPathBusy { .. }
             | CdtError::OutputReadFailed { .. }
             | CdtError::CheckpointSerializationFailed { .. }
             | CdtError::CheckpointResumeFailed { .. }) => Self::Unexpected {
@@ -1744,14 +1763,14 @@ pub enum CdtError {
         provided_value: u32,
     },
     /// [`Measurement`](crate::cdt::results::Measurement) construction failed
-    /// because a per-slice volume profile could not fit the stored triangle count.
+    /// because a per-slab triangle profile could not fit the stored triangle count.
     #[error(
-        "Invalid measurement volume profile at step {step}: total {profile_total} exceeds triangle count {triangles}"
+        "Invalid measurement slab-triangle profile at step {step}: total {profile_total} exceeds triangle count {triangles}"
     )]
-    InvalidMeasurementVolumeProfile {
-        /// Measurement step with invalid volume-profile telemetry.
+    InvalidMeasurementSlabTriangleProfile {
+        /// Measurement step with invalid slab-triangle-profile telemetry.
         step: u32,
-        /// Sum of the supplied volume profile entries.
+        /// Sum of the supplied slab-triangle profile entries.
         profile_total: u64,
         /// Stored measurement triangle count.
         triangles: u32,
@@ -1990,7 +2009,7 @@ pub enum CdtError {
         /// Lower-level preparation diagnostic.
         detail: String,
     },
-    /// Writing CSV/JSON simulation output failed.
+    /// Coordinating or writing CSV/JSON simulation output failed.
     #[error("Failed to write {format} output to {path} during {stage}: {detail}")]
     OutputWriteFailed {
         /// Target output path.
@@ -2017,6 +2036,14 @@ pub enum CdtError {
         csv_path: String,
         /// Resolved JSON output path.
         json_path: String,
+    },
+    /// A configured output path is locked by another simulation.
+    #[error("{format} output path {path} is already in use by another simulation")]
+    OutputPathBusy {
+        /// Resolved output path whose exclusive lock could not be acquired.
+        path: String,
+        /// Output format associated with the locked destination.
+        format: OutputFormat,
     },
     /// Reading or decoding CSV/JSON simulation output failed.
     #[error("Failed to read {format} output from {path}: {detail}")]
@@ -2254,7 +2281,10 @@ mod tests {
                 ConfigurationSetting::CosmologicalConstant,
                 "cosmological_constant",
             ),
-            (ConfigurationSetting::VolumeProfile, "volume_profile"),
+            (
+                ConfigurationSetting::SpatialVertexProfile,
+                "spatial_vertex_profile",
+            ),
         ];
 
         for (setting, expected) in cases {
@@ -2294,16 +2324,16 @@ mod tests {
                 "Number of slices must be positive",
             ),
             (
-                GenerationParameterIssue::EmptyVolumeProfile,
-                "Empty volume profile",
+                GenerationParameterIssue::EmptySpatialVertexProfile,
+                "Empty spatial-vertex profile",
             ),
             (
-                GenerationParameterIssue::VolumeProfileLengthOverflow,
-                "Volume profile length overflow",
+                GenerationParameterIssue::SpatialVertexProfileLengthOverflow,
+                "Spatial-vertex profile length overflow",
             ),
             (
-                GenerationParameterIssue::InsufficientVerticesInVolumeProfileSlice,
-                "Insufficient vertices in volume-profile slice",
+                GenerationParameterIssue::InsufficientVerticesInSpatialVertexProfileSlice,
+                "Insufficient vertices in spatial-vertex-profile slice",
             ),
             (
                 GenerationParameterIssue::VertexCountOverflow,
@@ -3037,6 +3067,26 @@ mod tests {
         assert_eq!(
             format!("{error}"),
             "CSV output path output/results and JSON output path output/results resolve to the same file"
+        );
+    }
+
+    #[test]
+    fn output_path_busy_preserves_destination_context() {
+        let error = CdtError::OutputPathBusy {
+            path: "output/trace.csv".to_string(),
+            format: OutputFormat::Csv,
+        };
+
+        assert_matches!(
+            &error,
+            CdtError::OutputPathBusy {
+                path,
+                format: OutputFormat::Csv,
+            } if path == "output/trace.csv"
+        );
+        assert_eq!(
+            format!("{error}"),
+            "CSV output path output/trace.csv is already in use by another simulation"
         );
     }
 

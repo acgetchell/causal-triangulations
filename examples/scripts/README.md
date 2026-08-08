@@ -27,7 +27,8 @@ Runs a small temperature sweep and writes per-temperature logs to `sweep_results
 ./examples/scripts/parameter_sweep.sh
 ```
 
-Use this as a starting point for acceptance, action, and volume diagnostics. Temperature is a sampler parameter here, not a claim about a physical heat bath.
+Use this as a starting point for acceptance, action, and volume diagnostics. Temperature rescales the complete action through `exp(-S/T)`, so changing it
+changes the sampled ensemble even when it is not interpreted as a physical heat bath.
 
 ### `performance_test.sh`
 

@@ -2,7 +2,7 @@
 
 //! Proposal and step telemetry for CDT Metropolis sampling.
 
-use super::helpers::actions_match;
+use super::helpers::action_delta_matches;
 use crate::cdt::ergodic_moves::MoveType;
 use crate::errors::{CdtError, CdtResult, CheckpointResumeFailure};
 use markov_chain_monte_carlo::DiscreteProposalRatio;
@@ -999,7 +999,7 @@ impl MonteCarloStepOutcome {
     ) -> CdtResult<Self> {
         validate_action_after(step, action_after)?;
         validate_delta_action(step, delta_action)?;
-        if !actions_match(action_after, action_before + delta_action) {
+        if !action_delta_matches(action_before, delta_action, action_after) {
             return Err(checkpoint_resume_failed(
                 CheckpointResumeFailure::StepActionAfterDeltaMismatch { step: step.get() },
             ));
@@ -1681,6 +1681,7 @@ impl ProposalStatistics {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cdt::metropolis::helpers::actions_match;
     use serde_json::{from_str, from_value, to_value};
     use std::assert_matches;
 

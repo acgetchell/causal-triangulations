@@ -41,7 +41,7 @@ impl CdtTarget {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if `temperature` is
-    /// not finite and positive. [`ActionConfig`] has already validated its
+    /// not finite and positive with a finite reciprocal. [`ActionConfig`] has already validated its
     /// couplings before this constructor receives it.
     ///
     /// # Examples
@@ -55,6 +55,15 @@ impl CdtTarget {
     pub fn new(action_config: ActionConfig, temperature: f64) -> CdtResult<Self> {
         action_config.validate();
         validate_temperature(temperature)?;
+        if !(action_config.maximum_action_magnitude() / temperature).is_finite() {
+            return Err(CdtError::InvalidSimulationConfiguration {
+                setting: crate::errors::ConfigurationSetting::Temperature,
+                provided_value: temperature.to_string(),
+                expected:
+                    "large enough to keep -action / temperature finite for representable CDT states"
+                        .to_string(),
+            });
+        }
         Ok(Self {
             action_config,
             temperature,
@@ -1067,7 +1076,7 @@ where
         _state: &CdtTriangulation2D,
         plan: &Self::Plan,
     ) -> Result<f64, Self::Error> {
-        Ok(concrete_log_q_ratio(plan))
+        Ok(plan.log_proposal_ratio())
     }
 
     fn info(&self, plan: &Self::Plan) -> Self::Info {
@@ -1218,7 +1227,8 @@ pub(crate) fn propose_concrete_plan(
             ));
         }
     };
-    let delta_action = action_after - action_before;
+    let delta_action = proposed_delta_action(action_config, simplex_counts(state), move_type)
+        .expect("proposal count delta was validated before mutation");
     let reverse_site_count = moves
         .proposal_policy_view(&proposed_state, move_type.reverse())
         .offered_site_count();
@@ -1240,15 +1250,6 @@ pub(crate) fn propose_concrete_plan(
         log_proposal_ratio,
         proposed_state,
     }))
-}
-
-/// Computes the Hastings proposal-density correction for a concrete plan.
-///
-/// The ratio uses the instantaneous forward and reverse local-site counts from
-/// the selected move family. Zero denominators represent impossible proposal
-/// weights and are scored as negative infinity rather than panicking.
-pub(crate) const fn concrete_log_q_ratio(plan: &CdtProposalPlan) -> f64 {
-    plan.log_proposal_ratio
 }
 
 /// Restores a checkpointed triangulation through the upstream MCMC chain type.

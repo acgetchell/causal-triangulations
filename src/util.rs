@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Crate-private numeric conversion helpers.
+//! Numeric conversion helpers.
 
 use num_traits::cast::NumCast;
 

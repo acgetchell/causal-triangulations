@@ -160,9 +160,16 @@ Windows matrix legs often determining wall-clock duration:
 
 The repository intentionally keeps the existing `build (ubuntu-latest)`,
 `build (macos-latest)`, and `build (windows-latest)` required check contexts,
-and keeps Rust target coverage on all three platforms. A broader split that
-would run the comprehensive repository/tooling path only on Linux was rejected
-because it would weaken the current macOS build signal.
+and keeps Rust target coverage on all three platforms. Each matrix leg runs the
+comprehensive `just ci` path for the runner's native host and separately checks
+the library and CLI with all features for the declared Rust target. This matters
+on the ARM64 `macos-latest` runner: native tests exercise
+`aarch64-apple-darwin`, while the explicit target check preserves compile
+coverage for `x86_64-apple-darwin`. The target check stays production-only
+because cross-target tests, examples, and Criterion benchmarks may require
+execution or a target-native C toolchain. A broader split that would run the
+comprehensive repository/tooling path only on Linux was rejected because it
+would weaken the current macOS build signal.
 
 The adopted change is smaller: the Windows leg now uses
 `cargo nextest run --workspace --all-targets --no-run` instead of an initial
@@ -206,6 +213,9 @@ and Dependabot review/merge sequence. Registry and Homebrew metadata confirm the
   Taplo, typos-cli, uv, and zizmor. Workflows bootstrap `just` through the repository-local composite action, then resolve every remaining tool version with
   `just --evaluate` instead of duplicating workflow `env` pins. Multi-version exports validate every lookup before writing any step outputs, preventing failed
   or empty evaluations from being masked by successful `echo` commands.
+- The dependency-audit workflow runs a human-readable `cargo audit` as its blocking verdict. A separate `if: always()` step writes the JSON artifact without
+  suppressing that command's exit status, and the upload step still runs after either audit command reports a known advisory. Neither audit step may use
+  `continue-on-error` or shell-level failure suppression, because that would let an audit invocation appear successful when the lockfile is vulnerable.
 - Shared Rust dependencies move to their current stable releases, including `delaunay` 0.8.0, Clap 4.6.5, rand 0.10.2, serde 1.0.229, serde_json 1.0.151,
   thiserror 2.0.19, env_logger 0.11.11, and log 0.4.33. The `delaunay` upgrade requires Rust 1.97.1, so `Cargo.toml`, `rust-toolchain.toml`, and current MSRV
   documentation move together; historical release notes remain unchanged.
@@ -317,6 +327,13 @@ quickstart and visualization notebooks in routine CI and reserves the analysis-c
   Just continues to own launch behavior, the fast/slow execution sets, output placement under `target/notebooks`, and explicit source-output cleanup.
 - No workflow or tool-version changes are needed: the existing platform matrix already delegates to `just ci`, and the pinned cargo-nextest/uv environment
   provides every command used by the standardized buckets. The new nextest file supplies repository-owned profile policy rather than changing a tool pin.
+
+## Issue #222 Deterministic Allocation Contract
+
+Issue #222 treats cached-observable allocation counts as deterministic correctness assertions rather than noisy timing measurements. The canonical
+`allocation-check` recipe executes those assertions through the `perf` profile; `just ci` runs it as part of the before-push contract, `just bench-ci` pairs it
+with the stable Criterion suite, and the performance workflow invokes the same recipe before baseline analysis. Allocation failures are blocking on every path,
+while statistically noisy Criterion regressions retain their existing report-only pull-request behavior.
 
 ## Deferred Updates
 

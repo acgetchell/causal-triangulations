@@ -119,7 +119,7 @@ fn open_profile_face_count(profile: &[u32]) -> CdtResult<u32> {
         profile
             .split_first()
             .ok_or_else(|| CdtError::InvalidGenerationParameters {
-                issue: GenerationParameterIssue::EmptyVolumeProfile,
+                issue: GenerationParameterIssue::EmptySpatialVertexProfile,
                 provided_value: "[]".to_string(),
                 expected_range: "at least one time slice".to_string(),
             })?;
@@ -135,7 +135,7 @@ fn open_profile_face_count(profile: &[u32]) -> CdtResult<u32> {
     })?;
     let slice_count =
         u32::try_from(profile.len()).map_err(|err| CdtError::InvalidGenerationParameters {
-            issue: GenerationParameterIssue::VolumeProfileLengthOverflow,
+            issue: GenerationParameterIssue::SpatialVertexProfileLengthOverflow,
             provided_value: profile.len().to_string(),
             expected_range: format!("length must fit in u32: {err}"),
         })?;
@@ -155,9 +155,9 @@ fn open_profile_face_count(profile: &[u32]) -> CdtResult<u32> {
 
 /// Verifies that a profiled open-boundary builder returned the requested mesh size.
 ///
-/// This protects [`CdtTriangulation::from_cdt_strip_profile`] from constructing
+/// This protects [`CdtTriangulation::from_cdt_strip_spatial_vertex_profile`] from constructing
 /// foliation metadata for a backend whose vertex or face topology does not
-/// match the requested spatial volume profile.
+/// match the requested spatial-vertex profile.
 fn validate_profile_strip_counts(
     backend: &DelaunayBackend2D,
     total_vertices: u32,
@@ -246,7 +246,7 @@ fn build_validated_toroidal_backend(
     Ok(backend)
 }
 
-/// Validates an explicit per-slice spatial volume profile.
+/// Validates an explicit per-slice spatial-vertex profile.
 fn validate_spatial_profile(
     profile: &[u32],
     minimum_slices: u32,
@@ -255,7 +255,7 @@ fn validate_spatial_profile(
 ) -> CdtResult<(u32, u32)> {
     if profile.is_empty() {
         return Err(CdtError::InvalidGenerationParameters {
-            issue: GenerationParameterIssue::EmptyVolumeProfile,
+            issue: GenerationParameterIssue::EmptySpatialVertexProfile,
             provided_value: "[]".to_string(),
             expected_range: "at least one time slice".to_string(),
         });
@@ -263,7 +263,7 @@ fn validate_spatial_profile(
 
     let num_slices =
         u32::try_from(profile.len()).map_err(|err| CdtError::InvalidGenerationParameters {
-            issue: GenerationParameterIssue::VolumeProfileLengthOverflow,
+            issue: GenerationParameterIssue::SpatialVertexProfileLengthOverflow,
             provided_value: profile.len().to_string(),
             expected_range: format!("length must fit in u32: {err}"),
         })?;
@@ -279,7 +279,7 @@ fn validate_spatial_profile(
     for (slice, &vertices) in profile.iter().enumerate() {
         if vertices < minimum_vertices_per_slice {
             return Err(CdtError::InvalidGenerationParameters {
-                issue: GenerationParameterIssue::InsufficientVerticesInVolumeProfileSlice,
+                issue: GenerationParameterIssue::InsufficientVerticesInSpatialVertexProfileSlice,
                 provided_value: format!("slice {slice} has {vertices}"),
                 expected_range: format!(
                     "each slice ≥ {minimum_vertices_per_slice} for {topology_label}"
@@ -298,15 +298,15 @@ fn validate_spatial_profile(
     Ok((total_vertices, num_slices))
 }
 
-/// Converts a spatial volume profile to `usize` slice sizes.
+/// Converts a spatial-vertex profile to `usize` slice sizes.
 fn profile_slice_sizes(
     profile: &[u32],
     mut generation_failed: impl FnMut(DelaunayGenerationFailure) -> CdtError,
 ) -> CdtResult<Vec<usize>> {
     profile
         .iter()
-        .map(|&volume| {
-            generation_count_to_usize(volume, DelaunayGenerationQuantity::SliceVolume)
+        .map(|&vertices| {
+            generation_count_to_usize(vertices, DelaunayGenerationQuantity::SliceVertexCount)
                 .map_err(&mut generation_failed)
         })
         .collect()
@@ -1248,11 +1248,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(tri)
     }
 
-    /// Construct a Delaunay-backed open-boundary 1+1 CDT strip from a spatial volume profile.
+    /// Construct a Delaunay-backed open-boundary 1+1 CDT strip from a spatial-vertex profile.
     ///
-    /// Each entry in `volume_profile` is the number of vertices on that time
+    /// Each entry in `spatial_vertex_profile` is the number of vertices on that time
     /// slice. Unlike [`Self::from_cdt_strip`], adjacent slices may have different
-    /// spatial volumes; this represents a general nonuniform CDT initial
+    /// spatial vertex counts; this represents a general nonuniform CDT initial
     /// geometry rather than a regular fixture.
     /// The triangulation itself is delegated to
     /// [`crate::geometry::generators::build_delaunay2_with_data`].
@@ -1279,15 +1279,17 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::from_cdt_strip_profile(&[4, 6, 5])?;
+    ///     let tri = CdtTriangulation::from_cdt_strip_spatial_vertex_profile(&[4, 6, 5])?;
     ///     assert_eq!(tri.slice_sizes(), &[4, 6, 5]);
     ///     assert!(tri.validate_simplex_classification().is_ok());
     ///     Ok(())
     /// }
     /// ```
-    pub fn from_cdt_strip_profile(volume_profile: &[u32]) -> CdtResult<Self> {
+    pub fn from_cdt_strip_spatial_vertex_profile(
+        spatial_vertex_profile: &[u32],
+    ) -> CdtResult<Self> {
         let (total_vertices, num_slices) =
-            validate_spatial_profile(volume_profile, 2, 4, "open-boundary topology")?;
+            validate_spatial_profile(spatial_vertex_profile, 2, 4, "open-boundary topology")?;
         let coordinate_max = f64::from(num_slices);
         let expected_vertices = usize::try_from(total_vertices).map_err(|err| {
             strip_generation_error(
@@ -1299,8 +1301,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 },
             )
         })?;
-        let expected_faces =
-            usize::try_from(open_profile_face_count(volume_profile)?).map_err(|err| {
+        let expected_faces = usize::try_from(open_profile_face_count(spatial_vertex_profile)?)
+            .map_err(|err| {
                 strip_generation_error(
                     total_vertices,
                     coordinate_max,
@@ -1310,7 +1312,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     },
                 )
             })?;
-        let vertex_specs = open_profile_vertices(volume_profile, total_vertices)?;
+        let vertex_specs = open_profile_vertices(spatial_vertex_profile, total_vertices)?;
         let dt = build_delaunay2_with_data(&vertex_specs)
             .map_err(|error| remap_strip_generation_error(error, total_vertices, coordinate_max))?;
         let backend = validated_backend(dt)?;
@@ -1321,7 +1323,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             expected_faces,
             coordinate_max,
         )?;
-        let slice_sizes = profile_slice_sizes(volume_profile, |err| {
+        let slice_sizes = profile_slice_sizes(spatial_vertex_profile, |err| {
             strip_generation_error(total_vertices, coordinate_max, err)
         })?;
 
@@ -1507,12 +1509,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(tri)
     }
 
-    /// Construct a periodic 1+1 CDT torus from a spatial volume profile.
+    /// Construct a periodic 1+1 CDT torus from a spatial-vertex profile.
     ///
     /// Each profile entry gives the number of vertices on one closed S¹ spatial
     /// slice. Time wraps periodically, so the final slice is adjacent to slice
     /// zero. Unlike [`Self::from_toroidal_cdt`], adjacent slices may have
-    /// different spatial volumes.
+    /// different spatial vertex counts.
     /// The triangulation itself is delegated to
     /// [`crate::geometry::generators::build_periodic_toroidal_delaunay2`].
     ///
@@ -1537,15 +1539,17 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// use causal_triangulations::prelude::triangulation::*;
     ///
     /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::from_toroidal_cdt_profile(&[3, 4, 5, 4])?;
+    ///     let tri = CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&[3, 4, 5, 4])?;
     ///     assert_eq!(tri.slice_sizes(), &[3, 4, 5, 4]);
     ///     assert_eq!(tri.time_slices().get(), 4);
     ///     Ok(())
     /// }
     /// ```
-    pub fn from_toroidal_cdt_profile(volume_profile: &[u32]) -> CdtResult<Self> {
+    pub fn from_toroidal_cdt_spatial_vertex_profile(
+        spatial_vertex_profile: &[u32],
+    ) -> CdtResult<Self> {
         let (total_vertices, num_slices) =
-            validate_spatial_profile(volume_profile, 3, 3, "toroidal topology")?;
+            validate_spatial_profile(spatial_vertex_profile, 3, 3, "toroidal topology")?;
         let total_simplices =
             total_vertices
                 .checked_mul(2)
@@ -1576,8 +1580,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 },
             )
         })?;
-        let max_slice_volume = volume_profile.iter().copied().max().unwrap_or(1);
-        let domain = [f64::from(max_slice_volume), f64::from(num_slices)];
+        let max_slice_vertices = spatial_vertex_profile.iter().copied().max().unwrap_or(1);
+        let domain = [f64::from(max_slice_vertices), f64::from(num_slices)];
         let coordinate_range = (0.0, domain[0].max(domain[1]) - 1.0);
         let generation_failed = |attempt: u32, failure: DelaunayGenerationFailure| {
             toroidal_generation_error(total_vertices, coordinate_range, attempt, failure)
@@ -1587,7 +1591,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             1..TOROIDAL_EMBEDDING_ATTEMPTS,
             |candidate, attempt| {
                 let vertex_specs = toroidal_profile_vertices(
-                    volume_profile,
+                    spatial_vertex_profile,
                     total_vertices,
                     num_slices,
                     candidate,
@@ -1606,7 +1610,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
             || generation_failed(0, DelaunayGenerationFailure::NoEmbeddingCandidates),
         )?;
 
-        let slice_sizes = profile_slice_sizes(volume_profile, |error| generation_failed(1, error))?;
+        let slice_sizes =
+            profile_slice_sizes(spatial_vertex_profile, |error| generation_failed(1, error))?;
         let foliation =
             Foliation::from_slice_sizes(slice_sizes, checked_nonzero_slice_count(num_slices))
                 .map_err(CdtError::from)?;
@@ -2385,15 +2390,15 @@ mod tests {
     }
 
     #[test]
-    fn test_from_cdt_strip_profile_builds_nonuniform_valid_mesh() {
-        let tri = CdtTriangulation::from_cdt_strip_profile(&[4, 6, 5])
+    fn test_from_cdt_strip_spatial_vertex_profile_builds_nonuniform_valid_mesh() {
+        let tri = CdtTriangulation::from_cdt_strip_spatial_vertex_profile(&[4, 6, 5])
             .expect("nonuniform Delaunay strip should build");
 
         assert_eq!(tri.vertex_count(), 15);
         assert_eq!(tri.face_count(), 17);
         assert_eq!(tri.slice_sizes(), &[4, 6, 5]);
         assert_eq!(
-            tri.volume_profile()
+            tri.slab_triangle_profile()
                 .expect("nonuniform strip profile should be valid")
                 .len(),
             3
@@ -2430,7 +2435,7 @@ mod tests {
                 ref issue,
                 ref provided_value,
                 ref expected_range,
-            }) if *issue == GenerationParameterIssue::EmptyVolumeProfile
+            }) if *issue == GenerationParameterIssue::EmptySpatialVertexProfile
                 && provided_value == "[]"
                 && expected_range == "at least one time slice"
         );
@@ -2438,7 +2443,7 @@ mod tests {
 
     #[test]
     fn test_profile_strip_count_validation_rejects_backend_count_mismatch() {
-        let tri = CdtTriangulation::from_cdt_strip_profile(&[4, 6, 5])
+        let tri = CdtTriangulation::from_cdt_strip_spatial_vertex_profile(&[4, 6, 5])
             .expect("nonuniform Delaunay strip should build");
         let result = validate_profile_strip_counts(tri.geometry(), 15, 16, 18, 3.0);
 
@@ -2459,8 +2464,8 @@ mod tests {
     }
 
     #[test]
-    fn test_from_cdt_strip_profile_rejects_invalid_profile() {
-        let result = CdtTriangulation::from_cdt_strip_profile(&[4, 3, 5]);
+    fn test_from_cdt_strip_spatial_vertex_profile_rejects_invalid_profile() {
+        let result = CdtTriangulation::from_cdt_strip_spatial_vertex_profile(&[4, 3, 5]);
 
         assert_matches!(
             result,
@@ -2468,15 +2473,15 @@ mod tests {
                 ref issue,
                 ref provided_value,
                 ref expected_range,
-            }) if *issue == GenerationParameterIssue::InsufficientVerticesInVolumeProfileSlice
+            }) if *issue == GenerationParameterIssue::InsufficientVerticesInSpatialVertexProfileSlice
                 && provided_value == "slice 1 has 3"
                 && expected_range == "each slice ≥ 4 for open-boundary topology"
         );
     }
 
     #[test]
-    fn test_from_cdt_strip_profile_rejects_too_few_slices() {
-        let result = CdtTriangulation::from_cdt_strip_profile(&[4]);
+    fn test_from_cdt_strip_spatial_vertex_profile_rejects_too_few_slices() {
+        let result = CdtTriangulation::from_cdt_strip_spatial_vertex_profile(&[4]);
 
         assert_matches!(
             result,
@@ -2565,8 +2570,8 @@ mod tests {
     }
 
     #[test]
-    fn test_from_toroidal_cdt_profile_builds_nonuniform_valid_mesh() {
-        let tri = CdtTriangulation::from_toroidal_cdt_profile(&[3, 4, 5, 4])
+    fn test_from_toroidal_cdt_spatial_vertex_profile_builds_nonuniform_valid_mesh() {
+        let tri = CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&[3, 4, 5, 4])
             .expect("nonuniform toroidal CDT should build");
 
         assert_eq!(tri.vertex_count(), 16);
@@ -2583,8 +2588,8 @@ mod tests {
     }
 
     #[test]
-    fn test_from_toroidal_cdt_profile_rejects_invalid_profile() {
-        let few_slices = CdtTriangulation::from_toroidal_cdt_profile(&[3, 4]);
+    fn test_from_toroidal_cdt_spatial_vertex_profile_rejects_invalid_profile() {
+        let few_slices = CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&[3, 4]);
         assert_matches!(
             few_slices,
             Err(CdtError::InvalidGenerationParameters {
@@ -2596,14 +2601,14 @@ mod tests {
                 && expected_range == "≥ 3 for toroidal topology"
         );
 
-        let small_slice = CdtTriangulation::from_toroidal_cdt_profile(&[3, 2, 3]);
+        let small_slice = CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&[3, 2, 3]);
         assert_matches!(
             small_slice,
             Err(CdtError::InvalidGenerationParameters {
                 ref issue,
                 ref provided_value,
                 ref expected_range,
-            }) if *issue == GenerationParameterIssue::InsufficientVerticesInVolumeProfileSlice
+            }) if *issue == GenerationParameterIssue::InsufficientVerticesInSpatialVertexProfileSlice
                 && provided_value == "slice 1 has 2"
                 && expected_range == "each slice ≥ 3 for toroidal topology"
         );

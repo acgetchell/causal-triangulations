@@ -340,7 +340,7 @@ fn uniform_injected_runner_reproduces_seeded_conventional_trajectory() -> CdtRes
 }
 
 #[test]
-fn uniform_policy_concrete_pair_satisfies_independent_detailed_balance() -> CdtResult<()> {
+fn uniform_policy_volume_pair_satisfies_independent_detailed_balance() -> CdtResult<()> {
     let triangulation = CdtTriangulation::from_toroidal_cdt(4, 4)?;
     let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(83);
     let mut rng = StdRng::seed_from_u64(89);
@@ -349,8 +349,14 @@ fn uniform_policy_concrete_pair_satisfies_independent_detailed_balance() -> CdtR
             proposal
                 .propose_plan(&triangulation, &mut rng)
                 .expect("uniform planning should not fail")
+                .filter(|plan| {
+                    matches!(
+                        plan.move_type(),
+                        MoveType::Move13Add | MoveType::Move31Remove
+                    )
+                })
         })
-        .expect("representative uniform policy should realize a concrete plan");
+        .expect("representative uniform policy should realize a concrete volume plan");
     let mut proposed = triangulation.clone();
     proposal.commit(&mut proposed, plan.clone(), &mut rng)?;
 
@@ -454,8 +460,8 @@ fn fixed_policy_checkpoint_resume_matches_uninterrupted_rng_stream() -> CdtResul
         )
     );
     assert_eq!(
-        resumed.triangulation().volume_profile()?,
-        uninterrupted.triangulation().volume_profile()?
+        resumed.triangulation().slab_triangle_profile()?,
+        uninterrupted.triangulation().slab_triangle_profile()?
     );
     resumed.triangulation().validate()?;
     uninterrupted.triangulation().validate()?;

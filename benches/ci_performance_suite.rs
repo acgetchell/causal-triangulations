@@ -9,8 +9,8 @@
 //! 1. Open-boundary and toroidal CDT triangulation construction.
 //! 2. Evolved-state validation on generated triangulations.
 //! 3. Individual ergodic move attempts on fresh fixtures.
-//! 4. Ten-sweep random-move workloads, where each sweep attempts one move per
-//!    current simplex.
+//! 4. Random-move workloads with a fixed attempt budget equal to ten initial
+//!    sweeps, so Criterion throughput matches the timed work exactly.
 //! 5. Short Metropolis runs sized as ten initial sweeps.
 //! 6. Public proposal-site iteration paths used by move attempts and one-step
 //!    Metropolis proposal planning.
@@ -19,8 +19,11 @@
 mod benchmark_support;
 
 use causal_triangulations::prelude::action::ActionConfig;
-use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveStatistics, MoveType};
-use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
+use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
+use causal_triangulations::prelude::simulation::{
+    CdtMoveFamilyPolicy, CdtMoveFamilyPolicyError, CdtProposalPolicyView, MetropolisAlgorithm,
+    MetropolisConfig,
+};
 use causal_triangulations::prelude::triangulation::CdtTriangulation2D;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::fmt::{Display, Formatter, Result as FmtResult};
@@ -51,6 +54,7 @@ struct PreparedFixture {
     triangulation: CdtTriangulation2D,
     vertices: usize,
     simplices: usize,
+    move_seed: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -63,6 +67,8 @@ enum SetupOperation {
     ComputeSweepStepCount,
     ValidateRandomSweepWorkload,
     RunTenSweepMetropolis,
+    BuildSuccessfulInsertionFixture,
+    BuildSuccessfulRemovalFixture,
 }
 
 impl Display for SetupOperation {
@@ -84,6 +90,12 @@ impl Display for SetupOperation {
                 formatter.write_str("validate random sweep workload")
             }
             Self::RunTenSweepMetropolis => formatter.write_str("run ten-sweep Metropolis workload"),
+            Self::BuildSuccessfulInsertionFixture => {
+                formatter.write_str("build a fixture with a successful forward volume move")
+            }
+            Self::BuildSuccessfulRemovalFixture => {
+                formatter.write_str("build a fixture with a successful inverse volume move")
+            }
         }
     }
 }
@@ -163,6 +175,47 @@ const PROPOSAL_FIXTURES: &[CdtFixture] = &[
     },
 ];
 
+const SUCCESSFUL_REMOVAL_FIXTURES: &[CdtFixture] = &[
+    CdtFixture {
+        name: "toroidal_small",
+        topology: TopologyFixture::Toroidal,
+        vertices_per_slice: 8,
+        time_slices: 8,
+    },
+    CdtFixture {
+        name: "toroidal_medium",
+        topology: TopologyFixture::Toroidal,
+        vertices_per_slice: 12,
+        time_slices: 10,
+    },
+    CdtFixture {
+        name: "toroidal_large",
+        topology: TopologyFixture::Toroidal,
+        vertices_per_slice: 16,
+        time_slices: 12,
+    },
+];
+
+/// State-dependent policy that reacts to current volume and offered support.
+#[derive(Clone, Copy)]
+struct VolumeResponsivePolicy;
+
+impl CdtMoveFamilyPolicy for VolumeResponsivePolicy {
+    fn family_weight(
+        &self,
+        view: &CdtProposalPolicyView<'_>,
+    ) -> Result<f64, CdtMoveFamilyPolicyError> {
+        let volume_is_large = view.slice_sizes().iter().sum::<usize>() > 150;
+        let supported = view.offered_site_count() != 0;
+        let weight = match (view.family(), volume_is_large, supported) {
+            (_, _, false) => 0.0,
+            (MoveType::Move13Add, false, true) | (MoveType::Move31Remove, true, true) => 3.0,
+            _ => 1.0,
+        };
+        Ok(weight)
+    }
+}
+
 impl CdtFixture {
     /// Builds the requested CDT topology for a benchmark fixture.
     fn build(self) -> CdtTriangulation2D {
@@ -179,18 +232,41 @@ impl CdtFixture {
 }
 
 /// Attempts one selected move type through the public move API.
+fn selected_move_result(
+    ergodics: &mut ErgodicsSystem,
+    move_type: MoveType,
+    triangulation: &mut CdtTriangulation2D,
+) -> MoveResult {
+    match move_type {
+        MoveType::Move22 => ergodics.attempt_22_move(triangulation),
+        MoveType::Move13Add => ergodics.attempt_13_move(triangulation),
+        MoveType::Move31Remove => ergodics.attempt_31_move(triangulation),
+        MoveType::EdgeFlip => ergodics.attempt_edge_flip(triangulation),
+    }
+}
+
+/// Attempts one selected move type and keeps its result observable to Criterion.
 fn attempt_selected_move(
     ergodics: &mut ErgodicsSystem,
     move_type: MoveType,
     triangulation: &mut CdtTriangulation2D,
 ) {
-    let result = match move_type {
-        MoveType::Move22 => ergodics.attempt_22_move(triangulation),
-        MoveType::Move13Add => ergodics.attempt_13_move(triangulation),
-        MoveType::Move31Remove => ergodics.attempt_31_move(triangulation),
-        MoveType::EdgeFlip => ergodics.attempt_edge_flip(triangulation),
-    };
-    black_box(result);
+    black_box(selected_move_result(ergodics, move_type, triangulation));
+}
+
+/// Finds a deterministic seed whose first selected move succeeds on this exact state.
+fn successful_move_seed(
+    triangulation: &CdtTriangulation2D,
+    move_type: MoveType,
+    operation: SetupOperation,
+) -> u64 {
+    (0_u64..=4_096)
+        .find(|&seed| {
+            let mut probe = triangulation.clone();
+            let mut ergodics = ErgodicsSystem::with_seed(seed);
+            selected_move_result(&mut ergodics, move_type, &mut probe) == MoveResult::Success
+        })
+        .or_abort(operation)
 }
 
 /// Materializes a fixture once so benchmarks can use stable size metadata.
@@ -203,6 +279,48 @@ fn prepare_fixture(fixture: CdtFixture) -> PreparedFixture {
         triangulation,
         vertices,
         simplices,
+        move_seed: BENCH_SEED,
+    }
+}
+
+/// Creates and verifies a fixture whose next forward-volume move succeeds.
+fn prepare_successful_insertion_fixture(fixture: CdtFixture) -> PreparedFixture {
+    let mut prepared = prepare_fixture(fixture);
+    prepared.move_seed = successful_move_seed(
+        &prepared.triangulation,
+        MoveType::Move13Add,
+        SetupOperation::BuildSuccessfulInsertionFixture,
+    );
+    prepared
+}
+
+/// Creates and verifies a fixture whose next inverse-volume move succeeds.
+fn prepare_successful_removal_fixture(fixture: CdtFixture) -> PreparedFixture {
+    let mut triangulation = fixture.build();
+    let insertion_seed = successful_move_seed(
+        &triangulation,
+        MoveType::Move13Add,
+        SetupOperation::BuildSuccessfulRemovalFixture,
+    );
+    let mut insertion = ErgodicsSystem::with_seed(insertion_seed);
+    let insertion_result = insertion.attempt_13_move(&mut triangulation);
+    (insertion_result == MoveResult::Success)
+        .then_some(())
+        .or_abort(SetupOperation::BuildSuccessfulRemovalFixture);
+    let move_seed = successful_move_seed(
+        &triangulation,
+        MoveType::Move31Remove,
+        SetupOperation::BuildSuccessfulRemovalFixture,
+    );
+
+    let vertices = triangulation.vertex_count();
+    let simplices = triangulation.face_count();
+    PreparedFixture {
+        fixture,
+        triangulation,
+        vertices,
+        simplices,
+        move_seed,
     }
 }
 
@@ -212,6 +330,18 @@ fn run_single_metropolis_proposal(triangulation: CdtTriangulation2D) {
         .or_abort(SetupOperation::RunSingleMetropolisProposal)
         .with_seed(BENCH_SEED);
     let results = MetropolisAlgorithm::new(config, ActionConfig::default())
+        .run(triangulation)
+        .or_abort(SetupOperation::RunSingleMetropolisProposal);
+    black_box(results.proposal_stats());
+}
+
+/// Runs one proposal with family weights recomputed from the live state.
+fn run_state_dependent_metropolis_proposal(triangulation: CdtTriangulation2D) {
+    let config = MetropolisConfig::new(1.0, 1, 0, 1)
+        .or_abort(SetupOperation::RunSingleMetropolisProposal)
+        .with_seed(BENCH_SEED);
+    let results = MetropolisAlgorithm::new(config, ActionConfig::default())
+        .with_policy(VolumeResponsivePolicy)
         .run(triangulation)
         .or_abort(SetupOperation::RunSingleMetropolisProposal);
     black_box(results.proposal_stats());
@@ -235,16 +365,17 @@ fn sweep_attempt_count(simplices: usize) -> usize {
         .or_abort(SetupOperation::ComputeSweepStepCount)
 }
 
-/// Runs ten random-move sweeps and validates the evolved triangulation.
-fn run_random_move_sweeps(mut triangulation: CdtTriangulation2D, seed: u64) -> MoveStatistics {
+/// Runs an exact random-move attempt budget and validates the evolved triangulation.
+fn run_random_move_attempt_budget(
+    mut triangulation: CdtTriangulation2D,
+    seed: u64,
+    attempts: usize,
+) -> MoveStatistics {
     let mut ergodics = ErgodicsSystem::with_seed(seed);
 
-    for _ in 0..SWEEP_COUNT {
-        let attempts = triangulation.face_count();
-        for _ in 0..attempts {
-            let result = ergodics.attempt_random_move(&mut triangulation);
-            black_box(result);
-        }
+    for _ in 0..attempts {
+        let result = ergodics.attempt_random_move(&mut triangulation);
+        black_box(result);
     }
 
     triangulation
@@ -311,16 +442,27 @@ fn bench_cdt_validation(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmarks individual ergodic move attempts on a common fresh fixture.
+/// Benchmarks individual ergodic move attempts on verified fresh fixtures.
 fn bench_cdt_move_attempts(c: &mut Criterion) {
-    let prepared = prepare_fixture(CdtFixture {
+    let flip_fixture = prepare_fixture(CdtFixture {
         name: "open_strip_medium",
         topology: TopologyFixture::OpenStrip,
         vertices_per_slice: 20,
         time_slices: 10,
     });
+    let insertion_fixture = prepare_successful_insertion_fixture(CdtFixture {
+        name: "toroidal_medium",
+        topology: TopologyFixture::Toroidal,
+        vertices_per_slice: 12,
+        time_slices: 10,
+    });
+    let removal_fixture = prepare_successful_removal_fixture(CdtFixture {
+        name: "toroidal_medium_after_insertion",
+        topology: TopologyFixture::Toroidal,
+        vertices_per_slice: 12,
+        time_slices: 10,
+    });
     let mut group = c.benchmark_group("cdt_move_attempts_2d");
-    group.throughput(Throughput::Elements(usize_to_u64(prepared.simplices)));
 
     for move_type in [
         MoveType::Move22,
@@ -328,6 +470,12 @@ fn bench_cdt_move_attempts(c: &mut Criterion) {
         MoveType::Move31Remove,
         MoveType::EdgeFlip,
     ] {
+        let prepared = match move_type {
+            MoveType::Move13Add => &insertion_fixture,
+            MoveType::Move31Remove => &removal_fixture,
+            MoveType::Move22 | MoveType::EdgeFlip => &flip_fixture,
+        };
+        group.throughput(Throughput::Elements(usize_to_u64(prepared.simplices)));
         group.bench_with_input(
             BenchmarkId::new(format!("{move_type:?}"), prepared.simplices),
             &move_type,
@@ -335,7 +483,7 @@ fn bench_cdt_move_attempts(c: &mut Criterion) {
                 b.iter_batched(
                     || {
                         (
-                            ErgodicsSystem::with_seed(BENCH_SEED),
+                            ErgodicsSystem::with_seed(prepared.move_seed),
                             prepared.triangulation.clone(),
                         )
                     },
@@ -414,15 +562,63 @@ fn bench_cdt_single_metropolis_proposal(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmarks short random-move evolution over tiny CI-sized triangulations.
-fn bench_cdt_random_move_sweeps(c: &mut Criterion) {
-    let mut group = c.benchmark_group("cdt_random_move_sweeps_2d");
+/// Benchmarks policy evaluation that materializes state-dependent family views.
+fn bench_cdt_state_dependent_policy(c: &mut Criterion) {
+    let prepared = prepare_fixture(CdtFixture {
+        name: "open_strip_medium",
+        topology: TopologyFixture::OpenStrip,
+        vertices_per_slice: 20,
+        time_slices: 10,
+    });
+    let mut group = c.benchmark_group("cdt_state_dependent_policy_2d");
+    group.throughput(Throughput::Elements(usize_to_u64(prepared.simplices)));
+    group.bench_function("single_metropolis_proposal", |b| {
+        b.iter_batched(
+            || prepared.triangulation.clone(),
+            run_state_dependent_metropolis_proposal,
+            BatchSize::LargeInput,
+        );
+    });
+    group.finish();
+}
+
+/// Benchmarks a guaranteed-success inverse move across increasing mesh sizes.
+fn bench_cdt_successful_local_finalization(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cdt_successful_local_finalization_2d");
+    for &fixture in SUCCESSFUL_REMOVAL_FIXTURES {
+        let prepared = prepare_successful_removal_fixture(fixture);
+        group.throughput(Throughput::Elements(usize_to_u64(prepared.simplices)));
+        group.bench_with_input(
+            BenchmarkId::new(prepared.fixture.name, prepared.simplices),
+            &prepared,
+            |b, prepared| {
+                b.iter_batched(
+                    || {
+                        (
+                            ErgodicsSystem::with_seed(prepared.move_seed),
+                            prepared.triangulation.clone(),
+                        )
+                    },
+                    |(mut ergodics, mut triangulation)| {
+                        let result = ergodics.attempt_31_move(&mut triangulation);
+                        black_box(result);
+                    },
+                    BatchSize::LargeInput,
+                );
+            },
+        );
+    }
+    group.finish();
+}
+
+/// Benchmarks fixed random-move attempt budgets over tiny CI-sized triangulations.
+fn bench_cdt_random_move_attempt_budget(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cdt_random_move_attempt_budget_2d");
 
     for &fixture in SWEEP_FIXTURES {
         let prepared = prepare_fixture(fixture);
-        group.throughput(Throughput::Elements(usize_to_u64(sweep_attempt_count(
-            prepared.simplices,
-        ))));
+        let attempt_budget = sweep_attempt_count(prepared.simplices);
+        group.throughput(Throughput::Elements(usize_to_u64(attempt_budget)));
         group.bench_with_input(
             BenchmarkId::new(prepared.fixture.name, prepared.simplices),
             &prepared,
@@ -430,7 +626,16 @@ fn bench_cdt_random_move_sweeps(c: &mut Criterion) {
                 b.iter_batched(
                     || prepared.triangulation.clone(),
                     |triangulation| {
-                        let stats = run_random_move_sweeps(triangulation, BENCH_SEED);
+                        let stats = run_random_move_attempt_budget(
+                            triangulation,
+                            BENCH_SEED,
+                            attempt_budget,
+                        );
+                        assert_eq!(
+                            stats.total_attempted(),
+                            u64::try_from(attempt_budget)
+                                .or_abort(SetupOperation::ConvertBenchmarkSize)
+                        );
                         black_box(stats.total_attempted())
                     },
                     BatchSize::LargeInput,
@@ -482,7 +687,9 @@ criterion_group!(
         bench_cdt_move_attempts,
         bench_cdt_proposal_site_move_attempts,
         bench_cdt_single_metropolis_proposal,
-        bench_cdt_random_move_sweeps,
+        bench_cdt_state_dependent_policy,
+        bench_cdt_successful_local_finalization,
+        bench_cdt_random_move_attempt_budget,
         bench_cdt_metropolis_ten_sweeps
 );
 criterion_main!(benches);

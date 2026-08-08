@@ -70,11 +70,12 @@ pub struct DelaunayBackend<VertexData, SimplexData, const D: usize> {
     owner_id: Uuid,
 }
 
-/// Rollback guard for one backend topology mutation.
+/// Transaction guard for one backend topology mutation.
 ///
-/// The guard holds the only mutable backend borrow for the mutation window and
-/// restores both canonical topology and its derived facet index unless
-/// [`Self::commit`] is called after every postcondition succeeds.
+/// The guard holds the only mutable backend borrow for the mutation window.
+/// Standalone backend edits carry a snapshot that is restored unless
+/// [`Self::commit`] succeeds; CDT edits may instead rely on an enclosing
+/// caller-owned rollback or discard boundary.
 struct DelaunayMutation<'a, VertexData: DataType, SimplexData: DataType, const D: usize> {
     backend: &'a mut DelaunayBackend<VertexData, SimplexData, D>,
     snapshot: Option<(
@@ -90,6 +91,19 @@ impl<'a, VertexData: DataType, SimplexData: DataType, const D: usize>
     fn new(backend: &'a mut DelaunayBackend<VertexData, SimplexData, D>) -> Self {
         let snapshot = Some((backend.dt.clone(), backend.interior_facets_by_edge.clone()));
         Self { backend, snapshot }
+    }
+
+    /// Begins a mutation inside a caller-owned rollback or discard boundary.
+    ///
+    /// The caller must restore the enclosing CDT snapshot or discard its
+    /// speculative state whenever the operation or a later postcondition fails.
+    const fn without_snapshot(
+        backend: &'a mut DelaunayBackend<VertexData, SimplexData, D>,
+    ) -> Self {
+        Self {
+            backend,
+            snapshot: None,
+        }
     }
 
     /// Publishes the mutated backend and discards rollback state.
@@ -382,6 +396,12 @@ pub struct DelaunayFaceHandle {
     key: SimplexKey,
     owner_id: Uuid,
     generation: u64,
+}
+
+/// Faces created by an internal inverse k=1 vertex removal.
+#[derive(Debug, Clone)]
+pub(crate) struct DelaunayRemovalResult {
+    pub(crate) new_faces: Vec<DelaunayFaceHandle>,
 }
 
 /// Stable vertex identity used only to remap a proposal into a cloned owner.
@@ -688,6 +708,15 @@ pub enum DelaunayError {
         failure: DelaunayFlipOutputFailure,
     },
 
+    /// A local topology edit could not update the derived interior-facet index.
+    #[error("failed to update the interior-facet index after {operation}: {detail}")]
+    InteriorFacetIndexUpdateFailed {
+        /// Mutation whose local index update failed.
+        operation: DelaunayOperation,
+        /// Underlying topology-query diagnostic.
+        detail: String,
+    },
+
     /// Upstream Delaunay backend validation failed.
     #[error("Delaunay backend validation failed [{level}]: {detail}")]
     ValidationFailed {
@@ -743,8 +772,17 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
         dt: &RawTriangulation<VertexData, SimplexData, D>,
     ) -> HashMap<EdgeKey, FacetHandle> {
         let mut facets_by_edge = HashMap::new();
+        Self::populate_interior_facets_by_edge(dt, &mut facets_by_edge);
+        facets_by_edge
+    }
+
+    /// Populates a caller-owned interior-facet map without replacing its allocation.
+    fn populate_interior_facets_by_edge(
+        dt: &RawTriangulation<VertexData, SimplexData, D>,
+        facets_by_edge: &mut HashMap<EdgeKey, FacetHandle>,
+    ) {
         if D != 2 {
-            return facets_by_edge;
+            return;
         }
         for (simplex_key, simplex) in dt.simplices() {
             let vertices = simplex.vertices();
@@ -776,13 +814,136 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
                 }
             }
         }
-
-        facets_by_edge
     }
 
     /// Refreshes cached edge adjacency after a topology mutation succeeds.
     fn rebuild_interior_facet_index(&mut self) {
-        self.interior_facets_by_edge = Self::build_interior_facets_by_edge(&self.dt);
+        self.interior_facets_by_edge.clear();
+        Self::populate_interior_facets_by_edge(&self.dt, &mut self.interior_facets_by_edge);
+    }
+
+    /// Collects every edge belonging to the simplices an edit will replace.
+    fn local_edges_for_simplices(
+        &self,
+        simplices: &[SimplexKey],
+        operation: DelaunayOperation,
+    ) -> Result<Vec<EdgeKey>, DelaunayError> {
+        if D != 2 {
+            return Ok(Vec::new());
+        }
+
+        let mut edges = Vec::with_capacity(simplices.len().saturating_mul(3));
+        for &simplex_key in simplices {
+            let vertices = self.dt.simplex_vertices(simplex_key).map_err(|err| {
+                DelaunayError::InteriorFacetIndexUpdateFailed {
+                    operation,
+                    detail: err.to_string(),
+                }
+            })?;
+            for first in 0..vertices.len() {
+                for second in (first + 1)..vertices.len() {
+                    let edge = self
+                        .dt
+                        .edge_key(vertices[first], vertices[second])
+                        .map_err(|err| DelaunayError::InteriorFacetIndexUpdateFailed {
+                            operation,
+                            detail: err.to_string(),
+                        })?;
+                    if !edges.contains(&edge) {
+                        edges.push(edge);
+                    }
+                }
+            }
+        }
+        Ok(edges)
+    }
+
+    /// Resolves the two live simplices sharing an indexed interior facet.
+    fn simplices_adjacent_to_facet(
+        &self,
+        facet: FacetHandle,
+        operation: DelaunayOperation,
+    ) -> Result<[SimplexKey; 2], DelaunayError> {
+        let simplex_key = facet.simplex_key();
+        let simplex = self.dt.simplex(simplex_key).ok_or_else(|| {
+            DelaunayError::InteriorFacetIndexUpdateFailed {
+                operation,
+                detail: format!("facet source simplex {simplex_key:?} is not live"),
+            }
+        })?;
+        let neighbor = simplex
+            .neighbors()
+            .and_then(|mut neighbors| neighbors.nth(usize::from(facet.facet_index())))
+            .flatten()
+            .ok_or_else(|| DelaunayError::InteriorFacetIndexUpdateFailed {
+                operation,
+                detail: format!("facet {facet:?} has no adjacent simplex"),
+            })?;
+        Ok([simplex_key, neighbor])
+    }
+
+    /// Applies the facet-index delta described by one realized local edit.
+    fn update_interior_facet_index(
+        &mut self,
+        removed_edges: &[EdgeKey],
+        new_simplices: &[SimplexKey],
+        operation: DelaunayOperation,
+    ) -> Result<(), DelaunayError> {
+        if D != 2 {
+            return Ok(());
+        }
+        for edge in removed_edges {
+            self.interior_facets_by_edge.remove(edge);
+        }
+        for &simplex_key in new_simplices {
+            let simplex = self.dt.simplex(simplex_key).ok_or_else(|| {
+                DelaunayError::InteriorFacetIndexUpdateFailed {
+                    operation,
+                    detail: format!("new simplex {simplex_key:?} is not live"),
+                }
+            })?;
+            let vertices = simplex.vertices();
+            let Some(neighbors) = simplex.neighbors() else {
+                continue;
+            };
+            for (facet_index, neighbor) in neighbors.enumerate() {
+                if neighbor.is_none() {
+                    continue;
+                }
+                let mut facet_vertices = vertices
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, &vertex)| (index != facet_index).then_some(vertex));
+                let (Some(first), Some(second), None) = (
+                    facet_vertices.next(),
+                    facet_vertices.next(),
+                    facet_vertices.next(),
+                ) else {
+                    continue;
+                };
+                let edge = self.dt.edge_key(first, second).map_err(|err| {
+                    DelaunayError::InteriorFacetIndexUpdateFailed {
+                        operation,
+                        detail: err.to_string(),
+                    }
+                })?;
+                let facet_index = u8::try_from(facet_index).map_err(|err| {
+                    DelaunayError::InteriorFacetIndexUpdateFailed {
+                        operation,
+                        detail: err.to_string(),
+                    }
+                })?;
+                let facet = self
+                    .dt
+                    .facet_handle(simplex_key, facet_index)
+                    .map_err(|err| DelaunayError::InteriorFacetIndexUpdateFailed {
+                        operation,
+                        detail: err.to_string(),
+                    })?;
+                self.interior_facets_by_edge.entry(edge).or_insert(facet);
+            }
+        }
+        Ok(())
     }
 
     /// Resolves the replacement edge produced by a flip inside a rollback guard.
@@ -1048,6 +1209,16 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
                     stable_id.0
                 ),
             })
+    }
+
+    /// Resolves a stable face only when it survived a later local primitive.
+    pub(crate) fn resolve_live_face_id(
+        &self,
+        stable_id: DelaunayFaceStableId,
+    ) -> Option<DelaunayFaceHandle> {
+        self.dt
+            .simplex_key_from_uuid(&stable_id.0)
+            .map(|key| self.face_handle(key))
     }
 
     /// Converts an owner-bound edge handle into stable endpoint identity.
@@ -1454,6 +1625,8 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
 
     /// Returns the copied payload for a current owner-bound vertex handle.
     ///
+    /// Returns `Ok(None)` when the live vertex has no attached payload.
+    ///
     /// # Errors
     ///
     /// Returns a typed provenance or invalid-key error when `vertex` is not a
@@ -1473,6 +1646,8 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
     }
 
     /// Returns the copied payload for a current owner-bound face handle.
+    ///
+    /// Returns `Ok(None)` when the live face has no attached payload.
     ///
     /// # Errors
     ///
@@ -1494,10 +1669,43 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
 
     /// Replaces the payload for a current owner-bound vertex handle.
     ///
+    /// Returns the previous payload, including `None` when the vertex had no
+    /// attached payload.
+    ///
     /// # Errors
     ///
     /// Returns a typed provenance or invalid-key error when `vertex` is not a
     /// live handle issued by this backend generation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::*;
+    ///
+    /// fn main() -> Result<(), DelaunayError> {
+    ///     let dt = build_delaunay2_with_data(&[
+    ///         ([0.0, 0.0], 0_u32),
+    ///         ([1.0, 0.0], 0),
+    ///         ([0.5, 1.0], 1),
+    ///     ])
+    ///     .map_err(|err| DelaunayError::ValidationFailed {
+    ///         level: DelaunayValidationLevel::Five,
+    ///         detail: err.to_string(),
+    ///     })?;
+    ///     let mut backend = DelaunayBackend2D::from_triangulation(dt)?;
+    ///     let vertex = backend.vertices().next().ok_or_else(|| {
+    ///         DelaunayError::ValidationFailed {
+    ///             level: DelaunayValidationLevel::Five,
+    ///             detail: "validated triangle has no vertex".to_string(),
+    ///         }
+    ///     })?;
+    ///     let previous = backend.vertex_data(&vertex)?;
+    ///
+    ///     assert_eq!(backend.set_vertex_data(&vertex, Some(7))?, previous);
+    ///     assert_eq!(backend.vertex_data(&vertex)?, Some(7));
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn set_vertex_data(
         &mut self,
         vertex: &DelaunayVertexHandle,
@@ -1509,10 +1717,43 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
 
     /// Replaces the payload for a current owner-bound face handle.
     ///
+    /// Returns the previous payload, including `None` when the face had no
+    /// attached payload.
+    ///
     /// # Errors
     ///
     /// Returns a typed provenance or invalid-key error when `face` is not a
     /// live handle issued by this backend generation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::geometry::*;
+    ///
+    /// fn main() -> Result<(), DelaunayError> {
+    ///     let dt = build_delaunay2_with_data(&[
+    ///         ([0.0, 0.0], 0_u32),
+    ///         ([1.0, 0.0], 0),
+    ///         ([0.5, 1.0], 1),
+    ///     ])
+    ///     .map_err(|err| DelaunayError::ValidationFailed {
+    ///         level: DelaunayValidationLevel::Five,
+    ///         detail: err.to_string(),
+    ///     })?;
+    ///     let mut backend = DelaunayBackend2D::from_triangulation(dt)?;
+    ///     let face = backend.faces().next().ok_or_else(|| {
+    ///         DelaunayError::ValidationFailed {
+    ///             level: DelaunayValidationLevel::Five,
+    ///             detail: "validated triangle has no face".to_string(),
+    ///         }
+    ///     })?;
+    ///     let previous = backend.simplex_data(&face)?;
+    ///
+    ///     assert_eq!(backend.set_simplex_data(&face, Some(-3))?, previous);
+    ///     assert_eq!(backend.simplex_data(&face)?, Some(-3));
+    ///     Ok(())
+    /// }
+    /// ```
     pub fn set_simplex_data(
         &mut self,
         face: &DelaunayFaceHandle,
@@ -1650,42 +1891,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationQ
     ) -> Result<(Self::VertexHandle, Self::VertexHandle), Self::Error> {
         let key = self.validate_edge_handle(edge)?;
         let (v0, v1) = key.endpoints();
-        let contains_v0 = self.dt.contains_vertex_key(v0);
-        let contains_v1 = self.dt.contains_vertex_key(v1);
-        // Fast reject for invalid endpoint handles.
-        if !(contains_v0 && contains_v1) {
-            log::trace!(
-                "edge_endpoints: missing endpoint(s) for edge {:?} (contains_v0={}, contains_v1={})",
-                edge.key,
-                contains_v0,
-                contains_v1,
-            );
-            return Err(DelaunayError::InvalidEdge { v0, v1 });
-        }
-
-        // Validate membership using local adjacency around v0.
-        // This is O(deg(v0)) rather than scanning all edges.
-        let edge_exists = self.dt.incident_edges(v0).any(|candidate| {
-            let (c0, c1) = candidate.endpoints();
-            (c0 == v0 && c1 == v1) || (c0 == v1 && c1 == v0)
-        });
-
-        if edge_exists {
-            return Ok((self.vertex_handle(v0), self.vertex_handle(v1)));
-        }
-
-        log::trace!(
-            "edge_endpoints: unable to resolve edge {:?} (contains_v0={}, contains_v1={}, edge_exists={}, V={}, E={}, F={})",
-            edge.key,
-            contains_v0,
-            contains_v1,
-            edge_exists,
-            self.dt.number_of_vertices(),
-            self.dt.as_triangulation().number_of_edges(),
-            self.dt.number_of_simplices(),
-        );
-
-        Err(DelaunayError::InvalidEdge { v0, v1 })
+        Ok((self.vertex_handle(v0), self.vertex_handle(v1)))
     }
 
     fn edge_adjacent_faces(
@@ -1800,54 +2006,63 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationQ
     }
 }
 
-impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationMut
-    for DelaunayBackend<VertexData, SimplexData, D>
+/// Identifies which layer owns rollback for a topology mutation.
+#[derive(Clone, Copy)]
+enum MutationRollback {
+    /// The backend must restore itself before returning an error.
+    Backend,
+    /// An enclosing CDT transaction restores or discards the whole state.
+    Caller,
+}
+
+impl<VertexData: DataType, SimplexData: DataType, const D: usize>
+    DelaunayBackend<VertexData, SimplexData, D>
 {
-    fn insert_vertex(
+    /// Opens a topology mutation with the requested rollback ownership.
+    fn mutation(
         &mut self,
-        coords: &[Self::Coordinate],
-    ) -> Result<Self::VertexHandle, Self::Error> {
-        let vertex = Self::build_vertex(coords, None, DelaunayOperation::InsertVertex)?;
-        let mut mutation = DelaunayMutation::new(self);
-        let key =
-            mutation
-                .dt
-                .insert_vertex(vertex)
-                .map_err(|err| DelaunayError::InsertionFailed {
-                    operation: DelaunayOperation::InsertVertex,
-                    coordinates: coords.to_vec(),
-                    detail: err.to_string(),
-                })?;
-        mutation.rebuild_interior_facet_index();
-        mutation.validate_embedding_after_mutation(
-            DelaunayOperation::InsertVertex,
-            format!("{coords:?}"),
-        )?;
-        let handle = mutation.vertex_handle(key);
-        mutation.commit();
-        Ok(handle)
+        rollback: MutationRollback,
+    ) -> DelaunayMutation<'_, VertexData, SimplexData, D> {
+        match rollback {
+            MutationRollback::Backend => DelaunayMutation::new(self),
+            MutationRollback::Caller => DelaunayMutation::without_snapshot(self),
+        }
     }
 
-    fn remove_vertex(&mut self, vertex: Self::VertexHandle) -> Result<(), Self::Error> {
-        let vertex_key = self.validate_vertex_handle(&vertex)?;
+    /// Removes one vertex with either backend- or caller-owned rollback.
+    fn remove_vertex_with_rollback(
+        &mut self,
+        vertex: &DelaunayVertexHandle,
+        rollback: MutationRollback,
+    ) -> Result<DelaunayRemovalResult, DelaunayError> {
+        let vertex_key = self.validate_vertex_handle(vertex)?;
 
-        let inverse_k1 = self.dt.can_flip_k1_remove(vertex_key).is_ok();
-        let mut mutation = DelaunayMutation::new(self);
-        let removal = if inverse_k1 {
+        let inverse_k1 = self.dt.can_flip_k1_remove(vertex_key).ok();
+        let removed_edges = inverse_k1
+            .as_ref()
+            .map(|feasibility| {
+                self.local_edges_for_simplices(
+                    &feasibility.removed_simplices,
+                    DelaunayOperation::FlipK1Remove,
+                )
+            })
+            .transpose()?;
+        let mut mutation = self.mutation(rollback);
+        let removal = if inverse_k1.is_some() {
             mutation
                 .dt
                 .flip_k1_remove(vertex_key)
-                .map(|_| ())
+                .map(Some)
                 .map_err(|err| err.to_string())
         } else {
             mutation
                 .dt
                 .delete_vertex(vertex_key)
-                .map(|_| ())
+                .map(|_| None)
                 .map_err(|err| err.to_string())
         };
-        removal.map_err(|err| DelaunayError::RemovalFailed {
-            operation: if inverse_k1 {
+        let info = removal.map_err(|err| DelaunayError::RemovalFailed {
+            operation: if inverse_k1.is_some() {
                 DelaunayOperation::FlipK1Remove
             } else {
                 DelaunayOperation::RemoveVertex
@@ -1855,33 +2070,38 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             target: format!("vertex {:?}", vertex.key),
             detail: err,
         })?;
-        mutation.rebuild_interior_facet_index();
-        if !inverse_k1 {
+        let new_faces = if let (Some(removed_edges), Some(info)) = (removed_edges, info) {
+            mutation.update_interior_facet_index(
+                &removed_edges,
+                &info.new_simplices,
+                DelaunayOperation::FlipK1Remove,
+            )?;
+            info.new_simplices
+                .iter()
+                .copied()
+                .map(|key| mutation.face_handle(key))
+                .collect()
+        } else {
+            mutation.rebuild_interior_facet_index();
+            Vec::new()
+        };
+        if inverse_k1.is_none() {
             mutation.validate_embedding_after_mutation(
                 DelaunayOperation::RemoveVertex,
                 format!("vertex {:?}", vertex.key),
             )?;
         }
         mutation.commit();
-        Ok(())
+        Ok(DelaunayRemovalResult { new_faces })
     }
 
-    fn move_vertex(
+    /// Flips one edge with either backend- or caller-owned rollback.
+    fn flip_edge_with_rollback(
         &mut self,
-        _vertex: Self::VertexHandle,
-        _new_coords: &[Self::Coordinate],
-    ) -> Result<(), Self::Error> {
-        // TODO: Implement vertex movement.
-        Err(DelaunayError::NotImplemented {
-            operation: DelaunayOperation::MoveVertex,
-        })
-    }
-
-    fn flip_edge(
-        &mut self,
-        edge: Self::EdgeHandle,
-    ) -> Result<FlipResult<Self::EdgeHandle, Self::FaceHandle>, Self::Error> {
-        let edge_key = self.validate_edge_handle(&edge)?;
+        edge: &DelaunayEdgeHandle,
+        rollback: MutationRollback,
+    ) -> Result<FlipResult<DelaunayEdgeHandle, DelaunayFaceHandle>, DelaunayError> {
+        let edge_key = self.validate_edge_handle(edge)?;
         let facet = if self.edge_exists(edge_key) {
             self.interior_facet_for_edge(edge_key).ok_or_else(|| {
                 DelaunayError::NonFlippableEdge {
@@ -1896,7 +2116,11 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
                 v1: edge.key.v1(),
             });
         };
-        let mut mutation = DelaunayMutation::new(self);
+        let removed_simplices =
+            self.simplices_adjacent_to_facet(facet, DelaunayOperation::FlipK2)?;
+        let removed_edges =
+            self.local_edges_for_simplices(&removed_simplices, DelaunayOperation::FlipK2)?;
+        let mut mutation = self.mutation(rollback);
         let info = mutation
             .dt
             .flip_k2(facet)
@@ -1946,8 +2170,11 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
             });
         }
         let replacement_edge = mutation.replacement_edge_key(v0, v1)?;
-        mutation.rebuild_interior_facet_index();
-        // `flip_k2` commits only after upstream cumulative realization validation.
+        mutation.update_interior_facet_index(
+            &removed_edges,
+            &info.new_simplices,
+            DelaunayOperation::FlipK2,
+        )?;
         let affected_faces = info
             .new_simplices
             .iter()
@@ -1959,35 +2186,19 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
         Ok(result)
     }
 
-    fn can_flip_edge(&self, edge: &Self::EdgeHandle) -> bool {
-        self.validate_edge_handle(edge)
-            .ok()
-            .and_then(|key| self.interior_facet_for_edge(key))
-            .is_some_and(|facet| self.dt.can_flip_k2(facet).is_ok())
-    }
-
-    fn can_subdivide_face(&self, face: &Self::FaceHandle, point: &[Self::Coordinate]) -> bool {
-        let Ok(vertex) = Self::build_vertex(point, None, DelaunayOperation::SubdivideFace) else {
-            return false;
-        };
-        self.validate_face_handle(face)
-            .is_ok_and(|key| self.dt.can_flip_k1_insert(key, &vertex).is_ok())
-    }
-
-    fn can_collapse_vertex(&self, vertex: &Self::VertexHandle) -> bool {
-        self.validate_vertex_handle(vertex)
-            .is_ok_and(|key| self.dt.can_flip_k1_remove(key).is_ok())
-    }
-
-    fn subdivide_face(
+    /// Subdivides one face with either backend- or caller-owned rollback.
+    fn subdivide_face_with_rollback(
         &mut self,
-        face: Self::FaceHandle,
-        point: &[Self::Coordinate],
-    ) -> Result<SubdivisionResult<Self::VertexHandle, Self::FaceHandle>, Self::Error> {
+        face: DelaunayFaceHandle,
+        point: &[f64],
+        rollback: MutationRollback,
+    ) -> Result<SubdivisionResult<DelaunayVertexHandle, DelaunayFaceHandle>, DelaunayError> {
         let face_key = self.validate_face_handle(&face)?;
 
         let vertex = Self::build_vertex(point, None, DelaunayOperation::SubdivideFace)?;
-        let mut mutation = DelaunayMutation::new(self);
+        let mut mutation = self.mutation(rollback);
+        let removed_edges =
+            mutation.local_edges_for_simplices(&[face_key], DelaunayOperation::FlipK1Insert)?;
         let info = mutation
             .dt
             .flip_k1_insert(face_key, vertex)
@@ -2020,8 +2231,11 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
                 },
             });
         }
-        mutation.rebuild_interior_facet_index();
-        // `flip_k1_insert` commits only after upstream cumulative realization validation.
+        mutation.update_interior_facet_index(
+            &removed_edges,
+            &info.new_simplices,
+            DelaunayOperation::FlipK1Insert,
+        )?;
         let result = SubdivisionResult::new(
             mutation.vertex_handle(new_vertex),
             info.new_simplices
@@ -2033,6 +2247,134 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
         );
         mutation.commit();
         Ok(result)
+    }
+
+    /// Removes a vertex inside an enclosing rollback or discard boundary.
+    pub(crate) fn remove_vertex_in_caller_transaction(
+        &mut self,
+        vertex: &DelaunayVertexHandle,
+    ) -> Result<DelaunayRemovalResult, DelaunayError> {
+        self.remove_vertex_with_rollback(vertex, MutationRollback::Caller)
+    }
+
+    /// Returns the faces an inverse k=1 vertex removal would replace.
+    pub(crate) fn removal_affected_faces(
+        &self,
+        vertex: &DelaunayVertexHandle,
+    ) -> Result<Vec<DelaunayFaceHandle>, DelaunayError> {
+        let vertex_key = self.validate_vertex_handle(vertex)?;
+        self.dt
+            .can_flip_k1_remove(vertex_key)
+            .map(|feasibility| {
+                feasibility
+                    .removed_simplices
+                    .iter()
+                    .copied()
+                    .map(|key| self.face_handle(key))
+                    .collect()
+            })
+            .map_err(|err| DelaunayError::RemovalFailed {
+                operation: DelaunayOperation::FlipK1Remove,
+                target: format!("vertex {:?}", vertex.key),
+                detail: err.to_string(),
+            })
+    }
+
+    /// Flips an edge inside an enclosing rollback or discard boundary.
+    pub(crate) fn flip_edge_in_caller_transaction(
+        &mut self,
+        edge: &DelaunayEdgeHandle,
+    ) -> Result<FlipResult<DelaunayEdgeHandle, DelaunayFaceHandle>, DelaunayError> {
+        self.flip_edge_with_rollback(edge, MutationRollback::Caller)
+    }
+
+    /// Subdivides a face inside an enclosing rollback or discard boundary.
+    pub(crate) fn subdivide_face_in_caller_transaction(
+        &mut self,
+        face: DelaunayFaceHandle,
+        point: &[f64],
+    ) -> Result<SubdivisionResult<DelaunayVertexHandle, DelaunayFaceHandle>, DelaunayError> {
+        self.subdivide_face_with_rollback(face, point, MutationRollback::Caller)
+    }
+}
+
+impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationMut
+    for DelaunayBackend<VertexData, SimplexData, D>
+{
+    fn insert_vertex(
+        &mut self,
+        coords: &[Self::Coordinate],
+    ) -> Result<Self::VertexHandle, Self::Error> {
+        let vertex = Self::build_vertex(coords, None, DelaunayOperation::InsertVertex)?;
+        let mut mutation = DelaunayMutation::new(self);
+        let key =
+            mutation
+                .dt
+                .insert_vertex(vertex)
+                .map_err(|err| DelaunayError::InsertionFailed {
+                    operation: DelaunayOperation::InsertVertex,
+                    coordinates: coords.to_vec(),
+                    detail: err.to_string(),
+                })?;
+        mutation.rebuild_interior_facet_index();
+        mutation.validate_embedding_after_mutation(
+            DelaunayOperation::InsertVertex,
+            format!("{coords:?}"),
+        )?;
+        let handle = mutation.vertex_handle(key);
+        mutation.commit();
+        Ok(handle)
+    }
+
+    fn remove_vertex(&mut self, vertex: Self::VertexHandle) -> Result<(), Self::Error> {
+        self.remove_vertex_with_rollback(&vertex, MutationRollback::Backend)
+            .map(|_| ())
+    }
+
+    fn move_vertex(
+        &mut self,
+        _vertex: Self::VertexHandle,
+        _new_coords: &[Self::Coordinate],
+    ) -> Result<(), Self::Error> {
+        // TODO: Implement vertex movement.
+        Err(DelaunayError::NotImplemented {
+            operation: DelaunayOperation::MoveVertex,
+        })
+    }
+
+    fn flip_edge(
+        &mut self,
+        edge: Self::EdgeHandle,
+    ) -> Result<FlipResult<Self::EdgeHandle, Self::FaceHandle>, Self::Error> {
+        self.flip_edge_with_rollback(&edge, MutationRollback::Backend)
+    }
+
+    fn can_flip_edge(&self, edge: &Self::EdgeHandle) -> bool {
+        self.validate_edge_handle(edge)
+            .ok()
+            .and_then(|key| self.interior_facet_for_edge(key))
+            .is_some_and(|facet| self.dt.can_flip_k2(facet).is_ok())
+    }
+
+    fn can_subdivide_face(&self, face: &Self::FaceHandle, point: &[Self::Coordinate]) -> bool {
+        let Ok(vertex) = Self::build_vertex(point, None, DelaunayOperation::SubdivideFace) else {
+            return false;
+        };
+        self.validate_face_handle(face)
+            .is_ok_and(|key| self.dt.can_flip_k1_insert(key, &vertex).is_ok())
+    }
+
+    fn can_collapse_vertex(&self, vertex: &Self::VertexHandle) -> bool {
+        self.validate_vertex_handle(vertex)
+            .is_ok_and(|key| self.dt.can_flip_k1_remove(key).is_ok())
+    }
+
+    fn subdivide_face(
+        &mut self,
+        face: Self::FaceHandle,
+        point: &[Self::Coordinate],
+    ) -> Result<SubdivisionResult<Self::VertexHandle, Self::FaceHandle>, Self::Error> {
+        self.subdivide_face_with_rollback(face, point, MutationRollback::Backend)
     }
 
     fn clear(&mut self) -> Result<(), Self::Error> {
@@ -2932,6 +3274,81 @@ mod tests {
     }
 
     #[test]
+    fn checked_payload_accessors_update_live_handles_and_reject_invalid_provenance() {
+        let dt =
+            build_delaunay2_with_data(&[([0.0, 0.0], 0_u32), ([1.0, 0.0], 0), ([0.0, 1.0], 1)])
+                .expect("triangle fixture should build");
+        let mut backend = validated_backend(dt);
+        let mut foreign_owner = backend.clone();
+        let vertex = backend.vertices().next().expect("fixture has a vertex");
+        let face = backend.faces().next().expect("fixture has a face");
+        let original_vertex_data = backend
+            .vertex_data(&vertex)
+            .expect("live vertex payload should be readable");
+        let original_simplex_data = backend
+            .simplex_data(&face)
+            .expect("live simplex payload should be readable");
+
+        assert_eq!(
+            backend
+                .set_vertex_data(&vertex, Some(7))
+                .expect("live vertex payload should be writable"),
+            original_vertex_data
+        );
+        assert_eq!(
+            backend
+                .vertex_data(&vertex)
+                .expect("updated vertex payload should be readable"),
+            Some(7)
+        );
+        assert_eq!(
+            backend
+                .set_simplex_data(&face, Some(-3))
+                .expect("live simplex payload should be writable"),
+            original_simplex_data
+        );
+        assert_eq!(
+            backend
+                .simplex_data(&face)
+                .expect("updated simplex payload should be readable"),
+            Some(-3)
+        );
+
+        assert_matches!(
+            foreign_owner.set_vertex_data(&vertex, Some(9)),
+            Err(DelaunayError::ForeignHandle {
+                kind: DelaunayHandleKind::Vertex,
+                ..
+            })
+        );
+        assert_matches!(
+            foreign_owner.set_simplex_data(&face, Some(9)),
+            Err(DelaunayError::ForeignHandle {
+                kind: DelaunayHandleKind::Face,
+                ..
+            })
+        );
+
+        backend
+            .subdivide_face(face.clone(), &[0.25, 0.25])
+            .expect("subdivision should advance the topology generation");
+        assert_matches!(
+            backend.set_vertex_data(&vertex, Some(9)),
+            Err(DelaunayError::StaleHandle {
+                kind: DelaunayHandleKind::Vertex,
+                ..
+            })
+        );
+        assert_matches!(
+            backend.set_simplex_data(&face, Some(9)),
+            Err(DelaunayError::StaleHandle {
+                kind: DelaunayHandleKind::Face,
+                ..
+            })
+        );
+    }
+
+    #[test]
     fn test_edge_endpoints_non_edge_with_existing_vertices_returns_none() {
         let dt = build_delaunay2_with_data(&[
             ([0.0, 0.0], 0),
@@ -3578,6 +3995,40 @@ mod tests {
                 .interior_facets_by_edge
                 .contains_key(&flip.new_edge.key)
         );
+        assert_interior_facet_index_matches_rebuild(&backend);
+    }
+
+    #[test]
+    fn local_facet_index_updates_match_full_rebuild_after_inverse_volume_pair() {
+        let dt = build_delaunay2_with_data(&[
+            ([0.0, 0.0], 0),
+            ([1.0, 0.0], 0),
+            ([0.0, 1.0], 1),
+            ([1.0, 1.0], 1),
+        ])
+        .expect("subdivision fixture should build");
+        let mut backend = validated_backend(dt);
+        let face = backend.faces().next().expect("fixture has a face");
+        let point = backend
+            .face_barycenter(&face)
+            .expect("face barycenter should resolve");
+        let subdivision = backend
+            .subdivide_face(face, &point)
+            .expect("face subdivision should succeed");
+        assert_interior_facet_index_matches_rebuild(&backend);
+
+        backend
+            .remove_vertex(subdivision.new_vertex)
+            .expect("inserted degree-3 vertex should collapse");
+        assert_interior_facet_index_matches_rebuild(&backend);
+    }
+
+    fn assert_interior_facet_index_matches_rebuild(backend: &DelaunayBackend2D) {
+        let rebuilt = DelaunayBackend2D::build_interior_facets_by_edge(&backend.dt);
+        let actual_edges: std::collections::HashSet<_> =
+            backend.interior_facets_by_edge.keys().copied().collect();
+        let rebuilt_edges: std::collections::HashSet<_> = rebuilt.keys().copied().collect();
+        assert_eq!(actual_edges, rebuilt_edges);
     }
 
     #[test]

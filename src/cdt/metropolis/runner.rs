@@ -14,8 +14,8 @@ use super::adapter::{
     CdtProposal, CdtProposalError, CdtProposalInfo, CdtTarget, restore_checkpoint_state,
 };
 use super::checkpoint::{
-    CdtMcmcCheckpoint, CdtMcmcCheckpointParts, chain_counters, checkpoint_resume_failed,
-    validate_checkpoint_counters, validate_resume_compatible,
+    CdtMcmcCheckpoint, CdtMcmcCheckpointParts, ValidatedCheckpointPrefix, chain_counters,
+    checkpoint_resume_failed, validate_resume_compatible,
 };
 use super::helpers::{
     action_for, actions_match, measurement_for, measurement_is_due, validate_metropolis_schedule,
@@ -106,7 +106,8 @@ impl MetropolisConfig {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if `temperature` is
-    /// not finite and positive, if `steps` or `measurement_frequency` is zero, if
+    /// not finite and positive with a finite reciprocal, if `steps` or
+    /// `measurement_frequency` is zero, if
     /// thermalization exceeds the step count, or if the schedule cannot produce a
     /// post-thermalization measurement.
     ///
@@ -359,7 +360,11 @@ impl MetropolisConfig {
     /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     pub fn validate(&self) {
-        debug_assert!(self.temperature.is_finite() && self.temperature > 0.0);
+        debug_assert!(
+            self.temperature.is_finite()
+                && self.temperature > 0.0
+                && self.temperature.recip().is_finite()
+        );
         debug_assert!(self.thermalization_steps <= self.steps.get());
     }
 }
@@ -399,7 +404,7 @@ struct MetropolisRunTelemetry {
     scalar_trace_rows: Vec<CdtScalarTraceRow>,
     elapsed_time: Duration,
     /// Trusted pre-sampling profile retained until the first scalar row is built.
-    initial_volume_profile: Option<Vec<u32>>,
+    initial_slab_triangle_profile: Option<Vec<u32>>,
 }
 
 impl Deref for MetropolisRunState {
@@ -529,7 +534,9 @@ where
     /// compact telemetry storage, [`CdtError::InvalidMeasurementAction`] if a
     /// measurement action is non-finite,
     /// [`CdtError::MetropolisProposalPolicyFailed`] if the configured policy
-    /// returns an invalid or empty-support distribution, or a validation error
+    /// returns an invalid or empty-support distribution,
+    /// [`CdtError::MetropolisProposalRatioFailed`] if proposal accounting
+    /// produces invalid forward or reverse probabilities, or a validation error
     /// for unrecoverable triangulation failures.
     ///
     /// # Examples
@@ -574,7 +581,9 @@ where
     /// compact telemetry storage, [`CdtError::InvalidMeasurementAction`] if a
     /// measurement action is non-finite,
     /// [`CdtError::MetropolisProposalPolicyFailed`] if the configured policy
-    /// returns an invalid or empty-support distribution, or a validation error
+    /// returns an invalid or empty-support distribution,
+    /// [`CdtError::MetropolisProposalRatioFailed`] if proposal accounting
+    /// produces invalid forward or reverse probabilities, or a validation error
     /// for unrecoverable triangulation failures.
     ///
     /// # Examples
@@ -635,7 +644,9 @@ where
     /// compact telemetry storage, [`CdtError::InvalidMeasurementAction`] if a
     /// measurement action is non-finite,
     /// [`CdtError::MetropolisProposalPolicyFailed`] if the configured policy
-    /// returns an invalid or empty-support distribution, or a validation error
+    /// returns an invalid or empty-support distribution,
+    /// [`CdtError::MetropolisProposalRatioFailed`] if proposal accounting
+    /// produces invalid forward or reverse probabilities, or a validation error
     /// for unrecoverable triangulation failures.
     ///
     /// # Examples
@@ -690,8 +701,10 @@ where
     /// cannot fit compact telemetry storage,
     /// [`CdtError::InvalidMeasurementAction`] if a resumed measurement action is
     /// non-finite, [`CdtError::MetropolisProposalPolicyFailed`] if the configured
-    /// policy returns an invalid or empty-support distribution, or validation
-    /// errors for failures during resumed sampling.
+    /// policy returns an invalid or empty-support distribution,
+    /// [`CdtError::MetropolisProposalRatioFailed`] if proposal accounting
+    /// produces invalid forward or reverse probabilities, or validation errors
+    /// for failures during resumed sampling.
     ///
     /// # Examples
     ///
@@ -753,8 +766,10 @@ where
     /// cannot fit compact telemetry storage,
     /// [`CdtError::InvalidMeasurementAction`] if a resumed measurement action is
     /// non-finite, [`CdtError::MetropolisProposalPolicyFailed`] if the configured
-    /// policy returns an invalid or empty-support distribution, or validation
-    /// errors for failures during resumed sampling.
+    /// policy returns an invalid or empty-support distribution,
+    /// [`CdtError::MetropolisProposalRatioFailed`] if proposal accounting
+    /// produces invalid forward or reverse probabilities, or validation errors
+    /// for failures during resumed sampling.
     ///
     /// # Examples
     ///
@@ -789,6 +804,7 @@ where
         self.config.try_validate()?;
         self.action_config.validate();
         validate_resume_compatible(self, &checkpoint)?;
+        let validated_prefix = checkpoint.validated_prefix()?;
 
         let mut result_config = checkpoint.config.clone();
         let steps = checkpoint
@@ -801,7 +817,11 @@ where
 
         let state = MetropolisRunState::from_checkpoint(checkpoint)?;
         let state = self.run_steps(state, self.config.steps)?;
-        state.into_checkpoint(result_config, self.action_config.clone())
+        state.into_checkpoint_after_validated_prefix(
+            result_config,
+            self.action_config.clone(),
+            validated_prefix,
+        )
     }
 
     fn initial_state(&self, triangulation: CdtTriangulation2D) -> CdtResult<MetropolisRunState> {
@@ -814,7 +834,7 @@ where
         ) {
             measurements.push(measurement_for(0, current_action, &triangulation)?);
         }
-        let initial_volume_profile = triangulation.volume_profile()?;
+        let initial_slab_triangle_profile = triangulation.slab_triangle_profile()?;
 
         Ok(MetropolisRunState {
             triangulation,
@@ -832,7 +852,7 @@ where
                 measurements,
                 scalar_trace_rows: Vec::new(),
                 elapsed_time: Duration::ZERO,
-                initial_volume_profile: Some(initial_volume_profile),
+                initial_slab_triangle_profile: Some(initial_slab_triangle_profile),
             },
         })
     }
@@ -927,9 +947,9 @@ impl MetropolisRunState {
     ///
     /// The generic MCMC checkpoint rechecks target compatibility, then CDT
     /// recomputes the action so serialized telemetry cannot silently diverge
-    /// from the invariant-checked triangulation payload.
+    /// from the invariant-checked triangulation payload. The caller must fully
+    /// validate the checkpoint before transferring it here.
     fn from_checkpoint(checkpoint: CdtMcmcCheckpoint) -> CdtResult<Self> {
-        validate_checkpoint_counters(&checkpoint)?;
         let stored_action = checkpoint.current_action();
         let target = CdtTarget::new(
             checkpoint.action_config.clone(),
@@ -961,7 +981,7 @@ impl MetropolisRunState {
                 measurements: checkpoint.measurements,
                 scalar_trace_rows: checkpoint.scalar_trace_rows,
                 elapsed_time: checkpoint.elapsed_time,
-                initial_volume_profile: None,
+                initial_slab_triangle_profile: None,
             },
         })
     }
@@ -976,6 +996,28 @@ impl MetropolisRunState {
         config: MetropolisConfig,
         action_config: ActionConfig,
     ) -> CdtResult<CdtMcmcCheckpoint> {
+        CdtMcmcCheckpoint::from_parts(self.into_checkpoint_parts(config, action_config)?)
+    }
+
+    /// Converts resumed state while replaying only telemetry after the trusted prefix.
+    fn into_checkpoint_after_validated_prefix(
+        self,
+        config: MetropolisConfig,
+        action_config: ActionConfig,
+        prefix: ValidatedCheckpointPrefix,
+    ) -> CdtResult<CdtMcmcCheckpoint> {
+        CdtMcmcCheckpoint::from_parts_after_validated_prefix(
+            self.into_checkpoint_parts(config, action_config)?,
+            prefix,
+        )
+    }
+
+    /// Packages mutable run state for checkpoint validation and storage.
+    fn into_checkpoint_parts(
+        self,
+        config: MetropolisConfig,
+        action_config: ActionConfig,
+    ) -> CdtResult<CdtMcmcCheckpointParts> {
         let Self {
             triangulation,
             telemetry,
@@ -988,7 +1030,7 @@ impl MetropolisRunState {
                 expected: 1,
             })
         })?;
-        CdtMcmcCheckpoint::from_parts(CdtMcmcCheckpointParts {
+        Ok(CdtMcmcCheckpointParts {
             triangulation,
             accepted,
             rejected,
@@ -1128,13 +1170,13 @@ fn record_planned_step_parts<P>(
     )?;
     let action_after = step_outcome.action_after();
     let delta_action = step_outcome.delta_action();
+    let attach_initial_slab_triangle_profile =
+        step.get() == 1 && state.initial_slab_triangle_profile.is_some();
 
     let mut next_move_stats = state.move_stats.clone();
     next_move_stats.record_attempt(move_type);
     if action_after.is_some() {
         next_move_stats.record_success(move_type);
-    }
-    if action_after.is_some() {
         validate_supported_state_candidate_if_due(triangulation, next_move_stats.total_accepted())?;
     }
 
@@ -1142,9 +1184,6 @@ fn record_planned_step_parts<P>(
     let trace_triangulation = triangulation;
     let step_entry = MonteCarloStep::new(step, move_type, action_before, step_outcome)?
         .with_proposal_telemetry(info.proposal_telemetry());
-    let initial_volume_profile = (step.get() == 1)
-        .then(|| state.initial_volume_profile.take())
-        .flatten();
     let mut scalar_trace_row = CdtScalarTraceRow::new(
         step,
         trace_outcome,
@@ -1157,11 +1196,14 @@ fn record_planned_step_parts<P>(
         action_after,
         state.trace_seed,
     )?;
-    if let Some(initial_volume_profile) = initial_volume_profile {
-        scalar_trace_row = scalar_trace_row.with_initial_volume_profile(initial_volume_profile);
-    }
     let measurement =
         staged_measurement_for_step(algorithm, step, trace_action, trace_triangulation)?;
+    if attach_initial_slab_triangle_profile
+        && let Some(initial_slab_triangle_profile) = state.initial_slab_triangle_profile.take()
+    {
+        scalar_trace_row =
+            scalar_trace_row.with_initial_slab_triangle_profile(initial_slab_triangle_profile);
+    }
 
     state.move_stats = next_move_stats;
     if let Some(applied_action) = action_after {
@@ -1311,9 +1353,8 @@ mod tests {
     use crate::cdt::ergodic_moves::proposal_site_count;
     use crate::cdt::foliation::FoliationError;
     use crate::cdt::metropolis::{
-        adapter::{
-            CdtProposalPlan, ConcretePlanAttempt, concrete_log_q_ratio, propose_concrete_plan,
-        },
+        adapter::{CdtProposalPlan, ConcretePlanAttempt, propose_concrete_plan},
+        checkpoint::validate_checkpoint_counters,
         helpers::{SimplexCounts, proposed_delta_action, simplex_counts},
         telemetry::{CdtProposalPlanningOutcome, CdtProposalSiteRejection},
     };
@@ -1480,10 +1521,10 @@ mod tests {
         assert_eq!(left.face_count(), right.face_count());
         assert_eq!(left.slice_sizes(), right.slice_sizes());
         assert_eq!(
-            left.volume_profile()
+            left.slab_triangle_profile()
                 .expect("left canonical profile should be valid"),
             right
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("right canonical profile should be valid")
         );
         assert_eq!(
@@ -1690,7 +1731,7 @@ mod tests {
                 measurements: Vec::new(),
                 scalar_trace_rows: Vec::new(),
                 elapsed_time: Duration::ZERO,
-                initial_volume_profile: None,
+                initial_slab_triangle_profile: None,
             },
         }
     }
@@ -2084,11 +2125,11 @@ mod tests {
         assert_eq!(
             one_shot
                 .triangulation()
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("one-shot profile should be valid"),
             chunked
                 .triangulation()
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("chunked profile should be valid")
         );
     }
@@ -2809,11 +2850,11 @@ mod tests {
     }
 
     #[test]
-    fn explicit_cdt_volume_profiles_count_time_slabs() {
+    fn explicit_cdt_slab_triangle_profiles_count_time_slabs() {
         let strip = CdtTriangulation::from_cdt_strip(4, 3).expect("create Delaunay strip");
         assert_eq!(
             strip
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("strip profile should be valid"),
             vec![6, 6, 0]
         );
@@ -2821,27 +2862,27 @@ mod tests {
         let torus = CdtTriangulation::from_toroidal_cdt(3, 3).expect("create periodic torus");
         assert_eq!(
             torus
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("torus profile should be valid"),
             vec![6, 6, 6]
         );
     }
 
     #[test]
-    fn measurement_records_volume_profile_for_foliated_triangulation() {
+    fn measurement_records_slab_triangle_profile_for_foliated_triangulation() {
         let triangulation = CdtTriangulation::from_cdt_strip(4, 3).expect("create Delaunay strip");
         let measurement =
             measurement_for(0, 1.0, &triangulation).expect("measurement should build");
 
-        assert_eq!(measurement.volume_profile(), &[6, 6, 0]);
+        assert_eq!(measurement.slab_triangle_profile(), &[6, 6, 0]);
         assert_eq!(
-            measurement.volume_profile().iter().sum::<u32>(),
+            measurement.slab_triangle_profile().iter().sum::<u32>(),
             measurement.triangles().get()
         );
     }
 
     #[test]
-    fn volume_profile_is_empty_without_current_foliation() {
+    fn slab_triangle_profile_is_empty_without_current_foliation() {
         let triangulation =
             CdtTriangulation::from_seeded_points(5, 2, 2, 53).expect("create seeded triangulation");
         let measurement =
@@ -2850,11 +2891,11 @@ mod tests {
         assert!(!triangulation.has_foliation());
         assert!(
             triangulation
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("unfoliated triangulation should report an empty profile")
                 .is_empty()
         );
-        assert!(measurement.volume_profile().is_empty());
+        assert!(measurement.slab_triangle_profile().is_empty());
     }
 
     #[test]
@@ -3442,7 +3483,7 @@ mod tests {
 
     #[test]
     fn run_rejects_bad_temperature() {
-        for bad_temp in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+        for bad_temp in [0.0, -1.0, f64::NAN, f64::INFINITY, f64::from_bits(1)] {
             let err =
                 MetropolisConfig::new(bad_temp, 10, 2, 2).expect_err("bad temperature is invalid");
             match err {
@@ -3450,13 +3491,24 @@ mod tests {
                     setting, expected, ..
                 } => {
                     assert_eq!(setting, ConfigurationSetting::Temperature, "T={bad_temp}");
-                    assert_eq!(expected, "finite and positive", "T={bad_temp}");
+                    assert_eq!(
+                        expected, "finite and positive with a finite reciprocal",
+                        "T={bad_temp}"
+                    );
                 }
                 other => panic!(
                     "Expected InvalidSimulationConfiguration for T={bad_temp}, got {other:?}"
                 ),
             }
         }
+    }
+
+    #[test]
+    fn validated_temperature_has_finite_inverse_temperature() {
+        let config = MetropolisConfig::new(f64::MIN_POSITIVE, 10, 2, 2)
+            .expect("smallest normal temperature has a finite reciprocal");
+
+        assert!(config.beta().is_finite());
     }
 
     #[test]
@@ -3556,11 +3608,26 @@ mod tests {
                     expected,
                 } => {
                     assert_eq!(setting, ConfigurationSetting::Temperature);
-                    assert_eq!(expected, "finite and positive");
+                    assert_eq!(expected, "finite and positive with a finite reciprocal");
                 }
                 other => panic!("Expected InvalidSimulationConfiguration, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn cdt_target_rejects_temperature_that_can_overflow_log_probability() {
+        let Err(error) = CdtTarget::new(ActionConfig::default(), f64::MIN_POSITIVE) else {
+            panic!("subnormal action scaling must not create an infinite target");
+        };
+
+        assert!(matches!(
+            error,
+            CdtError::InvalidSimulationConfiguration {
+                setting: ConfigurationSetting::Temperature,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -3669,7 +3736,7 @@ mod tests {
         let expected = DiscreteProposalRatio::from_counts(forward_sites, reverse_sites)
             .expect("positive forward proposal sites should build a ratio")
             .log_q_ratio();
-        assert_relative_eq!(concrete_log_q_ratio(&plan), expected, epsilon = 1e-12);
+        assert_relative_eq!(plan.log_proposal_ratio(), expected, epsilon = 1e-12);
 
         let proposal = CdtProposal::new(action_config);
         assert_relative_eq!(

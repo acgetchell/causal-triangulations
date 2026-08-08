@@ -91,7 +91,9 @@ fn cdt_cli_help_documents_readme_usage() {
             "Vertices per spatial slice; total vertices are computed",
         ))
         .stdout(predicate::str::contains("--vertices-per-slice"))
-        .stdout(predicate::str::contains("--volume-profile <N0,N1,...>"))
+        .stdout(predicate::str::contains(
+            "--spatial-vertex-profile <N0,N1,...>",
+        ))
         .stdout(predicate::str::contains("--topology <TOPOLOGY>"))
         .stdout(predicate::str::contains("toroidal"))
         .stdout(predicate::str::contains("--output-json <PATH>"));
@@ -224,12 +226,12 @@ fn cdt_cli_writes_configured_outputs() {
 }
 
 #[test]
-fn cdt_cli_accepts_nonuniform_volume_profile_without_timeslices() {
-    let output_dir = temp_output_dir("volume-profile");
+fn cdt_cli_accepts_nonuniform_spatial_vertex_profile_without_timeslices() {
+    let output_dir = temp_output_dir("spatial-vertex-profile");
     let json_path = output_dir.join("summary.json");
     let mut cmd = cdt_command();
 
-    cmd.arg("--volume-profile").arg("4,6,5");
+    cmd.arg("--spatial-vertex-profile").arg("4,6,5");
     cmd.arg("--steps").arg("4");
     cmd.arg("--thermalization-steps").arg("0");
     cmd.arg("--measurement-frequency").arg("1");
@@ -244,20 +246,20 @@ fn cdt_cli_accepts_nonuniform_volume_profile_without_timeslices() {
 
     assert_eq!(parsed["config"]["vertices"], 15);
     assert_eq!(parsed["config"]["timeslices"], 3);
-    assert_eq!(parsed["config"]["volume_profile"], json!([4, 6, 5]));
+    assert_eq!(parsed["config"]["spatial_vertex_profile"], json!([4, 6, 5]));
     assert_eq!(parsed["final_triangulation"]["vertices"], 15);
     assert_eq!(parsed["final_triangulation"]["time_slices"], 3);
 }
 
 #[test]
-fn cdt_cli_rejects_volume_profile_timeslice_mismatch() {
+fn cdt_cli_rejects_spatial_vertex_profile_timeslice_mismatch() {
     let mut cmd = cdt_command();
 
-    cmd.arg("--volume-profile").arg("4,6,5");
+    cmd.arg("--spatial-vertex-profile").arg("4,6,5");
     cmd.arg("--timeslices").arg("4");
 
     cmd.assert().failure().stderr(predicate::str::contains(
-        "--timeslices (4) must match --volume-profile entry count (3)",
+        "--timeslices (4) must match --spatial-vertex-profile entry count (3)",
     ));
 }
 

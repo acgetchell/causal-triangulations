@@ -17,7 +17,7 @@
 //! - Foliated 2D triangulation construction and validation
 //! - Foliation-aware 2D ergodic moves backed by bistellar flips
 //! - Metropolis-Hastings sampling over foliation-aware 2D ergodic moves
-//! - Volume-profile, Hausdorff-dimension, and spectral-dimension observables
+//! - Slab-triangle profiles and finite-graph effective dimensional observables
 //!   for CDT analysis
 //! - Trace CSV/JSON simulation output and resumable serde-backed CDT/MCMC checkpoints
 //!
@@ -25,6 +25,12 @@
 //! observable, and error types. Focused preludes under [`prelude`] provide
 //! smaller import surfaces for documentation, examples, integration tests, and
 //! benchmarks.
+//!
+//! # Feature flags
+//!
+//! - `slow-tests` enables long-running validation tests used by repository
+//!   development commands. It does not change the library or `cdt` binary API
+//!   and is not needed for normal use.
 //!
 //! # Checkpointing
 //!
@@ -195,7 +201,10 @@ pub use cdt::metropolis::{
     MonteCarloStep, MonteCarloStepOutcome, ProposalKernelTelemetry, ProposalStatistics,
     RejectedProposalStepTelemetry, StepOutcome,
 };
-pub use cdt::observables::{estimate_hausdorff_dimension, estimate_spectral_dimension};
+pub use cdt::observables::{
+    average_dual_ball_volume_curve, average_dual_return_probability_curve,
+    estimate_all_scale_effective_hausdorff_slope, estimate_short_time_effective_spectral_dimension,
+};
 pub use cdt::proposal_policy::{
     CdtMoveFamilyDistribution, CdtMoveFamilyPolicy, CdtMoveFamilyPolicyError,
     CdtProposalPolicyView, CdtProposalSiteId, CdtProposalSiteIdError, CdtProposalSiteIds,
@@ -207,7 +216,7 @@ pub use cdt::triangulation::{
 };
 pub use config::{
     CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, ValidatedCdtConfig,
-    ValidatedInitialVolume,
+    ValidatedInitialSpatialVertices,
 };
 pub use errors::{
     BackendMutationOperation, BackendRollbackFailure, BackendRollbackFailures, CdtError, CdtResult,
@@ -222,10 +231,11 @@ pub use geometry::traits::TriangulationQuery;
 pub use geometry::{SpacetimeCoordinate, SpacetimeCoordinateComponent, SpacetimeCoordinateError};
 pub use markov_chain_monte_carlo::{DiscreteProposalRatioError, McmcError};
 
-use crate::cdt::results::SimulationResultsParts;
+use crate::cdt::results::{SimulationResultsParts, ensure_parent_directory};
 use std::env;
 use std::fmt::Display;
-use std::fs;
+use std::fs::{self, File, OpenOptions, TryLockError};
+use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -269,7 +279,7 @@ pub mod prelude {
     pub mod config {
         pub use crate::config::{
             CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, ValidatedCdtConfig,
-            ValidatedInitialVolume,
+            ValidatedInitialSpatialVertices,
         };
     }
 
@@ -504,17 +514,19 @@ pub mod prelude {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    ///     let profile = tri.volume_profile()?;
+    ///     let profile = tri.slab_triangle_profile()?;
     ///
     ///     assert_eq!(profile.len(), 3);
-    ///     assert!(estimate_hausdorff_dimension(&tri)?.is_some_and(f64::is_finite));
-    ///     assert!(estimate_spectral_dimension(&tri)?.is_some_and(f64::is_finite));
+    ///     assert!(estimate_all_scale_effective_hausdorff_slope(&tri)?.is_some_and(f64::is_finite));
+    ///     assert!(estimate_short_time_effective_spectral_dimension(&tri)?.is_some_and(f64::is_finite));
     ///     Ok(())
     /// }
     /// ```
     pub mod observables {
         pub use crate::cdt::observables::{
-            estimate_hausdorff_dimension, estimate_spectral_dimension,
+            average_dual_ball_volume_curve, average_dual_return_probability_curve,
+            estimate_all_scale_effective_hausdorff_slope,
+            estimate_short_time_effective_spectral_dimension,
         };
         pub use crate::{CdtTriangulation, CdtTriangulation2D};
     }
@@ -608,8 +620,8 @@ pub mod prelude {
 /// This function uses the trait-based geometry backend system, which provides
 /// better abstraction and testability compared to legacy approaches.
 /// Open-boundary runs construct a foliated strip; toroidal runs construct a
-/// periodic mesh. When [`ValidatedCdtConfig::volume_profile`] is present, the initial
-/// geometry uses those explicit per-slice spatial volumes. Otherwise the run
+/// periodic mesh. When [`ValidatedCdtConfig::spatial_vertex_profile`] is present, the initial
+/// geometry uses those explicit per-slice spatial-vertex counts. Otherwise the run
 /// uses regular equal-size slices derived from the total
 /// [`ValidatedCdtConfig::vertices`] count and [`ValidatedCdtConfig::timeslices`].
 ///
@@ -633,10 +645,14 @@ pub mod prelude {
 /// cannot be resolved. Returns [`CdtError::OutputPathConflict`] if CSV and JSON
 /// outputs resolve to the same file. Output path resolution and conflict checks
 /// happen before triangulation construction or sampling begins. Returns
+/// [`CdtError::OutputPathBusy`] if another simulation owns either configured
+/// output destination. Output locks are acquired before triangulation
+/// construction and held through publication of all configured outputs. Lock or
+/// parent-directory I/O failures return [`CdtError::OutputWriteFailed`] before
+/// construction begins. Returns
 /// [`CdtError::OutputPreparationFailed`] if trace or mesh preparation fails
-/// after the run completes. Returns [`CdtError::OutputWriteFailed`] if the
-/// configured output file, parent directory creation, serialization, or staged
-/// publication fails.
+/// after the run completes. Returns [`CdtError::OutputWriteFailed`] if configured
+/// output-file creation, serialization, or staged publication fails.
 ///
 /// # Examples
 ///
@@ -660,35 +676,42 @@ pub mod prelude {
 /// ```
 pub fn run_simulation(config: &ValidatedCdtConfig) -> CdtResult<SimulationResultsBackend> {
     let output_paths = resolve_configured_output_paths(config)?;
+    let output_locks = OutputPathLocks::acquire(&output_paths)?;
     let vertices = config.vertices();
     let timeslices = config.timeslices();
 
     log::info!("Dimensionality: {}", config.dimension());
     log::info!("Number of vertices: {vertices}");
     log::info!("Number of timeslices: {timeslices}");
-    if let Some(profile) = config.volume_profile() {
-        log::info!("Initial spatial volume profile: {profile:?}");
+    if let Some(profile) = config.spatial_vertex_profile() {
+        log::info!("Initial spatial vertex profile: {profile:?}");
     }
     log::info!("Topology: {:?}", config.topology());
     log::info!("Using trait-based backend system");
 
     // Create initial triangulation from the validated topology/profile matrix.
-    let triangulation = match (config.topology(), config.initial_volume()) {
-        (CdtTopology::Toroidal, ValidatedInitialVolume::ExplicitProfile(profile)) => {
+    let triangulation = match (config.topology(), config.initial_spatial_vertices()) {
+        (CdtTopology::Toroidal, ValidatedInitialSpatialVertices::ExplicitProfile(profile)) => {
             log::info!("Constructing toroidal CDT (S¹×S¹)");
             let profile: Vec<_> = profile.iter().map(|volume| volume.get()).collect();
-            CdtTriangulation::from_toroidal_cdt_profile(&profile)?
+            CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&profile)?
         }
-        (CdtTopology::Toroidal, ValidatedInitialVolume::Regular { vertices_per_slice }) => {
+        (
+            CdtTopology::Toroidal,
+            ValidatedInitialSpatialVertices::Regular { vertices_per_slice },
+        ) => {
             log::info!("Constructing toroidal CDT (S¹×S¹)");
             CdtTriangulation::from_toroidal_cdt(vertices_per_slice.get(), timeslices.get())?
         }
-        (CdtTopology::OpenBoundary, ValidatedInitialVolume::ExplicitProfile(profile)) => {
+        (CdtTopology::OpenBoundary, ValidatedInitialSpatialVertices::ExplicitProfile(profile)) => {
             log::info!("Constructing open-boundary CDT strip");
             let profile: Vec<_> = profile.iter().map(|volume| volume.get()).collect();
-            CdtTriangulation::from_cdt_strip_profile(&profile)?
+            CdtTriangulation::from_cdt_strip_spatial_vertex_profile(&profile)?
         }
-        (CdtTopology::OpenBoundary, ValidatedInitialVolume::Regular { vertices_per_slice }) => {
+        (
+            CdtTopology::OpenBoundary,
+            ValidatedInitialSpatialVertices::Regular { vertices_per_slice },
+        ) => {
             log::info!("Constructing open-boundary CDT strip");
             CdtTriangulation::from_cdt_strip(vertices_per_slice.get(), timeslices.get())?
         }
@@ -728,7 +751,7 @@ pub fn run_simulation(config: &ValidatedCdtConfig) -> CdtResult<SimulationResult
         );
 
         let measurement = Measurement::try_from_simplex_counts(0, initial_action, counts)?
-            .try_with_volume_profile(triangulation.volume_profile()?)?;
+            .try_with_slab_triangle_profile(triangulation.slab_triangle_profile()?)?;
 
         SimulationResultsBackend::from_parts(SimulationResultsParts::new(
             config.to_metropolis_config(),
@@ -744,12 +767,66 @@ pub fn run_simulation(config: &ValidatedCdtConfig) -> CdtResult<SimulationResult
     };
 
     write_configured_outputs(config, &results, &output_paths)?;
+    drop(output_locks);
     Ok(results)
 }
 
 struct ResolvedOutputPaths {
     csv: Option<PathBuf>,
     json: Option<PathBuf>,
+}
+
+/// Holds exclusive operating-system locks for every configured output destination.
+struct OutputPathLocks {
+    _files: Vec<File>,
+}
+
+impl OutputPathLocks {
+    /// Acquires every configured destination lock in stable path order.
+    fn acquire(output_paths: &ResolvedOutputPaths) -> CdtResult<Self> {
+        let mut destinations = Vec::with_capacity(2);
+        if let Some(path) = output_paths.csv.as_deref() {
+            destinations.push((path, OutputFormat::Csv));
+        }
+        if let Some(path) = output_paths.json.as_deref() {
+            destinations.push((path, OutputFormat::Json));
+        }
+        destinations.sort_unstable_by_key(|(path, _)| *path);
+
+        let mut files = Vec::with_capacity(destinations.len());
+        for (path, format) in destinations {
+            ensure_parent_directory(path, format)?;
+            let lock_path = sibling_output_lock_path(path);
+            let file = OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&lock_path)
+                .map_err(|err| {
+                    output_write_failed(path, format, OutputWriteStage::AcquireLock, err)
+                })?;
+            match file.try_lock() {
+                Ok(()) => files.push(file),
+                Err(TryLockError::WouldBlock) => {
+                    return Err(CdtError::OutputPathBusy {
+                        path: path.display().to_string(),
+                        format,
+                    });
+                }
+                Err(TryLockError::Error(err)) => {
+                    return Err(output_write_failed(
+                        path,
+                        format,
+                        OutputWriteStage::AcquireLock,
+                        err,
+                    ));
+                }
+            }
+        }
+
+        Ok(Self { _files: files })
+    }
 }
 
 /// Resolves configured output paths before expensive triangulation or sampling work begins.
@@ -857,36 +934,45 @@ impl<'a> StagedOutputs<'a> {
         Ok(())
     }
 
-    /// Publishes every staged output, rolling back an earlier CSV publish on JSON failure.
+    /// Publishes every staged output while preserving any previous destination set.
     fn commit(mut self) -> CdtResult<()> {
-        let published_csv = if let Some(output) = &self.csv {
-            output.persist()?;
-            let final_path = output.final_path.to_path_buf();
-            self.csv = None;
-            Some(final_path)
-        } else {
-            None
-        };
-
-        if let Some(output) = &self.json
-            && let Err(err) = output.persist()
-        {
-            if let Some(path) = &published_csv {
-                let _ignored = fs::remove_file(path);
-            }
-            return Err(err);
+        for output in self.csv.iter().chain(&self.json) {
+            output.validate_destination()?;
         }
-        self.json = None;
+        for output in self.csv.iter_mut().chain(&mut self.json) {
+            if let Err(error) = output.back_up_existing() {
+                let rollback_failures = self.rollback();
+                return Err(attach_output_rollback_failures(error, &rollback_failures));
+            }
+        }
+        for output in self.csv.iter_mut().chain(&mut self.json) {
+            if let Err(error) = output.persist() {
+                let rollback_failures = self.rollback();
+                return Err(attach_output_rollback_failures(error, &rollback_failures));
+            }
+        }
+        for output in self.csv.iter_mut().chain(&mut self.json) {
+            output.finalize();
+        }
         Ok(())
+    }
+
+    /// Restores every destination touched by a partial commit.
+    fn rollback(&mut self) -> Vec<String> {
+        self.csv
+            .iter_mut()
+            .chain(&mut self.json)
+            .flat_map(StagedOutput::rollback)
+            .collect()
     }
 }
 
 impl Drop for StagedOutputs<'_> {
     fn drop(&mut self) {
-        if let Some(output) = &self.csv {
-            output.cleanup();
-        }
-        if let Some(output) = &self.json {
+        for output in self.csv.iter_mut().chain(&mut self.json) {
+            for failure in output.rollback() {
+                log::error!("failed to restore staged output during cleanup: {failure}");
+            }
             output.cleanup();
         }
     }
@@ -896,7 +982,10 @@ impl Drop for StagedOutputs<'_> {
 struct StagedOutput<'a> {
     final_path: &'a Path,
     temp_path: PathBuf,
+    backup_path: PathBuf,
     format: OutputFormat,
+    backup_created: bool,
+    published: bool,
 }
 
 impl<'a> StagedOutput<'a> {
@@ -905,15 +994,125 @@ impl<'a> StagedOutput<'a> {
         Self {
             final_path,
             temp_path: sibling_temp_output_path(final_path, format),
+            backup_path: sibling_backup_output_path(final_path, format),
             format,
+            backup_created: false,
+            published: false,
         }
     }
 
+    /// Rejects destination types that cannot participate in file replacement.
+    fn validate_destination(&self) -> CdtResult<()> {
+        match fs::symlink_metadata(self.final_path) {
+            Ok(metadata) if metadata.file_type().is_file() => Ok(()),
+            Ok(_) => Err(output_write_failed(
+                self.final_path,
+                self.format,
+                OutputWriteStage::ValidateDestination,
+                io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "existing output destination is not a regular file",
+                ),
+            )),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(output_write_failed(
+                self.final_path,
+                self.format,
+                OutputWriteStage::ValidateDestination,
+                error,
+            )),
+        }
+    }
+
+    /// Moves a previous regular output aside for failure-atomic replacement.
+    fn back_up_existing(&mut self) -> CdtResult<()> {
+        if !self.final_path.exists() {
+            return Ok(());
+        }
+        if self.backup_path.exists() {
+            return Err(output_write_failed(
+                self.final_path,
+                self.format,
+                OutputWriteStage::BackupExisting,
+                io::Error::new(
+                    ErrorKind::AlreadyExists,
+                    format!("backup path {} already exists", self.backup_path.display()),
+                ),
+            ));
+        }
+        fs::rename(self.final_path, &self.backup_path).map_err(|error| {
+            output_write_failed(
+                self.final_path,
+                self.format,
+                OutputWriteStage::BackupExisting,
+                error,
+            )
+        })?;
+        self.backup_created = true;
+        Ok(())
+    }
+
     /// Renames the staged output into its final path.
-    fn persist(&self) -> CdtResult<()> {
+    fn persist(&mut self) -> CdtResult<()> {
         fs::rename(&self.temp_path, self.final_path).map_err(|err| {
             output_write_failed(self.final_path, self.format, OutputWriteStage::Persist, err)
-        })
+        })?;
+        self.published = true;
+        Ok(())
+    }
+
+    /// Restores the previous destination or removes a newly published output.
+    fn rollback(&mut self) -> Vec<String> {
+        let remove_failure = if self.published {
+            match fs::remove_file(self.final_path) {
+                Ok(()) => None,
+                Err(error) if error.kind() == ErrorKind::NotFound => None,
+                Err(error) => Some(format!(
+                    "remove replacement {}: {error}",
+                    self.final_path.display()
+                )),
+            }
+        } else {
+            None
+        };
+        self.published = false;
+
+        if self.backup_created {
+            match fs::rename(&self.backup_path, self.final_path) {
+                Ok(()) => {
+                    self.backup_created = false;
+                    Vec::new()
+                }
+                Err(error) => {
+                    let mut failures = Vec::with_capacity(2);
+                    if let Some(remove_failure) = remove_failure {
+                        failures.push(remove_failure);
+                    }
+                    failures.push(format!(
+                        "restore backup {} to {}: {error}",
+                        self.backup_path.display(),
+                        self.final_path.display()
+                    ));
+                    failures
+                }
+            }
+        } else {
+            remove_failure.into_iter().collect()
+        }
+    }
+
+    /// Finishes a successful commit and discards its no-longer-needed backup.
+    fn finalize(&mut self) {
+        self.published = false;
+        if self.backup_created {
+            if let Err(error) = fs::remove_file(&self.backup_path) {
+                log::warn!(
+                    "could not remove committed output backup {}: {error}",
+                    self.backup_path.display()
+                );
+            }
+            self.backup_created = false;
+        }
     }
 
     /// Removes the staged temporary file if it still exists.
@@ -961,6 +1160,57 @@ fn sibling_temp_output_path(path: &Path, format: OutputFormat) -> PathBuf {
     ))
 }
 
+/// Builds a unique sibling backup path used only during multi-output commit.
+fn sibling_backup_output_path(path: &Path, format: OutputFormat) -> PathBuf {
+    let suffix = match format {
+        OutputFormat::Csv => "csv",
+        OutputFormat::Json => "json",
+    };
+    let token = NEXT_TEMP_OUTPUT_ID.fetch_add(1, Ordering::Relaxed);
+    let file_name = path
+        .file_name()
+        .map_or_else(|| "output".into(), |name| name.to_string_lossy());
+    path.with_file_name(format!(
+        ".{file_name}.{}.{}.{}.backup",
+        process::id(),
+        token,
+        suffix
+    ))
+}
+
+/// Retains the primary commit error while reporting any failed restoration work.
+fn attach_output_rollback_failures(error: CdtError, failures: &[String]) -> CdtError {
+    if failures.is_empty() {
+        return error;
+    }
+    match error {
+        CdtError::OutputWriteFailed {
+            path,
+            format,
+            stage,
+            detail,
+        } => CdtError::OutputWriteFailed {
+            path,
+            format,
+            stage,
+            detail: format!("{detail}; output rollback failed: {}", failures.join("; ")),
+        },
+        error => error,
+    }
+}
+
+/// Builds the stable sibling path used to coordinate writers of one output destination.
+///
+/// The empty coordination file intentionally persists after the operating-system
+/// lock is released. Its presence never denotes ownership, and retaining the
+/// path prevents concurrent writers from locking different file identities.
+fn sibling_output_lock_path(path: &Path) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .map_or_else(|| "output".into(), |name| name.to_string_lossy());
+    path.with_file_name(format!(".{file_name}.causal-triangulations.lock"))
+}
+
 /// Builds a typed output write error for crate-root persistence helpers.
 fn output_write_failed(
     path: &Path,
@@ -980,7 +1230,6 @@ fn output_write_failed(
 mod tests {
     use super::*;
     use crate::cdt::action::DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT;
-    use approx::assert_relative_eq;
     use serde_json::{Value, from_str, to_string};
     use std::assert_matches;
     use std::collections::HashSet;
@@ -992,7 +1241,7 @@ mod tests {
             dimension: Some(2),
             vertices: 36,
             timeslices: 3,
-            volume_profile: None,
+            spatial_vertex_profile: None,
             temperature: 1.0,
             steps: 10,
             thermalization_steps: 5,
@@ -1023,6 +1272,19 @@ mod tests {
         ))
     }
 
+    /// Removes a persistent output coordination file created by a test.
+    fn remove_output_lock(path: &Path) {
+        let lock_path = sibling_output_lock_path(path);
+        match fs::remove_file(&lock_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => panic!(
+                "output lock {} should be removable: {err}",
+                lock_path.display()
+            ),
+        }
+    }
+
     /// Returns the current test thread name with path separators and
     /// reserved characters removed.
     fn safe_thread_name() -> String {
@@ -1049,8 +1311,8 @@ mod tests {
         assert!(
             !results
                 .triangulation()
-                .volume_profile()
-                .expect("run triangulation should have a valid volume profile")
+                .slab_triangle_profile()
+                .expect("run triangulation should have a valid slab-triangle profile")
                 .is_empty()
         );
         results
@@ -1113,6 +1375,8 @@ mod tests {
         let json = fs::read_to_string(&json_path).expect("JSON output should be readable");
         fs::remove_file(&csv_path).expect("temporary CSV output should be removable");
         fs::remove_file(&json_path).expect("temporary JSON output should be removable");
+        remove_output_lock(&csv_path);
+        remove_output_lock(&json_path);
         let parsed: Value = from_str(&json).expect("JSON output should parse");
 
         assert!(csv.starts_with(
@@ -1158,6 +1422,7 @@ mod tests {
         );
         assert!(!csv_temp.exists(), "staged CSV output should be cleaned");
         assert!(!json_temp.exists(), "staged JSON output should be absent");
+        remove_output_lock(&csv_path);
         fs::remove_file(&blocked_parent).expect("blocked parent fixture should be removable");
     }
 
@@ -1197,7 +1462,131 @@ mod tests {
     }
 
     #[test]
-    fn staged_outputs_roll_back_published_csv_when_json_persist_fails() {
+    fn output_path_locks_exclude_other_threads_and_release_on_drop() {
+        let directory = temp_output_path("exclusive-output-lock");
+        let csv_path = directory.join("trace.csv");
+        let output_paths = ResolvedOutputPaths {
+            csv: Some(csv_path.clone()),
+            json: None,
+        };
+        let owner = OutputPathLocks::acquire(&output_paths)
+            .expect("first writer should acquire the output lock");
+        let barrier = Arc::new(Barrier::new(2));
+        let contender_barrier = Arc::clone(&barrier);
+        let contender_path = csv_path.clone();
+        let contender = thread::spawn(move || {
+            let output_paths = ResolvedOutputPaths {
+                csv: Some(contender_path),
+                json: None,
+            };
+            contender_barrier.wait();
+            OutputPathLocks::acquire(&output_paths)
+        });
+
+        barrier.wait();
+        let Err(error) = contender.join().expect("lock contender should finish") else {
+            panic!("another thread should not acquire a held output lock");
+        };
+        assert_matches!(
+            error,
+            CdtError::OutputPathBusy {
+                path,
+                format: OutputFormat::Csv,
+            } if path == csv_path.display().to_string()
+        );
+
+        drop(owner);
+        let reacquired = OutputPathLocks::acquire(&output_paths)
+            .expect("output lock should be released when its owner is dropped");
+        drop(reacquired);
+        remove_output_lock(&csv_path);
+        fs::remove_dir(&directory).expect("output lock fixture directory should be removable");
+    }
+
+    #[test]
+    fn failed_multi_output_lock_releases_earlier_locks() {
+        let directory = temp_output_path("partial-output-lock");
+        let csv_path = directory.join("a-trace.csv");
+        let json_path = directory.join("z-summary.json");
+        let json_only = ResolvedOutputPaths {
+            csv: None,
+            json: Some(json_path.clone()),
+        };
+        let json_owner = OutputPathLocks::acquire(&json_only)
+            .expect("first writer should acquire the JSON output lock");
+        let both = ResolvedOutputPaths {
+            csv: Some(csv_path.clone()),
+            json: Some(json_path.clone()),
+        };
+
+        let Err(error) = OutputPathLocks::acquire(&both) else {
+            panic!("multi-output acquisition should fail on the held JSON lock");
+        };
+        assert_matches!(
+            error,
+            CdtError::OutputPathBusy {
+                path,
+                format: OutputFormat::Json,
+            } if path == json_path.display().to_string()
+        );
+
+        let csv_only = ResolvedOutputPaths {
+            csv: Some(csv_path.clone()),
+            json: None,
+        };
+        let csv_owner = OutputPathLocks::acquire(&csv_only)
+            .expect("failed multi-output acquisition should release its earlier CSV lock");
+        drop(csv_owner);
+        drop(json_owner);
+        let both_owner = OutputPathLocks::acquire(&both)
+            .expect("both output locks should be available after their owners are dropped");
+        drop(both_owner);
+
+        remove_output_lock(&csv_path);
+        remove_output_lock(&json_path);
+        fs::remove_dir(&directory).expect("output lock fixture directory should be removable");
+    }
+
+    #[test]
+    fn run_simulation_rejects_busy_output_destinations_before_writing() {
+        let directory = temp_output_path("busy-simulation-output");
+        let csv_path = directory.join("a-trace.csv");
+        let json_path = directory.join("z-summary.json");
+        let output_paths = ResolvedOutputPaths {
+            csv: Some(csv_path.clone()),
+            json: Some(json_path.clone()),
+        };
+        let owner = OutputPathLocks::acquire(&output_paths)
+            .expect("fixture should own both output destinations");
+        let mut config = create_test_config();
+        config.output_csv = Some(csv_path.clone());
+        config.output_json = Some(json_path.clone());
+        let config = validated(config);
+
+        let error = run_simulation(&config)
+            .expect_err("a run should reject destinations owned by another run");
+
+        assert_matches!(
+            error,
+            CdtError::OutputPathBusy {
+                path,
+                format: OutputFormat::Csv,
+            } if path == csv_path.display().to_string()
+        );
+        assert!(!csv_path.exists(), "busy run should not publish CSV output");
+        assert!(
+            !json_path.exists(),
+            "busy run should not publish JSON output"
+        );
+
+        drop(owner);
+        remove_output_lock(&csv_path);
+        remove_output_lock(&json_path);
+        fs::remove_dir(&directory).expect("busy output fixture directory should be removable");
+    }
+
+    #[test]
+    fn staged_outputs_reject_unsupported_destination_before_publish() {
         let csv_path = temp_output_path("rollback-trace.csv");
         let json_path = temp_output_path("rollback-summary.json");
         let output_paths = ResolvedOutputPaths {
@@ -1229,6 +1618,7 @@ mod tests {
             error,
             CdtError::OutputWriteFailed {
                 format: OutputFormat::Json,
+                stage: OutputWriteStage::ValidateDestination,
                 ..
             }
         );
@@ -1242,6 +1632,83 @@ mod tests {
             "staged JSON should be cleaned when commit fails"
         );
         fs::remove_dir(&json_path).expect("blocking JSON directory should be removable");
+    }
+
+    #[test]
+    fn staged_outputs_restore_existing_files_when_later_publish_fails() {
+        let csv_path = temp_output_path("restore-trace.csv");
+        let json_path = temp_output_path("restore-summary.json");
+        let output_paths = ResolvedOutputPaths {
+            csv: Some(csv_path.clone()),
+            json: Some(json_path.clone()),
+        };
+        let staged_outputs = StagedOutputs::new(&output_paths);
+        let csv_temp = staged_outputs
+            .csv
+            .as_ref()
+            .expect("CSV output should be staged")
+            .temp_path
+            .clone();
+        let json_temp = staged_outputs
+            .json
+            .as_ref()
+            .expect("JSON output should be staged")
+            .temp_path
+            .clone();
+        let csv_backup = staged_outputs
+            .csv
+            .as_ref()
+            .expect("CSV output should have a backup path")
+            .backup_path
+            .clone();
+        let json_backup = staged_outputs
+            .json
+            .as_ref()
+            .expect("JSON output should have a backup path")
+            .backup_path
+            .clone();
+        fs::write(&csv_path, "previous trace").expect("previous CSV should write");
+        fs::write(&json_path, "previous summary").expect("previous JSON should write");
+        fs::write(&csv_temp, "replacement trace").expect("staged CSV should write");
+
+        let error = staged_outputs
+            .commit()
+            .expect_err("missing staged JSON should fail after CSV publication");
+
+        assert_matches!(
+            error,
+            CdtError::OutputWriteFailed {
+                format: OutputFormat::Json,
+                stage: OutputWriteStage::Persist,
+                ..
+            }
+        );
+        assert_eq!(
+            fs::read_to_string(&csv_path).expect("previous CSV should be restored"),
+            "previous trace"
+        );
+        assert_eq!(
+            fs::read_to_string(&json_path).expect("previous JSON should be restored"),
+            "previous summary"
+        );
+        assert!(
+            !csv_temp.exists(),
+            "published CSV staging path should be gone"
+        );
+        assert!(
+            !json_temp.exists(),
+            "missing JSON staging path should stay absent"
+        );
+        assert!(
+            !csv_backup.exists(),
+            "restored CSV backup should be consumed"
+        );
+        assert!(
+            !json_backup.exists(),
+            "restored JSON backup should be consumed"
+        );
+        fs::remove_file(&csv_path).expect("restored CSV fixture should be removable");
+        fs::remove_file(&json_path).expect("restored JSON fixture should be removable");
     }
 
     #[test]
@@ -1323,7 +1790,8 @@ mod tests {
                 setting: ConfigurationSetting::Temperature,
                 ref provided_value,
                 ref expected,
-            }) if provided_value == "-1" && expected == "finite and positive"
+            }) if provided_value == "-1"
+                && expected == "finite and positive with a finite reciprocal"
         );
     }
 
@@ -1355,25 +1823,6 @@ mod tests {
     }
 
     #[test]
-    fn test_config_conversions() {
-        let config = create_test_config()
-            .into_validated()
-            .expect("test config should validate");
-
-        let metropolis_config = config.to_metropolis_config();
-        assert_relative_eq!(metropolis_config.temperature(), 1.0);
-        assert_eq!(metropolis_config.steps().get(), 10);
-
-        let action_config = config.to_action_config();
-        assert_relative_eq!(action_config.coupling_0(), 0.0);
-        assert_relative_eq!(action_config.coupling_2(), 0.0);
-        assert_relative_eq!(
-            action_config.cosmological_constant(),
-            DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT
-        );
-    }
-
-    #[test]
     fn test_run_simulation_toroidal_uses_total_vertex_count() {
         // For toroidal topology `config.vertices` is the *total* vertex
         // count.  With vertices=12, timeslices=3 we expect a triangulation
@@ -1383,7 +1832,7 @@ mod tests {
             dimension: Some(2),
             vertices: 12,
             timeslices: 3,
-            volume_profile: None,
+            spatial_vertex_profile: None,
             temperature: 1.0,
             steps: 10,
             thermalization_steps: 5,
@@ -1417,11 +1866,11 @@ mod tests {
     }
 
     #[test]
-    fn test_run_simulation_uses_nonuniform_volume_profile() {
+    fn test_run_simulation_uses_nonuniform_spatial_vertex_profile() {
         let config = CdtConfig {
             vertices: 15,
             timeslices: 3,
-            volume_profile: Some(vec![4, 6, 5]),
+            spatial_vertex_profile: Some(vec![4, 6, 5]),
             steps: 4,
             thermalization_steps: 0,
             measurement_frequency: 1,
@@ -1433,7 +1882,7 @@ mod tests {
 
         assert_eq!(results.triangulation().vertex_count(), 15);
         assert_eq!(results.triangulation().slice_sizes(), &[4, 6, 5]);
-        assert_eq!(results.measurements()[0].volume_profile().len(), 3);
+        assert_eq!(results.measurements()[0].slab_triangle_profile().len(), 3);
         results
             .triangulation()
             .validate()
@@ -1441,12 +1890,12 @@ mod tests {
     }
 
     #[test]
-    fn test_run_simulation_uses_nonuniform_toroidal_volume_profile() {
+    fn test_run_simulation_uses_nonuniform_toroidal_spatial_vertex_profile() {
         let config = CdtConfig {
             vertices: 16,
             timeslices: 4,
             topology: CdtTopology::Toroidal,
-            volume_profile: Some(vec![3, 4, 5, 4]),
+            spatial_vertex_profile: Some(vec![3, 4, 5, 4]),
             steps: 4,
             thermalization_steps: 0,
             measurement_frequency: 1,

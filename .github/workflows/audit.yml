@@ -75,11 +75,11 @@ jobs:
           tool: cargo-audit@${{ steps.cargo_audit_version.outputs.version }}
 
       - name: Run cargo audit
-        run: |
-          cargo audit --json > audit-results.json || true
-          # Show human-readable output as well (reuses cached advisory DB)
-          cargo audit --no-fetch
-        continue-on-error: true
+        run: cargo audit
+
+      - name: Write cargo audit JSON
+        if: always()
+        run: cargo audit --json --no-fetch > audit-results.json
 
       - name: Upload audit results
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

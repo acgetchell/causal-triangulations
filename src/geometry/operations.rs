@@ -88,8 +88,8 @@ where
     B: TriangulationQuery + ?Sized,
     B::VertexHandle: Clone + Eq + Hash,
 {
-    // Map: facet key -> (occurrence count, representative vertex list)
-    type FacetCounts<V> = HashMap<UnorderedSet<V>, (usize, Vec<V>)>;
+    // Map: facet key -> occurrence count. The key retains the representative vertices.
+    type FacetCounts<V> = HashMap<UnorderedSet<V>, usize>;
     let mut facet_counts: FacetCounts<B::VertexHandle> = HashMap::new();
 
     for face in tri.faces() {
@@ -106,11 +106,10 @@ where
         if vertices.len() == 2 {
             for v in &vertices {
                 let facet = vec![v.clone()];
-                let key = UnorderedSet(facet.clone());
                 facet_counts
-                    .entry(key)
-                    .and_modify(|(count, _)| *count += 1)
-                    .or_insert((1, facet));
+                    .entry(UnorderedSet(facet))
+                    .and_modify(|count| *count += 1)
+                    .or_insert(1);
             }
             continue;
         }
@@ -124,17 +123,16 @@ where
                 .map(|(_, v)| v.clone())
                 .collect();
 
-            let key = UnorderedSet(facet.clone());
             facet_counts
-                .entry(key)
-                .and_modify(|(count, _)| *count += 1)
-                .or_insert((1, facet));
+                .entry(UnorderedSet(facet))
+                .and_modify(|count| *count += 1)
+                .or_insert(1);
         }
     }
 
     facet_counts
-        .into_values()
-        .filter_map(|(count, facet)| (count == 1).then_some(facet))
+        .into_iter()
+        .filter_map(|(facet, count)| (count == 1).then_some(facet.0))
         .collect()
 }
 
@@ -225,8 +223,8 @@ pub trait TriangulationOps: TriangulationQuery {
                 Ok((v1, v2)) => {
                     edge_by_vertices.insert(UnorderedPair(v1, v2), edge);
                 }
-                Err(_) => {
-                    log::trace!("boundary_edges: skipping unresolved edge");
+                Err(error) => {
+                    log::trace!("boundary_edges: skipping unresolved edge: {error}");
                 }
             }
         }

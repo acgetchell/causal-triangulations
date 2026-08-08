@@ -46,15 +46,11 @@ pub const DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT: f64 =
 /// * `coupling_2` - Coupling constant κ₂ for triangles
 /// * `cosmological_constant` - Cosmological constant λ
 ///
-/// # Returns
+/// # Errors
 ///
-/// The calculated Regge Action value
-///
-/// # Panics
-///
-/// Panics only if the platform cannot represent a `usize` simplex count as a
-/// finite `f64`. Supported targets represent all `usize` counts as finite
-/// floating-point values, though very large counts may lose integer precision.
+/// Returns [`CdtError::InvalidConfiguration`] when any coupling is non-finite or
+/// when their combined magnitude cannot guarantee a finite action for all
+/// representable simplex counts.
 ///
 /// # Examples
 ///
@@ -62,11 +58,24 @@ pub const DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT: f64 =
 /// use approx::assert_relative_eq;
 /// use causal_triangulations::prelude::action::compute_regge_action;
 ///
-/// let action = compute_regge_action(10, 20, 15, 1.0, 1.0, 0.1);
+/// let action = compute_regge_action(10, 20, 15, 1.0, 1.0, 0.1)?;
 /// assert_relative_eq!(action, -23.0, epsilon = 1e-12);
+/// # Ok::<(), causal_triangulations::CdtError>(())
 /// ```
-#[must_use]
 pub fn compute_regge_action(
+    vertices: usize,
+    edges: usize,
+    triangles: usize,
+    coupling_0: f64,
+    coupling_2: f64,
+    cosmological_constant: f64,
+) -> CdtResult<f64> {
+    let config = ActionConfig::new(coupling_0, coupling_2, cosmological_constant)?;
+    Ok(config.calculate_action(vertices, edges, triangles))
+}
+
+/// Evaluates the action after the couplings have established the finite-range invariant.
+fn compute_regge_action_unchecked(
     vertices: usize,
     edges: usize,
     triangles: usize,
@@ -83,9 +92,10 @@ pub fn compute_regge_action(
 
 /// Validated configuration for CDT action parameters.
 ///
-/// The stored couplings are always finite. Raw action parameters enter through
-/// [`Self::new`] or deserialization, both of which reject NaN and infinite values
-/// before the configuration can be used by action or Metropolis code.
+/// The stored couplings are finite and jointly bounded so evaluating the action
+/// for any representable `usize` simplex counts remains finite. Raw action
+/// parameters enter through [`Self::new`] or deserialization, which establish
+/// that stronger arithmetic invariant before storage.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ActionConfig {
     /// Coupling constant for vertices (κ₀)
@@ -132,7 +142,8 @@ impl ActionConfig {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidConfiguration`] when any coupling is NaN or
-    /// infinite.
+    /// infinite, or when their combined magnitude could overflow action
+    /// evaluation for representable simplex counts.
     ///
     /// # Examples
     ///
@@ -151,6 +162,7 @@ impl ActionConfig {
             ConfigurationSetting::CosmologicalConstant,
             cosmological_constant,
         )?;
+        validate_action_range(coupling_0, coupling_2, cosmological_constant)?;
         Ok(Self::from_validated_parts(
             coupling_0,
             coupling_2,
@@ -243,6 +255,10 @@ impl ActionConfig {
         debug_assert!(self.coupling_0.is_finite());
         debug_assert!(self.coupling_2.is_finite());
         debug_assert!(self.cosmological_constant.is_finite());
+        debug_assert!(
+            maximum_action_magnitude(self.coupling_0, self.coupling_2, self.cosmological_constant)
+                .is_some()
+        );
     }
 
     /// Calculates the action for given simplex counts.
@@ -266,14 +282,23 @@ impl ActionConfig {
     /// ```
     #[must_use]
     pub fn calculate_action(&self, vertices: usize, edges: usize, triangles: usize) -> f64 {
-        compute_regge_action(
+        let action = compute_regge_action_unchecked(
             vertices,
             edges,
             triangles,
             self.coupling_0,
             self.coupling_2,
             self.cosmological_constant,
-        )
+        );
+        debug_assert!(action.is_finite());
+        action
+    }
+
+    /// Returns a conservative upper bound for the magnitude of any action
+    /// representable by this configuration's simplex-count types.
+    pub(crate) fn maximum_action_magnitude(&self) -> f64 {
+        maximum_action_magnitude(self.coupling_0, self.coupling_2, self.cosmological_constant)
+            .expect("validated action couplings must retain a finite magnitude bound")
     }
 }
 
@@ -288,6 +313,40 @@ fn validate_coupling(setting: ConfigurationSetting, value: f64) -> CdtResult<()>
             expected: "finite".to_string(),
         })
     }
+}
+
+/// Computes a conservative finite action bound for all `usize` count triples.
+fn maximum_action_magnitude(
+    coupling_0: f64,
+    coupling_2: f64,
+    cosmological_constant: f64,
+) -> Option<f64> {
+    let maximum_count: f64 = NumCast::from(usize::MAX)?;
+    let coupling_sum = coupling_0.abs() + coupling_2.abs() + cosmological_constant.abs();
+    if !coupling_sum.is_finite() {
+        return None;
+    }
+    let bound = maximum_count * coupling_sum;
+    bound.is_finite().then_some(bound)
+}
+
+/// Rejects jointly finite couplings whose arithmetic range is still unsafe.
+fn validate_action_range(
+    coupling_0: f64,
+    coupling_2: f64,
+    cosmological_constant: f64,
+) -> CdtResult<()> {
+    if maximum_action_magnitude(coupling_0, coupling_2, cosmological_constant).is_some() {
+        return Ok(());
+    }
+
+    Err(CdtError::InvalidConfiguration {
+        setting: ConfigurationSetting::ActionCouplings,
+        provided_value: format!("[{coupling_0}, {coupling_2}, {cosmological_constant}]"),
+        expected:
+            "joint magnitude that keeps action evaluation finite for representable simplex counts"
+                .to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -312,7 +371,8 @@ mod tests {
             coupling_0,
             coupling_2,
             cosmological_constant,
-        );
+        )
+        .expect("finite couplings should produce a finite action");
 
         // Expected: -1.0 * 10 - 1.0 * 15 + 0.1 * 20 = -10 - 15 + 2 = -23
         let expected = -23.0;
@@ -361,6 +421,35 @@ mod tests {
         );
         assert!(ActionConfig::new(f64::INFINITY, 0.0, 0.0).is_err());
     }
+
+    #[test]
+    fn action_config_rejects_finite_couplings_that_can_overflow_actions() {
+        let error = ActionConfig::new(f64::MAX, 0.0, 0.0)
+            .expect_err("finite but unbounded coupling must not enter action evaluation");
+
+        assert!(matches!(
+            error,
+            CdtError::InvalidConfiguration {
+                setting: ConfigurationSetting::ActionCouplings,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn direct_action_calculation_rejects_invalid_couplings() {
+        for couplings in [
+            (f64::NAN, 0.0, 0.0),
+            (0.0, f64::INFINITY, 0.0),
+            (0.0, 0.0, f64::NEG_INFINITY),
+            (f64::MAX, 0.0, 0.0),
+        ] {
+            assert!(
+                compute_regge_action(1, 1, 1, couplings.0, couplings.1, couplings.2).is_err(),
+                "invalid direct-action couplings should be rejected: {couplings:?}"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -382,7 +471,7 @@ mod prop_tests {
             let action = compute_regge_action(
                 vertices, edges, triangles,
                 coupling_0, coupling_2, cosmological_constant
-            );
+            ).expect("bounded proptest couplings should be valid");
 
             prop_assert!(action.is_finite(), "Action must always be finite, got: {}", action);
             prop_assert!(!action.is_nan(), "Action must not be NaN");
@@ -422,7 +511,7 @@ mod prop_tests {
             let action_direct = compute_regge_action(
                 vertices, edges, triangles,
                 coupling_0, coupling_2, cosmological_constant
-            );
+            ).expect("bounded proptest couplings should be valid");
 
             prop_assert!(
                 relative_eq!(action_config, action_direct, epsilon = f64::EPSILON),

@@ -251,7 +251,8 @@ The `ci` recipe directly composes the GitHub-equivalent leaf validators instead 
 - **Python correctness**: pytest over support scripts, including the reusable notebook checker
 - **notebooks**: source notebooks are output-clean, extracted code passes Ruff and ty, and the fast notebook set executes headlessly through the uv-managed
   environment
-- **benchmarks and examples**: benchmark harnesses compile without warnings, and Cargo examples build once before running with stable output markers
+- **benchmarks and examples**: benchmark harnesses compile without warnings, the deterministic allocation contract executes, and Cargo examples build once
+  before running with stable output markers
 
 For non-core changes, run the smallest relevant test or integration crate first and compose each focused final bucket once. For core Rust changes or exact
 GitHub-equivalent evidence, run `just ci` directly rather than pre-running broad bundles that select the same tests.

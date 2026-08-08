@@ -2,8 +2,10 @@
 
 //! Foliation assignment, queries, and CDT simplex classification.
 
-use super::CdtTriangulation;
-use crate::cdt::foliation::{EdgeType, Foliation, FoliationError, SimplexType, classify_simplex};
+use super::{CdtSimplexCounts, CdtTriangulation};
+use crate::cdt::foliation::{
+    EdgeType, Foliation, FoliationError, FoliationVertexDelta, SimplexType, classify_simplex,
+};
 use crate::config::CdtTopology;
 use crate::errors::{
     BackendMutationOperation, BackendRollbackFailure, BackendRollbackFailures, CdtError, CdtResult,
@@ -17,6 +19,28 @@ use crate::geometry::{DelaunayBackend2D, SpacetimeCoordinate};
 use crate::util::f64_band_to_u32;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroU32;
+
+/// Pre-mutation derived state needed to prove and cache one local CDT edit.
+pub struct LocalMoveBaseline {
+    counts: CdtSimplexCounts,
+    slab_triangle_profile: Vec<u32>,
+    removed_profile_slices: Vec<u32>,
+}
+
+/// Count and foliation delta guaranteed by a concrete 2D bistellar edit.
+#[derive(Debug, Clone, Copy)]
+pub enum LocalMoveDelta {
+    Flip,
+    Insert { label: Option<u32> },
+    Remove { label: Option<u32> },
+}
+
+#[derive(Debug, Clone, Copy)]
+struct LocalExpectedCounts {
+    vertices: usize,
+    edges: usize,
+    faces: usize,
+}
 
 impl CdtTriangulation<DelaunayBackend2D> {
     /// Validate foliation consistency.
@@ -135,9 +159,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         let mut neighbor_slices: Vec<HashSet<usize>> = vec![HashSet::new(); num_slices];
         for edge in self.geometry.edges() {
-            let Ok((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
-                continue;
-            };
+            let (v0, v1) = self.geometry.edge_endpoints(&edge).map_err(|error| {
+                geometry_query_error("toroidal temporal wraparound edge", &error)
+            })?;
             let Some(t0) = self.geometry.vertex_data_by_key(v0.vertex_key()) else {
                 continue;
             };
@@ -190,7 +214,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     fn spacelike_adjacency_by_slice(
         &self,
         num_slices: usize,
-    ) -> Vec<HashMap<DelaunayVertexHandle, Vec<DelaunayVertexHandle>>> {
+    ) -> CdtResult<Vec<HashMap<DelaunayVertexHandle, Vec<DelaunayVertexHandle>>>> {
         let mut spacelike_neighbors: Vec<HashMap<DelaunayVertexHandle, Vec<DelaunayVertexHandle>>> =
             vec![HashMap::new(); num_slices];
 
@@ -205,9 +229,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
 
         for edge in self.geometry.edges() {
-            let Ok((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
-                continue;
-            };
+            let (v0, v1) = self
+                .geometry
+                .edge_endpoints(&edge)
+                .map_err(|error| geometry_query_error("spacelike adjacency edge", &error))?;
             let Some(t0) = self.geometry.vertex_data_by_key(v0.vertex_key()) else {
                 continue;
             };
@@ -228,18 +253,19 @@ impl CdtTriangulation<DelaunayBackend2D> {
             spacelike_neighbors[slice].entry(v1).or_default().push(v0);
         }
 
-        spacelike_neighbors
+        Ok(spacelike_neighbors)
     }
 
     /// Validates that every open-boundary spatial slice forms one interval.
     ///
     /// This topology-specific pass underpins [`Self::validate_foliation`]. It
-    /// checks spacelike degrees, path connectivity, coordinate order, and
-    /// adjacent-slab crossings so a successful public validation proves that
-    /// each stored slice is one consistently embedded open interval.
+    /// always checks spacelike degrees and path connectivity. Coordinate order
+    /// and adjacent-slab crossings validate only the initial drawing; evolved
+    /// CDT states are abstract combinatorial triangulations whose backend
+    /// coordinates are not a sampled physical constraint.
     #[expect(
         clippy::too_many_lines,
-        reason = "open-boundary interval validation keeps the slice-degree, path-order, coordinate-order, and slab-crossing diagnostics in one invariant pass"
+        reason = "open-boundary interval validation keeps slice-degree, path-order, and initial-embedding diagnostics in one invariant pass"
     )]
     fn validate_open_boundary_spatial_intervals(&self) -> CdtResult<()> {
         let Some(foliation) = &self.foliation else {
@@ -247,7 +273,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         };
 
         let num_slices = foliation.slice_sizes().len();
-        let spacelike_neighbors = self.spacelike_adjacency_by_slice(num_slices);
+        let spacelike_neighbors = self.spacelike_adjacency_by_slice(num_slices)?;
+        let validate_initial_embedding = self.metadata.modification_count() == 0;
         let mut slice_orders = Vec::with_capacity(num_slices);
 
         for (slice, adjacency) in spacelike_neighbors.into_iter().enumerate() {
@@ -281,8 +308,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     }
                     .into());
                 };
-                let coordinate_order = self.open_boundary_coordinate_order(&[single_vertex])?;
-                slice_orders.push(coordinate_order);
+                if validate_initial_embedding {
+                    let coordinate_order = self.open_boundary_coordinate_order(&[single_vertex])?;
+                    slice_orders.push(coordinate_order);
+                }
                 continue;
             }
 
@@ -355,30 +384,34 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 }
                 .into());
             }
-            let coordinate_order =
-                self.open_boundary_coordinate_order(ordered_vertices.as_slice())?;
-            if !orders_match_with_orientation(ordered_vertices.as_slice(), &coordinate_order) {
-                return Err(FoliationError::OpenBoundarySpatialOrderMismatch {
-                    slice,
-                    path_vertices: ordered_vertices.len(),
-                    coordinate_vertices: coordinate_order.len(),
+            if validate_initial_embedding {
+                let coordinate_order =
+                    self.open_boundary_coordinate_order(ordered_vertices.as_slice())?;
+                if !orders_match_with_orientation(ordered_vertices.as_slice(), &coordinate_order) {
+                    return Err(FoliationError::OpenBoundarySpatialOrderMismatch {
+                        slice,
+                        path_vertices: ordered_vertices.len(),
+                        coordinate_vertices: coordinate_order.len(),
+                    }
+                    .into());
                 }
-                .into());
+                slice_orders.push(coordinate_order);
             }
-            slice_orders.push(coordinate_order);
         }
 
-        self.validate_open_boundary_slab_embedding(&slice_orders)?;
+        if validate_initial_embedding {
+            self.validate_open_boundary_slab_embedding(&slice_orders)?;
+        }
 
         Ok(())
     }
 
     /// Returns the backend x-coordinate order for one open-boundary slice.
     ///
-    /// Open strips use this to ensure the combinatorial spacelike interval and
-    /// displayed spatial embedding describe the same spatial ordering. Evolved
-    /// CDT moves are still abstract bistellar edits, so exact coordinate
-    /// re-embedding is tracked separately from this combinatorial validator.
+    /// Open strips use this during initial-state validation to ensure the
+    /// combinatorial spacelike interval and displayed spatial embedding describe
+    /// the same spatial ordering. Evolved CDT moves are abstract bistellar edits,
+    /// so their labels and connectivity are authoritative instead.
     fn open_boundary_coordinate_order(
         &self,
         vertices: &[DelaunayVertexHandle],
@@ -450,9 +483,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         let mut slab_edges: Vec<Vec<SlabEdge>> = vec![Vec::new(); slice_orders.len() - 1];
         for edge in self.geometry.edges() {
-            let Ok((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
-                continue;
-            };
+            let (v0, v1) = self
+                .geometry
+                .edge_endpoints(&edge)
+                .map_err(|error| geometry_query_error("open-boundary slab edge", &error))?;
             let Some(t0) = self.geometry.vertex_data_by_key(v0.vertex_key()) else {
                 continue;
             };
@@ -470,12 +504,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
             slab_edges[lower_slice].push((lower, upper));
         }
 
-        let slice_positions: Vec<HashMap<DelaunayVertexHandle, usize>> = slice_orders
+        let slice_positions: Vec<HashMap<&DelaunayVertexHandle, usize>> = slice_orders
             .iter()
             .map(|order| {
                 order
                     .iter()
-                    .cloned()
                     .enumerate()
                     .map(|(position, vertex)| (vertex, position))
                     .collect()
@@ -507,7 +540,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         };
 
         let num_slices = foliation.slice_sizes().len();
-        let spacelike_neighbors = self.spacelike_adjacency_by_slice(num_slices);
+        let spacelike_neighbors = self.spacelike_adjacency_by_slice(num_slices)?;
 
         for (slice, adjacency) in spacelike_neighbors.iter().enumerate() {
             let expected_size = foliation.slice_sizes()[slice];
@@ -712,20 +745,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 let target = format!("face {key:?}");
                 let detail = err.to_string();
                 let rollback_failures = rollback_payloads(&mut self.geometry);
-                return if rollback_failures.is_empty() {
-                    Err(CdtError::BackendMutationFailed {
-                        operation,
-                        target,
-                        detail,
-                    })
-                } else {
-                    Err(CdtError::BackendRollbackFailed {
-                        operation,
-                        target,
-                        detail,
-                        rollback_failures,
-                    })
-                };
+                return Err(backend_mutation_error(
+                    operation,
+                    target,
+                    detail,
+                    rollback_failures,
+                ));
             }
         }
 
@@ -735,20 +760,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 let target = format!("vertex {vertex_key:?}");
                 let detail = format!("failed while assigning time label {t}: {err}");
                 let rollback_failures = rollback_payloads(&mut self.geometry);
-                return if rollback_failures.is_empty() {
-                    Err(CdtError::BackendMutationFailed {
-                        operation,
-                        target,
-                        detail,
-                    })
-                } else {
-                    Err(CdtError::BackendRollbackFailed {
-                        operation,
-                        target,
-                        detail,
-                        rollback_failures,
-                    })
-                };
+                return Err(backend_mutation_error(
+                    operation,
+                    target,
+                    detail,
+                    rollback_failures,
+                ));
             }
         }
 
@@ -836,7 +853,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// Returns an empty iterator when no current foliation exists. That includes
     /// the stale-bookkeeping case after geometry mutation but before foliation
-    /// resynchronization.
+    /// resynchronization. Backend label-read failures caused by inconsistent
+    /// live geometry are silently excluded, so a short result is not
+    /// authoritative slice membership; use [`Self::time_label`] when callers
+    /// must surface backend errors.
     ///
     /// # Examples
     ///
@@ -890,7 +910,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// Returns [`CdtError::MeasurementCountOverflow`] if any per-slice triangle
     /// count exceeds the compact `u32` storage used by measurements and scalar
-    /// traces.
+    /// traces. Returns [`CdtError::ValidationFailed`] if a backend face query
+    /// fails while reconstructing the profile.
     ///
     /// # Examples
     ///
@@ -899,13 +920,18 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    ///     assert_eq!(tri.volume_profile()?, vec![6, 6, 0]);
+    ///     assert_eq!(tri.slab_triangle_profile()?, vec![6, 6, 0]);
     ///     Ok(())
     /// }
     /// ```
-    pub fn volume_profile(&self) -> CdtResult<Vec<u32>> {
+    pub fn slab_triangle_profile(&self) -> CdtResult<Vec<u32>> {
+        if let Some(profile) = self.cached_slab_triangle_profile() {
+            return Ok(profile);
+        }
         if !self.has_current_foliation() {
-            return Ok(Vec::new());
+            let profile = Vec::new();
+            self.cache_slab_triangle_profile(profile.clone());
+            return Ok(profile);
         }
 
         let Ok(slice_count) = usize::try_from(self.metadata.time_slices.get()) else {
@@ -914,7 +940,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let mut profile = vec![0_u32; slice_count];
 
         for face in self.geometry.faces() {
-            let Some(slice) = self.face_time_slice(&face) else {
+            let Some(slice) = self.live_face_time_slice(&face)? else {
                 continue;
             };
             let Ok(index) = usize::try_from(slice) else {
@@ -923,10 +949,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
             if let Some(count) = profile.get_mut(index) {
                 *count = count
                     .checked_add(1)
-                    .ok_or_else(volume_profile_count_overflow)?;
+                    .ok_or_else(slab_triangle_profile_count_overflow)?;
             }
         }
 
+        self.cache_slab_triangle_profile(profile.clone());
         Ok(profile)
     }
 
@@ -972,6 +999,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
         } else {
             base_slice.checked_add(1)?
         };
+        if apex_slice == up_apex {
+            return Some(SimplexType::Up);
+        }
         let down_apex = if toroidal {
             if base_slice == 0 {
                 total - 1
@@ -981,55 +1011,63 @@ impl CdtTriangulation<DelaunayBackend2D> {
         } else {
             base_slice.checked_sub(1)?
         };
-        if apex_slice == up_apex {
-            Some(SimplexType::Up)
-        } else if apex_slice == down_apex {
-            Some(SimplexType::Down)
-        } else {
-            None
-        }
+        (apex_slice == down_apex).then_some(SimplexType::Down)
     }
 
-    /// Returns the lower time-slab index assigned to a classifiable CDT face.
-    fn face_time_slice(&self, face: &DelaunayFaceHandle) -> Option<u32> {
-        self.simplex_type(face).ok()??;
-
-        let vertices = self.geometry.face_vertices(face).ok()?;
-        let [v0, v1, v2] = exactly_three(vertices)?;
-
-        let labels = [
-            self.geometry.vertex_data_by_key(v0.vertex_key())?,
-            self.geometry.vertex_data_by_key(v1.vertex_key())?,
-            self.geometry.vertex_data_by_key(v2.vertex_key())?,
-        ];
-
-        match self.metadata.topology {
-            CdtTopology::OpenBoundary => Some(labels[0].min(labels[1]).min(labels[2])),
-            CdtTopology::Toroidal => {
-                let total = self.metadata.time_slices.get();
-
-                let first = labels[0];
-                let mut second = None;
-                for &label in &labels[1..] {
-                    if label != first {
-                        if second.is_some_and(|distinct| distinct != label) {
-                            return None;
-                        }
-                        second = Some(label);
-                    }
-                }
-                let second = second?;
-
-                let next_slice = |slice: u32| slice.checked_add(1).map(|next| next % total);
-                if next_slice(first) == Some(second) {
-                    Some(first)
-                } else if next_slice(second) == Some(first) {
-                    Some(second)
-                } else {
-                    None
-                }
-            }
+    /// Returns a topology-aware simplex type and its lower time slab.
+    fn classify_simplex_with_slab(&self, t0: u32, t1: u32, t2: u32) -> Option<(SimplexType, u32)> {
+        if matches!(self.metadata.topology, CdtTopology::OpenBoundary) {
+            let simplex_type = classify_simplex(Some(t0), Some(t1), Some(t2))?;
+            return Some((simplex_type, t0.min(t1).min(t2)));
         }
+
+        let simplex_type = self.classify_simplex_with_topology(t0, t1, t2)?;
+        let (base_slice, apex_slice) = if t0 == t1 {
+            (t0, t2)
+        } else if t1 == t2 {
+            (t1, t0)
+        } else if t0 == t2 {
+            (t0, t1)
+        } else {
+            return None;
+        };
+        let lower_slab = match simplex_type {
+            SimplexType::Up => base_slice,
+            SimplexType::Down => apex_slice,
+        };
+        Some((simplex_type, lower_slab))
+    }
+
+    /// Reads and classifies one face from live vertex labels in a single backend query.
+    fn live_face_classification(
+        &self,
+        face: &DelaunayFaceHandle,
+    ) -> CdtResult<Option<(SimplexType, u32)>> {
+        let vertices = self
+            .geometry
+            .face_vertices(face)
+            .map_err(|error| geometry_query_error("simplex classification", &error))?;
+        let Some([v0, v1, v2]) = exactly_three(vertices) else {
+            return Ok(None);
+        };
+        if self.foliation.is_none() {
+            return Ok(None);
+        }
+        let labels = [v0, v1, v2].map(|vertex| self.geometry.vertex_data(&vertex));
+        let [t0, t1, t2] = labels.map(|label| {
+            label.map_err(|error| geometry_query_error("simplex vertex label", &error))
+        });
+        let (Some(t0), Some(t1), Some(t2)) = (t0?, t1?, t2?) else {
+            return Ok(None);
+        };
+        Ok(self.classify_simplex_with_slab(t0, t1, t2))
+    }
+
+    /// Returns a face's lower slab from live labels even while aggregate bookkeeping is stale.
+    fn live_face_time_slice(&self, face: &DelaunayFaceHandle) -> CdtResult<Option<u32>> {
+        Ok(self
+            .live_face_classification(face)?
+            .map(|(_, lower_slab)| lower_slab))
     }
 
     /// Returns the causal classification of an edge from endpoint time labels.
@@ -1326,6 +1364,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     pub fn classify_all_simplices(&mut self) -> CdtResult<Option<usize>> {
         if self.foliation.is_none() {
+            self.cache_slab_triangle_profile(Vec::new());
             return Ok(None);
         }
         if !self.has_current_foliation() {
@@ -1334,8 +1373,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         let faces: Vec<_> = self.geometry.faces().collect();
         let mut classifications = Vec::with_capacity(faces.len());
+        let mut slab_triangle_profile = vec![0_u32; self.metadata.time_slices.get() as usize];
         for face in &faces {
-            let Some(ct) = self.simplex_type(face)? else {
+            let Some((ct, slice)) = self.live_face_classification(face)? else {
                 return Err(CdtError::ValidationFailed {
                     check: CdtValidationCheck::SimplexClassification,
                     failure: CdtValidationFailure::NonStrictSimplex {
@@ -1344,6 +1384,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 });
             };
             classifications.push((face.simplex_key(), ct));
+            let count = profile_count_mut(&mut slab_triangle_profile, slice)?;
+            *count = count
+                .checked_add(1)
+                .ok_or_else(slab_triangle_profile_count_overflow)?;
         }
 
         let count = classifications.len();
@@ -1379,20 +1423,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     "failed to clear existing simplex payload before classification: {err}"
                 );
                 let rollback_failures = rollback_simplex_payloads(&mut self.geometry);
-                return if rollback_failures.is_empty() {
-                    Err(CdtError::BackendMutationFailed {
-                        operation,
-                        target,
-                        detail,
-                    })
-                } else {
-                    Err(CdtError::BackendRollbackFailed {
-                        operation,
-                        target,
-                        detail,
-                        rollback_failures,
-                    })
-                };
+                return Err(backend_mutation_error(
+                    operation,
+                    target,
+                    detail,
+                    rollback_failures,
+                ));
             }
         }
         for (key, ct) in classifications {
@@ -1407,26 +1443,20 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     ct.to_i32()
                 );
                 let rollback_failures = rollback_simplex_payloads(&mut self.geometry);
-                return if rollback_failures.is_empty() {
-                    Err(CdtError::BackendMutationFailed {
-                        operation,
-                        target,
-                        detail,
-                    })
-                } else {
-                    Err(CdtError::BackendRollbackFailed {
-                        operation,
-                        target,
-                        detail,
-                        rollback_failures,
-                    })
-                };
+                return Err(backend_mutation_error(
+                    operation,
+                    target,
+                    detail,
+                    rollback_failures,
+                ));
             }
         }
+        self.cache_slab_triangle_profile(slab_triangle_profile);
         Ok(Some(count))
     }
 
     /// Rebuilds foliation bookkeeping from live backend vertex labels after a topology edit.
+    #[cfg(test)]
     pub(crate) fn synchronize_foliation_from_live_labels(&mut self) -> CdtResult<()> {
         if self.foliation.is_none() {
             return Ok(());
@@ -1450,10 +1480,360 @@ impl CdtTriangulation<DelaunayBackend2D> {
             }
         }
     }
+
+    /// Captures the trusted derived state that a local bistellar edit will update.
+    pub(crate) fn begin_local_move(&self) -> CdtResult<LocalMoveBaseline> {
+        Ok(LocalMoveBaseline {
+            counts: self.simplex_counts()?,
+            slab_triangle_profile: self.slab_triangle_profile()?,
+            removed_profile_slices: Vec::with_capacity(4),
+        })
+    }
+
+    /// Records the slab contributions removed by the next primitive edit.
+    ///
+    /// Composite toroidal moves call this before each primitive. Intermediate
+    /// faces therefore cancel naturally against the surviving final-face set.
+    pub(crate) fn record_locally_removed_faces(
+        &self,
+        baseline: &mut LocalMoveBaseline,
+        faces: &[DelaunayFaceHandle],
+    ) -> CdtResult<()> {
+        if self.foliation.is_none() {
+            return Ok(());
+        }
+        for face in faces {
+            let Some(slice) = self.live_face_time_slice(face)? else {
+                return Err(local_move_validation_error(format!(
+                    "removed face {:?} is not a strict CDT simplex",
+                    face.simplex_key()
+                )));
+            };
+            baseline.removed_profile_slices.push(slice);
+        }
+        Ok(())
+    }
+
+    /// Records strict faces removed by a later primitive in a composite move.
+    ///
+    /// A toroidal link split/collapse may create a deliberately non-CDT face
+    /// between its two primitives. Such an intermediate face never contributed
+    /// to the baseline profile and is therefore ignored here; strict surviving
+    /// baseline faces are still subtracted normally.
+    pub(crate) fn record_intermediate_removed_faces(
+        &self,
+        baseline: &mut LocalMoveBaseline,
+        faces: &[DelaunayFaceHandle],
+    ) -> CdtResult<()> {
+        if self.foliation.is_none() {
+            return Ok(());
+        }
+        for face in faces {
+            if let Some(slice) = self.live_face_time_slice(face)? {
+                baseline.removed_profile_slices.push(slice);
+            }
+        }
+        Ok(())
+    }
+
+    /// Finalizes one local move from its mutation receipt.
+    ///
+    /// The backend has already established structural and embedding validity,
+    /// including the Euler topology check.
+    /// This method proves the CDT delta by checking live vertex/face counts,
+    /// updating the one changed foliation count, classifying only newly created
+    /// faces, and reconciling the incremental slab-triangle profile. Debug builds then
+    /// run the global validator as a differential oracle.
+    pub(crate) fn finish_local_move(
+        &mut self,
+        baseline: LocalMoveBaseline,
+        affected_faces: &[DelaunayFaceHandle],
+        delta: LocalMoveDelta,
+    ) -> CdtResult<()> {
+        let expected = local_expected_counts(baseline.counts, delta)?;
+        if self.vertex_count() != expected.vertices || self.face_count() != expected.faces {
+            return Err(local_move_validation_error(format!(
+                "local move count delta mismatch: expected V={}, F={}; got V={}, F={}",
+                expected.vertices,
+                expected.faces,
+                self.vertex_count(),
+                self.face_count()
+            )));
+        }
+
+        self.apply_local_foliation_delta(delta)?;
+        self.validate_touched_spatial_degrees(affected_faces)?;
+        let mut slab_triangle_profile = remove_profile_mass(
+            baseline.slab_triangle_profile,
+            baseline.removed_profile_slices,
+        )?;
+        self.classify_local_faces(&mut slab_triangle_profile, affected_faces)?;
+        self.validate_local_derived_totals(&slab_triangle_profile, expected)?;
+
+        self.cache_edge_count(expected.edges);
+        self.cache_slab_triangle_profile(slab_triangle_profile);
+
+        #[cfg(debug_assertions)]
+        self.validate_after_realized_mutation()?;
+
+        Ok(())
+    }
+
+    /// Validates the spatial-link degrees changed by one local edit.
+    ///
+    /// The pre-mutation state already proved the complete interval or ring. A
+    /// bistellar edit can change degrees only at vertices of its replacement
+    /// faces, so checking this touched set preserves that spatial shape.
+    fn validate_touched_spatial_degrees(
+        &self,
+        affected_faces: &[DelaunayFaceHandle],
+    ) -> CdtResult<()> {
+        let Some(foliation) = &self.foliation else {
+            return Ok(());
+        };
+        let mut touched_vertices = HashSet::with_capacity(affected_faces.len().saturating_mul(3));
+        for face in affected_faces {
+            touched_vertices.extend(
+                self.geometry
+                    .face_vertices(face)
+                    .map_err(|err| geometry_query_error("local face vertices", &err))?,
+            );
+        }
+        for vertex in touched_vertices {
+            let Some(label) = self.geometry.vertex_data_by_key(vertex.vertex_key()) else {
+                return Err(CdtError::ValidationFailed {
+                    check: CdtValidationCheck::FoliationAssignment,
+                    failure: CdtValidationFailure::MissingVertexTimeLabel {
+                        vertex: format!("{:?}", vertex.vertex_key()),
+                    },
+                });
+            };
+            let spatial_degree = self
+                .geometry
+                .incident_edges(&vertex)
+                .map_err(|err| geometry_query_error("local spatial degree", &err))?
+                .filter(|edge| {
+                    self.geometry
+                        .edge_endpoints(edge)
+                        .ok()
+                        .and_then(|(first, second)| {
+                            let neighbor = if first == vertex { second } else { first };
+                            self.geometry.vertex_data_by_key(neighbor.vertex_key())
+                        })
+                        == Some(label)
+                })
+                .count();
+            let slice =
+                usize::try_from(label).map_err(|_| FoliationError::SliceIndexOutOfRange {
+                    slice: label,
+                    num_slices: foliation.slice_sizes().len(),
+                })?;
+            let expected_size = foliation.slice_sizes().get(slice).copied().ok_or_else(|| {
+                FoliationError::SliceIndexOutOfRange {
+                    slice: label,
+                    num_slices: foliation.slice_sizes().len(),
+                }
+            })?;
+            match self.metadata.topology {
+                CdtTopology::Toroidal if spatial_degree != 2 => {
+                    return Err(FoliationError::SpacelikeDegreeViolation {
+                        slice,
+                        vertex: format!("{:?}", vertex.vertex_key()),
+                        observed_degree: spatial_degree,
+                    }
+                    .into());
+                }
+                CdtTopology::OpenBoundary
+                    if (expected_size == 1 && spatial_degree != 0)
+                        || (expected_size > 1 && !matches!(spatial_degree, 1 | 2)) =>
+                {
+                    return Err(FoliationError::SpacelikeOpenSliceDegreeViolation {
+                        slice,
+                        vertex: format!("{:?}", vertex.vertex_key()),
+                        observed_degree: spatial_degree,
+                    }
+                    .into());
+                }
+                CdtTopology::OpenBoundary | CdtTopology::Toroidal => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Applies the move's single-slice vertex delta and marks foliation state current.
+    fn apply_local_foliation_delta(&mut self, delta: LocalMoveDelta) -> CdtResult<()> {
+        if let Some(foliation) = self.foliation.as_mut() {
+            match delta {
+                LocalMoveDelta::Flip => {}
+                LocalMoveDelta::Insert { label: Some(label) } => {
+                    foliation.apply_local_vertex_delta(label, FoliationVertexDelta::Insert)?;
+                }
+                LocalMoveDelta::Remove { label: Some(label) } => {
+                    foliation.apply_local_vertex_delta(label, FoliationVertexDelta::Remove)?;
+                }
+                LocalMoveDelta::Insert { label: None } | LocalMoveDelta::Remove { label: None } => {
+                    return Err(local_move_validation_error(
+                        "foliated volume move did not carry a time-slice label".to_string(),
+                    ));
+                }
+            }
+        }
+        self.mark_foliation_synchronized();
+        Ok(())
+    }
+
+    /// Classifies each unique replacement face and adds it to the affected slab count.
+    fn classify_local_faces(
+        &mut self,
+        slab_triangle_profile: &mut [u32],
+        affected_faces: &[DelaunayFaceHandle],
+    ) -> CdtResult<()> {
+        let mut seen_faces = HashSet::with_capacity(affected_faces.len());
+        for face in affected_faces {
+            let key = face.simplex_key();
+            if !seen_faces.insert(key) || self.foliation.is_none() {
+                continue;
+            }
+            let Some((simplex_type, slice)) = self.live_face_classification(face)? else {
+                return Err(CdtError::ValidationFailed {
+                    check: CdtValidationCheck::SimplexClassification,
+                    failure: CdtValidationFailure::NonStrictSimplex {
+                        face: format!("{key:?}"),
+                    },
+                });
+            };
+            if let Err(err) = self
+                .geometry
+                .set_simplex_data_by_key(key, Some(simplex_type.to_i32()))
+            {
+                return Err(CdtError::BackendMutationFailed {
+                    operation: BackendMutationOperation::SetSimplexDataByKey,
+                    target: format!("face {key:?}"),
+                    detail: err.to_string(),
+                });
+            }
+            let count = profile_count_mut(slab_triangle_profile, slice)?;
+            *count = count
+                .checked_add(1)
+                .ok_or_else(slab_triangle_profile_count_overflow)?;
+        }
+        Ok(())
+    }
+
+    /// Verifies the CDT-owned incremental profile and foliation-size invariants.
+    fn validate_local_derived_totals(
+        &self,
+        slab_triangle_profile: &[u32],
+        expected: LocalExpectedCounts,
+    ) -> CdtResult<()> {
+        if self.foliation.is_some() {
+            let profile_total = slab_triangle_profile
+                .iter()
+                .try_fold(0_usize, |total, &count| total.checked_add(count as usize))
+                .ok_or_else(|| {
+                    local_move_validation_error(
+                        "local slab-triangle-profile total overflowed usize".to_string(),
+                    )
+                })?;
+            if profile_total != expected.faces {
+                return Err(local_move_validation_error(format!(
+                    "local slab-triangle-profile total {profile_total} does not match {} faces",
+                    expected.faces
+                )));
+            }
+            let labeled_vertices = self
+                .foliation
+                .as_ref()
+                .map_or(0, Foliation::labeled_vertex_count);
+            if labeled_vertices != expected.vertices {
+                return Err(FoliationError::SliceSizeSumMismatch {
+                    sum: labeled_vertices,
+                    labeled: expected.vertices,
+                }
+                .into());
+            }
+        }
+
+        Ok(())
+    }
 }
 
-/// Builds the typed measurement overflow reported by [`CdtTriangulation::volume_profile`].
-fn volume_profile_count_overflow() -> CdtError {
+/// Computes the exact nonzero simplex-count result required by one local move family.
+fn local_expected_counts(
+    counts: CdtSimplexCounts,
+    delta: LocalMoveDelta,
+) -> CdtResult<LocalExpectedCounts> {
+    match delta {
+        LocalMoveDelta::Flip => Ok(LocalExpectedCounts {
+            vertices: counts.vertex_count(),
+            edges: counts.edge_count(),
+            faces: counts.triangle_count(),
+        }),
+        LocalMoveDelta::Insert { .. } => Ok(LocalExpectedCounts {
+            vertices: checked_local_count_add(counts.vertex_count(), 1, "vertices")?,
+            edges: checked_local_count_add(counts.edge_count(), 3, "edges")?,
+            faces: checked_local_count_add(counts.triangle_count(), 2, "triangles")?,
+        }),
+        LocalMoveDelta::Remove { .. } => Ok(LocalExpectedCounts {
+            vertices: checked_local_count_sub(counts.vertex_count(), 1, "vertices")?,
+            edges: checked_local_count_sub(counts.edge_count(), 3, "edges")?,
+            faces: checked_local_count_sub(counts.triangle_count(), 2, "triangles")?,
+        }),
+    }
+}
+
+/// Removes the baseline contribution of faces replaced by a local move.
+fn remove_profile_mass(
+    mut slab_triangle_profile: Vec<u32>,
+    removed_profile_slices: Vec<u32>,
+) -> CdtResult<Vec<u32>> {
+    for slice in removed_profile_slices {
+        let count = profile_count_mut(&mut slab_triangle_profile, slice)?;
+        *count = count.checked_sub(1).ok_or_else(|| {
+            local_move_validation_error(format!("removed slab {slice} has no cached triangle mass"))
+        })?;
+    }
+    Ok(slab_triangle_profile)
+}
+
+/// Applies an expected local count increase without permitting overflow.
+fn checked_local_count_add(value: usize, delta: usize, field: &str) -> CdtResult<usize> {
+    value
+        .checked_add(delta)
+        .ok_or_else(|| local_move_validation_error(format!("local {field} count overflowed")))
+}
+
+/// Applies an expected local count decrease while preserving nonzero CDT counts.
+fn checked_local_count_sub(value: usize, delta: usize, field: &str) -> CdtResult<usize> {
+    value
+        .checked_sub(delta)
+        .filter(|&count| count != 0)
+        .ok_or_else(|| local_move_validation_error(format!("local {field} count underflowed")))
+}
+
+/// Resolves a mutable slab count while retaining typed out-of-range diagnostics.
+fn profile_count_mut(profile: &mut [u32], slice: u32) -> CdtResult<&mut u32> {
+    let profile_len = profile.len();
+    usize::try_from(slice)
+        .ok()
+        .and_then(|index| profile.get_mut(index))
+        .ok_or_else(|| {
+            local_move_validation_error(format!(
+                "time slab {slice} is outside slab-triangle profile length {profile_len}"
+            ))
+        })
+}
+
+/// Classifies a failed local proof as an ergodic-move candidate geometry error.
+const fn local_move_validation_error(detail: String) -> CdtError {
+    CdtError::ValidationFailed {
+        check: CdtValidationCheck::ErgodicMoveCandidateGeometry,
+        failure: CdtValidationFailure::ErgodicMoveCandidateGeometry { detail },
+    }
+}
+
+/// Builds the typed measurement overflow reported by [`CdtTriangulation::slab_triangle_profile`].
+fn slab_triangle_profile_count_overflow() -> CdtError {
     CdtError::MeasurementCountOverflow {
         field: MeasurementCountField::Triangles,
         provided_value: usize::try_from(u32::MAX).map_or(usize::MAX, |max| max.saturating_add(1)),
@@ -1469,6 +1849,29 @@ fn geometry_query_error(context: &str, error: &DelaunayError) -> CdtError {
         failure: CdtValidationFailure::BackendGeometry {
             detail: format!("{context} query failed: {error}"),
         },
+    }
+}
+
+/// Preserves an original backend failure and any failures observed while rolling it back.
+fn backend_mutation_error(
+    operation: BackendMutationOperation,
+    target: String,
+    detail: String,
+    rollback_failures: BackendRollbackFailures,
+) -> CdtError {
+    if rollback_failures.is_empty() {
+        CdtError::BackendMutationFailed {
+            operation,
+            target,
+            detail,
+        }
+    } else {
+        CdtError::BackendRollbackFailed {
+            operation,
+            target,
+            detail,
+            rollback_failures,
+        }
     }
 }
 
@@ -1502,8 +1905,8 @@ fn orders_match_with_orientation(
 /// edges while preserving the crossing pair used in public diagnostics.
 fn first_slab_crossing<'a>(
     edges: &'a [SlabEdge],
-    lower_positions: &HashMap<DelaunayVertexHandle, usize>,
-    upper_positions: &HashMap<DelaunayVertexHandle, usize>,
+    lower_positions: &HashMap<&DelaunayVertexHandle, usize>,
+    upper_positions: &HashMap<&DelaunayVertexHandle, usize>,
 ) -> Option<SlabCrossing<'a>> {
     let mut positioned_edges = Vec::with_capacity(edges.len());
     for edge in edges {
@@ -1665,13 +2068,11 @@ mod tests {
         let upper = tri.vertices_at_time(1).collect::<Vec<_>>();
         let lower_positions = lower
             .iter()
-            .cloned()
             .enumerate()
             .map(|(index, vertex)| (vertex, index))
             .collect::<HashMap<_, _>>();
         let upper_positions = upper
             .iter()
-            .cloned()
             .enumerate()
             .map(|(index, vertex)| (vertex, index))
             .collect::<HashMap<_, _>>();
@@ -1704,13 +2105,11 @@ mod tests {
         let upper = tri.vertices_at_time(1).collect::<Vec<_>>();
         let mut lower_positions = lower
             .iter()
-            .cloned()
             .enumerate()
             .map(|(index, vertex)| (vertex, index))
             .collect::<HashMap<_, _>>();
         let mut upper_positions = upper
             .iter()
-            .cloned()
             .enumerate()
             .map(|(index, vertex)| (vertex, index))
             .collect::<HashMap<_, _>>();
@@ -1730,13 +2129,13 @@ mod tests {
             "edges missing lower position data should be skipped rather than reported"
         );
 
-        lower_positions.insert(lower[1].clone(), 0);
+        lower_positions.insert(&lower[1], 0);
         assert!(
             first_slab_crossing(&crossing_edges, &lower_positions, &upper_positions).is_none(),
             "edges with the same lower rank are not ordered crossings"
         );
 
-        lower_positions.insert(lower[1].clone(), 1);
+        lower_positions.insert(&lower[1], 1);
         upper_positions.remove(&upper[3]);
         assert!(
             first_slab_crossing(&crossing_edges, &lower_positions, &upper_positions).is_none(),
@@ -1843,7 +2242,7 @@ mod tests {
         let initial_modification_count = tri.metadata().modification_count;
         let initial_edge_count = tri.edge_count();
         tri.refresh_cache();
-        assert!(tri.cache.edge_count.is_some());
+        assert!(tri.cache.edge_count.get().is_some());
 
         let old_last_modified = tri
             .metadata()
@@ -1863,7 +2262,7 @@ mod tests {
             tri.metadata().modification_count,
             initial_modification_count + 1
         );
-        assert!(tri.cache.edge_count.is_none());
+        assert!(tri.cache.edge_count.get().is_none());
         assert_eq!(tri.edge_count(), initial_edge_count);
         for vh in tri.geometry().vertices() {
             assert!(tri.time_label(&vh).is_ok_and(|label| label.is_some()));
@@ -1951,6 +2350,85 @@ mod tests {
         assert!(tri.vertices_at_time(999).next().is_none());
         for vh in tri.geometry().vertices() {
             assert_eq!(tri.time_label(&vh), Ok(Some(0)));
+        }
+    }
+
+    #[test]
+    fn classification_queries_reject_foreign_handles_with_context() {
+        let source = strict_strip(4, 2);
+        let vertex = source
+            .geometry()
+            .vertices()
+            .next()
+            .expect("strip should contain vertices");
+        let edge = source
+            .geometry()
+            .edges()
+            .next()
+            .expect("strip should contain edges");
+        let face = source
+            .geometry()
+            .faces()
+            .next()
+            .expect("strip should contain faces");
+        let foreign = source.clone();
+        assert!(
+            source
+                .time_label(&vertex)
+                .expect("the source owner should accept its own vertex handle")
+                .is_some()
+        );
+
+        let errors = [
+            (
+                "time label",
+                "vertex",
+                foreign
+                    .time_label(&vertex)
+                    .expect_err("a clone must reject the source owner's vertex handle"),
+            ),
+            (
+                "edge classification",
+                "edge",
+                foreign
+                    .edge_type(&edge)
+                    .expect_err("a clone must reject the source owner's edge handle"),
+            ),
+            (
+                "simplex classification",
+                "face",
+                foreign
+                    .simplex_type(&face)
+                    .expect_err("a clone must reject the source owner's face handle"),
+            ),
+            (
+                "stored simplex classification",
+                "face",
+                foreign
+                    .simplex_type_from_data(&face)
+                    .expect_err("a clone must reject the source owner's face payload handle"),
+            ),
+            (
+                "face edge classification",
+                "face",
+                foreign
+                    .face_edge_types(&face)
+                    .expect_err("a clone must reject the source owner's face handle"),
+            ),
+        ];
+
+        for (context, kind, error) in errors {
+            let CdtError::ValidationFailed { check, failure } = error else {
+                panic!("expected a geometry validation error, received {error:?}");
+            };
+            assert_eq!(check, CdtValidationCheck::Geometry);
+            let CdtValidationFailure::BackendGeometry { detail } = failure else {
+                panic!("expected a backend geometry failure, received {failure:?}");
+            };
+            assert!(
+                detail.contains(&format!("{context} query failed: foreign {kind} handle")),
+                "query error did not preserve its operation and handle kind: {detail}"
+            );
         }
     }
 
@@ -2154,25 +2632,25 @@ mod tests {
     }
 
     #[test]
-    fn volume_profile_counts_temporal_wrap_slab() {
+    fn slab_triangle_profile_counts_temporal_wrap_slab() {
         let tri = CdtTriangulation::from_toroidal_cdt(4, 3).expect("build toroidal CDT");
 
         let profile = tri
-            .volume_profile()
-            .expect("toroidal CDT should have a valid volume profile");
+            .slab_triangle_profile()
+            .expect("toroidal CDT should have a valid slab-triangle profile");
 
         assert_eq!(profile, vec![8, 8, 8]);
         assert_eq!(profile.iter().sum::<u32>(), 24);
     }
 
     #[test]
-    fn volume_profile_is_empty_without_current_foliation() {
+    fn slab_triangle_profile_is_empty_without_current_foliation() {
         let triangulation = CdtTriangulation::from_seeded_points(5, 3, 2, TEST_POINT_SEED)
             .expect("create unfoliated triangulation");
 
         assert!(
             triangulation
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("missing foliation should not fail")
                 .is_empty()
         );
@@ -2193,7 +2671,7 @@ mod tests {
 
         assert!(
             triangulation
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("stale foliation should not fail")
                 .is_empty()
         );

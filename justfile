@@ -208,7 +208,10 @@ action-lint: _ensure-actionlint
 bench:
     cargo bench --workspace
 
-bench-ci:
+allocation-check:
+    cargo bench --profile perf --bench allocation_profile
+
+bench-ci: allocation-check
     cargo bench --profile perf --bench ci_performance_suite
 
 # Compile benchmarks without running them, treating warnings as errors.
@@ -289,7 +292,7 @@ check-fast:
 # CI simulation: flat union of GitHub-equivalent focused validators.
 # All Cargo targets receive the same Clippy coverage as the SARIF workflow;
 # runnable Rust tests and rustdoc doctests remain separate execution evidence.
-ci: action-lint zizmor markdown-check spell-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check test-python notebook-check shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check test-rust-ci test-doc bench-compile examples-validate
+ci: action-lint zizmor markdown-check spell-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check test-python notebook-check shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check test-rust-ci test-doc bench-compile allocation-check examples-validate
     @echo "🎯 CI checks complete!"
 
 # CI with performance baseline
@@ -407,7 +410,8 @@ help-workflows:
     @echo ""
     @echo "Benchmark System:"
     @echo "  just bench              # Run all benchmarks"
-    @echo "  just bench-ci           # Run CI regression benchmarks with the perf profile"
+    @echo "  just allocation-check   # Run deterministic allocation assertions"
+    @echo "  just bench-ci           # Run allocation assertions and CI regression benchmarks"
     @echo "  just bench-compile      # Compile benchmarks without running"
     @echo "  just bench-smoke        # Smoke-test benchmark harnesses with minimal samples"
     @echo "  just bench-test-compile # Compile benches + release integration tests without running"

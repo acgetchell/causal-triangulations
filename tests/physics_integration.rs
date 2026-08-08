@@ -46,11 +46,11 @@ fn assert_physics_pipeline(config: CdtConfig) {
         "accepted moves should mutate the triangulation even when the count-based action is unchanged"
     );
 
-    let profile = results.average_volume_profile();
+    let profile = results.average_slab_triangle_profile();
     assert_eq!(
         profile.len(),
         usize::try_from(config.timeslices().get()).expect("timeslices should fit usize"),
-        "volume profile should cover every time slice"
+        "slab-triangle profile should cover every time slice"
     );
     assert!(
         profile

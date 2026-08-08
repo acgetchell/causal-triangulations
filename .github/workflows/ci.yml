@@ -61,6 +61,9 @@ jobs:
           cache-bin: false # Avoid restoring stale rustup/cargo shims from cache.
       # toolchain, components, etc. are specified in rust-toolchain.toml
 
+      - name: Check declared Rust target
+        run: cargo check --locked --workspace --target ${{ matrix.target }} --all-features --lib --bins
+
       - name: Set up just
         uses: ./.github/actions/setup-just
 

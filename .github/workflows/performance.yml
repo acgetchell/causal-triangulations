@@ -137,6 +137,10 @@ jobs:
             performance-data-${{ runner.os }}-
             performance-baselines-main-
 
+      - name: Verify deterministic allocation contract
+        if: steps.detect_bench.outputs.bench_found == 'true'
+        run: just allocation-check
+
       # For main branch: save baseline after successful benchmarks
       - name: Run benchmarks and save baseline (main branch)
         if: github.ref == 'refs/heads/main' && github.event_name == 'push' && steps.detect_bench.outputs.bench_found == 'true'

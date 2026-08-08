@@ -73,7 +73,7 @@ mod integration_tests {
         assert_eq!(triangulation.metadata().topology(), CdtTopology::Toroidal);
         assert_eq!(triangulation.geometry().euler_characteristic(), 0);
         let initial_profile = triangulation
-            .volume_profile()
+            .slab_triangle_profile()
             .expect("initial toroidal profile should be valid");
         triangulation
             .validate_topology()
@@ -103,10 +103,10 @@ mod integration_tests {
         assert_ne!(
             results
                 .triangulation()
-                .volume_profile()
+                .slab_triangle_profile()
                 .expect("final toroidal profile should be valid"),
             initial_profile,
-            "periodic toroidal volume moves should change the final volume profile"
+            "periodic toroidal volume moves should change the final slab-triangle profile"
         );
         assert_eq!(
             results.triangulation().metadata().topology(),

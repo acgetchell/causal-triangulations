@@ -10,7 +10,7 @@
 //! - Runtime behavior options
 
 use crate::cdt::action::{ActionConfig, DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT};
-use crate::cdt::metropolis::MetropolisConfig;
+use crate::cdt::metropolis::{CdtTarget, MetropolisConfig};
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
 use clap::{ArgGroup, Error as ClapError, Parser, ValueEnum, error::ErrorKind};
 use dirs::home_dir;
@@ -23,8 +23,7 @@ use std::path::{Component, Path, PathBuf};
 /// Topology of the spatial slices in the CDT triangulation.
 ///
 /// Determines the boundary conditions for the simulation:
-/// - [`OpenBoundary`](Self::OpenBoundary) — open-boundary generation; topology
-///   validation accepts disk-like χ = 1 and sphere-like χ = 2 configurations
+/// - [`OpenBoundary`](Self::OpenBoundary) — a finite planar strip with χ = 1
 /// - [`Toroidal`](Self::Toroidal) — periodic in both space and time (S¹×S¹, χ = 0)
 ///
 /// Serde uses the same kebab-case vocabulary as the CLI (`open-boundary`,
@@ -33,8 +32,7 @@ use std::path::{Component, Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum CdtTopology {
-    /// Finite strip with open boundaries (Euler characteristic χ = 1 for
-    /// disk-like or χ = 2 for sphere-like configurations).
+    /// Finite connected planar strip with open boundaries (Euler characteristic χ = 1).
     #[default]
     OpenBoundary,
     /// Periodic in both space and time, forming a torus S¹×S¹ (χ = 0).
@@ -61,7 +59,7 @@ impl fmt::Display for CdtTopology {
 /// action calculation, and Metropolis sampling. Command-line parsing may derive
 /// some of these values from more ergonomic inputs; for example,
 /// `--vertices-per-slice` is converted into the total [`Self::vertices`] count
-/// and `--volume-profile` records explicit per-slice initial spatial volumes.
+/// and `--spatial-vertex-profile` records explicit per-slice initial vertex counts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CdtConfig {
     /// Dimensionality of the triangulation.
@@ -78,12 +76,12 @@ pub struct CdtConfig {
     /// Number of time slices in the initial triangulation.
     pub timeslices: u32,
 
-    /// Optional explicit initial spatial volume profile, in vertices per time slice.
+    /// Optional explicit initial spatial-vertex profile, in vertices per time slice.
     ///
     /// When present, this vector has exactly [`Self::timeslices`] entries and its
     /// sum equals [`Self::vertices`]. It represents general nonuniform CDT
     /// initial data. When absent, initialization uses regular equal-size slices.
-    pub volume_profile: Option<Vec<u32>>,
+    pub spatial_vertex_profile: Option<Vec<u32>>,
 
     /// Temperature for the Metropolis acceptance rule.
     pub temperature: f64,
@@ -160,16 +158,16 @@ pub struct ValidatedCdtConfig {
     metropolis_config: MetropolisConfig,
     vertices: NonZeroU32,
     timeslices: NonZeroU32,
-    initial_volume: ValidatedInitialVolumeData,
+    initial_spatial_vertices: ValidatedInitialSpatialVerticesData,
 }
 
 #[derive(Debug, Clone)]
-enum ValidatedInitialVolumeData {
+enum ValidatedInitialSpatialVerticesData {
     Regular { vertices_per_slice: NonZeroU32 },
     ExplicitProfile(Vec<NonZeroU32>),
 }
 
-/// Validated initial spatial-volume input for CDT construction.
+/// Validated initial spatial-vertex input for CDT construction.
 ///
 /// This lets callers branch on regular equal-slice data versus an explicit
 /// nonuniform profile without rechecking divisibility, slice-count, or per-slice
@@ -178,15 +176,15 @@ enum ValidatedInitialVolumeData {
 /// # Examples
 ///
 /// ```
-/// use causal_triangulations::prelude::config::{CdtConfig, ValidatedInitialVolume};
+/// use causal_triangulations::prelude::config::{CdtConfig, ValidatedInitialSpatialVertices};
 /// use causal_triangulations::prelude::errors::CdtResult;
 /// use std::assert_matches;
 ///
 /// fn main() -> CdtResult<()> {
 ///     let config = CdtConfig::new(16, 4).into_validated()?;
 ///     assert_matches!(
-///         config.initial_volume(),
-///         ValidatedInitialVolume::Regular {
+///         config.initial_spatial_vertices(),
+///         ValidatedInitialSpatialVertices::Regular {
 ///             vertices_per_slice
 ///         } if vertices_per_slice.get() == 4
 ///     );
@@ -194,13 +192,13 @@ enum ValidatedInitialVolumeData {
 /// }
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ValidatedInitialVolume<'a> {
+pub enum ValidatedInitialSpatialVertices<'a> {
     /// Regular equal-size spatial slices.
     Regular {
         /// Number of vertices in each slice.
         vertices_per_slice: NonZeroU32,
     },
-    /// Explicit nonuniform spatial slice volumes.
+    /// Explicit nonuniform spatial slice vertex counts.
     ExplicitProfile(&'a [NonZeroU32]),
 }
 
@@ -229,17 +227,19 @@ impl ValidatedCdtConfig {
         config.ensure_valid()?;
         let vertices = nonzero_config_count(ConfigurationSetting::Vertices, config.vertices)?;
         let timeslices = nonzero_config_count(ConfigurationSetting::Timeslices, config.timeslices)?;
-        let initial_volume = if let Some(profile) = &config.volume_profile {
-            ValidatedInitialVolumeData::ExplicitProfile(
+        let initial_spatial_vertices = if let Some(profile) = &config.spatial_vertex_profile {
+            ValidatedInitialSpatialVerticesData::ExplicitProfile(
                 profile
                     .iter()
                     .copied()
-                    .map(|volume| nonzero_config_count(ConfigurationSetting::VolumeProfile, volume))
+                    .map(|volume| {
+                        nonzero_config_count(ConfigurationSetting::SpatialVertexProfile, volume)
+                    })
                     .collect::<CdtResult<Vec<_>>>()?,
             )
         } else {
             let vertices_per_slice = config.vertices / config.timeslices;
-            ValidatedInitialVolumeData::Regular {
+            ValidatedInitialSpatialVerticesData::Regular {
                 vertices_per_slice: nonzero_config_count(
                     ConfigurationSetting::Vertices,
                     vertices_per_slice,
@@ -261,7 +261,7 @@ impl ValidatedCdtConfig {
             metropolis_config,
             vertices,
             timeslices,
-            initial_volume,
+            initial_spatial_vertices,
         })
     }
 
@@ -365,7 +365,7 @@ impl ValidatedCdtConfig {
         self.timeslices
     }
 
-    /// Returns the optional explicit initial spatial volume profile.
+    /// Returns the optional explicit initial spatial-vertex profile.
     ///
     /// Each returned profile entry is nonzero because [`Self::new`] has already
     /// rejected empty slices.
@@ -380,11 +380,11 @@ impl ValidatedCdtConfig {
     ///     let config = CdtConfig {
     ///         vertices: 15,
     ///         timeslices: 3,
-    ///         volume_profile: Some(vec![4, 6, 5]),
+    ///         spatial_vertex_profile: Some(vec![4, 6, 5]),
     ///         ..CdtConfig::new(15, 3)
     ///     }
     ///     .into_validated()?;
-    ///     let Some(profile) = config.volume_profile() else {
+    ///     let Some(profile) = config.spatial_vertex_profile() else {
     ///         return Ok(());
     ///     };
     ///     assert!(profile.iter().map(|volume| volume.get()).eq([4, 6, 5]));
@@ -392,16 +392,16 @@ impl ValidatedCdtConfig {
     /// }
     /// ```
     #[must_use]
-    pub fn volume_profile(&self) -> Option<&[NonZeroU32]> {
-        match &self.initial_volume {
-            ValidatedInitialVolumeData::Regular { .. } => None,
-            ValidatedInitialVolumeData::ExplicitProfile(profile) => Some(profile),
+    pub fn spatial_vertex_profile(&self) -> Option<&[NonZeroU32]> {
+        match &self.initial_spatial_vertices {
+            ValidatedInitialSpatialVerticesData::Regular { .. } => None,
+            ValidatedInitialSpatialVerticesData::ExplicitProfile(profile) => Some(profile),
         }
     }
 
     /// Returns the nonzero vertices per slice for regular equal-slice initial data.
     ///
-    /// Returns `None` when the configuration uses an explicit volume profile.
+    /// Returns `None` when the configuration uses an explicit spatial-vertex profile.
     ///
     /// # Examples
     ///
@@ -417,13 +417,15 @@ impl ValidatedCdtConfig {
     /// ```
     #[must_use]
     pub const fn regular_vertices_per_slice(&self) -> Option<NonZeroU32> {
-        match &self.initial_volume {
-            ValidatedInitialVolumeData::Regular { vertices_per_slice } => Some(*vertices_per_slice),
-            ValidatedInitialVolumeData::ExplicitProfile(_) => None,
+        match &self.initial_spatial_vertices {
+            ValidatedInitialSpatialVerticesData::Regular { vertices_per_slice } => {
+                Some(*vertices_per_slice)
+            }
+            ValidatedInitialSpatialVerticesData::ExplicitProfile(_) => None,
         }
     }
 
-    /// Returns initial spatial-volume input with validation proof attached.
+    /// Returns initial spatial-vertex input with validation proof attached.
     ///
     /// The returned value is safe to feed directly into CDT constructors because
     /// [`Self::new`] has already checked topology-specific slice constraints.
@@ -431,7 +433,7 @@ impl ValidatedCdtConfig {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::config::{CdtConfig, ValidatedInitialVolume};
+    /// use causal_triangulations::prelude::config::{CdtConfig, ValidatedInitialSpatialVertices};
     /// use causal_triangulations::prelude::errors::CdtResult;
     /// use std::assert_matches;
     ///
@@ -439,29 +441,29 @@ impl ValidatedCdtConfig {
     ///     let config = CdtConfig {
     ///         vertices: 15,
     ///         timeslices: 3,
-    ///         volume_profile: Some(vec![4, 6, 5]),
+    ///         spatial_vertex_profile: Some(vec![4, 6, 5]),
     ///         ..CdtConfig::new(15, 3)
     ///     }
     ///     .into_validated()?;
     ///
     ///     assert_matches!(
-    ///         config.initial_volume(),
-    ///         ValidatedInitialVolume::ExplicitProfile(profile)
+    ///         config.initial_spatial_vertices(),
+    ///         ValidatedInitialSpatialVertices::ExplicitProfile(profile)
     ///             if profile.iter().map(|volume| volume.get()).eq([4, 6, 5])
     ///     );
     ///     Ok(())
     /// }
     /// ```
     #[must_use]
-    pub fn initial_volume(&self) -> ValidatedInitialVolume<'_> {
-        match &self.initial_volume {
-            ValidatedInitialVolumeData::Regular { vertices_per_slice } => {
-                ValidatedInitialVolume::Regular {
+    pub fn initial_spatial_vertices(&self) -> ValidatedInitialSpatialVertices<'_> {
+        match &self.initial_spatial_vertices {
+            ValidatedInitialSpatialVerticesData::Regular { vertices_per_slice } => {
+                ValidatedInitialSpatialVertices::Regular {
                     vertices_per_slice: *vertices_per_slice,
                 }
             }
-            ValidatedInitialVolumeData::ExplicitProfile(profile) => {
-                ValidatedInitialVolume::ExplicitProfile(profile)
+            ValidatedInitialSpatialVerticesData::ExplicitProfile(profile) => {
+                ValidatedInitialSpatialVertices::ExplicitProfile(profile)
             }
         }
     }
@@ -603,7 +605,11 @@ impl ValidatedCdtConfig {
     /// ```
     #[must_use]
     pub const fn to_action_config(&self) -> ActionConfig {
-        to_action_config(&self.config)
+        ActionConfig::from_validated_parts(
+            self.config.coupling_0,
+            self.config.coupling_2,
+            self.config.cosmological_constant,
+        )
     }
 }
 
@@ -621,10 +627,10 @@ impl TryFrom<CdtConfig> for ValidatedCdtConfig {
     author,
     version,
     about = "Run 1+1-dimensional Causal Dynamical Triangulations simulations",
-    long_about = "Run 1+1-dimensional Causal Dynamical Triangulations simulations.\n\nConstruct a foliated CDT triangulation, optionally run the Metropolis move loop, and write CSV trace rows plus JSON summary metadata. Prefer --vertices-per-slice for regular initial data or --volume-profile for explicit nonuniform initial slice volumes; --vertices remains available when the total initial vertex count is already known.",
+    long_about = "Run 1+1-dimensional Causal Dynamical Triangulations simulations.\n\nConstruct a foliated CDT triangulation, optionally run the Metropolis move loop, and write CSV trace rows plus JSON summary metadata. Prefer --vertices-per-slice for regular initial data or --spatial-vertex-profile for explicit nonuniform initial slice vertex counts; --vertices remains available when the total initial vertex count is already known.",
     group = ArgGroup::new("vertex_count")
         .required(true)
-        .args(["vertices", "vertices_per_slice", "volume_profile"])
+        .args(["vertices", "vertices_per_slice", "spatial_vertex_profile"])
 )]
 struct CdtCliArgs {
     #[arg(
@@ -654,7 +660,7 @@ struct CdtCliArgs {
         short,
         long,
         help = "Number of time slices; open-boundary requires at least 2, toroidal at least 3",
-        required_unless_present = "volume_profile",
+        required_unless_present = "spatial_vertex_profile",
         value_parser = clap::value_parser!(u32).range(1..)
     )]
     timeslices: Option<u32>,
@@ -662,12 +668,16 @@ struct CdtCliArgs {
     #[arg(
         long,
         value_name = "N0,N1,...",
-        help = "Explicit vertices per time slice for nonuniform initial spatial volume",
-        long_help = "Explicit vertices per time slice for nonuniform initial spatial volume, for example 8,10,7,9. If --timeslices is also supplied it must match the number of profile entries."
+        help = "Explicit vertices per time slice for a nonuniform initial spatial-vertex profile",
+        long_help = "Explicit vertices per time slice for a nonuniform initial spatial-vertex profile, for example 8,10,7,9. If --timeslices is also supplied it must match the number of profile entries."
     )]
-    volume_profile: Option<String>,
+    spatial_vertex_profile: Option<String>,
 
-    #[arg(long, default_value = "1.0", help = "Positive Metropolis temperature")]
+    #[arg(
+        long,
+        default_value = "1.0",
+        help = "Positive action-scaling parameter T in exp(-S/T); changing it changes the sampled ensemble"
+    )]
     temperature: f64,
 
     #[arg(
@@ -751,18 +761,21 @@ struct CdtCliArgs {
 impl CdtCliArgs {
     /// Converts parsed CLI arguments into the canonical runtime configuration.
     fn into_config(self) -> Result<CdtConfig, ClapError> {
-        let (vertices, timeslices, volume_profile) = if let Some(raw_profile) = self.volume_profile
+        let (vertices, timeslices, spatial_vertex_profile) = if let Some(raw_profile) =
+            self.spatial_vertex_profile
         {
-            let profile = parse_volume_profile(&raw_profile).map_err(|err| {
+            let profile = parse_spatial_vertex_profile(&raw_profile).map_err(|err| {
                 ClapError::raw(
                     ErrorKind::ValueValidation,
-                    format!("invalid --volume-profile: {err}"),
+                    format!("invalid --spatial-vertex-profile: {err}"),
                 )
             })?;
             let profile_slices = u32::try_from(profile.len()).map_err(|err| {
                 ClapError::raw(
                     ErrorKind::ValueValidation,
-                    format!("--volume-profile has too many entries for u32 timeslices: {err}"),
+                    format!(
+                        "--spatial-vertex-profile has too many entries for u32 timeslices: {err}"
+                    ),
                 )
             })?;
             let timeslices = self.timeslices.unwrap_or(profile_slices);
@@ -770,7 +783,7 @@ impl CdtCliArgs {
                 return Err(ClapError::raw(
                     ErrorKind::ValueValidation,
                     format!(
-                        "--timeslices ({timeslices}) must match --volume-profile entry count ({profile_slices})"
+                        "--timeslices ({timeslices}) must match --spatial-vertex-profile entry count ({profile_slices})"
                     ),
                 ));
             }
@@ -778,15 +791,15 @@ impl CdtCliArgs {
                 total.checked_add(volume).ok_or_else(|| {
                     ClapError::raw(
                         ErrorKind::ValueValidation,
-                        "--volume-profile total vertices exceed u32::MAX",
+                        "--spatial-vertex-profile total vertices exceed u32::MAX",
                     )
                 })
             })?;
             (vertices, timeslices, Some(profile))
         } else {
-            let timeslices = self
-                .timeslices
-                .expect("required clap arguments should set timeslices without a volume profile");
+            let timeslices = self.timeslices.expect(
+                "required clap arguments should set timeslices without a spatial-vertex profile",
+            );
             let vertices = if let Some(vertices) = self.vertices {
                 vertices
             } else {
@@ -809,7 +822,7 @@ impl CdtCliArgs {
             dimension: self.dimension,
             vertices,
             timeslices,
-            volume_profile,
+            spatial_vertex_profile,
             temperature: self.temperature,
             steps: self.steps,
             thermalization_steps: self.thermalization_steps,
@@ -847,16 +860,16 @@ pub struct CdtConfigOverrides {
     pub vertices: Option<u32>,
     /// Optional override for the timeslice count.
     pub timeslices: Option<u32>,
-    /// Optional override for the explicit initial spatial volume profile.
+    /// Optional override for the explicit initial spatial-vertex profile.
     ///
     /// `None` leaves the base profile unchanged, `Some(None)` clears it so
     /// regular equal-size slices are used, and `Some(Some(profile))` replaces it
-    /// with explicit per-slice volumes.
+    /// with explicit per-slice vertex counts.
     #[expect(
         clippy::option_option,
         reason = "None=no override, Some(None)=clear profile, Some(Some(v))=set profile"
     )]
-    pub volume_profile: Option<Option<Vec<u32>>>,
+    pub spatial_vertex_profile: Option<Option<Vec<u32>>>,
     /// Optional override for the temperature.
     pub temperature: Option<f64>,
     /// Optional override for the total number of steps.
@@ -926,7 +939,7 @@ impl CdtConfig {
     /// unchanged. When an override value is provided, it replaces the corresponding field in
     /// the returned validated configuration.
     ///
-    /// A provided volume profile is an atomic override for its derived counts:
+    /// A provided spatial-vertex profile is an atomic override for its derived counts:
     /// the returned configuration recomputes `vertices` from the profile sum and
     /// `timeslices` from the profile length, even if those scalar fields were
     /// also present in the override set.
@@ -987,14 +1000,14 @@ impl CdtConfig {
 
         // Profiles are atomic overrides for their derived counts; otherwise a
         // merged config can pair stale vertex/time-slice totals with new slices.
-        match &overrides.volume_profile {
+        match &overrides.spatial_vertex_profile {
             Some(Some(profile)) => {
                 let profile_vertices = profile.iter().try_fold(0_u32, |total, &vertices| {
                     total.checked_add(vertices).ok_or_else(|| {
                         invalid_config(
                             ConfigurationSetting::Vertices,
                             format!("{profile:?}"),
-                            "volume profile sum <= u32::MAX",
+                            "spatial-vertex profile sum <= u32::MAX",
                         )
                     })
                 })?;
@@ -1002,15 +1015,15 @@ impl CdtConfig {
                     invalid_config(
                         ConfigurationSetting::Timeslices,
                         profile.len(),
-                        format!("volume profile length must fit in u32: {err}"),
+                        format!("spatial vertex profile length must fit in u32: {err}"),
                     )
                 })?;
 
                 merged.vertices = profile_vertices;
                 merged.timeslices = profile_timeslices;
-                merged.volume_profile = Some(profile.clone());
+                merged.spatial_vertex_profile = Some(profile.clone());
             }
-            Some(None) => merged.volume_profile = None,
+            Some(None) => merged.spatial_vertex_profile = None,
             None => {}
         }
 
@@ -1194,15 +1207,6 @@ const fn invalid_sim_config_parts(
     }
 }
 
-/// Rejects non-finite action couplings before they can poison action/log-probability math.
-fn validate_coupling(setting: ConfigurationSetting, value: f64) -> CdtResult<()> {
-    if value.is_finite() {
-        Ok(())
-    } else {
-        Err(invalid_config(setting, value, "finite"))
-    }
-}
-
 /// Converts a validated positive configuration count into a [`NonZeroU32`].
 ///
 /// [`ValidatedCdtConfig`] uses this helper after raw [`CdtConfig`] validation so
@@ -1212,24 +1216,27 @@ fn nonzero_config_count(setting: ConfigurationSetting, value: u32) -> CdtResult<
     NonZeroU32::new(value).ok_or_else(|| invalid_config(setting, value, "≥ 1"))
 }
 
-/// Parses a comma-separated spatial volume profile from the CLI.
-fn parse_volume_profile(raw: &str) -> Result<Vec<u32>, String> {
+/// Parses a comma-separated spatial-vertex profile from the CLI.
+fn parse_spatial_vertex_profile(raw: &str) -> Result<Vec<u32>, String> {
     let mut profile = Vec::new();
 
     for (index, entry) in raw.split(',').enumerate() {
         let trimmed = entry.trim();
         if trimmed.is_empty() {
-            return Err(format!("volume profile entry {} is empty", index + 1));
+            return Err(format!(
+                "spatial-vertex profile entry {} is empty",
+                index + 1
+            ));
         }
         let volume = trimmed.parse::<u32>().map_err(|err| {
             format!(
-                "volume profile entry {} ({trimmed}) is not a positive integer: {err}",
+                "spatial-vertex profile entry {} ({trimmed}) is not a positive integer: {err}",
                 index + 1
             )
         })?;
         if volume == 0 {
             return Err(format!(
-                "volume profile entry {} must be at least 1",
+                "spatial-vertex profile entry {} must be at least 1",
                 index + 1
             ));
         }
@@ -1237,7 +1244,7 @@ fn parse_volume_profile(raw: &str) -> Result<Vec<u32>, String> {
     }
 
     if profile.is_empty() {
-        Err("volume profile must contain at least one entry".to_string())
+        Err("spatial-vertex profile must contain at least one entry".to_string())
     } else {
         Ok(profile)
     }
@@ -1255,11 +1262,11 @@ pub(crate) fn validate_schedule(
         Err(error_for(setting, provided_value, expected))
     };
 
-    if !temperature.is_finite() || temperature <= 0.0 {
+    if !temperature.is_finite() || temperature <= 0.0 || !temperature.recip().is_finite() {
         return invalid(
             ConfigurationSetting::Temperature,
             temperature.to_string(),
-            "finite and positive".to_string(),
+            "finite and positive with a finite reciprocal".to_string(),
         );
     }
 
@@ -1312,15 +1319,6 @@ pub(crate) fn validate_schedule(
     Ok(())
 }
 
-/// Builds the action runtime configuration from an already validated raw config.
-const fn to_action_config(config: &CdtConfig) -> ActionConfig {
-    ActionConfig::from_validated_parts(
-        config.coupling_0,
-        config.coupling_2,
-        config.cosmological_constant,
-    )
-}
-
 impl CdtConfig {
     /// Builds a new [`CdtConfig`] from command-line arguments.
     ///
@@ -1353,7 +1351,7 @@ impl CdtConfig {
     ///
     /// Returns [`clap::Error`] when required arguments are missing, when any
     /// value fails Clap validation, when `--vertices-per-slice × --timeslices`
-    /// overflows `u32`, or when `--volume-profile` cannot be parsed or does not
+    /// overflows `u32`, or when `--spatial-vertex-profile` cannot be parsed or does not
     /// match an explicitly supplied `--timeslices` count.
     ///
     /// # Examples
@@ -1405,7 +1403,7 @@ impl CdtConfig {
             dimension: Some(2),
             vertices,
             timeslices,
-            volume_profile: None,
+            spatial_vertex_profile: None,
             temperature: 1.0,
             steps: 1000,
             thermalization_steps: 100,
@@ -1450,7 +1448,7 @@ impl CdtConfig {
     /// action couplings are non-finite, or if topology constraints on time
     /// slices, total vertices, or per-slice vertices are not satisfied. Regular
     /// equal-slice initialization requires `vertices` to be divisible by
-    /// `timeslices`; explicit [`Self::volume_profile`] initialization instead
+    /// `timeslices`; explicit [`Self::spatial_vertex_profile`] initialization instead
     /// requires the profile length and sum to match the configured counts.
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
     /// temperature or measurement schedule is invalid.
@@ -1487,12 +1485,8 @@ impl CdtConfig {
             return Err(invalid_config(ConfigurationSetting::Dimension, dim, "2"));
         }
 
-        validate_coupling(ConfigurationSetting::Coupling0, self.coupling_0)?;
-        validate_coupling(ConfigurationSetting::Coupling2, self.coupling_2)?;
-        validate_coupling(
-            ConfigurationSetting::CosmologicalConstant,
-            self.cosmological_constant,
-        )?;
+        let action_config =
+            ActionConfig::new(self.coupling_0, self.coupling_2, self.cosmological_constant)?;
 
         self.validate_volume_constraints()?;
 
@@ -1502,10 +1496,12 @@ impl CdtConfig {
             self.thermalization_steps,
             self.measurement_frequency,
             invalid_sim_config_parts,
-        )
+        )?;
+        CdtTarget::new(action_config, self.temperature)?;
+        Ok(())
     }
 
-    /// Validates topology-specific initial volume constraints.
+    /// Validates topology-specific initial spatial-vertex constraints.
     ///
     /// Regular configurations require equal slice divisibility and minimum
     /// per-slice volume; explicit profiles are delegated to the profile-aware
@@ -1524,8 +1520,8 @@ impl CdtConfig {
             ));
         }
 
-        if let Some(profile) = &self.volume_profile {
-            return self.validate_explicit_volume_profile(
+        if let Some(profile) = &self.spatial_vertex_profile {
+            return self.validate_explicit_spatial_vertex_profile(
                 profile,
                 minimum_vertices_per_slice,
                 topology_label,
@@ -1568,11 +1564,11 @@ impl CdtConfig {
         Ok(())
     }
 
-    /// Validates that an explicit volume profile matches configured counts.
+    /// Validates that an explicit spatial-vertex profile matches configured counts.
     ///
     /// This checks profile length, per-slice minima, sum overflow, and agreement
     /// with the top-level total vertex count before construction begins.
-    fn validate_explicit_volume_profile(
+    fn validate_explicit_spatial_vertex_profile(
         &self,
         profile: &[u32],
         minimum_vertices_per_slice: u32,
@@ -1582,12 +1578,12 @@ impl CdtConfig {
             invalid_config_parts(
                 ConfigurationSetting::Timeslices,
                 self.timeslices.to_string(),
-                format!("must fit usize for volume profile validation: {err}"),
+                format!("must fit usize for spatial-vertex profile validation: {err}"),
             )
         })?;
         if profile.len() != expected_len {
             return Err(invalid_config_parts(
-                ConfigurationSetting::VolumeProfile,
+                ConfigurationSetting::SpatialVertexProfile,
                 format!("{} entries", profile.len()),
                 format!("{} entries for configured timeslices", self.timeslices),
             ));
@@ -1597,14 +1593,14 @@ impl CdtConfig {
         for (slice, &volume) in profile.iter().enumerate() {
             if volume < minimum_vertices_per_slice {
                 return Err(invalid_config_parts(
-                    ConfigurationSetting::VolumeProfile,
+                    ConfigurationSetting::SpatialVertexProfile,
                     format!("slice {slice} has {volume}"),
                     format!("each slice ≥ {minimum_vertices_per_slice} for {topology_label}"),
                 ));
             }
             total = total.checked_add(volume).ok_or_else(|| {
                 invalid_config_parts(
-                    ConfigurationSetting::VolumeProfile,
+                    ConfigurationSetting::SpatialVertexProfile,
                     format!("{profile:?}"),
                     "sum must fit in u32".to_string(),
                 )
@@ -1615,7 +1611,7 @@ impl CdtConfig {
             return Err(invalid_config_parts(
                 ConfigurationSetting::Vertices,
                 self.vertices.to_string(),
-                format!("sum of volume_profile ({total})"),
+                format!("sum of spatial_vertex_profile ({total})"),
             ));
         }
 
@@ -1644,7 +1640,7 @@ impl TestConfig {
             dimension: Some(2),
             vertices: 16,
             timeslices: 2,
-            volume_profile: None,
+            spatial_vertex_profile: None,
             temperature: 1.0,
             steps: 10,
             thermalization_steps: 2,
@@ -1676,7 +1672,7 @@ impl TestConfig {
             dimension: Some(2),
             vertices: 64,
             timeslices: 4,
-            volume_profile: None,
+            spatial_vertex_profile: None,
             temperature: 1.0,
             steps: 100,
             thermalization_steps: 20,
@@ -1708,7 +1704,7 @@ impl TestConfig {
             dimension: Some(2),
             vertices: 256,
             timeslices: 8,
-            volume_profile: None,
+            spatial_vertex_profile: None,
             temperature: 1.0,
             steps: 1000,
             thermalization_steps: 100,
@@ -1850,7 +1846,7 @@ mod tests {
     }
 
     #[test]
-    fn validated_config_carries_initial_volume_proof() {
+    fn validated_config_carries_initial_spatial_vertex_proof() {
         let regular = CdtConfig::new(64, 4)
             .into_validated()
             .expect("regular config should validate");
@@ -1862,8 +1858,8 @@ mod tests {
             Some(16)
         );
         assert_matches!(
-            regular.initial_volume(),
-            ValidatedInitialVolume::Regular {
+            regular.initial_spatial_vertices(),
+            ValidatedInitialSpatialVertices::Regular {
                 vertices_per_slice
             } if vertices_per_slice.get() == 16
         );
@@ -1871,7 +1867,7 @@ mod tests {
         let profiled = CdtConfig {
             vertices: 15,
             timeslices: 3,
-            volume_profile: Some(vec![4, 6, 5]),
+            spatial_vertex_profile: Some(vec![4, 6, 5]),
             ..CdtConfig::new(15, 3)
         }
         .into_validated()
@@ -1880,15 +1876,15 @@ mod tests {
         assert_eq!(profiled.regular_vertices_per_slice(), None);
         assert!(
             profiled
-                .volume_profile()
+                .spatial_vertex_profile()
                 .expect("explicit profile should be present")
                 .iter()
                 .map(|volume| volume.get())
                 .eq([4, 6, 5])
         );
         assert_matches!(
-            profiled.initial_volume(),
-            ValidatedInitialVolume::ExplicitProfile(profile)
+            profiled.initial_spatial_vertices(),
+            ValidatedInitialSpatialVertices::ExplicitProfile(profile)
                 if profile.iter().map(|volume| volume.get()).eq([4, 6, 5])
         );
     }
@@ -1907,7 +1903,7 @@ mod tests {
             ValidatedCdtConfig::try_from(raw.clone()).expect("toroidal config should validate");
 
         assert_eq!(validated.config().vertices, 12);
-        assert_eq!(validated.volume_profile(), None);
+        assert_eq!(validated.spatial_vertex_profile(), None);
         assert_eq!(validated.topology(), CdtTopology::Toroidal);
         assert!(!validated.simulate());
         assert_eq!(
@@ -1968,7 +1964,19 @@ mod tests {
                 expected,
             }) if setting == ConfigurationSetting::Temperature
                 && provided_value == "-1"
-                && expected == "finite and positive"
+                && expected == "finite and positive with a finite reciprocal"
+        );
+
+        let incompatible_action_temperature = CdtConfig {
+            temperature: f64::MIN_POSITIVE,
+            ..CdtConfig::new(36, 3)
+        };
+        assert_matches!(
+            incompatible_action_temperature.into_validated(),
+            Err(CdtError::InvalidSimulationConfiguration {
+                setting: ConfigurationSetting::Temperature,
+                ..
+            })
         );
 
         let invalid_measurement_frequency = CdtConfig {
@@ -2316,11 +2324,11 @@ mod tests {
     }
 
     #[test]
-    fn test_config_validation_open_boundary_volume_profile() {
+    fn test_config_validation_open_boundary_spatial_vertex_profile() {
         let valid_profile = CdtConfig {
             vertices: 15,
             timeslices: 3,
-            volume_profile: Some(vec![4, 6, 5]),
+            spatial_vertex_profile: Some(vec![4, 6, 5]),
             ..CdtConfig::new(12, 3)
         };
         assert!(
@@ -2331,7 +2339,7 @@ mod tests {
         let mismatched_sum = CdtConfig {
             vertices: 14,
             timeslices: 3,
-            volume_profile: Some(vec![4, 6, 5]),
+            spatial_vertex_profile: Some(vec![4, 6, 5]),
             ..CdtConfig::new(12, 3)
         };
         assert_matches!(
@@ -2342,13 +2350,13 @@ mod tests {
                 expected,
             }) if setting == ConfigurationSetting::Vertices
                 && provided_value == "14"
-                && expected == "sum of volume_profile (15)"
+                && expected == "sum of spatial_vertex_profile (15)"
         );
 
         let mismatched_len = CdtConfig {
             vertices: 15,
             timeslices: 4,
-            volume_profile: Some(vec![4, 6, 5]),
+            spatial_vertex_profile: Some(vec![4, 6, 5]),
             ..CdtConfig::new(16, 4)
         };
         assert_matches!(
@@ -2357,19 +2365,19 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == ConfigurationSetting::VolumeProfile
+            }) if setting == ConfigurationSetting::SpatialVertexProfile
                 && provided_value == "3 entries"
                 && expected == "4 entries for configured timeslices"
         );
     }
 
     #[test]
-    fn test_config_validation_toroidal_volume_profile_minimum_slice_size() {
+    fn test_config_validation_toroidal_spatial_vertex_profile_minimum_slice_size() {
         let valid_profile = CdtConfig {
             vertices: 16,
             timeslices: 4,
             topology: CdtTopology::Toroidal,
-            volume_profile: Some(vec![3, 4, 5, 4]),
+            spatial_vertex_profile: Some(vec![3, 4, 5, 4]),
             ..CdtConfig::new(16, 4)
         };
         assert!(valid_profile.into_validated().is_ok());
@@ -2378,7 +2386,7 @@ mod tests {
             vertices: 11,
             timeslices: 4,
             topology: CdtTopology::Toroidal,
-            volume_profile: Some(vec![3, 2, 3, 3]),
+            spatial_vertex_profile: Some(vec![3, 2, 3, 3]),
             ..CdtConfig::new(12, 4)
         };
         assert_matches!(
@@ -2387,31 +2395,31 @@ mod tests {
                 setting,
                 provided_value,
                 expected,
-            }) if setting == ConfigurationSetting::VolumeProfile
+            }) if setting == ConfigurationSetting::SpatialVertexProfile
                 && provided_value == "slice 1 has 2"
                 && expected == "each slice ≥ 3 for toroidal topology"
         );
     }
 
     #[test]
-    fn test_try_from_args_derives_counts_from_volume_profile() {
-        let config = CdtConfig::try_from_args(["cdt", "--volume-profile", "4, 6,5"])
-            .expect("volume profile CLI should derive counts");
+    fn test_try_from_args_derives_counts_from_spatial_vertex_profile() {
+        let config = CdtConfig::try_from_args(["cdt", "--spatial-vertex-profile", "4, 6,5"])
+            .expect("spatial-vertex profile CLI should derive counts");
 
         assert_eq!(config.vertices, 15);
         assert_eq!(config.timeslices, 3);
-        assert_eq!(config.volume_profile, Some(vec![4, 6, 5]));
+        assert_eq!(config.spatial_vertex_profile, Some(vec![4, 6, 5]));
     }
 
     #[test]
-    fn test_try_from_args_rejects_malformed_volume_profile() {
-        let error = CdtConfig::try_from_args(["cdt", "--volume-profile", "4,,5"])
+    fn test_try_from_args_rejects_malformed_spatial_vertex_profile() {
+        let error = CdtConfig::try_from_args(["cdt", "--spatial-vertex-profile", "4,,5"])
             .expect_err("empty profile entries should be rejected");
 
         assert!(
-            error
-                .to_string()
-                .contains("invalid --volume-profile: volume profile entry 2 is empty"),
+            error.to_string().contains(
+                "invalid --spatial-vertex-profile: spatial-vertex profile entry 2 is empty"
+            ),
             "{error}"
         );
     }
@@ -2475,7 +2483,7 @@ mod tests {
         let base = CdtConfig::new(10, 2);
         let overrides = CdtConfigOverrides {
             timeslices: Some(5),
-            volume_profile: Some(Some(vec![4, 6, 5])),
+            spatial_vertex_profile: Some(Some(vec![4, 6, 5])),
             steps: Some(250),
             thermalization_steps: Some(25),
             measurement_frequency: Some(5),
@@ -2496,7 +2504,7 @@ mod tests {
 
         assert_eq!(merged.vertices, 15);
         assert_eq!(merged.timeslices, 3);
-        assert_eq!(merged.volume_profile, Some(vec![4, 6, 5]));
+        assert_eq!(merged.spatial_vertex_profile, Some(vec![4, 6, 5]));
         assert_eq!(merged.steps, 250);
         assert_eq!(merged.thermalization_steps, 25);
         assert_eq!(merged.measurement_frequency, 5);
@@ -2529,15 +2537,15 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_with_override_can_clear_volume_profile() {
+    fn test_merge_with_override_can_clear_spatial_vertex_profile() {
         let base = CdtConfig {
             vertices: 15,
             timeslices: 3,
-            volume_profile: Some(vec![4, 6, 5]),
+            spatial_vertex_profile: Some(vec![4, 6, 5]),
             ..CdtConfig::new(12, 3)
         };
         let overrides = CdtConfigOverrides {
-            volume_profile: Some(None),
+            spatial_vertex_profile: Some(None),
             ..CdtConfigOverrides::default()
         };
 
@@ -2546,7 +2554,7 @@ mod tests {
             .expect("override merge should succeed");
         let merged = merged.config();
 
-        assert_eq!(merged.volume_profile, None);
+        assert_eq!(merged.spatial_vertex_profile, None);
         assert_eq!(merged.vertices, 15);
         assert_eq!(merged.timeslices, 3);
     }
@@ -2568,10 +2576,10 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_with_override_rejects_volume_profile_vertex_overflow() {
+    fn test_merge_with_override_rejects_spatial_vertex_profile_overflow() {
         let base = CdtConfig::new(10, 2);
         let overrides = CdtConfigOverrides {
-            volume_profile: Some(Some(vec![u32::MAX, 1])),
+            spatial_vertex_profile: Some(Some(vec![u32::MAX, 1])),
             ..CdtConfigOverrides::default()
         };
 
@@ -2584,7 +2592,7 @@ mod tests {
                 ref provided_value,
                 ref expected,
             }) if provided_value == "[4294967295, 1]"
-                && expected == "volume profile sum <= u32::MAX"
+                && expected == "spatial-vertex profile sum <= u32::MAX"
         );
     }
 

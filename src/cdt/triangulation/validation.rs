@@ -47,6 +47,7 @@ pub enum CdtValidationProfile {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EmbeddingValidationState {
     Required,
+    #[cfg(debug_assertions)]
     AlreadyValidated,
 }
 
@@ -247,6 +248,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// contract. A foliated move still enters the evolved profile with explicit
     /// evidence that its embedding predicate has already passed. Raw unfoliated
     /// geometry experiments instead retain their geometry/topology-only contract.
+    #[cfg(debug_assertions)]
     pub(crate) fn validate_after_realized_mutation(&self) -> CdtResult<()> {
         if self.foliation.is_none() {
             return self.validate_unfoliated_geometry(EmbeddingValidationState::AlreadyValidated);

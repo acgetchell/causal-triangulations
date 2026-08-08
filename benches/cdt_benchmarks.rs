@@ -13,7 +13,7 @@
 mod benchmark_support;
 
 use causal_triangulations::prelude::action::ActionConfig;
-use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveType};
+use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveResult, MoveType};
 use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
 use causal_triangulations::prelude::triangulation::{CdtTriangulation2D, TriangulationQuery};
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -227,9 +227,32 @@ fn bench_action_calculations(c: &mut Criterion) {
 fn bench_ergodic_moves(c: &mut Criterion) {
     let mut group = c.benchmark_group("ergodic_moves");
 
-    let seed_triangulation = || {
-        CdtTriangulation2D::from_cdt_strip(4, 3).or_abort(SetupOperation::BuildCdtBenchmarkStrip)
+    let open_fixture =
+        CdtTriangulation2D::from_cdt_strip(4, 3).or_abort(SetupOperation::BuildCdtBenchmarkStrip);
+    let insertion_fixture = CdtTriangulation2D::from_toroidal_cdt(8, 8)
+        .or_abort(SetupOperation::BuildCdtBenchmarkStrip);
+    let successful_seed = |triangulation: &CdtTriangulation2D, move_type| {
+        (0_u64..=4_096)
+            .find(|&seed| {
+                let mut probe = triangulation.clone();
+                let mut ergodics = ErgodicsSystem::with_seed(seed);
+                let result = match move_type {
+                    MoveType::Move13Add => ergodics.attempt_13_move(&mut probe),
+                    MoveType::Move31Remove => ergodics.attempt_31_move(&mut probe),
+                    MoveType::Move22 | MoveType::EdgeFlip => unreachable!(),
+                };
+                result == MoveResult::Success
+            })
+            .or_abort("find a successful deterministic volume-move benchmark seed")
     };
+    let insertion_seed = successful_seed(&insertion_fixture, MoveType::Move13Add);
+    let mut removal_fixture = insertion_fixture.clone();
+    let mut insertion = ErgodicsSystem::with_seed(insertion_seed);
+    let insertion_result = insertion.attempt_13_move(&mut removal_fixture);
+    (insertion_result == MoveResult::Success)
+        .then_some(())
+        .or_abort("apply the verified insertion benchmark seed");
+    let removal_seed = successful_seed(&removal_fixture, MoveType::Move31Remove);
 
     // Benchmark different move types
     let move_types = [
@@ -240,12 +263,17 @@ fn bench_ergodic_moves(c: &mut Criterion) {
     ];
 
     for move_type in move_types {
+        let (fixture, move_seed) = match move_type {
+            MoveType::Move13Add => (&insertion_fixture, insertion_seed),
+            MoveType::Move31Remove => (&removal_fixture, removal_seed),
+            MoveType::Move22 | MoveType::EdgeFlip => (&open_fixture, BENCH_SEED),
+        };
         group.bench_with_input(
             BenchmarkId::new("move", format!("{move_type:?}")),
             &move_type,
             |b, &move_type| {
                 b.iter_batched(
-                    || (ErgodicsSystem::with_seed(BENCH_SEED), seed_triangulation()),
+                    || (ErgodicsSystem::with_seed(move_seed), fixture.clone()),
                     |(mut ergodics, mut triangulation)| {
                         let result = match move_type {
                             MoveType::Move22 => ergodics.attempt_22_move(&mut triangulation),
@@ -276,7 +304,7 @@ fn bench_ergodic_moves(c: &mut Criterion) {
     // Benchmark random move attempt (needs fresh triangulation each time)
     group.bench_function("random_move_attempt", |b| {
         b.iter_batched(
-            || (ErgodicsSystem::with_seed(BENCH_SEED), seed_triangulation()),
+            || (ErgodicsSystem::with_seed(BENCH_SEED), open_fixture.clone()),
             |(mut ergodics, mut triangulation)| {
                 let result = ergodics.attempt_random_move(&mut triangulation);
                 black_box(result)
@@ -348,41 +376,41 @@ fn bench_simulation_analysis(c: &mut Criterion) {
         });
     });
 
-    group.bench_function("average_volume_profile", |b| {
+    group.bench_function("average_slab_triangle_profile", |b| {
         b.iter(|| {
-            let profile = results.average_volume_profile();
+            let profile = results.average_slab_triangle_profile();
             black_box(profile)
         });
     });
 
-    group.bench_function("volume_fluctuations", |b| {
+    group.bench_function("slab_triangle_fluctuations", |b| {
         b.iter(|| {
-            let fluctuations = results.volume_fluctuations();
+            let fluctuations = results.slab_triangle_fluctuations();
             black_box(fluctuations)
         });
     });
 
-    group.bench_function("hausdorff_dimension_estimate", |b| {
+    group.bench_function("all_scale_effective_hausdorff_slope", |b| {
         b.iter(|| {
             let estimate = results
-                .hausdorff_dimension_estimate()
+                .all_scale_effective_hausdorff_slope()
                 .or_abort(SetupOperation::ReadTriangulationAdjacency);
             black_box(estimate)
         });
     });
 
-    group.bench_function("spectral_dimension_estimate", |b| {
+    group.bench_function("short_time_effective_spectral_dimension", |b| {
         b.iter(|| {
             let estimate = results
-                .spectral_dimension_estimate()
+                .short_time_effective_spectral_dimension()
                 .or_abort(SetupOperation::ReadTriangulationAdjacency);
             black_box(estimate)
         });
     });
 
-    group.bench_function("equilibrium_measurements", |b| {
+    group.bench_function("post_thermalization_measurements", |b| {
         b.iter(|| {
-            let measurements = results.equilibrium_measurements();
+            let measurements = results.post_thermalization_measurements();
             black_box(measurements)
         });
     });
@@ -395,12 +423,14 @@ fn bench_cache_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("cache_operations");
 
     group.bench_function("refresh_cache", |b| {
-        b.iter(|| {
-            let mut triangulation =
-                CdtTriangulation2D::from_cdt_strip(10, 5).or_abort(SetupOperation::CreateCdtStrip);
-            triangulation.refresh_cache();
-            black_box(triangulation)
-        });
+        b.iter_batched(
+            || CdtTriangulation2D::from_cdt_strip(10, 5).or_abort(SetupOperation::CreateCdtStrip),
+            |mut triangulation| {
+                triangulation.refresh_cache();
+                black_box(triangulation)
+            },
+            BatchSize::SmallInput,
+        );
     });
 
     group.bench_function("metadata_cache_invalidation", |b| {

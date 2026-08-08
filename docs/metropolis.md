@@ -83,6 +83,8 @@ In-memory continuation and Serde round trips produced and consumed by the same b
 their representation includes internal state from `causal-triangulations`, `delaunay`, and `markov-chain-monte-carlo`, and compatibility is not guaranteed
 across crate or dependency upgrades. Read a serialized checkpoint with the same build that wrote it, or with a release that explicitly documents checkpoint
 compatibility. In particular, checkpoints written through Delaunay 0.7 cannot be deserialized after the Delaunay 0.8 upgrade.
+Checkpoints written before `initial_vertex_count` became required cannot be read by this release and must be regenerated; the field remains required because it
+reconstructs the initial `SimulationEvent::Created` vertex count rather than guessing from the final triangulation.
 
 Use trace CSV and JSON summary exports for durable cross-version analysis artifacts. A future CDT-owned, versioned checkpoint wire format is tracked in
 [`causal-triangulations#218`](https://github.com/acgetchell/causal-triangulations/issues/218).
@@ -100,8 +102,8 @@ therefore exports one row per completed step, not one row per scheduled measurem
 
 The fixed upstream columns are `chain_id`, `step`, `accepted`, `proposed`, and `log_prob`. CDT adds numeric observable columns for the current action,
 vertex/edge/triangle counts, stable move-family code, action delta and before/after action fields with presence flags, optional seed split into exactly
-representable `u32` halves, and zero-filled `volume_profile_*` columns. The `proposed` column distinguishes no-site/no-plan self-loops from concrete proposals
-that were rejected by Metropolis-Hastings or CDT-local proposal checks.
+representable `u32` halves, and zero-filled `slab_triangle_profile_*` columns. The `proposed` column distinguishes no-site/no-plan self-loops from concrete
+proposals that were rejected by Metropolis-Hastings or CDT-local proposal checks.
 
 CSV is the core export format so downstream tools such as Polars can load the data without coupling the crate to a dataframe or Parquet dependency. Plotting,
 Parquet conversion, and wider ensemble analysis belong downstream of this typed trace export.
@@ -125,24 +127,24 @@ current step:
 q(current | proposed) / q(proposed | current)
 ```
 
-For the current sampler, move families are selected with equal probability. Once a move family is selected, the kernel chooses uniformly among its valid local
-application sites. For a concrete transition from `current` to `proposed`:
+Under the default `UniformCdtMoveFamilyPolicy`, move families are selected with equal probability. Once a move family is selected, the kernel chooses uniformly
+among its offered local application sites. For a successful concrete proposal from `current` to `proposed`:
 
 ```text
 q(proposed | current) = P(forward move family) * 1 / N_forward
 q(current | proposed) = P(reverse move family) * 1 / N_reverse
 ```
 
-The equal move-family probabilities cancel for inverse move pairs, leaving:
+For that default policy, the equal move-family probabilities cancel for inverse move pairs, leaving:
 
 ```text
 q(current | proposed) / q(proposed | current) = N_forward / N_reverse
 log_q_ratio = log(N_forward) - log(N_reverse)
 ```
 
-`N_forward` is the number of valid local sites for the selected move type in the current triangulation. `N_reverse` is the number of valid local sites for the
-inverse move type in the proposed triangulation. For example, a `(1,3)` proposal counts valid `(1,3)` sites before the move and valid reverse `(3,1)` sites
-after the move. This corrects proposal asymmetry for detailed balance without adding volume fixing or changing the target action.
+`N_forward` is the number of offered local sites for the selected move type in the current triangulation. `N_reverse` is the number of offered local sites for
+the inverse move type in the proposed triangulation. For example, a `(1,3)` proposal counts offered `(1,3)` sites before the move and offered reverse `(3,1)`
+sites after the move. This corrects proposal asymmetry for detailed balance without adding volume fixing or changing the target action.
 
 The proposal-site universe must be the same for sampling and counting. If the sampler can choose a site, that site belongs in the denominator used for the
 proposal probability, even if applying it later returns an ordinary geometric, causal, or backend rejection.
@@ -156,7 +158,7 @@ triangulation, causing the next proposal to rebuild before sampling stale handle
 Before a site enters that cache, the geometry adapter runs Delaunay 0.8's immutable k=1/k=2 feasibility validator for every primitive that can be checked on the
 current state. These exact deterministic preflights come from
 [`delaunay#419`](https://github.com/acgetchell/delaunay/issues/419) and avoid clone-and-try scans. They do not replace CDT's causal or topology checks, nor do
-they promise that the later primitive in a composite toroidal move or post-mutation CDT finalization cannot produce an ordinary self-loop rejection.
+they promise that the later primitive in a composite foliated move or post-mutation CDT finalization cannot produce an ordinary self-loop rejection.
 
 This is the ordinary Metropolis-Hastings proposal-ratio correction: it uses the actual proposal kernel, not empirical acceptance counts from the run. Hastings'
 original Markov-chain sampling paper gives the general acceptance rule, and Brunekreef, Görlich, and Loll describe CDT Monte Carlo moves together with their
@@ -242,8 +244,8 @@ implementation for policy consumers.
   preconditions and CDT postconditions needed by the move are known before sampling. This would support an executable-only action mask, although it still
   could not guarantee resource availability.
 
-The current policy view exposes offered sites, not eligible sites. Proposal policies, including future learned policies, must therefore use its IDs and counts
-as the actual proposal support and must not interpret them as a guarantee that execution will succeed.
+The current policy view exposes offered sites, not eligible sites. Downstream proposal policies must therefore use its IDs and counts as the actual proposal
+support and must not interpret them as a guarantee that execution will succeed.
 
 For state `x`, move family `m`, and a sampleable site set `S_m(x)`, one sampled auxiliary proposal atom `c = (m, s)` contributes:
 
@@ -321,5 +323,6 @@ checks the resulting Metropolis-Hastings flux equality, and compares a fixed-pol
 pairwise kernel and same-build reproducibility checks; they do not by themselves establish ergodicity, mixing quality, or physical convergence.
 
 The explicit-site model avoids dry-run cloning every candidate during site counting. Planned Metropolis acceptance creates one proposed-state clone; direct
-move attempts create one rollback snapshot. Applying a site to an already speculative proposal draft does not create a nested snapshot, including for composite
-mutations whose intermediate backend steps can partially commit.
+move attempts create one rollback snapshot. Both paths pass caller-owned rollback into the primitive backend edits, so applying a selected site does not clone
+the full backend again, including for composite mutations whose intermediate steps can partially commit. Standalone `TriangulationMut` calls retain their
+backend-owned rollback guard because they have no enclosing CDT transaction.

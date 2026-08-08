@@ -252,8 +252,8 @@ documented:
 - `prelude::errors` for crate error types and typed error-category enums needed to pattern-match failures
 - `prelude::simulation` for Metropolis/action simulation workflows, proposal types, simulation result types, telemetry, and triangulation query traits needed to
   inspect or debug simulations
-- `prelude::observables` for user-facing analysis APIs that measure triangulations or derived physical observables, such as volume profiles, Hausdorff-dimension
-  estimators, and spectral-dimension estimators
+- `prelude::observables` for user-facing analysis APIs that measure triangulations or derived physical observables, such as slab-triangle profiles and
+  explicitly finite-window effective Hausdorff and spectral estimators
 - `prelude::testing` for fixture-only helpers such as `TestConfig`, the mock backend, and its typed error categories
 
 Keep the simulation and observables boundaries crisp:
@@ -335,8 +335,8 @@ Before adding a dependency, consider:
 ## Geometry Backend Isolation
 
 `src/geometry/` is the backend interface layer. It is responsible for wrapping the upstream `delaunay` crate behind this crate's traits, opaque handles,
-generators, and backend adapters. `src/cdt/` is the CDT domain layer: it owns foliation, topology, causality, moves, action, simulation, results, and
-observables.
+generators, backend adapters, and structural geometry validation. `src/cdt/` is the CDT domain layer: it owns foliation, causality, CDT topology metadata,
+moves, action, simulation, results, and observables.
 
 Direct `use delaunay::` imports are **restricted** to the `src/geometry/` subtree:
 
@@ -349,6 +349,12 @@ No module outside `src/geometry/` may import from the `delaunay` crate directly.
 - Handle types from `crate::geometry::backends::delaunay` (`DelaunayVertexHandle`, `DelaunayEdgeHandle`, `DelaunayFaceHandle`)
 - Trait methods from `TriangulationQuery` / `TriangulationMut`
 - Generator utilities from `crate::geometry::generators`
+
+Structural geometry validation belongs to the geometry backend. Whenever `delaunay` provides incidence, orientation, manifold, embedding, Euler-topology,
+or related validation, delegate to that implementation through `src/geometry/`; do not reproduce its algorithm in `src/cdt/`. Rely on documented successful
+mutation postconditions instead of immediately repeating the same whole-mesh scan. If CDT needs an upstream check that the geometry traits do not expose, add
+a narrow trait/adapter method whose Delaunay implementation delegates upstream. CDT remains responsible for domain invariants that `delaunay` cannot express,
+including foliation, causality, move-family constraints, and agreement between CDT metadata and the backend geometry.
 
 Keep `GeometryBackend` associated coordinate and handle types unconstrained.
 Place numeric, cloning, equality, hashing, or formatting requirements on the

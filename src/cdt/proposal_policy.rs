@@ -424,7 +424,6 @@ fn remove_sample_mass(sample_masses: &mut [u64; 4], mut excess: u64, minimum_mas
         if available == 0 {
             break;
         }
-        debug_assert!(available > 0);
         let removed = available.min(excess);
         sample_masses[donor] -= removed;
         excess -= removed;
@@ -457,17 +456,29 @@ const fn family_index(family: MoveType) -> usize {
 ///
 /// ```
 /// use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveType};
+/// use causal_triangulations::prelude::simulation::CdtProposalSiteIdError;
 /// use causal_triangulations::prelude::triangulation::*;
+/// use std::assert_matches;
 ///
 /// # fn main() -> CdtResult<()> {
 /// let triangulation = CdtTriangulation::from_cdt_strip(4, 3)?;
 /// let mut moves = ErgodicsSystem::with_seed(7);
-/// let view = moves.proposal_policy_view(&triangulation, MoveType::Move13Add);
-/// let Some(site) = view.offered_sites().next() else {
-///     return Ok(());
+/// let site = {
+///     let view = moves.proposal_policy_view(&triangulation, MoveType::Move13Add);
+///     let Some(site) = view.offered_sites().next() else {
+///         return Ok(());
+///     };
+///     assert_eq!(site.family(), MoveType::Move13Add);
+///     assert_eq!(view.validate_site(site), Ok(()));
+///     site
 /// };
-/// assert_eq!(site.family(), MoveType::Move13Add);
-/// assert_eq!(view.validate_site(site), Ok(()));
+///
+/// let other_triangulation = CdtTriangulation::from_cdt_strip(4, 3)?;
+/// let other_view = moves.proposal_policy_view(&other_triangulation, MoveType::Move13Add);
+/// assert_matches!(
+///     other_view.validate_site(site),
+///     Err(CdtProposalSiteIdError::ForeignTriangulation { .. })
+/// );
 /// # Ok(())
 /// # }
 /// ```

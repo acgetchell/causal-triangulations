@@ -401,17 +401,7 @@ impl MockBackend {
     /// ```
     #[must_use]
     pub fn new_2d() -> Self {
-        Self {
-            vertices: HashMap::new(),
-            edges: HashMap::new(),
-            faces: HashMap::new(),
-            dimension: 2,
-            next_vertex_id: 0,
-            next_edge_id: 0,
-            next_face_id: 0,
-            owner_id: next_mock_owner_id(),
-            topology_generation: 0,
-        }
+        Self::new(NonZeroUsize::MIN.saturating_add(1))
     }
 
     /// Create a simple triangle for testing
@@ -690,7 +680,7 @@ impl TriangulationQuery for MockBackend {
         face: &Self::FaceHandle,
     ) -> Result<impl Iterator<Item = Self::FaceHandle> + 'a, Self::Error> {
         let face_id = self.validate_face_handle(face)?;
-        let face_vertices = &self.faces[&face_id];
+        let face_vertices = self.faces.get(&face_id).ok_or(MockError::Face(face_id))?;
         Ok(self
             .faces
             .iter()

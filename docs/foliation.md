@@ -14,10 +14,11 @@ For the periodic 1+1 CDT cases:
 - **Edge classification**: spacelike (both endpoints at same t) or timelike (endpoints at t and t±1)
 - **Causality constraint**: no edge may span more than one time slice (|Δt| ≤ 1)
 
-This implementation also supports open-boundary strip variants. `from_toroidal_cdt()` builds the periodic S¹ × S¹ toroidal case, while `from_cdt_strip()`
-builds regular open spatial-interval strip geometries over discrete time. Profile constructors, `from_cdt_strip_profile()` and `from_toroidal_cdt_profile()`,
-accept explicit per-slice spatial volumes `N(t)` for nonuniform initial data. All constructor families use the same edge classification and causality
-constraint, but their topology metadata and boundary expectations differ.
+This implementation also supports open-boundary strip variants. `from_toroidal_cdt()` builds the periodic S¹ × S¹ toroidal case, while
+`from_cdt_strip()` builds regular open spatial-interval strip geometries over discrete time. Profile constructors,
+`from_cdt_strip_spatial_vertex_profile()` and `from_toroidal_cdt_spatial_vertex_profile()`, accept explicit per-slice spatial-vertex counts `N₀(t)` for
+nonuniform initial data. All constructor families use the same edge classification and causality constraint, but their topology metadata and boundary
+expectations differ.
 
 ## Architecture
 
@@ -64,16 +65,16 @@ non-strict causal simplices, removes a vertex incident to an offending simplex t
 from live vertex labels, and repeats until the count converges to zero. The current pass budget is bounded, but success is defined by the CDT invariant, not by
 the number of cleanup passes used.
 
-`from_cdt_strip_profile()` places each open spatial slice according to the corresponding profile entry and delegates triangulation to the Delaunay point-data
-constructor. The returned mesh must pass the same initial-constructor contract as the regular open strip: upstream Delaunay Level 1-5 validation plus CDT
-topology, foliation, causality, and strict Up/Down simplex classification.
+`from_cdt_strip_spatial_vertex_profile()` places each open spatial slice according to the corresponding profile entry and delegates triangulation to the
+Delaunay point-data constructor. The returned mesh must pass the same initial-constructor contract as the regular open strip: upstream Delaunay Level 1-5
+validation plus CDT topology, foliation, causality, and strict Up/Down simplex classification.
 
 The toroidal constructor starts from an `N × T` lattice in a periodic domain, applies bounded deterministic offsets to put cocircular lattice points in
 generic position, and retries a fixed sequence of candidate embeddings through the upstream periodic image-point Delaunay constructor. It then checks the
 requested `V = N·T`, `E = 3·N·T`, `F = 2·N·T` toroidal counts and strict CDT classification.
 
-`from_toroidal_cdt_profile()` places each closed S¹ slice according to the corresponding profile entry and uses the periodic image-point constructor directly.
-It preserves closed spatial slices, periodic time, χ = 0, and strict CDT simplex classification for the returned initial torus.
+`from_toroidal_cdt_spatial_vertex_profile()` places each closed S¹ slice according to the corresponding profile entry and uses the periodic image-point
+constructor directly. It preserves closed spatial slices, periodic time, χ = 0, and strict CDT simplex classification for the returned initial torus.
 
 ## Initialization vs Evolution Validation
 
@@ -156,9 +157,12 @@ Structural checks:
 1. Every vertex has a time label (labeled count = vertex count)
 2. Every time slice is non-empty
 3. `slice_sizes` sum is consistent with labeled count
-4. For toroidal topology, every spatial slice is one closed S¹ ring: each vertex has exactly two spacelike neighbors in its slice, and the slice subgraph is a
+4. For open-boundary topology, every spatial slice is one connected interval with exactly two endpoints. Initial construction also checks path order and
+   noncrossing adjacent-slab edges against the drawing coordinates; after an abstract CDT move, labels and connectivity are authoritative and stale drawing
+   coordinates are not treated as a sampled physical constraint.
+5. For toroidal topology, every spatial slice is one closed S¹ ring: each vertex has exactly two spacelike neighbors in its slice, and the slice subgraph is a
    single connected cycle
-5. For toroidal topology, timelike edges connect each slice to both neighboring time slices modulo `T`
+6. For toroidal topology, timelike edges connect each slice to both neighboring time slices modulo `T`
 
 Foliated ergodic moves resynchronize foliation bookkeeping from live vertex labels after mutation, then finalize through the `Evolved` profile. The upstream
 bistellar-edit transaction validates the affected result against the Level 1-4 realization contract before it returns success, so move finalization carries

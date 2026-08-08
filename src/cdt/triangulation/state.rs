@@ -14,7 +14,10 @@ use crate::geometry::traits::TriangulationQuery;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use std::fmt;
 use std::num::{NonZeroU32, NonZeroUsize};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
 use std::time::Instant;
 
 mod builders;
@@ -22,6 +25,7 @@ mod foliation;
 mod moves;
 mod validation;
 
+pub(crate) use foliation::{LocalMoveBaseline, LocalMoveDelta};
 pub use validation::CdtValidationProfile;
 
 static NEXT_TRIANGULATION_INSTANCE_ID: AtomicU64 = AtomicU64::new(1);
@@ -419,11 +423,11 @@ impl CdtMetadata {
 /// Cached geometry measurements
 #[derive(Debug, Clone, Default)]
 struct GeometryCache {
-    edge_count: Option<CachedValue<usize>>,
-    euler_char: Option<CachedValue<i128>>,
+    edge_count: OnceLock<CachedValue<usize>>,
+    slab_triangle_profile: OnceLock<CachedValue<Vec<u32>>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 struct CachedValue<T> {
     value: T,
     modification_count: u64,
@@ -678,6 +682,31 @@ impl<B> CdtTriangulation<B> {
             .map(|_| self.metadata.modification_count);
     }
 
+    /// Returns a cached slab-triangle profile for the current geometry revision.
+    fn cached_slab_triangle_profile(&self) -> Option<Vec<u32>> {
+        self.cache
+            .slab_triangle_profile
+            .get()
+            .filter(|cached| cached.modification_count == self.metadata.modification_count)
+            .map(|cached| cached.value.clone())
+    }
+
+    /// Stores a derived slab-triangle profile for the current geometry revision.
+    fn cache_slab_triangle_profile(&self, value: Vec<u32>) {
+        let _ = self.cache.slab_triangle_profile.set(CachedValue {
+            value,
+            modification_count: self.metadata.modification_count,
+        });
+    }
+
+    /// Stores a proven edge count for the current geometry revision.
+    fn cache_edge_count(&self, value: usize) {
+        let _ = self.cache.edge_count.set(CachedValue {
+            value,
+            modification_count: self.metadata.modification_count,
+        });
+    }
+
     /// Builds the typed error used when callers try to trust stale foliation data.
     fn stale_foliation_error(&self) -> CdtError {
         FoliationError::StaleBookkeeping {
@@ -760,7 +789,8 @@ impl<B> CdtTriangulation<B> {
 
     /// Clears derived geometry counts so later queries recompute from the backend.
     fn invalidate_cache(&mut self) {
-        self.cache = GeometryCache::default();
+        self.cache.edge_count.take();
+        self.cache.slab_triangle_profile.take();
     }
 }
 
@@ -1019,10 +1049,8 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// Cached edge count with automatic invalidation.
     ///
     /// Returns the cached edge count if the cache is valid (i.e., no mutations since last refresh).
-    /// Otherwise, computes the edge count directly **without updating the cache**.
-    ///
-    /// Call [`refresh_cache()`](Self::refresh_cache) to explicitly populate the cache before
-    /// performance-critical loops that frequently query edge counts.
+    /// Otherwise, computes the edge count once and stores it for later reads of
+    /// the same geometry revision.
     ///
     /// # Performance
     ///
@@ -1042,13 +1070,18 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// }
     /// ```
     pub fn edge_count(&self) -> usize {
-        if let Some(cached) = &self.cache.edge_count
+        if let Some(cached) = self.cache.edge_count.get()
             && cached.modification_count == self.metadata.modification_count
         {
             return cached.value;
         }
 
-        self.geometry.edge_count()
+        let value = self.geometry.edge_count();
+        let _ = self.cache.edge_count.set(CachedValue {
+            value,
+            modification_count: self.metadata.modification_count,
+        });
+        value
     }
 
     /// Returns strictly positive CDT simplex counts for the current state.
@@ -1098,14 +1131,9 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// ```
     pub fn refresh_cache(&mut self) {
         let mod_count = self.metadata.modification_count;
-
-        self.cache.edge_count = Some(CachedValue {
+        self.cache.edge_count.take();
+        let _ = self.cache.edge_count.set(CachedValue {
             value: self.geometry.edge_count(),
-            modification_count: mod_count,
-        });
-
-        self.cache.euler_char = Some(CachedValue {
-            value: self.geometry.euler_characteristic(),
             modification_count: mod_count,
         });
     }
@@ -1135,12 +1163,15 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     pub fn validate_topology(&self) -> CdtResult<()> {
         self.validate_metadata()?;
 
-        let euler_char = self.geometry.euler_characteristic();
+        let vertices = self.geometry.vertex_count() as i128;
+        let edges = self.edge_count() as i128;
+        let faces = self.geometry.face_count() as i128;
+        let euler_char = vertices - edges + faces;
 
         if self.dimension() == 2 {
             let expected = match self.metadata.topology {
-                // Open boundary: planar with boundary χ=1, closed surface χ=2
-                CdtTopology::OpenBoundary => [1, 2].as_slice(),
+                // Open-boundary CDT is a connected planar strip with χ=1.
+                CdtTopology::OpenBoundary => [1].as_slice(),
                 // Toroidal (S¹×S¹): Euler characteristic must be 0
                 CdtTopology::Toroidal => [0].as_slice(),
             };
@@ -1151,8 +1182,8 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
                     euler_characteristic: euler_char,
                     expected_euler_characteristics: expected.to_vec(),
                     vertices: self.geometry.vertex_count(),
-                    edges: self.geometry.edge_count(),
-                    faces: self.geometry.face_count(),
+                    edges: self.edge_count(),
+                    faces: self.face_count(),
                 });
             }
         }
@@ -1324,7 +1355,7 @@ mod tests {
                 ref expected_euler_characteristics,
                 ..
             }) if topology == CdtTopology::OpenBoundary
-                && expected_euler_characteristics.as_slice() == [1, 2]
+                && expected_euler_characteristics.as_slice() == [1]
         );
     }
 
@@ -1436,8 +1467,12 @@ mod tests {
         let mut triangulation = CdtTriangulation::from_seeded_points(6, 2, 2, TEST_POINT_SEED)
             .expect("Failed to create triangulation");
 
-        // Get initial counts without cache
+        triangulation.bump_modification_count();
+        assert!(triangulation.cache.edge_count.get().is_none());
+
+        // A cache miss computes and populates the current revision.
         let edge_count_1 = triangulation.edge_count();
+        assert!(triangulation.cache.edge_count.get().is_some());
 
         // Refresh cache
         triangulation.refresh_cache();
@@ -1738,7 +1773,7 @@ mod tests {
                 euler_characteristic: 0,
                 ref expected_euler_characteristics,
                 ..
-            }) if topology == CdtTopology::OpenBoundary && expected_euler_characteristics == &[1, 2]
+            }) if topology == CdtTopology::OpenBoundary && expected_euler_characteristics == &[1]
         );
     }
 
