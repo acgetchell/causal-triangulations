@@ -7,6 +7,17 @@
 
 use std::error::Error as StdError;
 
+/// Converts an exact-size iterator into a three-element array without allocating.
+pub(crate) fn exactly_three<T>(mut values: impl ExactSizeIterator<Item = T>) -> Option<[T; 3]> {
+    if values.len() != 3 {
+        return None;
+    }
+    let first = values.next()?;
+    let second = values.next()?;
+    let third = values.next()?;
+    values.next().is_none().then_some([first, second, third])
+}
+
 /// Core geometry backend trait - completely abstracted from implementation details.
 ///
 /// Coordinate and handle types are deliberately unconstrained here. Read-only
@@ -16,6 +27,11 @@ pub trait GeometryBackend {
     /// Coordinate type used by this backend.
     type Coordinate;
     /// Opaque handle type for vertices.
+    ///
+    /// Detached handles are scoped to the backend instance and topology
+    /// generation that created them. Implementations must reject handles from a
+    /// different owner or an earlier generation before interpreting their local
+    /// storage key.
     type VertexHandle;
     /// Opaque handle type for edges.
     type EdgeHandle;
@@ -32,6 +48,9 @@ pub trait GeometryBackend {
 ///
 /// Generic CDT and analysis code can depend on this trait to inspect counts,
 /// connectivity, and coordinates without naming a concrete backend.
+/// Entity iterators borrow the backend while yielding detached, owned handles;
+/// coordinate slices borrow canonical payload storage directly. Topology
+/// mutation therefore cannot overlap a live borrowed coordinate or iterator.
 ///
 /// # Examples
 ///
@@ -82,14 +101,30 @@ pub trait TriangulationQuery: GeometryBackend {
 
     /// Returns the coordinate vector for a vertex handle.
     ///
+    /// The returned slice is a zero-copy view into canonical backend storage and
+    /// remains valid only for the shared borrow of `self`.
+    ///
+    /// ```compile_fail
+    /// use causal_triangulations::prelude::testing::*;
+    ///
+    /// let mut backend = MockBackend::create_triangle();
+    /// let Some(vertex) = backend.vertices().next() else {
+    ///     return Ok(());
+    /// };
+    /// let coordinates = backend.vertex_coordinates(&vertex)?;
+    /// backend.insert_vertex(&[2.0, 2.0])?;
+    /// assert_eq!(coordinates.len(), 2);
+    /// # Ok::<(), MockError>(())
+    /// ```
+    ///
     /// # Errors
     ///
     /// Returns the backend error when the vertex handle is invalid or when the
     /// backend cannot resolve the coordinate payload for that vertex.
-    fn vertex_coordinates(
-        &self,
+    fn vertex_coordinates<'a>(
+        &'a self,
         vertex: &Self::VertexHandle,
-    ) -> Result<Vec<Self::Coordinate>, Self::Error>;
+    ) -> Result<&'a [Self::Coordinate], Self::Error>;
 
     /// Returns the vertices that form a face.
     ///
@@ -97,15 +132,14 @@ pub trait TriangulationQuery: GeometryBackend {
     ///
     /// Returns the backend error when the face handle is invalid or when the
     /// backend cannot resolve the face connectivity.
-    fn face_vertices(
-        &self,
+    fn face_vertices<'a>(
+        &'a self,
         face: &Self::FaceHandle,
-    ) -> Result<Vec<Self::VertexHandle>, Self::Error>;
+    ) -> Result<impl ExactSizeIterator<Item = Self::VertexHandle> + 'a, Self::Error>;
 
     /// Get the two vertices that form an edge.
     ///
-    /// Returns `Some((v0, v1))` when endpoint resolution succeeds, or `None`
-    /// if the edge handle is invalid or endpoints are unavailable.
+    /// Returns the two current endpoint handles for a live edge.
     ///
     /// # Examples
     ///
@@ -116,12 +150,17 @@ pub trait TriangulationQuery: GeometryBackend {
     /// assert!(backend
     ///     .edges()
     ///     .next()
-    ///     .is_some_and(|edge| backend.edge_endpoints(&edge).is_some()));
+    ///     .is_some_and(|edge| backend.edge_endpoints(&edge).is_ok()));
     /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns the backend error when the edge is foreign, stale, or no longer
+    /// present in the current topology.
     fn edge_endpoints(
         &self,
         edge: &Self::EdgeHandle,
-    ) -> Option<(Self::VertexHandle, Self::VertexHandle)>;
+    ) -> Result<(Self::VertexHandle, Self::VertexHandle), Self::Error>;
 
     /// Get the two faces adjacent to an edge and their opposite vertices.
     ///
@@ -140,19 +179,18 @@ pub trait TriangulationQuery: GeometryBackend {
 
     /// Get all faces adjacent to a vertex.
     ///
-    /// Backend implementations may build an adjacency index for this query.
-    /// The Delaunay backend caches that index between topology mutations, so the
-    /// first query after a mutation is `O(F)` in the number of finite faces and
-    /// later queries reuse the same snapshot.
+    /// Implementations return a lazy borrowed view over their canonical
+    /// incidence representation. Consumers that need random access or ownership
+    /// beyond this borrow may explicitly collect it.
     ///
     /// # Errors
     ///
     /// Returns the backend error when the vertex handle is invalid or adjacency
     /// information cannot be resolved.
-    fn adjacent_faces(
-        &self,
+    fn adjacent_faces<'a>(
+        &'a self,
         vertex: &Self::VertexHandle,
-    ) -> Result<Vec<Self::FaceHandle>, Self::Error>;
+    ) -> Result<impl Iterator<Item = Self::FaceHandle> + 'a, Self::Error>;
 
     /// Get all edges incident to a vertex
     ///
@@ -160,10 +198,10 @@ pub trait TriangulationQuery: GeometryBackend {
     ///
     /// Returns the backend error when the vertex handle is invalid or incident
     /// edge information cannot be resolved.
-    fn incident_edges(
-        &self,
+    fn incident_edges<'a>(
+        &'a self,
         vertex: &Self::VertexHandle,
-    ) -> Result<Vec<Self::EdgeHandle>, Self::Error>;
+    ) -> Result<impl Iterator<Item = Self::EdgeHandle> + 'a, Self::Error>;
 
     /// Get all faces neighboring a given face
     ///
@@ -171,8 +209,10 @@ pub trait TriangulationQuery: GeometryBackend {
     ///
     /// Returns the backend error when the face handle is invalid or neighboring
     /// face information cannot be resolved.
-    fn face_neighbors(&self, face: &Self::FaceHandle)
-    -> Result<Vec<Self::FaceHandle>, Self::Error>;
+    fn face_neighbors<'a>(
+        &'a self,
+        face: &Self::FaceHandle,
+    ) -> Result<impl Iterator<Item = Self::FaceHandle> + 'a, Self::Error>;
 
     /// Check if the triangulation is valid
     fn is_valid(&self) -> bool;

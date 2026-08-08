@@ -14,7 +14,9 @@ use crate::cdt::proposal_policy::{
     CdtProposalPolicyView, UniformCdtMoveFamilyPolicy,
 };
 use crate::cdt::triangulation::CdtTriangulation2D;
-use crate::errors::{CdtError, CdtResult, MetropolisMoveApplicationFailure};
+use crate::errors::{
+    CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, MetropolisMoveApplicationFailure,
+};
 use markov_chain_monte_carlo::{
     Chain, ChainCheckpoint, DelayedProposal, DiscreteProposalRatio, DiscreteProposalRatioError,
     McmcError, Target,
@@ -1170,8 +1172,21 @@ pub(crate) fn propose_concrete_plan(
     };
 
     let mut proposed_state = state.clone();
+    let site = site
+        .remap_for_clone(state, &proposed_state)
+        .map_err(|error| MoveApplicationError {
+            attempt: 1,
+            source: CdtError::ValidationFailed {
+                check: CdtValidationCheck::Geometry,
+                failure: CdtValidationFailure::BackendGeometry {
+                    detail: format!(
+                        "failed to remap {move_type:?} proposal site into its speculative owner: {error}"
+                    ),
+                },
+            },
+        })?;
     let move_stats_before = moves.stats().clone();
-    let result = moves.apply_proposal_site(&mut proposed_state, move_type, site);
+    let result = moves.apply_proposal_site_to_draft(&mut proposed_state, move_type, site);
     moves.replace_stats(move_stats_before);
     let action_after = match result {
         MoveResult::Success => action_for(action_config, &proposed_state),

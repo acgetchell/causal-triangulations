@@ -24,10 +24,15 @@ fn vertex_fingerprint(
         .geometry()
         .vertex_coordinates(vertex)
         .expect("strip vertex coordinates should resolve")
-        .into_iter()
+        .iter()
+        .copied()
         .map(f64::to_bits)
         .collect();
-    (coords, tri.time_label(vertex))
+    (
+        coords,
+        tri.time_label(vertex)
+            .expect("strip time label query should succeed"),
+    )
 }
 
 /// Builds a canonical strip mesh fingerprint that is stable across handle allocation order.
@@ -47,7 +52,6 @@ fn strip_fingerprint(tri: &CdtTriangulation2D) -> StripFingerprint {
                 .geometry()
                 .face_vertices(&face)
                 .expect("strip face vertices should resolve")
-                .into_iter()
                 .map(|vertex| vertex_fingerprint(tri, &vertex))
                 .collect::<Vec<_>>();
             face_vertices.sort();
@@ -215,12 +219,12 @@ proptest! {
 
         for edge in tri.geometry().edges() {
             match tri.edge_type(&edge) {
-                Some(EdgeType::Spacelike) => spacelike += 1,
-                Some(EdgeType::Timelike) => timelike += 1,
-                Some(EdgeType::Acausal) => {
+                Ok(Some(EdgeType::Spacelike)) => spacelike += 1,
+                Ok(Some(EdgeType::Timelike)) => timelike += 1,
+                Ok(Some(EdgeType::Acausal)) => {
                     prop_assert!(false, "CDT strip should not have acausal edges");
                 }
-                None => {
+                Ok(None) | Err(_) => {
                     prop_assert!(false, "Every edge should be classifiable");
                 }
             }

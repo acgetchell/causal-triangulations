@@ -34,10 +34,10 @@ For each step:
    lower-level failure.
 
 This ordering avoids mutating the live triangulation for Metropolis-rejected moves while still binding each proposal to a concrete local transition before the
-acceptance draw. Rollback remains inside the move kernels while planning on the cloned state because a backend edit can fail after a site has been selected or
-after partial invariant refresh work. The recorded `SimulationResultsBackend::move_stats` counts Metropolis-level attempted and applied moves, while
-`SimulationResultsBackend::proposal_stats` records proposal-kernel telemetry such as no-site outcomes, sampled-site failures, Metropolis rejections, and
-accepted transitions.
+acceptance draw. The speculative clone is itself the rollback boundary during planning, so move kernels do not clone it again; direct public move attempts own
+one explicit rollback snapshot because a backend edit can fail after selection or partial invariant refresh. The recorded `SimulationResultsBackend::move_stats`
+counts Metropolis-level attempted and applied moves, while `SimulationResultsBackend::proposal_stats` records proposal-kernel telemetry such as no-site
+outcomes, sampled-site failures, Metropolis rejections, and accepted transitions.
 
 ## Scientific Calibration And Geometry Backend Role
 
@@ -320,5 +320,6 @@ empirical frequencies accumulated earlier in the run.
 checks the resulting Metropolis-Hastings flux equality, and compares a fixed-policy checkpoint/resume run with its uninterrupted seeded trajectory. These are
 pairwise kernel and same-build reproducibility checks; they do not by themselves establish ergodicity, mixing quality, or physical convergence.
 
-The explicit-site model avoids dry-run cloning every candidate during site counting. The only required full triangulation clone is the planned proposed state
-used by planned Metropolis acceptance, plus a narrow rollback snapshot around composite mutations whose intermediate backend steps can partially commit.
+The explicit-site model avoids dry-run cloning every candidate during site counting. Planned Metropolis acceptance creates one proposed-state clone; direct
+move attempts create one rollback snapshot. Applying a site to an already speculative proposal draft does not create a nested snapshot, including for composite
+mutations whose intermediate backend steps can partially commit.

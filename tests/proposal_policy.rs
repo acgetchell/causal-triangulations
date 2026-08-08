@@ -4,15 +4,15 @@ use approx::assert_relative_eq;
 use causal_triangulations::prelude::geometry::{DelaunayBackend2D, build_delaunay2_with_data};
 use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveResult, MoveType};
 use causal_triangulations::prelude::simulation::{
-    ActionConfig, CdtMoveFamilyDistribution, CdtMoveFamilyPolicy, CdtMoveFamilyPolicyError,
-    CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlanningOutcome,
-    CdtProposalPolicyView, CdtProposalSiteId, CdtProposalSiteIdError, CdtTopology, DelayedProposal,
-    MetropolisAlgorithm, MetropolisConfig, UniformCdtMoveFamilyPolicy,
+    ActionConfig, CdtError, CdtMoveFamilyDistribution, CdtMoveFamilyPolicy,
+    CdtMoveFamilyPolicyError, CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan,
+    CdtProposalPlanningOutcome, CdtProposalPolicyView, CdtProposalSiteId, CdtProposalSiteIdError,
+    CdtTopology, DelayedProposal, MetropolisAlgorithm, MetropolisConfig,
+    UniformCdtMoveFamilyPolicy,
 };
 use causal_triangulations::prelude::triangulation::{
     CdtResult, CdtTriangulation, CdtTriangulation2D,
 };
-use causal_triangulations::{CdtError, CdtProposalPlan};
 use rand::{SeedableRng, rngs::StdRng};
 use serde_json::to_value;
 use std::{assert_matches, cell::Cell};

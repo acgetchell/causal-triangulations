@@ -836,7 +836,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let slice_sizes = self.slice_sizes();
 
         for face in self.geometry.faces() {
-            if self.simplex_type(&face).is_some() {
+            if self.simplex_type(&face)?.is_some() {
                 continue;
             }
 
@@ -1638,7 +1638,8 @@ mod tests {
                     .geometry()
                     .vertex_coordinates(&vertex)
                     .expect("generated vertex coordinates should be readable")
-                    .into_iter()
+                    .iter()
+                    .copied()
                     .map(f64::to_bits)
                     .collect::<Vec<_>>()
             })
@@ -1700,8 +1701,11 @@ mod tests {
         tri.validate_simplex_classification()
             .expect("all Delaunay strip simplices should classify");
         for face in tri.geometry().faces() {
-            assert!(tri.simplex_type(&face).is_some());
-            assert!(tri.simplex_type_from_data(&face).is_some());
+            assert!(tri.simplex_type(&face).is_ok_and(|kind| kind.is_some()));
+            assert!(
+                tri.simplex_type_from_data(&face)
+                    .is_ok_and(|kind| kind.is_some())
+            );
         }
         tri
     }
@@ -1992,7 +1996,7 @@ mod tests {
         assert!(tri.validate_simplex_classification().is_ok());
 
         for vh in tri.geometry().vertices() {
-            assert!(tri.time_label(&vh).is_some());
+            assert!(tri.time_label(&vh).is_ok_and(|label| label.is_some()));
         }
     }
 
@@ -2109,7 +2113,7 @@ mod tests {
     fn test_from_cdt_strip_all_vertices_labeled() {
         let tri = strict_strip(5, 3);
         for vertex in tri.geometry().vertices() {
-            assert!(tri.time_label(&vertex).is_some());
+            assert!(tri.time_label(&vertex).is_ok_and(|label| label.is_some()));
         }
     }
 
@@ -2119,7 +2123,7 @@ mod tests {
         for edge in tri.geometry().edges() {
             assert_matches!(
                 tri.edge_type(&edge),
-                Some(EdgeType::Spacelike | EdgeType::Timelike)
+                Ok(Some(EdgeType::Spacelike | EdgeType::Timelike))
             );
         }
     }
@@ -2513,7 +2517,7 @@ mod tests {
         for face in tri.geometry().faces() {
             assert_matches!(
                 tri.simplex_type(&face),
-                Some(SimplexType::Up | SimplexType::Down)
+                Ok(Some(SimplexType::Up | SimplexType::Down))
             );
         }
     }
@@ -2553,7 +2557,7 @@ mod tests {
         assert_eq!(tri.slice_sizes(), &[5, 5, 5, 5]);
         for t in 0..4 {
             assert_eq!(
-                tri.vertices_at_time(t).len(),
+                tri.vertices_at_time(t).count(),
                 5,
                 "slice {t} should contain N=5 vertices"
             );
@@ -2710,7 +2714,6 @@ mod tests {
                 .face_vertices(&face)
                 .expect("toroidal face vertices should resolve");
             let labels: Vec<_> = vertices
-                .iter()
                 .map(|vh| {
                     tri.geometry()
                         .vertex_data_by_key(vh.vertex_key())
@@ -2721,9 +2724,11 @@ mod tests {
             if labels.contains(&0) && labels.contains(&2) {
                 let simplex_type = tri
                     .simplex_type(&face)
+                    .expect("wrap-around toroidal face query should succeed")
                     .expect("wrap-around toroidal face should classify");
                 let edge_types = tri
                     .face_edge_types(&face)
+                    .expect("wrap-around toroidal face query should succeed")
                     .expect("wrap-around toroidal face should expose edge types");
                 saw_wrap_timelike_edge |= edge_types
                     .iter()

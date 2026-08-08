@@ -73,10 +73,10 @@ fn accepted_move_history_keeps_matching_attempt_after_planned_proposal_handoff()
     let results =
         MetropolisAlgorithm::new(metropolis_config, ActionConfig::default()).run(triangulation);
     let results = results.expect("history regression run should complete");
-    let history = results.triangulation().metadata().simulation_history();
+    let history = results.simulation_history().collect::<Vec<_>>();
 
     let mut accepted_events = 0_u64;
-    for event in history {
+    for event in &history {
         let SimulationEvent::MoveAccepted {
             move_type, step, ..
         } = event

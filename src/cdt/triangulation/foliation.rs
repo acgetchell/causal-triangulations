@@ -10,9 +10,9 @@ use crate::errors::{
     CdtValidationCheck, CdtValidationFailure, MeasurementCountField, TriangulationMetadataField,
 };
 use crate::geometry::backends::delaunay::{
-    DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayVertexHandle,
+    DelaunayEdgeHandle, DelaunayError, DelaunayFaceHandle, DelaunayVertexHandle,
 };
-use crate::geometry::traits::TriangulationQuery;
+use crate::geometry::traits::{TriangulationQuery, exactly_three};
 use crate::geometry::{DelaunayBackend2D, SpacetimeCoordinate};
 use crate::util::f64_band_to_u32;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -135,7 +135,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         let mut neighbor_slices: Vec<HashSet<usize>> = vec![HashSet::new(); num_slices];
         for edge in self.geometry.edges() {
-            let Some((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
+            let Ok((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
                 continue;
             };
             let Some(t0) = self.geometry.vertex_data_by_key(v0.vertex_key()) else {
@@ -205,7 +205,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
 
         for edge in self.geometry.edges() {
-            let Some((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
+            let Ok((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
                 continue;
             };
             let Some(t0) = self.geometry.vertex_data_by_key(v0.vertex_key()) else {
@@ -394,7 +394,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     },
                 }
             })?;
-            let coordinate = SpacetimeCoordinate::try_from_space_time_slice(&raw_coordinates)
+            let coordinate = SpacetimeCoordinate::try_from_space_time_slice(raw_coordinates)
                 .map_err(|err| CdtError::ValidationFailed {
                     check: CdtValidationCheck::Geometry,
                     failure: CdtValidationFailure::from_spacetime_coordinate_error(
@@ -450,7 +450,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
         let mut slab_edges: Vec<Vec<SlabEdge>> = vec![Vec::new(); slice_orders.len() - 1];
         for edge in self.geometry.edges() {
-            let Some((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
+            let Ok((v0, v1)) = self.geometry.edge_endpoints(&edge) else {
                 continue;
             };
             let Some(t0) = self.geometry.vertex_data_by_key(v0.vertex_key()) else {
@@ -806,6 +806,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// foliation is present, the stored foliation is stale, or the vertex is
     /// unlabeled.
     ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::ValidationFailed`] when `vertex` is foreign, stale,
+    /// or absent from the current backend topology.
+    ///
     /// # Examples
     ///
     /// ```
@@ -813,19 +818,23 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 2)?;
-    ///     assert!(tri.geometry().vertices().all(|vertex| tri.time_label(&vertex).is_some()));
+    ///     assert!(tri.geometry().vertices().all(|vertex| {
+    ///         tri.time_label(&vertex).is_ok_and(|label| label.is_some())
+    ///     }));
     ///     Ok(())
     /// }
     /// ```
-    #[must_use]
-    pub fn time_label(&self, vertex: &DelaunayVertexHandle) -> Option<u32> {
-        self.foliation()?;
-        self.geometry.vertex_data_by_key(vertex.vertex_key())
+    pub fn time_label(&self, vertex: &DelaunayVertexHandle) -> CdtResult<Option<u32>> {
+        let label = self
+            .geometry
+            .vertex_data(vertex)
+            .map_err(|error| geometry_query_error("time label", &error))?;
+        Ok(self.foliation().and(label))
     }
 
-    /// Returns all vertex handles that belong to time slice `t`.
+    /// Iterates over all vertex handles that belong to time slice `t`.
     ///
-    /// Returns an empty vector when no current foliation exists. That includes
+    /// Returns an empty iterator when no current foliation exists. That includes
     /// the stale-bookkeeping case after geometry mutation but before foliation
     /// resynchronization.
     ///
@@ -836,20 +845,20 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-    ///     assert_eq!(tri.vertices_at_time(0).len(), 4);
-    ///     assert!(tri.vertices_at_time(99).is_empty());
+    ///     assert_eq!(tri.vertices_at_time(0).count(), 4);
+    ///     assert!(tri.vertices_at_time(99).next().is_none());
     ///     Ok(())
     /// }
     /// ```
-    #[must_use]
-    pub fn vertices_at_time(&self, t: u32) -> Vec<DelaunayVertexHandle> {
-        if !self.has_current_foliation() {
-            return vec![];
-        }
-        self.geometry
-            .vertices()
-            .filter(|vh| self.geometry.vertex_data_by_key(vh.vertex_key()) == Some(t))
-            .collect()
+    pub fn vertices_at_time(&self, t: u32) -> impl Iterator<Item = DelaunayVertexHandle> + '_ {
+        let has_current_foliation = self.has_current_foliation();
+        self.geometry.vertices().filter(move |vertex| {
+            has_current_foliation
+                && self
+                    .geometry
+                    .vertex_data(vertex)
+                    .is_ok_and(|label| label == Some(t))
+        })
     }
 
     /// Returns per-slice vertex counts, or an empty slice if no foliation.
@@ -983,12 +992,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
     /// Returns the lower time-slab index assigned to a classifiable CDT face.
     fn face_time_slice(&self, face: &DelaunayFaceHandle) -> Option<u32> {
-        self.simplex_type(face)?;
+        self.simplex_type(face).ok()??;
 
         let vertices = self.geometry.face_vertices(face).ok()?;
-        let [v0, v1, v2] = vertices.as_slice() else {
-            return None;
-        };
+        let [v0, v1, v2] = exactly_three(vertices)?;
 
         let labels = [
             self.geometry.vertex_data_by_key(v0.vertex_key())?,
@@ -1027,6 +1034,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
     /// Returns the causal classification of an edge from endpoint time labels.
     ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::ValidationFailed`] when `edge` is foreign, stale, or
+    /// absent, or when either live endpoint payload cannot be read.
+    ///
     /// # Examples
     ///
     /// ```
@@ -1034,75 +1046,48 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 2)?;
-    ///     assert!(tri.geometry().edges().any(|edge| tri.edge_type(&edge).is_some()));
+    ///     assert!(tri.geometry().edges().any(|edge| {
+    ///         tri.edge_type(&edge).is_ok_and(|edge_type| edge_type.is_some())
+    ///     }));
     ///     Ok(())
     /// }
     /// ```
-    #[must_use]
-    pub fn edge_type(&self, edge: &DelaunayEdgeHandle) -> Option<EdgeType> {
-        self.foliation()?;
+    pub fn edge_type(&self, edge: &DelaunayEdgeHandle) -> CdtResult<Option<EdgeType>> {
+        let (v0, v1) = self
+            .geometry
+            .edge_endpoints(edge)
+            .map_err(|error| geometry_query_error("edge classification", &error))?;
+        if self.foliation().is_none() {
+            return Ok(None);
+        }
+        let Some(t0) = self
+            .geometry
+            .vertex_data(&v0)
+            .map_err(|error| geometry_query_error("edge endpoint label", &error))?
+        else {
+            return Ok(None);
+        };
+        let Some(t1) = self
+            .geometry
+            .vertex_data(&v1)
+            .map_err(|error| geometry_query_error("edge endpoint label", &error))?
+        else {
+            return Ok(None);
+        };
 
-        let (v0, v1) = self.geometry.edge_endpoints(edge)?;
-        let t0 = self.geometry.vertex_data_by_key(v0.vertex_key())?;
-        let t1 = self.geometry.vertex_data_by_key(v1.vertex_key())?;
-
-        Some(match self.time_step_distance(t0, t1) {
+        Ok(Some(match self.time_step_distance(t0, t1) {
             0 => EdgeType::Spacelike,
             1 => EdgeType::Timelike,
             _ => EdgeType::Acausal,
-        })
+        }))
     }
 
     /// Classifies a triangle as Up (2,1) or Down (1,2) from vertex time labels.
     ///
-    /// # Examples
+    /// # Errors
     ///
-    /// ```
-    /// use causal_triangulations::prelude::triangulation::*;
-    ///
-    /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::from_cdt_strip(4, 2)?;
-    ///     assert!(tri.geometry().faces().all(|face| tri.simplex_type(&face).is_some()));
-    ///     Ok(())
-    /// }
-    /// ```
-    #[must_use]
-    pub fn simplex_type(&self, face: &DelaunayFaceHandle) -> Option<SimplexType> {
-        self.foliation()?;
-        let verts = self.geometry.face_vertices(face).ok()?;
-        if verts.len() != 3 {
-            return None;
-        }
-        let t0 = self.geometry.vertex_data_by_key(verts[0].vertex_key())?;
-        let t1 = self.geometry.vertex_data_by_key(verts[1].vertex_key())?;
-        let t2 = self.geometry.vertex_data_by_key(verts[2].vertex_key())?;
-        match self.metadata.topology {
-            CdtTopology::Toroidal => self.classify_simplex_with_topology(t0, t1, t2),
-            CdtTopology::OpenBoundary => classify_simplex(Some(t0), Some(t1), Some(t2)),
-        }
-    }
-
-    /// Reads the stored simplex type from simplex data, if previously classified.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::triangulation::*;
-    ///
-    /// fn main() -> CdtResult<()> {
-    ///     let tri = CdtTriangulation::from_cdt_strip(4, 2)?;
-    ///     assert!(tri.geometry().faces().all(|face| tri.simplex_type_from_data(&face).is_some()));
-    ///     Ok(())
-    /// }
-    /// ```
-    #[must_use]
-    pub fn simplex_type_from_data(&self, face: &DelaunayFaceHandle) -> Option<SimplexType> {
-        self.foliation()?;
-        let raw = self.geometry.simplex_data_by_key(face.simplex_key())?;
-        SimplexType::from_i32(raw)
-    }
-
-    /// Returns the edge classification for a triangular face.
+    /// Returns [`CdtError::ValidationFailed`] when `face` is foreign, stale, or
+    /// absent, or when a live vertex payload cannot be read.
     ///
     /// # Examples
     ///
@@ -1112,42 +1097,124 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// fn main() -> CdtResult<()> {
     ///     let tri = CdtTriangulation::from_cdt_strip(4, 2)?;
     ///     assert!(tri.geometry().faces().all(|face| {
-    ///         tri.face_edge_types(&face).is_some_and(|edges| {
-    ///             edges.iter().filter(|&&edge| edge == EdgeType::Spacelike).count() == 1
-    ///                 && edges.iter().filter(|&&edge| edge == EdgeType::Timelike).count() == 2
-    ///         })
+    ///         tri.simplex_type(&face).is_ok_and(|simplex_type| simplex_type.is_some())
     ///     }));
     ///     Ok(())
     /// }
     /// ```
-    #[must_use]
-    pub fn face_edge_types(&self, face: &DelaunayFaceHandle) -> Option<[EdgeType; 3]> {
-        self.foliation()?;
+    pub fn simplex_type(&self, face: &DelaunayFaceHandle) -> CdtResult<Option<SimplexType>> {
+        let verts = self
+            .geometry
+            .face_vertices(face)
+            .map_err(|error| geometry_query_error("simplex classification", &error))?;
+        let Some([v0, v1, v2]) = exactly_three(verts) else {
+            return Ok(None);
+        };
+        if self.foliation().is_none() {
+            return Ok(None);
+        }
+        let labels = [v0, v1, v2].map(|vertex| self.geometry.vertex_data(&vertex));
+        let [t0, t1, t2] = labels.map(|label| {
+            label.map_err(|error| geometry_query_error("simplex vertex label", &error))
+        });
+        let (Some(t0), Some(t1), Some(t2)) = (t0?, t1?, t2?) else {
+            return Ok(None);
+        };
+        Ok(match self.metadata.topology {
+            CdtTopology::Toroidal => self.classify_simplex_with_topology(t0, t1, t2),
+            CdtTopology::OpenBoundary => classify_simplex(Some(t0), Some(t1), Some(t2)),
+        })
+    }
 
-        let verts = self.geometry.face_vertices(face).ok()?;
-        if verts.len() != 3 {
-            return None;
+    /// Reads the stored simplex type from simplex data, if previously classified.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::ValidationFailed`] when `face` is foreign, stale, or
+    /// absent from the current backend topology.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 2)?;
+    ///     assert!(tri.geometry().faces().all(|face| {
+    ///         tri.simplex_type_from_data(&face).is_ok_and(|simplex_type| simplex_type.is_some())
+    ///     }));
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn simplex_type_from_data(
+        &self,
+        face: &DelaunayFaceHandle,
+    ) -> CdtResult<Option<SimplexType>> {
+        let raw = self
+            .geometry
+            .simplex_data(face)
+            .map_err(|error| geometry_query_error("stored simplex classification", &error))?;
+        Ok(self
+            .foliation()
+            .and_then(|_| raw.and_then(SimplexType::from_i32)))
+    }
+
+    /// Returns the edge classification for a triangular face.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CdtError::ValidationFailed`] when `face` is foreign, stale, or
+    /// absent, or when a live vertex payload cannot be read.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::triangulation::*;
+    ///
+    /// fn main() -> CdtResult<()> {
+    ///     let tri = CdtTriangulation::from_cdt_strip(4, 2)?;
+    ///     assert!(tri.geometry().faces().all(|face| {
+    ///         tri.face_edge_types(&face).is_ok_and(|edges| edges.is_some_and(|edges| {
+    ///             edges.iter().filter(|&&edge| edge == EdgeType::Spacelike).count() == 1
+    ///                 && edges.iter().filter(|&&edge| edge == EdgeType::Timelike).count() == 2
+    ///         }))
+    ///     }));
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn face_edge_types(&self, face: &DelaunayFaceHandle) -> CdtResult<Option<[EdgeType; 3]>> {
+        let verts = self
+            .geometry
+            .face_vertices(face)
+            .map_err(|error| geometry_query_error("face edge classification", &error))?;
+        let Some([v0, v1, v2]) = exactly_three(verts) else {
+            return Ok(None);
+        };
+        if self.foliation().is_none() {
+            return Ok(None);
         }
 
-        let t = [
-            self.geometry.vertex_data_by_key(verts[0].vertex_key())?,
-            self.geometry.vertex_data_by_key(verts[1].vertex_key())?,
-            self.geometry.vertex_data_by_key(verts[2].vertex_key())?,
-        ];
+        let labels = [v0, v1, v2].map(|vertex| self.geometry.vertex_data(&vertex));
+        let [t0, t1, t2] = labels
+            .map(|label| label.map_err(|error| geometry_query_error("face vertex label", &error)));
+        let (Some(t0), Some(t1), Some(t2)) = (t0?, t1?, t2?) else {
+            return Ok(None);
+        };
+        let t = [t0, t1, t2];
 
-        let edge_classify = |a: u32, b: u32| -> Option<EdgeType> {
-            Some(match self.time_step_distance(a, b) {
+        let edge_classify = |a: u32, b: u32| -> EdgeType {
+            match self.time_step_distance(a, b) {
                 0 => EdgeType::Spacelike,
                 1 => EdgeType::Timelike,
                 _ => EdgeType::Acausal,
-            })
+            }
         };
 
-        Some([
-            edge_classify(t[0], t[1])?,
-            edge_classify(t[1], t[2])?,
-            edge_classify(t[2], t[0])?,
-        ])
+        Ok(Some([
+            edge_classify(t[0], t[1]),
+            edge_classify(t[1], t[2]),
+            edge_classify(t[2], t[0]),
+        ]))
     }
 
     /// Validates that every finite face has a strict CDT simplex classification.
@@ -1179,7 +1246,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
 
         for face in self.geometry.faces() {
-            if self.simplex_type(&face).is_none() {
+            if self.simplex_type(&face)?.is_none() {
                 return Err(CdtError::ValidationFailed {
                     check: CdtValidationCheck::SimplexClassification,
                     failure: CdtValidationFailure::NonStrictSimplex {
@@ -1229,11 +1296,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
             return Err(self.stale_foliation_error());
         }
 
-        Ok(self
-            .geometry
-            .faces()
-            .filter(|face| self.simplex_type(face).is_none())
-            .count())
+        self.geometry.faces().try_fold(0_usize, |count, face| {
+            self.simplex_type(&face)
+                .map(|simplex_type| count + usize::from(simplex_type.is_none()))
+        })
     }
 
     /// Classifies every triangle and stores the result as simplex data.
@@ -1269,7 +1335,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let faces: Vec<_> = self.geometry.faces().collect();
         let mut classifications = Vec::with_capacity(faces.len());
         for face in &faces {
-            let Some(ct) = self.simplex_type(face) else {
+            let Some(ct) = self.simplex_type(face)? else {
                 return Err(CdtError::ValidationFailed {
                     check: CdtValidationCheck::SimplexClassification,
                     failure: CdtValidationFailure::NonStrictSimplex {
@@ -1396,6 +1462,15 @@ fn volume_profile_count_overflow() -> CdtError {
 }
 
 const OPEN_BOUNDARY_TIME_COORDINATE_EPSILON: f64 = 1e-9;
+
+fn geometry_query_error(context: &str, error: &DelaunayError) -> CdtError {
+    CdtError::ValidationFailed {
+        check: CdtValidationCheck::Geometry,
+        failure: CdtValidationFailure::BackendGeometry {
+            detail: format!("{context} query failed: {error}"),
+        },
+    }
+}
 
 type SlabEdge = (DelaunayVertexHandle, DelaunayVertexHandle);
 type SlabCrossing<'a> = (&'a SlabEdge, &'a SlabEdge);
@@ -1546,7 +1621,7 @@ mod tests {
     #[test]
     fn slice_order_matching_accepts_only_coordinate_order_or_reversal() {
         let tri = strict_strip(4, 2);
-        let path_order = tri.vertices_at_time(0);
+        let path_order = tri.vertices_at_time(0).collect::<Vec<_>>();
         let reversed_order = path_order.iter().rev().cloned().collect::<Vec<_>>();
         let mut rotated_order = path_order.clone();
         rotated_order.rotate_left(1);
@@ -1586,8 +1661,8 @@ mod tests {
     #[test]
     fn first_slab_crossing_ignores_incident_edges_and_reports_inversion() {
         let tri = strict_strip(4, 2);
-        let lower = tri.vertices_at_time(0);
-        let upper = tri.vertices_at_time(1);
+        let lower = tri.vertices_at_time(0).collect::<Vec<_>>();
+        let upper = tri.vertices_at_time(1).collect::<Vec<_>>();
         let lower_positions = lower
             .iter()
             .cloned()
@@ -1625,8 +1700,8 @@ mod tests {
     #[test]
     fn slab_crossing_skips_missing_positions_and_ties() {
         let tri = strict_strip(4, 2);
-        let lower = tri.vertices_at_time(0);
-        let upper = tri.vertices_at_time(1);
+        let lower = tri.vertices_at_time(0).collect::<Vec<_>>();
+        let upper = tri.vertices_at_time(1).collect::<Vec<_>>();
         let mut lower_positions = lower
             .iter()
             .cloned()
@@ -1791,7 +1866,7 @@ mod tests {
         assert!(tri.cache.edge_count.is_none());
         assert_eq!(tri.edge_count(), initial_edge_count);
         for vh in tri.geometry().vertices() {
-            assert!(tri.time_label(&vh).is_some());
+            assert!(tri.time_label(&vh).is_ok_and(|label| label.is_some()));
         }
     }
 
@@ -1865,17 +1940,17 @@ mod tests {
         assert!(!tri.has_foliation());
         assert!(tri.foliation().is_none());
         assert!(tri.slice_sizes().is_empty());
-        assert!(tri.vertices_at_time(0).is_empty());
+        assert!(tri.vertices_at_time(0).next().is_none());
 
         tri.assign_foliation_by_y(slice_count(1))
             .expect("Should assign single-slice foliation");
 
         assert!(tri.has_foliation());
         assert_eq!(tri.slice_sizes(), &[tri.vertex_count()]);
-        assert_eq!(tri.vertices_at_time(0).len(), tri.vertex_count());
-        assert!(tri.vertices_at_time(999).is_empty());
+        assert_eq!(tri.vertices_at_time(0).count(), tri.vertex_count());
+        assert!(tri.vertices_at_time(999).next().is_none());
         for vh in tri.geometry().vertices() {
-            assert_eq!(tri.time_label(&vh), Some(0));
+            assert_eq!(tri.time_label(&vh), Ok(Some(0)));
         }
     }
 
@@ -1907,12 +1982,12 @@ mod tests {
 
         assert!(!tri.has_foliation());
         assert!(tri.foliation().is_none());
-        assert_eq!(tri.time_label(&vertex), None);
-        assert!(tri.vertices_at_time(label).is_empty());
-        assert_eq!(tri.edge_type(&edge), None);
-        assert_eq!(tri.simplex_type(&face), None);
-        assert_eq!(tri.face_edge_types(&face), None);
-        assert_eq!(tri.simplex_type_from_data(&face), None);
+        assert_eq!(tri.time_label(&vertex), Ok(None));
+        assert!(tri.vertices_at_time(label).next().is_none());
+        assert_eq!(tri.edge_type(&edge), Ok(None));
+        assert_eq!(tri.simplex_type(&face), Ok(None));
+        assert_eq!(tri.face_edge_types(&face), Ok(None));
+        assert_eq!(tri.simplex_type_from_data(&face), Ok(None));
         assert_matches!(
             tri.strict_causal_simplex_violation_count(),
             Err(CdtError::Foliation(FoliationError::StaleBookkeeping { .. }))
@@ -1935,8 +2010,8 @@ mod tests {
         let tri = CdtTriangulation::from_seeded_points(5, 2, 2, TEST_POINT_SEED)
             .expect("create triangulation without foliation");
         for face in tri.geometry().faces() {
-            assert!(tri.face_edge_types(&face).is_none());
-            assert_eq!(tri.simplex_type(&face), None);
+            assert_eq!(tri.face_edge_types(&face), Ok(None));
+            assert_eq!(tri.simplex_type(&face), Ok(None));
         }
         tri.validate_simplex_classification()
             .expect("missing foliation should validate vacuously");
@@ -1949,6 +2024,7 @@ mod tests {
         for face in tri.geometry().faces() {
             let edge_types = tri
                 .face_edge_types(&face)
+                .expect("Delaunay strip face query should succeed")
                 .expect("Delaunay strip face should expose edge types");
             assert_eq!(
                 edge_types
@@ -1986,13 +2062,14 @@ mod tests {
         assert_eq!(tri.simplex_type_from_data(&face), tri.simplex_type(&face));
         let live_ct = tri
             .simplex_type(&face)
+            .expect("single face query should succeed")
             .expect("Single face should be classifiable");
         assert_matches!(live_ct, SimplexType::Up | SimplexType::Down);
 
         tri.classify_all_simplices()
             .expect("Should classify simplices with foliation")
             .expect("Foliation is present");
-        assert_eq!(tri.simplex_type_from_data(&face), Some(live_ct));
+        assert_eq!(tri.simplex_type_from_data(&face), Ok(Some(live_ct)));
 
         let vertex_to_mutate = tri
             .geometry()
@@ -2002,7 +2079,7 @@ mod tests {
         tri.set_vertex_data(&vertex_to_mutate, Some(7))
             .expect("Expected valid vertex handle while mutating label");
 
-        assert_eq!(tri.simplex_type_from_data(&face), None);
+        assert_eq!(tri.simplex_type_from_data(&face), Ok(None));
     }
 
     #[test]
@@ -2064,7 +2141,7 @@ mod tests {
         assert_eq!(tri.slice_sizes().len(), 2);
         assert_eq!(tri.slice_sizes().iter().sum::<usize>(), tri.vertex_count());
         for face in tri.geometry().faces() {
-            assert_eq!(tri.simplex_type_from_data(&face), None);
+            assert_eq!(tri.simplex_type_from_data(&face), Ok(None));
         }
         assert_matches!(
             tri.validate_foliation(),

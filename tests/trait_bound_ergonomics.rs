@@ -65,25 +65,25 @@ impl TriangulationQuery for MinimalBackend {
         empty()
     }
 
-    fn vertex_coordinates(
-        &self,
+    fn vertex_coordinates<'a>(
+        &'a self,
         _vertex: &Self::VertexHandle,
-    ) -> Result<Vec<Self::Coordinate>, Self::Error> {
+    ) -> Result<&'a [Self::Coordinate], Self::Error> {
         Err(MinimalBackendError)
     }
 
-    fn face_vertices(
-        &self,
+    fn face_vertices<'a>(
+        &'a self,
         _face: &Self::FaceHandle,
-    ) -> Result<Vec<Self::VertexHandle>, Self::Error> {
-        Err(MinimalBackendError)
+    ) -> Result<impl ExactSizeIterator<Item = Self::VertexHandle> + 'a, Self::Error> {
+        Err::<std::iter::Empty<Self::VertexHandle>, Self::Error>(MinimalBackendError)
     }
 
     fn edge_endpoints(
         &self,
         _edge: &Self::EdgeHandle,
-    ) -> Option<(Self::VertexHandle, Self::VertexHandle)> {
-        None
+    ) -> Result<(Self::VertexHandle, Self::VertexHandle), Self::Error> {
+        Err(MinimalBackendError)
     }
 
     fn edge_adjacent_faces(
@@ -93,25 +93,25 @@ impl TriangulationQuery for MinimalBackend {
         Ok(None)
     }
 
-    fn adjacent_faces(
-        &self,
+    fn adjacent_faces<'a>(
+        &'a self,
         _vertex: &Self::VertexHandle,
-    ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
-        Ok(Vec::new())
+    ) -> Result<impl Iterator<Item = Self::FaceHandle> + 'a, Self::Error> {
+        Ok(empty())
     }
 
-    fn incident_edges(
-        &self,
+    fn incident_edges<'a>(
+        &'a self,
         _vertex: &Self::VertexHandle,
-    ) -> Result<Vec<Self::EdgeHandle>, Self::Error> {
-        Ok(Vec::new())
+    ) -> Result<impl Iterator<Item = Self::EdgeHandle> + 'a, Self::Error> {
+        Ok(empty())
     }
 
-    fn face_neighbors(
-        &self,
+    fn face_neighbors<'a>(
+        &'a self,
         _face: &Self::FaceHandle,
-    ) -> Result<Vec<Self::FaceHandle>, Self::Error> {
-        Ok(Vec::new())
+    ) -> Result<impl Iterator<Item = Self::FaceHandle> + 'a, Self::Error> {
+        Ok(empty())
     }
 
     fn is_valid(&self) -> bool {

@@ -169,24 +169,24 @@ fn bench_geometry_queries(c: &mut Criterion) {
     // Benchmark vertex iteration
     group.bench_function("iterate_vertices", |b| {
         b.iter(|| {
-            let vertices: Vec<_> = geometry.vertices().collect();
-            black_box(vertices)
+            let vertex_count = geometry.vertices().map(black_box).count();
+            black_box(vertex_count)
         });
     });
 
     // Benchmark edge iteration
     group.bench_function("iterate_edges", |b| {
         b.iter(|| {
-            let edges: Vec<_> = geometry.edges().collect();
-            black_box(edges)
+            let edge_count = geometry.edges().map(black_box).count();
+            black_box(edge_count)
         });
     });
 
     // Benchmark face iteration
     group.bench_function("iterate_faces", |b| {
         b.iter(|| {
-            let faces: Vec<_> = geometry.faces().collect();
-            black_box(faces)
+            let face_count = geometry.faces().map(black_box).count();
+            black_box(face_count)
         });
     });
 

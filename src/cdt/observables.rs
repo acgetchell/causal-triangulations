@@ -12,6 +12,8 @@ use crate::errors::{
 use crate::geometry::traits::TriangulationQuery;
 use crate::util::usize_to_f64;
 use std::collections::{HashMap, VecDeque};
+use std::fmt::Debug;
+use std::hash::Hash;
 use std::mem;
 
 const MIN_SPECTRAL_DIFFUSION_STEP: usize = 2;
@@ -151,10 +153,34 @@ fn dual_adjacency(triangulation: &CdtTriangulation2D) -> CdtResult<Vec<Vec<usize
                         detail: err.to_string(),
                     },
                 })?;
-            Ok(neighbors
-                .into_iter()
-                .filter_map(|neighbor| face_indices.get(&neighbor).copied())
-                .collect())
+            face_neighbor_indices(face, neighbors, &face_indices)
+        })
+        .collect()
+}
+
+/// Resolves backend-reported face neighbors without hiding stale adjacency handles.
+fn face_neighbor_indices<Handle>(
+    face: &Handle,
+    neighbors: impl IntoIterator<Item = Handle>,
+    face_indices: &HashMap<Handle, usize>,
+) -> CdtResult<Vec<usize>>
+where
+    Handle: Debug + Eq + Hash,
+{
+    neighbors
+        .into_iter()
+        .map(|neighbor| {
+            face_indices
+                .get(&neighbor)
+                .copied()
+                .ok_or_else(|| CdtError::ValidationFailed {
+                    check: CdtValidationCheck::Geometry,
+                    failure: CdtValidationFailure::BackendGeometry {
+                        detail: format!(
+                            "face {face:?} reported neighbor {neighbor:?}, which is not a live face"
+                        ),
+                    },
+                })
         })
         .collect()
 }
@@ -258,17 +284,20 @@ fn dual_graph_distances(
 
 /// Fits the slope of `log(volume)` against `log(radius)`.
 fn fit_log_log_slope(ball_volumes: &[f64]) -> CdtResult<Option<f64>> {
-    let mut samples = Vec::new();
-    for (radius, &volume) in ball_volumes.iter().enumerate().skip(1) {
-        // Exclude root-only samples: ln(1.0) = 0 biases the slope toward zero.
-        if volume > 1.0 && volume.is_finite() {
-            let radius_f64 = usize_to_f64(radius).ok_or_else(|| {
-                observable_numeric_error(ObservableQuantity::DualGraphRadius, radius)
-            })?;
-            samples.push((radius_f64.ln(), volume.ln()));
-        }
-    }
-    Ok(fit_linear_slope(samples))
+    // Exclude root-only samples: ln(1.0) = 0 biases the slope toward zero.
+    let samples = ball_volumes
+        .iter()
+        .enumerate()
+        .skip(1)
+        .filter(|(_, volume)| **volume > 1.0 && volume.is_finite())
+        .map(|(radius, &volume)| {
+            usize_to_f64(radius)
+                .map(|radius_f64| (radius_f64.ln(), volume.ln()))
+                .ok_or_else(|| {
+                    observable_numeric_error(ObservableQuantity::DualGraphRadius, radius)
+                })
+        });
+    fit_linear_slope(samples)
 }
 
 /// Estimates spectral dimension from a precomputed dual adjacency list.
@@ -296,6 +325,24 @@ fn average_return_probabilities(adjacency: &[Vec<usize>], max_step: usize) -> Cd
     let mut sums = vec![0.0; max_step + 1];
     let mut current = vec![0.0; node_count];
     let mut next = vec![0.0; node_count];
+    let live_neighbor_counts = adjacency
+        .iter()
+        .map(|neighbors| {
+            let live_neighbor_count = neighbors
+                .iter()
+                .filter(|&&neighbor| neighbor < node_count)
+                .count();
+            if live_neighbor_count == 0 {
+                return Ok(None);
+            }
+            usize_to_f64(live_neighbor_count).map(Some).ok_or_else(|| {
+                observable_numeric_error(
+                    ObservableQuantity::LiveDualNeighborCount,
+                    live_neighbor_count,
+                )
+            })
+        })
+        .collect::<CdtResult<Vec<_>>>()?;
 
     for root in 0..node_count {
         current.fill(0.0);
@@ -314,22 +361,12 @@ fn average_return_probabilities(adjacency: &[Vec<usize>], max_step: usize) -> Cd
                     probability.mul_add(-SPECTRAL_SELF_LOOP_PROBABILITY, probability);
                 next[index] += stay;
 
-                let live_neighbor_count = adjacency[index]
-                    .iter()
-                    .filter(|&&neighbor| neighbor < node_count)
-                    .count();
-                if live_neighbor_count == 0 {
+                let Some(live_neighbor_count) = live_neighbor_counts[index] else {
                     next[index] += move_probability;
                     continue;
-                }
+                };
 
-                let neighbor_count = usize_to_f64(live_neighbor_count).ok_or_else(|| {
-                    observable_numeric_error(
-                        ObservableQuantity::LiveDualNeighborCount,
-                        live_neighbor_count,
-                    )
-                })?;
-                let share = move_probability / neighbor_count;
+                let share = move_probability / live_neighbor_count;
                 for neighbor in adjacency[index]
                     .iter()
                     .copied()
@@ -352,20 +389,20 @@ fn average_return_probabilities(adjacency: &[Vec<usize>], max_step: usize) -> Cd
 
 /// Fits `d_s = -2 d log(P(sigma)) / d log(sigma)` from return probabilities.
 fn fit_spectral_dimension(return_probabilities: &[f64]) -> CdtResult<Option<f64>> {
-    let mut samples = Vec::new();
-    for (step, &probability) in return_probabilities
+    let samples = return_probabilities
         .iter()
         .enumerate()
         .skip(MIN_SPECTRAL_DIFFUSION_STEP)
-    {
-        if probability > 0.0 && probability < 1.0 && probability.is_finite() {
-            let step_f64 = usize_to_f64(step)
-                .ok_or_else(|| observable_numeric_error(ObservableQuantity::DiffusionStep, step))?;
-            samples.push((step_f64.ln(), probability.ln()));
-        }
-    }
+        .filter(|(_, probability)| {
+            **probability > 0.0 && **probability < 1.0 && probability.is_finite()
+        })
+        .map(|(step, &probability)| {
+            usize_to_f64(step)
+                .map(|step_f64| (step_f64.ln(), probability.ln()))
+                .ok_or_else(|| observable_numeric_error(ObservableQuantity::DiffusionStep, step))
+        });
 
-    let Some(slope) = fit_linear_slope(samples) else {
+    let Some(slope) = fit_linear_slope(samples)? else {
         return Ok(None);
     };
 
@@ -374,31 +411,38 @@ fn fit_spectral_dimension(return_probabilities: &[f64]) -> CdtResult<Option<f64>
 }
 
 /// Fits the slope of `y = a + bx` from streaming `(x, y)` samples.
-fn fit_linear_slope(samples: impl IntoIterator<Item = (f64, f64)>) -> Option<f64> {
-    let (count, x_total, y_total, square_total, product_total) = samples.into_iter().fold(
+fn fit_linear_slope(
+    samples: impl IntoIterator<Item = CdtResult<(f64, f64)>>,
+) -> CdtResult<Option<f64>> {
+    let (count, x_total, y_total, square_total, product_total) = samples.into_iter().try_fold(
         (0_usize, 0.0, 0.0, 0.0, 0.0),
-        |(count, x_total, y_total, square_total, product_total), (x, y)| {
-            (
+        |(count, x_total, y_total, square_total, product_total), sample| {
+            let (x, y) = sample?;
+            Ok::<_, CdtError>((
                 count + 1,
                 x_total + x,
                 y_total + y,
                 x.mul_add(x, square_total),
                 x.mul_add(y, product_total),
-            )
+            ))
         },
-    );
+    )?;
 
     if count < 2 {
-        return None;
+        return Ok(None);
     }
 
-    let count_f64 = usize_to_f64(count)?;
+    let Some(count_f64) = usize_to_f64(count) else {
+        return Ok(None);
+    };
     let denominator = count_f64.mul_add(square_total, -x_total * x_total);
     if denominator <= f64::EPSILON {
-        return None;
+        return Ok(None);
     }
 
-    Some(count_f64.mul_add(product_total, -x_total * y_total) / denominator)
+    Ok(Some(
+        count_f64.mul_add(product_total, -x_total * y_total) / denominator,
+    ))
 }
 
 /// Maps impossible-sized observable counters into the public conversion error contract.
@@ -411,6 +455,23 @@ mod tests {
     use super::*;
     use crate::cdt::triangulation::CdtTriangulation;
     use approx::assert_relative_eq;
+    use std::assert_matches;
+
+    #[test]
+    fn face_neighbor_indices_rejects_neighbors_missing_from_live_faces() {
+        let face_indices = HashMap::from([(10, 0), (11, 1)]);
+
+        let error = face_neighbor_indices(&10, [11, 99], &face_indices)
+            .expect_err("stale face adjacency should fail validation");
+
+        assert_matches!(
+            error,
+            CdtError::ValidationFailed {
+                check: CdtValidationCheck::Geometry,
+                failure: CdtValidationFailure::BackendGeometry { detail },
+            } if detail.contains("face 10") && detail.contains("neighbor 99")
+        );
+    }
 
     #[test]
     fn observable_numeric_errors_preserve_quantity_and_value() {
@@ -573,6 +634,20 @@ mod tests {
 
         let probabilities = average_return_probabilities(&adjacency, 4)
             .expect("small two-node graph should not fail numerically");
+
+        assert_relative_eq!(probabilities[0], 1.0);
+        assert_relative_eq!(probabilities[1], 0.5);
+        assert_relative_eq!(probabilities[2], 0.5);
+        assert_relative_eq!(probabilities[3], 0.5);
+        assert_relative_eq!(probabilities[4], 0.5);
+    }
+
+    #[test]
+    fn return_probabilities_ignore_out_of_bounds_neighbors() {
+        let adjacency = vec![vec![1, 99], vec![0]];
+
+        let probabilities = average_return_probabilities(&adjacency, 4)
+            .expect("out-of-bounds neighbors should be excluded from diffusion");
 
         assert_relative_eq!(probabilities[0], 1.0);
         assert_relative_eq!(probabilities[1], 0.5);

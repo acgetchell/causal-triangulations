@@ -1392,11 +1392,10 @@ impl ProposalStatistics {
         let terminal_outcomes = terminal_counters
             .into_iter()
             .try_fold(0_u64, u64::checked_add);
-        let mut terminal_overflowed = false;
-        let terminal_outcomes = terminal_outcomes.unwrap_or_else(|| {
-            terminal_overflowed = true;
-            u64::MAX
-        });
+        let (terminal_outcomes, terminal_overflowed) = terminal_outcomes
+            .map_or((u64::MAX, true), |terminal_outcomes| {
+                (terminal_outcomes, false)
+            });
         if (terminal_saturated || terminal_overflowed) && wire.move_family_proposals != u64::MAX {
             return Err(checkpoint_resume_failed(
                 CheckpointResumeFailure::ProposalTerminalOutcomeCountMismatch {

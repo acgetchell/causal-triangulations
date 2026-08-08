@@ -10,8 +10,8 @@ use super::telemetry::{MonteCarloStep, ProposalStatistics};
 use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveStatistics, MoveType};
 use crate::cdt::results::{
-    CdtScalarTraceRow, Measurement, SimulationResultsBackend, SimulationResultsParts,
-    validate_scalar_trace_rows, validate_trajectory_observables,
+    CdtScalarTraceRow, Measurement, SimulationHistory, SimulationResultsBackend,
+    SimulationResultsParts, validate_scalar_trace_rows, validate_trajectory_observables,
 };
 use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::errors::{
@@ -467,6 +467,16 @@ impl CdtMcmcCheckpoint {
     #[must_use]
     pub fn measurements(&self) -> &[Measurement] {
         &self.measurements
+    }
+
+    /// Reconstructs the chronological simulation history without allocating.
+    ///
+    /// The returned iterator borrows the checkpoint's canonical step,
+    /// measurement, and triangulation metadata instead of reading a duplicate
+    /// serialized event log.
+    #[must_use]
+    pub fn simulation_history(&self) -> SimulationHistory<'_> {
+        SimulationHistory::new(self.triangulation(), &self.steps, &self.measurements)
     }
 
     /// Converts the checkpoint into a complete simulation result snapshot.

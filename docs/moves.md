@@ -129,7 +129,8 @@ see `src/cdt/metropolis/runner.rs` and `src/cdt/metropolis/adapter.rs`. The CDT 
 forward/reverse local-site ratio, then the upstream `markov-chain-monte-carlo` sampler owns the Metropolis-Hastings accept/reject draw and generic chain
 counters; see `docs/metropolis.md`. Only accepted proposals swap the cloned, mutated state into the live simulation. Ordinary causal, geometric, or backend
 edit failures on the cloned state are self-loop proposal outcomes recorded in `ProposalStatistics`; hard backend mutation or invariant-refresh failures still
-return `CdtError::MetropolisMoveApplicationFailed`.
+return `CdtError::MetropolisMoveApplicationFailed`. Because the cloned proposed state already provides isolation, this path uses the draft mutation entry point
+and does not take the additional rollback snapshot used by direct public move attempts.
 
 ## Ensemble And Volume Fixing
 

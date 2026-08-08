@@ -31,7 +31,7 @@ Time labels are stored **directly as vertex data** in the Delaunay triangulation
 CdtTriangulation<B>
 ├── geometry: B              (DelaunayBackend — owns the triangulation)
 │   └── Vertex.data: Option<u32>  (per-vertex time-slice label)
-├── metadata: CdtMetadata    (time_slices, dimension, history)
+├── metadata: CdtMetadata    (time_slices, dimension, topology, creation facts)
 └── foliation: Option<Foliation>
     ├── slice_sizes: Vec<usize>  (per-slice vertex counts)
     └── num_slices: u32

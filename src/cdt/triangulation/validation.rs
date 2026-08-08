@@ -9,7 +9,7 @@ use crate::errors::{
 };
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::DelaunayError;
-use crate::geometry::traits::TriangulationQuery;
+use crate::geometry::traits::{TriangulationQuery, exactly_three};
 use std::num::NonZeroUsize;
 
 /// Named invariant sets for validating a CDT triangulation.
@@ -400,62 +400,63 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 }
             })?;
 
-            if verts.len() != 3 {
+            let actual_vertex_count = verts.len();
+            let Some([v0, v1, v2]) = exactly_three(verts) else {
                 return Err(CdtError::ValidationFailed {
                     check: CdtValidationCheck::Causality,
                     failure: CdtValidationFailure::FaceVertexCount {
                         face: format!("{:?}", face.simplex_key()),
-                        actual: verts.len(),
+                        actual: actual_vertex_count,
                         expected: 3,
                     },
                 });
-            }
+            };
 
             let t0 = self
                 .geometry
-                .vertex_data_by_key(verts[0].vertex_key())
+                .vertex_data_by_key(v0.vertex_key())
                 .ok_or_else(|| {
                     log::debug!(
                         "Causality validation found unlabeled vertex {:?} while checking face {:?}",
-                        verts[0].vertex_key(),
+                        v0.vertex_key(),
                         face,
                     );
                     CdtError::ValidationFailed {
                         check: CdtValidationCheck::Causality,
                         failure: CdtValidationFailure::MissingVertexTimeLabel {
-                            vertex: format!("{:?}", verts[0].vertex_key()),
+                            vertex: format!("{:?}", v0.vertex_key()),
                         },
                     }
                 })?;
             let t1 = self
                 .geometry
-                .vertex_data_by_key(verts[1].vertex_key())
+                .vertex_data_by_key(v1.vertex_key())
                 .ok_or_else(|| {
                     log::debug!(
                         "Causality validation found unlabeled vertex {:?} while checking face {:?}",
-                        verts[1].vertex_key(),
+                        v1.vertex_key(),
                         face,
                     );
                     CdtError::ValidationFailed {
                         check: CdtValidationCheck::Causality,
                         failure: CdtValidationFailure::MissingVertexTimeLabel {
-                            vertex: format!("{:?}", verts[1].vertex_key()),
+                            vertex: format!("{:?}", v1.vertex_key()),
                         },
                     }
                 })?;
             let t2 = self
                 .geometry
-                .vertex_data_by_key(verts[2].vertex_key())
+                .vertex_data_by_key(v2.vertex_key())
                 .ok_or_else(|| {
                     log::debug!(
                         "Causality validation found unlabeled vertex {:?} while checking face {:?}",
-                        verts[2].vertex_key(),
+                        v2.vertex_key(),
                         face,
                     );
                     CdtError::ValidationFailed {
                         check: CdtValidationCheck::Causality,
                         failure: CdtValidationFailure::MissingVertexTimeLabel {
-                            vertex: format!("{:?}", verts[2].vertex_key()),
+                            vertex: format!("{:?}", v2.vertex_key()),
                         },
                     }
                 })?;
@@ -559,14 +560,14 @@ mod tests {
         let mut edges: Vec<_> = backend
             .edges()
             .map(|edge| match backend.edge_endpoints(&edge) {
-                Some((v0, v1)) => format!(
+                Ok((v0, v1)) => format!(
                     "{:?}<->{:?}:{:?}->{:?}",
                     v0.vertex_key(),
                     v1.vertex_key(),
                     backend.vertex_data_by_key(v0.vertex_key()),
                     backend.vertex_data_by_key(v1.vertex_key())
                 ),
-                None => "endpoint_error:unavailable".to_string(),
+                Err(error) => format!("endpoint_error:{error}"),
             })
             .collect();
         edges.sort_unstable();
@@ -709,8 +710,10 @@ mod tests {
             .expect("deterministic causal triangle should start causally valid");
         assert!(
             tri.geometry().faces().any(|face| {
-                tri.face_edge_types(&face)
-                    .is_some_and(|ets| ets.iter().any(|e| matches!(e, EdgeType::Timelike)))
+                tri.face_edge_types(&face).is_ok_and(|edge_types| {
+                    edge_types
+                        .is_some_and(|ets| ets.iter().any(|e| matches!(e, EdgeType::Timelike)))
+                })
             }),
             "Deterministic causal triangle should contain a timelike edge; {}",
             deterministic_triangle_debug_summary(tri.geometry())

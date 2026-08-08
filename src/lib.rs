@@ -201,10 +201,9 @@ pub use cdt::proposal_policy::{
     CdtProposalPolicyView, CdtProposalSiteId, CdtProposalSiteIdError, CdtProposalSiteIds,
     UniformCdtMoveFamilyPolicy,
 };
-pub use cdt::results::{Measurement, SimulationResultsBackend};
+pub use cdt::results::{Measurement, SimulationEvent, SimulationHistory, SimulationResultsBackend};
 pub use cdt::triangulation::{
     CdtMetadata, CdtSimplexCounts, CdtTriangulation, CdtTriangulation2D, CdtValidationProfile,
-    SimulationEvent,
 };
 pub use config::{
     CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, ValidatedCdtConfig,
@@ -380,7 +379,7 @@ pub mod prelude {
         };
     }
 
-    /// Focused exports for CDT triangulation construction, queries, classification, and history events.
+    /// Focused exports for CDT triangulation construction, queries, and classification.
     ///
     /// Lighter than `prelude::*` — just the types needed for building and
     /// inspecting triangulations (the most common doctest pattern).
@@ -403,7 +402,7 @@ pub mod prelude {
         pub use crate::geometry::traits::TriangulationQuery;
         pub use crate::{
             CdtMetadata, CdtSimplexCounts, CdtTriangulation, CdtTriangulation2D,
-            CdtValidationProfile, SimulationEvent,
+            CdtValidationProfile,
         };
     }
 
@@ -477,8 +476,9 @@ pub mod prelude {
             CdtProposalPolicyView, CdtProposalSiteId, CdtProposalSiteIdError, CdtProposalSiteIds,
             UniformCdtMoveFamilyPolicy,
         };
-        pub use crate::cdt::results::{Measurement, SimulationResultsBackend};
-        pub use crate::cdt::triangulation::SimulationEvent;
+        pub use crate::cdt::results::{
+            Measurement, SimulationEvent, SimulationHistory, SimulationResultsBackend,
+        };
         pub use crate::config::{CdtConfig, CdtTopology, ValidatedCdtConfig};
         pub use crate::errors::{CdtError, CdtResult};
         pub use crate::geometry::traits::TriangulationQuery;

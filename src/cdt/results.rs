@@ -30,6 +30,7 @@ use serde_json::to_writer_pretty;
 use std::fmt::Display;
 use std::fs::{File, create_dir_all};
 use std::io::{BufWriter, Write};
+use std::iter::FusedIterator;
 use std::num::NonZeroU32;
 use std::path::Path;
 use std::time::Duration;
@@ -63,6 +64,200 @@ pub struct Measurement {
     /// foliation.
     volume_profile: Vec<u32>,
 }
+
+/// Event reconstructed from canonical CDT result or checkpoint telemetry.
+///
+/// Complete histories are exposed lazily by
+/// [`SimulationResultsBackend::simulation_history`] and
+/// [`CdtMcmcCheckpoint::simulation_history`](crate::cdt::metropolis::CdtMcmcCheckpoint::simulation_history).
+/// Events are derived from creation metadata, step telemetry, and measurement
+/// telemetry rather than stored as a duplicate log.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::simulation::{MoveType, SimulationEvent};
+/// use std::assert_matches;
+///
+/// let event = SimulationEvent::MoveAttempted {
+///     move_type: MoveType::Move13Add,
+///     step: 7,
+/// };
+///
+/// assert_matches!(
+///     event,
+///     SimulationEvent::MoveAttempted {
+///         move_type: MoveType::Move13Add,
+///         step: 7,
+///     }
+/// );
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SimulationEvent {
+    /// Triangulation creation event.
+    Created {
+        /// Initial number of vertices.
+        vertex_count: usize,
+        /// Number of time slices.
+        time_slices: u32,
+    },
+    /// Ergodic move proposal event.
+    MoveAttempted {
+        /// Type of move attempted.
+        move_type: MoveType,
+        /// Simulation step number.
+        step: u64,
+    },
+    /// Accepted ergodic move event.
+    MoveAccepted {
+        /// Type of move accepted.
+        move_type: MoveType,
+        /// Simulation step number.
+        step: u64,
+        /// Change in action from this move.
+        action_change: f64,
+    },
+    /// Observable measurement event.
+    MeasurementTaken {
+        /// Simulation step number.
+        step: u64,
+        /// Action value measured.
+        action: f64,
+    },
+}
+
+/// Lazy chronological view of simulation events reconstructed from canonical telemetry.
+///
+/// The iterator yields the triangulation creation event, an optional step-0
+/// measurement, and then each attempted move, accepted move, and scheduled
+/// measurement in step order. It borrows result or checkpoint storage and does
+/// not allocate or duplicate the serialized step and measurement streams.
+#[derive(Debug, Clone)]
+pub struct SimulationHistory<'a> {
+    initial_vertex_count: usize,
+    time_slices: u32,
+    steps: &'a [MonteCarloStep],
+    measurements: &'a [Measurement],
+    step_index: usize,
+    measurement_index: usize,
+    phase: SimulationHistoryPhase,
+    remaining: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SimulationHistoryPhase {
+    Created,
+    InitialMeasurement,
+    Attempted,
+    Accepted,
+    StepMeasurements,
+    Finished,
+}
+
+impl<'a> SimulationHistory<'a> {
+    /// Creates a borrowed event view over validated trajectory telemetry.
+    pub(crate) fn new(
+        triangulation: &CdtTriangulation2D,
+        steps: &'a [MonteCarloStep],
+        measurements: &'a [Measurement],
+    ) -> Self {
+        let remaining = 1
+            + measurements.len()
+            + steps.len()
+            + steps.iter().filter(|step| step.accepted()).count();
+        Self {
+            initial_vertex_count: triangulation.metadata().initial_vertex_count(),
+            time_slices: triangulation.time_slices().get(),
+            steps,
+            measurements,
+            step_index: 0,
+            measurement_index: 0,
+            phase: SimulationHistoryPhase::Created,
+            remaining,
+        }
+    }
+
+    const fn yielded(&mut self, event: SimulationEvent) -> SimulationEvent {
+        self.remaining -= 1;
+        event
+    }
+}
+
+impl Iterator for SimulationHistory<'_> {
+    type Item = SimulationEvent;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.phase {
+                SimulationHistoryPhase::Created => {
+                    self.phase = SimulationHistoryPhase::InitialMeasurement;
+                    return Some(self.yielded(SimulationEvent::Created {
+                        vertex_count: self.initial_vertex_count,
+                        time_slices: self.time_slices,
+                    }));
+                }
+                SimulationHistoryPhase::InitialMeasurement => {
+                    self.phase = SimulationHistoryPhase::Attempted;
+                    if let Some(measurement) = self.measurements.get(self.measurement_index)
+                        && measurement.step() == 0
+                    {
+                        self.measurement_index += 1;
+                        return Some(self.yielded(SimulationEvent::MeasurementTaken {
+                            step: 0,
+                            action: measurement.action(),
+                        }));
+                    }
+                }
+                SimulationHistoryPhase::Attempted => {
+                    let Some(step) = self.steps.get(self.step_index) else {
+                        self.phase = SimulationHistoryPhase::Finished;
+                        continue;
+                    };
+                    self.phase = SimulationHistoryPhase::Accepted;
+                    return Some(self.yielded(SimulationEvent::MoveAttempted {
+                        move_type: step.move_type(),
+                        step: u64::from(step.step().get()),
+                    }));
+                }
+                SimulationHistoryPhase::Accepted => {
+                    let step = &self.steps[self.step_index];
+                    self.phase = SimulationHistoryPhase::StepMeasurements;
+                    if step.accepted() {
+                        return Some(self.yielded(SimulationEvent::MoveAccepted {
+                            move_type: step.move_type(),
+                            step: u64::from(step.step().get()),
+                            action_change:
+                                step.action_after().unwrap_or_else(|| step.action_before())
+                                    - step.action_before(),
+                        }));
+                    }
+                }
+                SimulationHistoryPhase::StepMeasurements => {
+                    let step = self.steps[self.step_index].step().get();
+                    if let Some(measurement) = self.measurements.get(self.measurement_index)
+                        && measurement.step() == step
+                    {
+                        self.measurement_index += 1;
+                        return Some(self.yielded(SimulationEvent::MeasurementTaken {
+                            step: u64::from(step),
+                            action: measurement.action(),
+                        }));
+                    }
+                    self.step_index += 1;
+                    self.phase = SimulationHistoryPhase::Attempted;
+                }
+                SimulationHistoryPhase::Finished => return None,
+            }
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.remaining, Some(self.remaining))
+    }
+}
+
+impl ExactSizeIterator for SimulationHistory<'_> {}
+impl FusedIterator for SimulationHistory<'_> {}
 
 /// Base observable columns emitted by [`SimulationResultsBackend::scalar_trace`].
 const SCALAR_TRACE_BASE_OBSERVABLES: [&str; 13] = [
@@ -128,6 +323,8 @@ pub(crate) struct CdtScalarTraceRow {
     move_type: MoveType,
     action_before: f64,
     seed: Option<u64>,
+    /// Step-0 profile retained independently of the initial measurement.
+    initial_volume_profile: Option<Vec<u32>>,
     volume_profile: Vec<u32>,
 }
 
@@ -214,6 +411,8 @@ struct CdtScalarTraceRowWire {
     action_before: f64,
     action_after: Option<f64>,
     seed: Option<u64>,
+    #[serde(default)]
+    initial_volume_profile: Option<Vec<u32>>,
     volume_profile: Vec<u32>,
 }
 
@@ -248,6 +447,7 @@ impl TryFrom<CdtScalarTraceRowWire> for CdtScalarTraceRow {
             move_type: wire.move_type,
             action_before: wire.action_before,
             seed: wire.seed,
+            initial_volume_profile: wire.initial_volume_profile,
             volume_profile: wire.volume_profile,
         };
         validate_scalar_trace_finite_fields(&row)?;
@@ -271,7 +471,7 @@ impl Serialize for CdtScalarTraceRow {
     where
         S: serde::Serializer,
     {
-        let mut state = serializer.serialize_struct("CdtScalarTraceRow", 13)?;
+        let mut state = serializer.serialize_struct("CdtScalarTraceRow", 14)?;
         state.serialize_field("step", &self.step)?;
         state.serialize_field("outcome", &self.payload.outcome())?;
         state.serialize_field("log_prob", &self.log_prob)?;
@@ -284,6 +484,7 @@ impl Serialize for CdtScalarTraceRow {
         state.serialize_field("action_before", &self.action_before)?;
         state.serialize_field("action_after", &self.payload.action_after())?;
         state.serialize_field("seed", &self.seed)?;
+        state.serialize_field("initial_volume_profile", &self.initial_volume_profile)?;
         state.serialize_field("volume_profile", &self.volume_profile)?;
         state.end()
     }
@@ -337,10 +538,17 @@ impl CdtScalarTraceRow {
             move_type,
             action_before,
             seed,
+            initial_volume_profile: None,
             volume_profile: triangulation.volume_profile()?,
         };
         validate_scalar_trace_finite_fields(&row)?;
         Ok(row)
+    }
+
+    /// Retains the trusted pre-sampling profile on the first trace row.
+    pub(crate) fn with_initial_volume_profile(mut self, initial_volume_profile: Vec<u32>) -> Self {
+        self.initial_volume_profile = Some(initial_volume_profile);
+        self
     }
 
     /// Converts the stored CDT outcome into the upstream trace outcome.
@@ -1017,12 +1225,20 @@ pub(crate) fn validate_trajectory_observables(
     let final_step = u32::try_from(steps.len()).map_err(|_| {
         checkpoint_resume_failed(CheckpointResumeFailure::StepTelemetryIndexOverflow)
     })?;
+    let initial_volume_profile = match (steps.first(), scalar_trace_rows.first()) {
+        (None, None) => Some(final_volume_profile.as_slice()),
+        (Some(step), Some(row)) => row.initial_volume_profile.as_deref().or_else(|| {
+            (!step.accepted() || matches!(step.move_type(), MoveType::Move22 | MoveType::EdgeFlip))
+                .then_some(row.volume_profile.as_slice())
+        }),
+        _ => None,
+    };
     let mut measurement_index = if let Some(initial_measurement) = measurements.first()
         && initial_measurement.step() == 0
     {
         validate_measurement_snapshot(initial_measurement, &current)?;
-        if final_step == 0 {
-            validate_measurement_profile_matches(initial_measurement, &final_volume_profile)?;
+        if let Some(initial_volume_profile) = initial_volume_profile {
+            validate_measurement_profile_matches(initial_measurement, initial_volume_profile)?;
         }
         1
     } else {
@@ -1771,7 +1987,7 @@ fn triangulation_vertex_time_labels(
                         ),
                     },
                 })?;
-        let time = triangulation.time_label(&handle);
+        let time = triangulation.time_label(&handle)?;
         labels.push(TriangulationVertexTimeLabel { vertex_id, time });
     }
     labels.sort_by(|left, right| left.vertex_id.cmp(&right.vertex_id));
@@ -2005,6 +2221,36 @@ impl SimulationResultsBackend {
         &self.measurements
     }
 
+    /// Reconstructs the chronological simulation history without allocating.
+    ///
+    /// Creation facts come from the final triangulation's immutable metadata;
+    /// move and measurement events borrow the canonical telemetry returned by
+    /// [`Self::steps`] and [`Self::measurements`]. The history itself is not
+    /// serialized as a second, potentially divergent event log.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::*;
+    /// use std::assert_matches;
+    ///
+    /// let results = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
+    ///     ActionConfig::default(),
+    /// )
+    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    ///
+    /// assert_matches!(
+    ///     results.simulation_history().next(),
+    ///     Some(SimulationEvent::Created { .. })
+    /// );
+    /// # Ok::<(), causal_triangulations::CdtError>(())
+    /// ```
+    #[must_use]
+    pub fn simulation_history(&self) -> SimulationHistory<'_> {
+        SimulationHistory::new(&self.triangulation, &self.steps, &self.measurements)
+    }
+
     /// Builds an upstream scalar trace for every completed Metropolis step.
     ///
     /// The trace uses chain id `0` and stores upstream accept/proposal metadata in
@@ -2221,22 +2467,18 @@ impl SimulationResultsBackend {
     #[must_use]
     pub fn average_volume_profile(&self) -> Vec<f64> {
         let mut measurement_count = 0_usize;
-        let mut profile_len = 0_usize;
-        for measurement in self.equilibrium_measurements_iter() {
+        let mut sums = Vec::new();
+        for measurement in self.equilibrium_measurements() {
             measurement_count += 1;
-            profile_len = profile_len.max(measurement.volume_profile().len());
-        }
-        if measurement_count == 0 || profile_len == 0 {
-            return Vec::new();
-        }
-
-        let mut sums = vec![0.0; profile_len];
-        for measurement in self.equilibrium_measurements_iter() {
+            sums.resize(sums.len().max(measurement.volume_profile().len()), 0.0);
             for (index, &volume) in measurement.volume_profile().iter().enumerate() {
                 sums[index] += <f64 as From<u32>>::from(volume);
             }
         }
 
+        if measurement_count == 0 || sums.is_empty() {
+            return Vec::new();
+        }
         let Some(count) = usize_to_f64(measurement_count) else {
             return Vec::new();
         };
@@ -2273,13 +2515,14 @@ impl SimulationResultsBackend {
     #[must_use]
     pub fn volume_fluctuations(&self) -> Vec<f64> {
         let means = self.average_volume_profile();
-        let n = self.equilibrium_measurements_iter().count();
-        if n < 2 || means.is_empty() {
+        if means.is_empty() {
             return Vec::new();
         }
 
+        let mut measurement_count = 0_usize;
         let mut variances = vec![0.0; means.len()];
-        for measurement in self.equilibrium_measurements_iter() {
+        for measurement in self.equilibrium_measurements() {
+            measurement_count += 1;
             for (index, mean) in means.iter().enumerate() {
                 let volume = measurement
                     .volume_profile()
@@ -2290,7 +2533,10 @@ impl SimulationResultsBackend {
             }
         }
 
-        let Some(denominator) = usize_to_f64(n - 1) else {
+        let Some(sample_count) = measurement_count.checked_sub(1).filter(|&count| count > 0) else {
+            return Vec::new();
+        };
+        let Some(denominator) = usize_to_f64(sample_count) else {
             return Vec::new();
         };
         variances
@@ -2403,15 +2649,11 @@ impl SimulationResultsBackend {
     /// }
     /// ```
     #[must_use]
-    pub fn equilibrium_measurements(&self) -> Vec<&Measurement> {
-        self.equilibrium_measurements_iter().collect()
-    }
-
-    /// Iterates over measurements after thermalization without allocating.
-    fn equilibrium_measurements_iter(&self) -> impl Iterator<Item = &Measurement> {
-        self.measurements
-            .iter()
-            .filter(|measurement| measurement.step() >= self.config.thermalization_steps())
+    pub fn equilibrium_measurements(&self) -> &[Measurement] {
+        let start = self
+            .measurements
+            .partition_point(|measurement| measurement.step() < self.config.thermalization_steps());
+        &self.measurements[start..]
     }
 
     /// Writes the upstream scalar trace CSV for every completed Metropolis step.
@@ -2526,7 +2768,7 @@ impl SimulationResultsBackend {
             proposal_stats: &self.proposal_stats,
             aggregate: AggregateSummary {
                 acceptance_rate: self.acceptance_rate(),
-                average_action: mean_measurement_action(self.equilibrium_measurements_iter()),
+                average_action: mean_measurement_action(self.equilibrium_measurements().iter()),
                 elapsed_time_ms: self.elapsed_time.as_millis(),
                 measurement_count: self.measurements.len(),
                 step_count: self.steps.len(),
@@ -2638,7 +2880,7 @@ mod tests {
     use crate::errors::ConfigurationSetting;
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
-    use serde_json::{Value, from_str, from_value, to_string, to_value};
+    use serde_json::{Value, from_str, from_value, json, to_string, to_value};
     use std::assert_matches;
     use std::collections::HashSet;
     use std::env;
@@ -2784,6 +3026,9 @@ mod tests {
         );
         let mut move_stats = MoveStatistics::new();
         move_stats.record_attempt(MoveType::Move22);
+        let initial_volume_profile = triangulation
+            .volume_profile()
+            .expect("initial volume profile should build");
         let scalar_trace_rows = vec![
             CdtScalarTraceRow::new(
                 step_number(1),
@@ -2797,7 +3042,8 @@ mod tests {
                 None,
                 config.seed(),
             )
-            .expect("trace row should build"),
+            .expect("trace row should build")
+            .with_initial_volume_profile(initial_volume_profile),
         ];
         let measurements = vec![
             state_measurement(0, action, &triangulation),
@@ -2823,6 +3069,107 @@ mod tests {
             CdtError::CheckpointResumeFailed {
                 failure
             } if failure == expected
+        );
+    }
+
+    #[test]
+    fn simulation_history_is_a_lazy_exact_view_over_canonical_telemetry() {
+        let triangulation = CdtTriangulation::from_cdt_strip(4, 3).expect("CDT strip should build");
+        let initial_vertex_count = triangulation.metadata().initial_vertex_count();
+        let results = valid_rejected_result(triangulation);
+        let mut history = results.simulation_history();
+
+        assert_eq!(history.len(), 4);
+        assert_matches!(
+            history.next(),
+            Some(SimulationEvent::Created {
+                vertex_count,
+                time_slices: 3,
+            }) if vertex_count == initial_vertex_count
+        );
+        assert_eq!(history.len(), 3);
+        assert_matches!(
+            history.next(),
+            Some(SimulationEvent::MeasurementTaken { step: 0, .. })
+        );
+        assert_matches!(
+            history.next(),
+            Some(SimulationEvent::MoveAttempted {
+                move_type: MoveType::Move22,
+                step: 1,
+            })
+        );
+        assert_matches!(
+            history.next(),
+            Some(SimulationEvent::MeasurementTaken { step: 1, .. })
+        );
+        assert_eq!(history.len(), 0);
+        assert!(history.next().is_none());
+        assert!(history.next().is_none(), "history must be fused");
+    }
+
+    #[test]
+    fn simulation_event_move_type_serializes_as_enum_variant() {
+        let event = SimulationEvent::MoveAccepted {
+            move_type: MoveType::Move31Remove,
+            step: 9,
+            action_change: -1.25,
+        };
+
+        let value = to_value(&event).expect("event should serialize");
+
+        assert_eq!(
+            value,
+            json!({
+                "MoveAccepted": {
+                    "move_type": "Move31Remove",
+                    "step": 9,
+                    "action_change": -1.25
+                }
+            })
+        );
+
+        let restored: SimulationEvent =
+            from_value(value).expect("typed move event should deserialize");
+        match restored {
+            SimulationEvent::MoveAccepted {
+                move_type,
+                step,
+                action_change,
+            } => {
+                assert_eq!(move_type, MoveType::Move31Remove);
+                assert_eq!(step, 9);
+                assert_relative_eq!(action_change, -1.25);
+            }
+            other => panic!("expected MoveAccepted event, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn simulation_event_rejects_free_form_move_type_strings() {
+        let invalid_json = r#"{"MoveAttempted":{"move_type":"test_move","step":1}}"#;
+
+        let error = from_str::<SimulationEvent>(invalid_json)
+            .expect_err("move history should reject unsupported move strings");
+
+        assert!(error.is_data());
+        let message = error.to_string();
+        assert!(message.contains("unknown variant `test_move`"));
+        assert!(message.contains("Move22"));
+    }
+
+    #[test]
+    fn result_serialization_does_not_duplicate_simulation_history() {
+        let results = valid_rejected_result(
+            CdtTriangulation::from_cdt_strip(4, 3).expect("CDT strip should build"),
+        );
+        let payload = to_value(&results).expect("result should serialize");
+        let metadata = &payload["triangulation"]["metadata"];
+
+        assert!(metadata.get("simulation_history").is_none());
+        assert_eq!(
+            metadata["initial_vertex_count"],
+            results.triangulation().metadata().initial_vertex_count()
         );
     }
 
@@ -3880,6 +4227,26 @@ mod tests {
             error
                 .to_string()
                 .contains("measurement vertices count does not match the reconstructed state"),
+            "unexpected serde error: {error}"
+        );
+    }
+
+    #[test]
+    fn deserialization_rejects_initial_measurement_profile_detached_from_step_zero() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let results = valid_rejected_result(triangulation);
+        let mut payload = to_value(&results).expect("results should serialize");
+        payload["measurements"][0]["volume_profile"] =
+            to_value([3_u32, 4, 5]).expect("profile should serialize");
+
+        let error = from_str::<SimulationResultsBackend>(&payload.to_string())
+            .expect_err("the step-0 profile must match the retained initial state");
+
+        assert!(
+            error
+                .to_string()
+                .contains("measurement volume profile does not match the reconstructed state"),
             "unexpected serde error: {error}"
         );
     }

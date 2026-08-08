@@ -76,6 +76,17 @@ Avoid unnecessary allocations and cloning in public APIs. Prefer returning refer
 
 Only return owned values (`Vec`, `String`, etc.) when necessary.
 
+Geometry query ownership is explicit: entity scans and adjacency queries return
+lazy iterators borrowing the backend, face-vertex queries return exact-size
+iterators, and coordinate lookup returns a slice borrowing canonical payload
+storage. Collect only when a consumer genuinely needs random access or ownership
+beyond the query borrow. Detached public handles are hashable runtime
+capabilities: equality and hashing include the backend owner, topology
+generation, and local key. They are valid for temporary `HashMap`/`HashSet`
+indexes, but they are neither serializable nor durable across mutation, backend
+cloning, or deserialization. Foreign and stale handles must produce typed errors
+before their local keys are interpreted.
+
 Do not expose broad mutable access to invariant-heavy CDT wrappers. Prefer narrow mutation methods that perform one operation, invalidate derived
 caches/bookkeeping, and return a typed `Result`. Tests that need invalid legacy states should use local helpers inside the test module rather than test-only
 constructors or methods on production impl blocks.
@@ -367,7 +378,8 @@ CDT may own thin domain adapters and result plumbing:
 
 - action-to-log-probability mapping (`CdtTarget`)
 - valid CDT proposal-site enumeration and topology/foliation validation (`CdtProposal`)
-- CDT-specific telemetry, measurements, and event history
+- CDT-specific telemetry and measurements, with event history reconstructed as
+  a borrowed view over those canonical streams
 - conversion between upstream sampler state and CDT result/checkpoint types
 
 Do not add new local generic M-H loops, direct `exp(log_alpha)` acceptance draws, one-off proposal schedulers, or generic chain counter logic in `src/cdt/` when

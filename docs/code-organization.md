@@ -243,7 +243,7 @@ design details.
 This is CDT domain logic layered over the geometry backend interface. It may use `DelaunayBackend2D` and crate-owned Delaunay handles, but it does not reach
 through to upstream `delaunay::` APIs directly.
 
-- Owns the `CdtTriangulation` state, `CdtMetadata`, `SimulationEvent`, metadata validation, cached simplex-count accessors, and common backend-agnostic state
+- Owns the `CdtTriangulation` state, `CdtMetadata`, creation metadata, metadata validation, cached simplex-count accessors, and common backend-agnostic state
   methods
 - Defines `CdtTriangulation2D`, the CDT-domain alias that binds `CdtTriangulation` to the supported 2D Delaunay backend
 - `CdtSimplexCounts` carries the CDT-domain proof that constructed triangulations have positive vertex, edge, and triangle counts as `NonZeroUsize`, while
@@ -273,8 +273,8 @@ The implementation lives under `src/cdt/triangulation/` and is wired from `src/l
 - `builders.rs` — Delaunay-backed random/seeded/labeled builders plus strip and periodic toroidal CDT builders
 - `foliation.rs` — foliation assignment, slice and label queries, volume profiles, simplex/edge classification, and foliation synchronization
 - `moves.rs` — narrow crate-internal Delaunay mutation hooks used by ergodic moves
-- `state.rs` — module entry point, `CdtTriangulation`, `CdtMetadata`, `SimulationEvent`, serialization, cached geometry accessors, and backend-agnostic
-  state methods
+- `state.rs` — module entry point, `CdtTriangulation`, `CdtMetadata`, triangulation serialization, cached geometry accessors, and backend-agnostic state
+  methods; it does not store a duplicate simulation event log
 - `validation.rs` — named CDT validation profiles, whole-state validation, and Delaunay-backed causality checks
 
 ### `config.rs` — `CdtTopology` enum
@@ -298,7 +298,8 @@ Toroidal move finalization rejects and rolls back candidate sites that would vio
 The module tree is declared from `src/lib.rs` to avoid the `metropolis.rs` plus `metropolis/` layout pattern. `adapter.rs` is the single CDT adapter boundary
 for `markov-chain-monte-carlo` proposal and target traits. `runner.rs` owns `MetropolisAlgorithm::run_steps`, which rebuilds the upstream `Chain`/`Sampler`
 continuation view, delegates generic acceptance, proposal-ratio application, chain counters, and planned-proposal commit ordering to the upstream MCMC crate,
-then records CDT-specific telemetry, measurements, and result state. `checkpoint.rs` owns resumable checkpoint state and resume validation, `telemetry.rs` owns
+then consumes the chain state back into the CDT result without cloning topology per step or per chunk. CDT-owned telemetry and RNG state travel beside that
+single canonical triangulation owner. `checkpoint.rs` owns resumable checkpoint state and resume validation, `telemetry.rs` owns
 public step/proposal telemetry, and `helpers.rs` holds shared CDT-domain calculations.
 
 See `docs/metropolis.md` for the current planned-proposal ordering and
@@ -307,7 +308,10 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
 ### `cdt/results.rs` — Simulation outputs
 
 - `Measurement` records per-step action, simplex counts, and optional per-slice volume profiles.
+- `SimulationEvent` is the public value type for reconstructed history entries.
 - `SimulationResultsBackend` owns the final triangulation, Monte Carlo step telemetry, upstream scalar trace rows, move statistics, and measurement history.
+- `SimulationHistory` is an allocation-free, exact-size borrowed iterator that reconstructs creation, attempted-move, accepted-move, and measurement events
+  from immutable creation metadata plus the canonical step and measurement streams; results and checkpoints do not serialize a duplicate event vector.
 - Result methods summarize acceptance rate, average action, post-thermalization volume profiles, sample volume fluctuations, and final-state Hausdorff/spectral
   dimension estimates.
 - `scalar_trace()` and `write_trace_csv()` expose step diagnostics through `markov-chain-monte-carlo::Trace`, using a rectangular CSV table suitable for Polars
@@ -344,7 +348,8 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
 
 - `GeometryBackend` defines unconstrained associated coordinate and handle types plus the backend error type; algorithms place numeric, cloning, identity, and
   hashing bounds only on the methods that use those capabilities
-- `TriangulationQuery` is the read-only surface used by CDT logic for counts, handles, adjacency, coordinates, face vertices, and validation
+- `TriangulationQuery` is the read-only surface used by CDT logic for counts, handles, adjacency, coordinates, face vertices, and validation. Entity and
+  adjacency scans are lazy borrowed iterators, face vertices are exact-size iterators, and coordinates are borrowed slices over canonical storage.
 - `TriangulationMut` is the narrow mutation surface used by CDT-owned move kernels through CDT state mutation methods, not broad mutable backend exposure
 - `TriangulationOps` supplies blanket high-level operations to sized and unsized query implementations, with handle capabilities constrained per operation
 - Result structs such as `FlipResult`, `EdgeAdjacentFaces`, and `SubdivisionResult` keep local topology operations backend-neutral
@@ -359,7 +364,9 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
 ### `geometry/backends/delaunay.rs` — Delaunay adapter
 
 - Wraps the upstream `delaunay` triangulation in `DelaunayBackend`
-- Defines crate-owned opaque handles (`DelaunayVertexHandle`, `DelaunayEdgeHandle`, `DelaunayFaceHandle`) so CDT code does not depend on upstream key types
+- Defines crate-owned opaque handles (`DelaunayVertexHandle`, `DelaunayEdgeHandle`, `DelaunayFaceHandle`) so CDT code does not depend on upstream key types.
+  Handles are hashable for runtime maps and sets, but owner and topology-generation provenance makes them non-durable; clones, deserialization, and topology
+  mutation reject old handles with typed foreign/stale errors.
 - Translates upstream Delaunay operations and errors into this crate's trait contracts
 - Exposes named validation adapters for Level 1–3 structure, Level 1–4 embedding/realization, and Level 1–5 Delaunay validity
 - Together with `geometry/generators.rs`, this is the only place that directly imports from the `delaunay` crate
