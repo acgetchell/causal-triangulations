@@ -201,10 +201,10 @@ the family/site path that was actually selected.
 
 ### Injected Family Policies
 
-`CdtMoveFamilyPolicy::family_weight()` is the state-dependent family-only injection boundary. CDT calls it four times per evaluated state, once with each
-`CdtProposalPolicyView`. Outputs are relative normalization inputs, not site weights: every value must be finite and nonnegative, and the complete array must
-have a positive finite normalization total. Custom state-dependent implementations may use topology, simplex counts, slice sizes, family identity, and
-offered-site information from the view.
+`CdtMoveFamilyPolicy::family_weight()` is the state-dependent family-only injection boundary. CDT calls it `MoveType::REVERSIBLE_1P1.len()` times per
+evaluated state, once with each `CdtProposalPolicyView`. Outputs are relative normalization inputs, not site weights: every value must be finite and
+nonnegative, and the complete array must have a positive finite normalization total. Custom state-dependent implementations may use topology, simplex counts,
+slice sizes, family identity, and offered-site information from the view.
 
 `CdtMoveFamilyPolicy::fixed_distribution()` is the opt-in fast path for state-independent policies. `CdtMoveFamilyDistribution::from_weights()` provides a
 checked fixed policy, while `UniformCdtMoveFamilyPolicy` supplies the conventional baseline; both reuse their distribution without enumerating all four

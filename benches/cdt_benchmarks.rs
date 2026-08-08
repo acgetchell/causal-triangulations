@@ -23,6 +23,7 @@ use std::hint::black_box;
 use benchmark_support::OrAbort;
 
 const BENCH_SEED: u64 = 0xCD7_BEC4;
+const SUCCESSFUL_MOVE_SEED_SEARCH_LIMIT: u64 = 64;
 
 fn benchmark_seed(vertex_count: u32) -> u64 {
     BENCH_SEED.wrapping_add(u64::from(vertex_count))
@@ -232,14 +233,16 @@ fn bench_ergodic_moves(c: &mut Criterion) {
     let insertion_fixture = CdtTriangulation2D::from_toroidal_cdt(8, 8)
         .or_abort(SetupOperation::BuildCdtBenchmarkStrip);
     let successful_seed = |triangulation: &CdtTriangulation2D, move_type| {
-        (0_u64..=4_096)
+        (0_u64..=SUCCESSFUL_MOVE_SEED_SEARCH_LIMIT)
             .find(|&seed| {
                 let mut probe = triangulation.clone();
                 let mut ergodics = ErgodicsSystem::with_seed(seed);
                 let result = match move_type {
                     MoveType::Move13Add => ergodics.attempt_13_move(&mut probe),
                     MoveType::Move31Remove => ergodics.attempt_31_move(&mut probe),
-                    MoveType::Move22 | MoveType::EdgeFlip => unreachable!(),
+                    MoveType::Move22 | MoveType::EdgeFlip => None.or_abort(format!(
+                        "successful volume-move seed search does not support {move_type:?}"
+                    )),
                 };
                 result == MoveResult::Success
             })

@@ -81,6 +81,7 @@ pub struct CdtConfig {
     /// When present, this vector has exactly [`Self::timeslices`] entries and its
     /// sum equals [`Self::vertices`]. It represents general nonuniform CDT
     /// initial data. When absent, initialization uses regular equal-size slices.
+    #[serde(alias = "volume_profile")]
     pub spatial_vertex_profile: Option<Vec<u32>>,
 
     /// Temperature for the Metropolis acceptance rule.
@@ -1488,7 +1489,7 @@ impl CdtConfig {
         let action_config =
             ActionConfig::new(self.coupling_0, self.coupling_2, self.cosmological_constant)?;
 
-        self.validate_volume_constraints()?;
+        self.validate_spatial_vertex_constraints()?;
 
         validate_schedule(
             self.temperature,
@@ -1506,7 +1507,7 @@ impl CdtConfig {
     /// Regular configurations require equal slice divisibility and minimum
     /// per-slice volume; explicit profiles are delegated to the profile-aware
     /// validator so count and shape errors remain distinguishable.
-    fn validate_volume_constraints(&self) -> CdtResult<()> {
+    fn validate_spatial_vertex_constraints(&self) -> CdtResult<()> {
         let (minimum_slices, minimum_vertices_per_slice, topology_label) = match self.topology {
             CdtTopology::OpenBoundary => (2, 4, "open-boundary topology"),
             CdtTopology::Toroidal => (3, 3, "toroidal topology"),
@@ -1824,6 +1825,24 @@ mod tests {
 
         let topology: CdtTopology = from_str("\"toroidal\"").expect("topology should deserialize");
         assert_eq!(topology, CdtTopology::Toroidal);
+    }
+
+    #[test]
+    fn config_deserializes_legacy_volume_profile_alias() {
+        let config = CdtConfig {
+            spatial_vertex_profile: Some(vec![4, 6, 5]),
+            ..CdtConfig::new(15, 3)
+        };
+        let current_json = to_string(&config).expect("current config should serialize");
+        let legacy_json = current_json.replacen("spatial_vertex_profile", "volume_profile", 1);
+
+        let restored: CdtConfig =
+            from_str(&legacy_json).expect("legacy volume_profile should deserialize");
+
+        assert_eq!(restored.spatial_vertex_profile, Some(vec![4, 6, 5]));
+        restored
+            .into_validated()
+            .expect("legacy profile should retain current validation behavior");
     }
 
     #[test]

@@ -1390,20 +1390,18 @@ mod tests {
     }
 
     #[test]
-    fn run_simulation_cleans_staged_csv_when_json_write_fails() {
+    fn run_simulation_rejects_invalid_json_parent_before_staging() {
         let csv_path = temp_output_path("atomic-trace.csv");
         let blocked_parent = temp_output_path("blocked-output-parent");
         fs::write(&blocked_parent, "not a directory").expect("blocked parent fixture should write");
         let json_path = blocked_parent.join("summary.json");
-        let csv_temp = sibling_temp_output_path(&csv_path, OutputFormat::Csv);
-        let json_temp = sibling_temp_output_path(&json_path, OutputFormat::Json);
         let mut config = create_test_config();
         config.output_csv = Some(csv_path.clone());
         config.output_json = Some(json_path.clone());
         let config = validated(config);
 
-        let error =
-            run_simulation(&config).expect_err("JSON output with a missing parent should fail");
+        let error = run_simulation(&config)
+            .expect_err("JSON output with an invalid parent should fail before staging");
 
         assert_matches!(
             error,
@@ -1420,10 +1418,71 @@ mod tests {
             !json_path.exists(),
             "JSON final output should not be published"
         );
-        assert!(!csv_temp.exists(), "staged CSV output should be cleaned");
-        assert!(!json_temp.exists(), "staged JSON output should be absent");
         remove_output_lock(&csv_path);
         fs::remove_file(&blocked_parent).expect("blocked parent fixture should be removable");
+    }
+
+    #[test]
+    fn staged_outputs_clean_csv_after_json_write_failure() {
+        let config = validated(create_test_config());
+        let results = run_simulation(&config).expect("output fixture simulation should succeed");
+        let directory = temp_output_path("staged-json-write-failure");
+        fs::create_dir(&directory).expect("output fixture directory should be created");
+        let csv_path = directory.join("trace.csv");
+        let json_path = directory.join("summary.json");
+        let output_paths = ResolvedOutputPaths {
+            csv: Some(csv_path.clone()),
+            json: Some(json_path.clone()),
+        };
+        let staged_outputs = StagedOutputs::new(&output_paths);
+        let csv_temp = staged_outputs
+            .csv
+            .as_ref()
+            .expect("CSV output should be staged")
+            .temp_path
+            .clone();
+        let json_temp = staged_outputs
+            .json
+            .as_ref()
+            .expect("JSON output should be staged")
+            .temp_path
+            .clone();
+
+        staged_outputs
+            .write_trace_csv(&results)
+            .expect("CSV staging should succeed before the JSON failure");
+        fs::create_dir(&json_temp).expect("JSON staged path should block file creation");
+        let error = staged_outputs
+            .write_summary_json(&config, &results)
+            .expect_err("JSON staging should fail when its staged path is a directory");
+
+        assert_matches!(
+            error,
+            CdtError::OutputWriteFailed {
+                format: OutputFormat::Json,
+                stage: OutputWriteStage::CreateFile,
+                ..
+            }
+        );
+        assert!(
+            csv_temp.exists(),
+            "CSV should have been staged before failure"
+        );
+        drop(staged_outputs);
+        assert!(
+            !csv_temp.exists(),
+            "staged CSV should be cleaned after failure"
+        );
+        assert!(
+            !csv_path.exists(),
+            "CSV final output should not be published"
+        );
+        assert!(
+            !json_path.exists(),
+            "JSON final output should not be published"
+        );
+        fs::remove_dir(&json_temp).expect("blocking JSON staged directory should be removable");
+        fs::remove_dir(&directory).expect("output fixture directory should be removable");
     }
 
     #[test]
@@ -1624,9 +1683,12 @@ mod tests {
         );
         assert!(
             !csv_path.exists(),
-            "CSV final output should be removed after JSON publish failure"
+            "CSV final output should not be published before destination validation"
         );
-        assert!(!csv_temp.exists(), "staged CSV should have been renamed");
+        assert!(
+            !csv_temp.exists(),
+            "staged CSV should be cleaned without being renamed"
+        );
         assert!(
             !json_temp.exists(),
             "staged JSON should be cleaned when commit fails"

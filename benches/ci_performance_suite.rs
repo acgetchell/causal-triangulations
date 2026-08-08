@@ -34,6 +34,7 @@ use benchmark_support::OrAbort;
 
 const SWEEP_COUNT: u32 = 10;
 const BENCH_SEED: u64 = 0xCDA7_2026;
+const SUCCESSFUL_MOVE_SEED_SEARCH_LIMIT: u64 = 64;
 
 #[derive(Clone, Copy)]
 enum TopologyFixture {
@@ -69,6 +70,7 @@ enum SetupOperation {
     RunTenSweepMetropolis,
     BuildSuccessfulInsertionFixture,
     BuildSuccessfulRemovalFixture,
+    ValidateStateDependentPolicyFixture,
 }
 
 impl Display for SetupOperation {
@@ -95,6 +97,9 @@ impl Display for SetupOperation {
             }
             Self::BuildSuccessfulRemovalFixture => {
                 formatter.write_str("build a fixture with a successful inverse volume move")
+            }
+            Self::ValidateStateDependentPolicyFixture => {
+                formatter.write_str("validate state-dependent policy fixture support")
             }
         }
     }
@@ -260,7 +265,7 @@ fn successful_move_seed(
     move_type: MoveType,
     operation: SetupOperation,
 ) -> u64 {
-    (0_u64..=4_096)
+    (0_u64..=SUCCESSFUL_MOVE_SEED_SEARCH_LIMIT)
         .find(|&seed| {
             let mut probe = triangulation.clone();
             let mut ergodics = ErgodicsSystem::with_seed(seed);
@@ -570,6 +575,17 @@ fn bench_cdt_state_dependent_policy(c: &mut Criterion) {
         vertices_per_slice: 20,
         time_slices: 10,
     });
+    let mut support_probe = ErgodicsSystem::with_seed(BENCH_SEED);
+    let offered_site_counts = MoveType::REVERSIBLE_1P1.map(|family| {
+        support_probe
+            .proposal_policy_view(&prepared.triangulation, family)
+            .offered_site_count()
+    });
+    offered_site_counts
+        .into_iter()
+        .any(|site_count| site_count > 0)
+        .then_some(())
+        .or_abort(SetupOperation::ValidateStateDependentPolicyFixture);
     let mut group = c.benchmark_group("cdt_state_dependent_policy_2d");
     group.throughput(Throughput::Elements(usize_to_u64(prepared.simplices)));
     group.bench_function("single_metropolis_proposal", |b| {
@@ -618,7 +634,8 @@ fn bench_cdt_random_move_attempt_budget(c: &mut Criterion) {
     for &fixture in SWEEP_FIXTURES {
         let prepared = prepare_fixture(fixture);
         let attempt_budget = sweep_attempt_count(prepared.simplices);
-        group.throughput(Throughput::Elements(usize_to_u64(attempt_budget)));
+        let attempt_budget_u64 = usize_to_u64(attempt_budget);
+        group.throughput(Throughput::Elements(attempt_budget_u64));
         group.bench_with_input(
             BenchmarkId::new(prepared.fixture.name, prepared.simplices),
             &prepared,
@@ -631,11 +648,7 @@ fn bench_cdt_random_move_attempt_budget(c: &mut Criterion) {
                             BENCH_SEED,
                             attempt_budget,
                         );
-                        assert_eq!(
-                            stats.total_attempted(),
-                            u64::try_from(attempt_budget)
-                                .or_abort(SetupOperation::ConvertBenchmarkSize)
-                        );
+                        assert_eq!(stats.total_attempted(), attempt_budget_u64);
                         black_box(stats.total_attempted())
                     },
                     BatchSize::LargeInput,

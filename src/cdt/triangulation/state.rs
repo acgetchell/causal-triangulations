@@ -692,6 +692,11 @@ impl<B> CdtTriangulation<B> {
     }
 
     /// Stores a derived slab-triangle profile for the current geometry revision.
+    ///
+    /// `OnceLock::set` is intentionally first-writer-wins: the stored value must
+    /// remain valid for this `metadata.modification_count`, and callers must not
+    /// expect same-revision replacement. [`Self::bump_modification_count`] calls
+    /// `invalidate_cache` before a new revision writes another value.
     fn cache_slab_triangle_profile(&self, value: Vec<u32>) {
         let _ = self.cache.slab_triangle_profile.set(CachedValue {
             value,
@@ -700,6 +705,11 @@ impl<B> CdtTriangulation<B> {
     }
 
     /// Stores a proven edge count for the current geometry revision.
+    ///
+    /// `OnceLock::set` is intentionally first-writer-wins: the stored value must
+    /// remain valid for this `metadata.modification_count`, and callers must not
+    /// expect same-revision replacement. [`Self::bump_modification_count`] calls
+    /// `invalidate_cache` before a new revision writes another value.
     fn cache_edge_count(&self, value: usize) {
         let _ = self.cache.edge_count.set(CachedValue {
             value,

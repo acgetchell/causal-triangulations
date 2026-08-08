@@ -1053,10 +1053,22 @@ impl CdtTriangulation<DelaunayBackend2D> {
         })?;
 
         let coordinate_max = f64::from(num_slices).max(2.0);
-        let mut vertex_specs = open_profile_vertices(
-            &vec![vertices_per_slice; num_slices as usize],
-            core_vertices,
-        )?;
+        let profile_len = num_slices as usize;
+        let mut spatial_vertex_profile = Vec::new();
+        spatial_vertex_profile
+            .try_reserve_exact(profile_len)
+            .map_err(|err| {
+                strip_generation_error(
+                    total_vertices,
+                    coordinate_max,
+                    DelaunayGenerationFailure::StorageReservation {
+                        requested_capacity: profile_len,
+                        detail: err.to_string(),
+                    },
+                )
+            })?;
+        spatial_vertex_profile.resize(profile_len, vertices_per_slice);
+        let mut vertex_specs = open_profile_vertices(&spatial_vertex_profile, core_vertices)?;
         vertex_specs
             .try_reserve_exact(surplus_vertices as usize)
             .map_err(|err| {
@@ -1852,9 +1864,10 @@ mod tests {
                 time_slices,
                 "Time slices should match for {description}"
             );
-            assert!(
-                triangulation.vertex_count() >= 3,
-                "Should have at least 3 vertices for {description}"
+            assert_eq!(
+                triangulation.vertex_count(),
+                usize::try_from(vertices).expect("u32 vertex count should fit usize"),
+                "Vertex count should match for {description}"
             );
             assert!(
                 triangulation.edge_count() > 0,

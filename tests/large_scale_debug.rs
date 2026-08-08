@@ -326,7 +326,7 @@ fn debug_large_scale_1p1() {
         let sweep_elapsed = elapsed.saturating_sub(previous_elapsed);
         println!(
             "sweep {sweep}/{sweeps}: sweep_proposals={}, final_vertices={}, final_edges={}, final_simplices={}, \
-             final_volume_profile={:?}, \
+             final_slab_triangle_profile={:?}, \
              sweep_accepted={} (Move22={}, Move13Add={}, Move31Remove={}, EdgeFlip={}), \
              sweep_rejected={}, sweep_no_site={}, sweep_site_rejections={}, sweep_metropolis_rejections={}, \
              sweep_hard_failures={}, total_accepted={}, total_proposals={}, total_rejected={}, total_hard_failures={}, \

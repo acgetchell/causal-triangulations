@@ -786,6 +786,9 @@ fn validate_checkpoint_after_prefix(
                 expected: prefix.scalar_trace_rows,
             })
         })?;
+    // These three streams contain only entries appended after the trusted
+    // prefix. Trajectory validation rewinds the suffix steps from the final
+    // triangulation to reconstruct and validate the prefix-boundary state.
     validate_trajectory_observables(
         &checkpoint.action_config,
         steps,

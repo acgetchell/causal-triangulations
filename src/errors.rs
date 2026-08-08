@@ -2281,6 +2281,7 @@ mod tests {
                 ConfigurationSetting::CosmologicalConstant,
                 "cosmological_constant",
             ),
+            (ConfigurationSetting::ActionCouplings, "action couplings"),
             (
                 ConfigurationSetting::SpatialVertexProfile,
                 "spatial_vertex_profile",

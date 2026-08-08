@@ -24,9 +24,8 @@ use crate::geometry::traits::{
 use rand::{RngExt, SeedableRng, rngs::Xoshiro256PlusPlus};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::array;
-use std::collections::{HashSet, hash_map::DefaultHasher};
+use std::collections::HashSet;
 use std::fmt::Display;
-use std::hash::{Hash, Hasher};
 
 /// Types of ergodic moves available in 2D CDT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -2153,26 +2152,14 @@ fn edge_exists_between(
 }
 
 /// Order-independent key for one triangular face's vertices.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct FaceVertexSet([DelaunayVertexHandle; 3]);
 
-impl PartialEq for FaceVertexSet {
-    fn eq(&self, other: &Self) -> bool {
-        self.0.iter().all(|vertex| other.0.contains(vertex))
-    }
-}
-
-impl Eq for FaceVertexSet {}
-
-impl Hash for FaceVertexSet {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        let mut hashes = self.0.each_ref().map(|vertex| {
-            let mut hasher = DefaultHasher::new();
-            vertex.hash(&mut hasher);
-            hasher.finish()
-        });
-        hashes.sort_unstable();
-        hashes.hash(state);
+impl FaceVertexSet {
+    /// Canonicalizes one triangular face by ascending backend vertex key.
+    fn new(mut vertices: [DelaunayVertexHandle; 3]) -> Self {
+        vertices.sort_unstable_by_key(DelaunayVertexHandle::vertex_key);
+        Self(vertices)
     }
 }
 
@@ -2187,7 +2174,7 @@ fn face_vertex_index(triangulation: &CdtTriangulation2D) -> HashSet<FaceVertexSe
                 .face_vertices(&face)
                 .ok()
                 .and_then(exactly_three)
-                .map(FaceVertexSet)
+                .map(FaceVertexSet::new)
         })
         .collect()
 }
@@ -2197,7 +2184,7 @@ fn face_exists_with_vertices_in(
     faces: &HashSet<FaceVertexSet>,
     vertices: &[DelaunayVertexHandle; 3],
 ) -> bool {
-    faces.contains(&FaceVertexSet(vertices.clone()))
+    faces.contains(&FaceVertexSet::new(vertices.clone()))
 }
 
 /// Returns true when a live face already spans exactly the three vertices.

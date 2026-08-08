@@ -1612,17 +1612,19 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 .geometry
                 .incident_edges(&vertex)
                 .map_err(|err| geometry_query_error("local spatial degree", &err))?
-                .filter(|edge| {
-                    self.geometry
-                        .edge_endpoints(edge)
-                        .ok()
-                        .and_then(|(first, second)| {
-                            let neighbor = if first == vertex { second } else { first };
-                            self.geometry.vertex_data_by_key(neighbor.vertex_key())
-                        })
-                        == Some(label)
-                })
-                .count();
+                .try_fold(0_usize, |degree, edge| {
+                    let (first, second) = self.geometry.edge_endpoints(&edge).map_err(|err| {
+                        geometry_query_error("local spatial degree endpoints", &err)
+                    })?;
+                    let neighbor = if first == vertex { second } else { first };
+                    Ok::<_, CdtError>(
+                        degree
+                            + usize::from(
+                                self.geometry.vertex_data_by_key(neighbor.vertex_key())
+                                    == Some(label),
+                            ),
+                    )
+                })?;
             let slice =
                 usize::try_from(label).map_err(|_| FoliationError::SliceIndexOutOfRange {
                     slice: label,

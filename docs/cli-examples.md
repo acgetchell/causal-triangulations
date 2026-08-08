@@ -90,7 +90,7 @@ cdt \
 Toroidal runs require at least 3 vertices per slice and at least 3 time slices. The constructor builds periodic S¹×S¹ initial data and validates topology,
 foliation, causality, and simplex classification before simulation.
 
-### Nonuniform Initial Volume Profile
+### Nonuniform Initial Spatial-Vertex Profile
 
 ```bash
 cdt \
