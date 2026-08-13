@@ -390,12 +390,9 @@ CDT may own thin domain adapters and result plumbing:
 
 Do not add new local generic M-H loops, direct `exp(log_alpha)` acceptance draws, one-off proposal schedulers, or generic chain counter logic in `src/cdt/` when
 `markov-chain-monte-carlo` can own that behavior. If CDT needs temporary local sampler logic because the upstream API lacks a hook, document the gap in the
-code or nearby docs and open or link an upstream issue before extending the local implementation. The current production migration is tracked by
-[`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155), with upstream planned-step telemetry tracked by
-[`markov-chain-monte-carlo#61`](https://github.com/acgetchell/markov-chain-monte-carlo/issues/61).
-
-Once the production runner delegates fully to upstream sampler mechanics, add a static check so future CDT changes cannot reintroduce local generic
-Metropolis-Hastings implementations by accident.
+code or nearby docs and open or link an upstream issue before extending the local implementation. The production runner delegates generic sampling,
+planned-proposal commit ordering, chain counters, and checkpoint-compatible continuation to `markov-chain-monte-carlo`. Repository-owned Semgrep rules reject
+new CDT-local acceptance draws and manual accepted/rejected sampler counters so the established boundary cannot regress silently.
 
 ---
 

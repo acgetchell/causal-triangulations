@@ -6,6 +6,11 @@ use causal_triangulations::prelude::geometry::{DelaunayBackend2D, GeometryBacken
 use causal_triangulations::prelude::triangulation::*;
 use proptest::prelude::*;
 
+#[path = "common/proptest_config.rs"]
+mod proptest_config;
+
+use proptest_config::with_default_cases;
+
 #[derive(Debug, PartialEq, Eq)]
 struct StripFingerprint {
     vertices: Vec<VertexFingerprint>,
@@ -68,13 +73,13 @@ fn strip_fingerprint(tri: &CdtTriangulation2D) -> StripFingerprint {
 }
 
 #[test]
-fn cdt_strip_builds_delaunay_mesh() {
-    let tri = CdtTriangulation::from_cdt_strip(5, 3).expect("Delaunay CDT strip should build");
+fn cdt_strip_builds_exact_realized_mesh() {
+    let tri = CdtTriangulation::from_cdt_strip(5, 3).expect("exact CDT strip should build");
     assert_eq!(tri.vertex_count(), 15);
     assert_eq!(tri.face_count(), 16);
     tri.geometry()
-        .validate_delaunay()
-        .expect("Delaunay CDT strip should pass upstream Level 1-5 validation");
+        .validate_embedding()
+        .expect("exact CDT strip should pass upstream Level 1-4 validation");
     tri.validate_topology()
         .expect("Delaunay CDT strip topology should validate");
     tri.validate_foliation()
@@ -130,7 +135,7 @@ proptest! {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(8))]
+    #![proptest_config(with_default_cases(8))]
     /// Property: periodic toroidal construction preserves Delaunay, topological,
     /// and foliation invariants for small generated N×T meshes.
     #[test]
@@ -158,7 +163,8 @@ proptest! {
 }
 
 proptest! {
-    /// Property: Delaunay CDT strip construction always produces valid foliation and causality.
+    /// Property: exact CDT strip construction always produces valid realization,
+    /// foliation, and causality.
     ///
     /// For any valid (vertices_per_slice, num_slices):
     /// - vertex count == vertices_per_slice × num_slices
@@ -171,7 +177,7 @@ proptest! {
         num_slices in 2u32..6,
     ) {
         let tri = CdtTriangulation::from_cdt_strip(vertices_per_slice, num_slices)
-            .expect("valid Delaunay strip construction should pass");
+            .expect("valid exact strip construction should pass");
 
         // Vertex count must match grid
         let expected_v = vertices_per_slice as usize * num_slices as usize;
@@ -181,8 +187,17 @@ proptest! {
 
         // Must have foliation
         prop_assert!(tri.has_foliation(), "CDT strip must have foliation");
-        prop_assert!(tri.geometry().validate_delaunay().is_ok(),
-            "CDT strip must pass upstream Level 1-5 Delaunay validation");
+        prop_assert!(tri.geometry().validate_embedding().is_ok(),
+            "exact CDT strip must pass upstream Level 1-4 realization validation");
+        for vertex in tri.geometry().vertices() {
+            let coordinates = tri.geometry().vertex_coordinates(&vertex)
+                .expect("exact strip vertex coordinates should resolve");
+            let label = tri.time_label(&vertex)
+                .expect("exact strip label query should succeed")
+                .expect("exact strip vertices should carry labels");
+            prop_assert_eq!(coordinates[1].to_bits(), f64::from(label).to_bits(),
+                "exact strip time coordinates must match their labels");
+        }
 
         // Every slice has the right count
         let sizes = tri.slice_sizes();
@@ -197,13 +212,13 @@ proptest! {
 
         // Causality passes (no edges spanning >1 slice)
         prop_assert!(tri.validate_causality_delaunay().is_ok(),
-            "Causality should hold for Delaunay CDT strip with {} vertices/slice, {} slices",
+            "Causality should hold for exact CDT strip with {} vertices/slice, {} slices",
             vertices_per_slice, num_slices);
         prop_assert!(tri.validate_simplex_classification().is_ok(),
-            "Every Delaunay strip face should classify as Up or Down");
+            "Every exact strip face should classify as Up or Down");
     }
 
-    /// Property: Every edge in a Delaunay CDT strip is classifiable and
+    /// Property: Every edge in an exact CDT strip is classifiable and
     /// spacelike + timelike == total edges.
     ///
     #[test]
@@ -212,7 +227,7 @@ proptest! {
         num_slices in 2u32..5,
     ) {
         let tri = CdtTriangulation::from_cdt_strip(vertices_per_slice, num_slices)
-            .expect("valid Delaunay strip construction should pass");
+            .expect("valid exact strip construction should pass");
 
         let mut spacelike = 0usize;
         let mut timelike = 0usize;
@@ -236,7 +251,7 @@ proptest! {
         prop_assert!(timelike > 0, "Should have timelike edges");
     }
 
-    /// Property: Delaunay CDT strip construction is deterministic for fixed inputs.
+    /// Property: exact CDT strip construction is deterministic for fixed inputs.
     ///
     #[test]
     fn cdt_strip_determinism(
@@ -244,9 +259,9 @@ proptest! {
         num_slices in 2u32..5,
     ) {
         let t1 = CdtTriangulation::from_cdt_strip(vertices_per_slice, num_slices)
-            .expect("valid Delaunay strip construction should pass");
+            .expect("valid exact strip construction should pass");
         let t2 = CdtTriangulation::from_cdt_strip(vertices_per_slice, num_slices)
-            .expect("valid Delaunay strip construction should pass");
+            .expect("valid exact strip construction should pass");
 
         prop_assert_eq!(strip_fingerprint(&t1), strip_fingerprint(&t2));
     }

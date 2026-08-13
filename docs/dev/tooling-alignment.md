@@ -304,6 +304,13 @@ The 7 August follow-up advances the command-layer uv pin from 0.12.2 to 0.12.3 a
 to 0.12.3. The `justfile` remains the single source of truth, and CI, performance, and Semgrep workflows continue to resolve it dynamically, so no duplicated
 workflow literals or project dependency-lock changes are required.
 
+The 12 August follow-up checks every exact command-layer and Python-tool pin against live crates.io, PyPI, and Homebrew metadata. Rumdl advances from 0.2.52
+to 0.2.55, Ruff from 0.16.1 to 0.16.2, and Ty from 0.0.69 to 0.0.71; all other exact Cargo and Python tool pins and uv 0.12.3 remain current. The complete uv
+lock is refreshed rather than limiting resolution to those exact requirements, allowing compatible direct and transitive packages such as JupyterLab 4.6.3
+to advance together. Semgrep 1.172.0 still declares `mcp==1.23.3`, so the security override remains at compatible MCP 1.28.1 instead of crossing to MCP 2.0.0.
+GitHub Actions continue to consume the single `justfile` rumdl pin through `just --evaluate`; no workflow-local rumdl literal needs updating. The independent
+action-release audit advances `astral-sh/setup-uv` from 9.0.0 to 10.0.0 at its immutable release commit, while every other pinned action remains current.
+
 ## Issue #205 Orthogonal CI And Notebook Checker Alignment
 
 Issue #205 compares CDT's validation shape with the completed `markov-chain-monte-carlo` issue #95 implementation while preserving CDT's stronger notebook

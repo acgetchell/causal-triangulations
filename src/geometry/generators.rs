@@ -18,7 +18,7 @@ use delaunay::geometry::{
 };
 use delaunay::prelude::Vertex;
 pub use delaunay::topology::traits::{GlobalTopology, ToroidalConstructionMode, ToroidalDomain};
-use delaunay::{DelaunayTriangulation, DelaunayTriangulationBuilder};
+use delaunay::{ConstructionOptions, DelaunayTriangulation, DelaunayTriangulationBuilder};
 
 /// Type alias for the 2D Delaunay triangulation returned by this crate's generators.
 ///
@@ -245,6 +245,24 @@ pub fn build_delaunay2_with_data(
         })
 }
 
+/// Builds an exact layered 2D triangulation from explicit CDT connectivity.
+///
+/// The upstream non-enforcing policy preserves exact collinear slice coordinates
+/// and validates the imported mesh through Level 4 without requiring the Level 5
+/// empty-circumsphere predicate.
+pub(crate) fn build_layered_delaunay2_from_simplices(
+    coords_with_data: &[([f64; 2], u32)],
+    simplices: &[Vec<usize>],
+) -> CdtResult<DelaunayTriangulation2D> {
+    build_delaunay2_with_topology_options(
+        coords_with_data,
+        simplices,
+        TopologyGuarantee::DEFAULT,
+        GlobalTopology::Euclidean,
+        ConstructionOptions::default().without_final_delaunay_enforcement(),
+    )
+}
+
 /// Builds a 2D triangulation from explicit vertex coordinates, data, and simplex connectivity.
 ///
 /// Each vertex is specified as `([x, y], data)`. Each simplex is a `Vec<usize>` of
@@ -347,6 +365,23 @@ pub fn build_delaunay2_with_topology(
     topology_guarantee: TopologyGuarantee,
     global_topology: GlobalTopology<2>,
 ) -> CdtResult<DelaunayTriangulation2D> {
+    build_delaunay2_with_topology_options(
+        coords_with_data,
+        simplices,
+        topology_guarantee,
+        global_topology,
+        ConstructionOptions::default(),
+    )
+}
+
+/// Builds explicit 2D connectivity with the requested topology and construction policies.
+fn build_delaunay2_with_topology_options(
+    coords_with_data: &[([f64; 2], u32)],
+    simplices: &[Vec<usize>],
+    topology_guarantee: TopologyGuarantee,
+    global_topology: GlobalTopology<2>,
+    construction_options: ConstructionOptions,
+) -> CdtResult<DelaunayTriangulation2D> {
     validate_explicit_coordinates(coords_with_data)?;
 
     let vertices: Vec<_> = coords_with_data
@@ -382,6 +417,7 @@ pub fn build_delaunay2_with_topology(
         .simplex_data_type::<i32>()
         .topology_guarantee(topology_guarantee)
         .global_topology(global_topology)
+        .construction_options(construction_options)
         .build()
         .map_err(|e| CdtError::DelaunayGenerationFailed {
             vertex_count,

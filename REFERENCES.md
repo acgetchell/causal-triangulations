@@ -8,8 +8,8 @@ structured citation metadata that can be automatically processed by GitHub and o
 **Quick citation:**
 
 ```text
-Adam Getchell. 2025. causal-triangulations: A Causal Dynamical Triangulation library for quantum gravity research.
-GitHub. https://github.com/acgetchell/causal-triangulations
+Adam Getchell. 2026. causal-triangulations: A Causal Dynamical Triangulation library for quantum gravity research (Version 0.1.0).
+Zenodo. https://doi.org/10.5281/zenodo.20513228
 ```
 
 For BibTeX, APA, or other citation formats, please refer to the [CITATION.cff](CITATION.cff) file or use GitHub's "Cite this repository" feature.
@@ -59,7 +59,8 @@ This section contains the seminal papers and foundational work that established 
 - Ambjørn, J., Görlich, A., Jurkiewicz, J., and Loll, R. "Nonperturbative Quantum Gravity." _Physics Reports_ 519, no. 4-5 (2012): 127-210. DOI:
   [10.1016/j.physrep.2012.03.007](https://doi.org/10.1016/j.physrep.2012.03.007). arXiv: [1203.3591](https://arxiv.org/abs/1203.3591)
 
-- Loll, R. "Quantum Gravity from Causal Dynamical Triangulations: A Review." _Classical and Quantum Gravity_ 37, no. 1 (2020): 013002. DOI:
+- Loll, R. "Quantum Gravity from Causal Dynamical Triangulations: A Review." _Classical and Quantum Gravity_ 37, no. 1 (2020; published online 2019): 013002.
+  DOI:
   [10.1088/1361-6382/ab57c7](https://doi.org/10.1088/1361-6382/ab57c7). arXiv: [1905.08669](https://arxiv.org/abs/1905.08669)
 
 ### Original CDT Framework
@@ -140,7 +141,7 @@ improvements to the `markov-chain-monte-carlo` crate. Refer to that crate and it
 
 ### Regge Calculus and Discrete Action
 
-- Hamber, H. W. "Quantum Gravitation: The Feynman Path Integral Approach." Berlin: Springer-Verlag, 2009. DOI:
+- Hamber, H. W. "Quantum Gravitation: The Feynman Path Integral Approach." Berlin: Springer-Verlag, 2009 (published online 2008). DOI:
   [10.1007/978-3-540-85293-3](https://doi.org/10.1007/978-3-540-85293-3)
 
 - Regge, T. "General Relativity without coordinates." _Il Nuovo Cimento_ 19, no. 3 (1961): 558-571. DOI:

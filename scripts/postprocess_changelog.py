@@ -20,6 +20,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
+from typing import cast
 
 # markdownlint MD013 line-length limit used by this project.
 MAX_LINE_WIDTH = 160
@@ -131,17 +132,17 @@ def _squash_heading_parts(line: str) -> tuple[str, str, str] | None:
     if match is None:
         return None
 
-    raw_prefix = match.group("prefix")
+    raw_prefix = cast("str", match.group("prefix"))
     kind = re.sub(r"\([^)]+\)", "", raw_prefix).rstrip("!").casefold()
     label = _SQUASH_HEADING_LABELS.get(kind)
     if label is None:
         return None
 
-    title = match.group("title").strip()
+    title = cast("str", match.group("title")).strip()
     if not title:
         return None
 
-    return match.group("indent"), label, title[0].upper() + title[1:]
+    return cast("str", match.group("indent")), label, title[0].upper() + title[1:]
 
 
 def _normalize_squash_heading(line: str, *, nested: bool = False) -> str:

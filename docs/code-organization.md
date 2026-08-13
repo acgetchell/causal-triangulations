@@ -140,6 +140,8 @@ causal-triangulations/
 │   ├── main.rs
 │   └── util.rs
 ├── tests/
+│   ├── common/
+│   │   └── proptest_config.rs
 │   ├── semgrep/
 │   │   ├── .github/
 │   │   │   └── workflows/
@@ -162,6 +164,7 @@ causal-triangulations/
 │   ├── integration_tests.rs
 │   ├── large_scale_debug.rs
 │   ├── physics_integration.rs
+│   ├── proptest_config.rs
 │   ├── proposal_policy.rs
 │   ├── proptest_foliation.rs
 │   ├── proptest_metropolis.rs
@@ -215,7 +218,7 @@ handle wrappers, `DelaunayBackend2D`, and generator functions from `crate::geome
 Generic MCMC mechanics should be delegated to `markov-chain-monte-carlo` through thin CDT adapters. CDT owns domain state, proposal-site enumeration,
 foliation/causality validation, topology metadata checks, measurements, and result translation; the upstream MCMC crate owns Metropolis-Hastings acceptance,
 proposal-ratio application, chain counters, planned-proposal commit ordering, and reusable sampler continuation behavior. Repository-owned Semgrep rules
-enforce the issue #155 boundary against new CDT-local generic acceptance draws or manual accepted/rejected sampler counters.
+enforce this boundary against new CDT-local generic acceptance draws or manual accepted/rejected sampler counters.
 
 ## Repository Areas
 
@@ -223,7 +226,8 @@ enforce the issue #155 boundary against new CDT-local generic acceptance draws o
 - `examples/` — runnable public API examples and shell workflows for simulation, observables, output, checkpoints, parameter sweeps, and performance checks.
 - `notebooks/` — notebook front ends and analysis consumers for CLI-generated artifacts such as trace CSV and JSON summary files. Notebook code may run the
   binary for tutorials, but simulation logic stays in Rust.
-- `tests/` — CLI, integration, physics, property-based, regression, slow-debug, and project-rule tests.
+- `tests/` — CLI, integration, physics, property-based, property-configuration, regression, slow-debug, and project-rule tests, with shared property-test
+  configuration under `tests/common/`.
 - `benches/` — Criterion benchmark harnesses and CI performance suites, with shared fail-fast fixture setup support under `benches/support/`.
 - `docs/` — user guides, architecture notes, development rules, and release/testing/performance documentation.
 - `scripts/` — Python and shell support tooling for benchmarks, coverage, changelog/release work, examples, and validation.
@@ -250,23 +254,24 @@ through to upstream `delaunay::` APIs directly.
 - Defines `CdtTriangulation2D`, the CDT-domain alias that binds `CdtTriangulation` to the supported 2D Delaunay backend
 - `CdtSimplexCounts` carries the CDT-domain proof that constructed triangulations have positive vertex, edge, and triangle counts as `NonZeroUsize`, while
   raw geometry queries remain `usize` so backend construction, clearing, and collection-style count APIs can represent zero
-- `from_cdt_strip(vertices_per_slice, num_slices)` — Delaunay-built open-boundary 1+1 CDT strip with strict Up/Down simplex classification and upstream Level
-  1–5 Delaunay validation before wrapping
+- `from_cdt_strip(vertices_per_slice, num_slices)` — exact-time open-boundary 1+1 CDT strip imported through the Delaunay adapter with strict Up/Down simplex
+  classification and upstream Level 1–4 realization validation before wrapping
 - `from_filtered_delaunay_strip(vertices_per_slice, num_slices)` — open-boundary 1+1 CDT initial-state constructor that starts from surplus labeled Delaunay
   points, removes vertices incident to non-strict CDT simplices through the backend `remove_vertex` path, and returns only after the strict causal simplex
   violation count converges to zero and full initial validation passes
-- `from_cdt_strip_spatial_vertex_profile(profile)` — open-boundary 1+1 CDT strip from explicit nonuniform per-slice vertex counts; builds labeled point
-  data and delegates triangulation to the Delaunay constructor before strict initial validation
+- `from_cdt_strip_spatial_vertex_profile(profile)` — exact-time open-boundary 1+1 CDT strip from explicit nonuniform per-slice vertex counts; builds balanced
+  staircase connectivity and delegates Level 1–4 realization validation to the Delaunay adapter
 - `from_toroidal_cdt(vertices_per_slice, num_slices)` — periodic Delaunay S¹×S¹ toroidal CDT (χ = 0) with upstream Level 1–5 validation before wrapping;
   requires `vertices_per_slice ≥ 3` and `num_slices ≥ 3`
 - `from_toroidal_cdt_spatial_vertex_profile(profile)` — periodic S¹×S¹ toroidal CDT from explicit per-slice vertex counts, preserving closed spatial
   slices and periodic time
 - `assign_foliation_by_y(num_slices)` — bin existing vertices into time slices
 - Query methods: `time_label`, `edge_type`, `vertices_at_time`, `slice_sizes`, `has_foliation`, `strict_causal_simplex_violation_count`
-- Validation: `CdtValidationProfile` names initial-Delaunay, evolved, and optional strict-Delaunay contracts. Constructors require Level 1–5 for initial
-  meshes; `validate()` selects the evolved profile with Level 1–4 embedding validity plus CDT topology, foliation, causality, and strict Up/Down simplex
-  classification; `validate_with_profile()` exposes explicit lifecycle and strict-mode selection. Named profiles reject missing foliation rather than
-  treating the mandatory causal checks as vacuously successful; raw unfoliated geometry experiments use a separate internal geometry/topology contract.
+- Validation: `CdtValidationProfile` names initial-Delaunay, evolved, and optional strict-Delaunay contracts. Strict Delaunay constructors require Level 1–5;
+  exact layered constructors require Level 1–4 plus the complete CDT-domain invariant set. `validate()` selects the evolved profile with Level 1–4 embedding
+  validity plus CDT topology, foliation, causality, and strict Up/Down simplex classification; `validate_with_profile()` exposes explicit lifecycle and
+  strict-mode selection. Named profiles reject missing foliation rather than treating the mandatory causal checks as vacuously successful; raw unfoliated
+  geometry experiments use a separate internal geometry/topology contract.
 - Mutable backend access is not exposed. CDT code mutates Delaunay state only through narrow crate-internal operations (`flip_edge`, `subdivide_face`,
   `remove_vertex`, `set_vertex_data`) that invalidate cached counts and foliation synchronization bookkeeping on success.
 
@@ -305,8 +310,7 @@ then consumes the chain state back into the CDT result without cloning topology 
 single canonical triangulation owner. `checkpoint.rs` owns resumable checkpoint state and resume validation, `telemetry.rs` owns
 public step/proposal telemetry, and `helpers.rs` holds shared CDT-domain calculations.
 
-See `docs/metropolis.md` for the current planned-proposal ordering and
-[`causal-triangulations#155`](https://github.com/acgetchell/causal-triangulations/issues/155) for the remaining MCMC boundary follow-up.
+See `docs/metropolis.md` for the current planned-proposal ordering and enforced MCMC backend boundary.
 
 ### `cdt/results.rs` — Simulation outputs
 
@@ -374,6 +378,8 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
   mutation reject old handles with typed foreign/stale errors.
 - Translates upstream Delaunay operations and errors into this crate's trait contracts
 - Exposes named validation adapters for Level 1–3 structure, Level 1–4 embedding/realization, and Level 1–5 Delaunay validity
+- Rebuilds Euclidean checkpoints through explicit Level 1–4 realization validation so exact layered and evolved non-Delaunay states remain restorable while
+  preserving vertex and simplex payloads
 - Together with `geometry/generators.rs`, this is the only place that directly imports from the `delaunay` crate
 
 ### `geometry/generators.rs` — Delaunay triangulation generators
@@ -382,6 +388,8 @@ See `docs/metropolis.md` for the current planned-proposal ordering and
 - `build_delaunay2_with_data` — builds from coordinate + vertex-data pairs
 - `build_delaunay2_from_simplices` / `build_delaunay2_with_topology` — builds from explicit simplex connectivity (no Delaunay point insertion); the latter
   also accepts `TopologyGuarantee` and `GlobalTopology` metadata for supported explicit topologies
+- `build_layered_delaunay2_from_simplices` — crate-private exact-layer import path that uses upstream Level 1–4 realization validation without forcing
+  Level 5
 - `build_toroidal_delaunay2` — API-compatibility wrapper for explicit toroidal meshes; with `delaunay` v0.8 it validates the domain and reports the upstream
   explicit-toroidal topology limitation
 - `build_periodic_toroidal_delaunay2` — builds true periodic toroidal Delaunay meshes through the upstream image-point constructor

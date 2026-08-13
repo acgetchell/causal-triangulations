@@ -22,7 +22,8 @@ use delaunay::prelude::{DataSerialize, DataType};
 use delaunay::tds::{EdgeKey, FacetHandle, SimplexKey, Tds, Vertex, VertexKey};
 use delaunay::topology::traits::{GlobalTopology, TopologyKind, ToroidalConstructionMode};
 use delaunay::{
-    DelaunayCheckPolicy, DelaunayTriangulation, SimplexBarycenterError, TopologyGuarantee,
+    ConstructionOptions, DelaunayCheckPolicy, DelaunayTriangulation, DelaunayTriangulationBuilder,
+    SimplexBarycenterError, TopologyGuarantee,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use std::collections::HashMap;
@@ -52,7 +53,9 @@ pub(crate) type DelaunayMeshExport<const D: usize> = MeshExport<D>;
 /// global topology and topology-guarantee metadata. Deserialization rebuilds
 /// transient backend indexes, including the interior-facet lookup used for local
 /// 2D edge queries. Vertex/simplex incidence is maintained by Delaunay and is not
-/// duplicated in checkpoints or backend caches.
+/// duplicated in checkpoints or backend caches. Restored meshes must pass the
+/// cumulative Level 1-4 realization validator; Level 5 is deliberately optional
+/// because exact layered and evolved CDT states need not remain Delaunay.
 ///
 /// This representation is version-bound because it embeds Delaunay's internal
 /// triangulation structure. Serialized backends and enclosing CDT checkpoints
@@ -309,6 +312,93 @@ impl SerializableDelaunayCheckPolicy {
     }
 }
 
+/// Rebuilds a Euclidean checkpoint through explicit Level 1-4 realization validation.
+fn rebuild_realized_euclidean<VertexData: DataType, SimplexData: DataType, const D: usize>(
+    tds: &Tds<VertexData, SimplexData, D>,
+    topology_guarantee: TopologyGuarantee,
+) -> Result<RawTriangulation<VertexData, SimplexData, D>, String> {
+    tds.validate().map_err(|error| error.to_string())?;
+
+    let mut vertex_indices = HashMap::with_capacity(tds.number_of_vertices());
+    let mut vertices = Vec::with_capacity(tds.number_of_vertices());
+    for (index, (key, vertex)) in tds.vertices().enumerate() {
+        vertex_indices.insert(key, index);
+        let coordinates = *vertex.point().coords();
+        let rebuilt = vertex.data().copied().map_or_else(
+            || Vertex::try_new(coordinates),
+            |data| Vertex::try_new_with_data(coordinates, data),
+        );
+        vertices.push(rebuilt.map_err(|error| error.to_string())?);
+    }
+
+    let mut simplices = Vec::with_capacity(tds.number_of_simplices());
+    let mut simplex_data = HashMap::with_capacity(tds.number_of_simplices());
+    for (key, simplex) in tds.simplices() {
+        let indices =
+            tds.simplex_vertices(key)
+                .map_err(|error| error.to_string())?
+                .iter()
+                .map(|vertex| {
+                    vertex_indices.get(vertex).copied().ok_or_else(|| {
+                        format!("simplex {key:?} references unknown vertex {vertex:?}")
+                    })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+        let mut signature = indices.clone();
+        signature.sort_unstable();
+        simplex_data.insert(signature, simplex.data().copied());
+        simplices.push(indices);
+    }
+
+    let vertex_uuids: HashMap<_, _> = vertices
+        .iter()
+        .enumerate()
+        .map(|(index, vertex)| (vertex.uuid(), index))
+        .collect();
+    let mut rebuilt = DelaunayTriangulationBuilder::try_from_vertices_and_simplices_generic(
+        &vertices, &simplices,
+    )
+    .map_err(|error| error.to_string())?
+    .simplex_data_type::<SimplexData>()
+    .topology_guarantee(topology_guarantee)
+    .global_topology(GlobalTopology::Euclidean)
+    .construction_options(ConstructionOptions::default().without_final_delaunay_enforcement())
+    .build()
+    .map_err(|error| error.to_string())?;
+
+    let assignments = rebuilt
+        .simplices()
+        .map(|(key, _)| {
+            let mut signature = rebuilt
+                .simplex_vertices(key)
+                .map_err(|error| error.to_string())?
+                .iter()
+                .map(|vertex| {
+                    let uuid = rebuilt.vertex_uuid_from_key(*vertex).ok_or_else(|| {
+                        format!("rebuilt simplex {key:?} references unknown vertex {vertex:?}")
+                    })?;
+                    vertex_uuids
+                        .get(&uuid)
+                        .copied()
+                        .ok_or_else(|| format!("rebuilt vertex {vertex:?} has unknown UUID {uuid}"))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            signature.sort_unstable();
+            let data = simplex_data.get(&signature).copied().ok_or_else(|| {
+                format!("rebuilt simplex {key:?} has no checkpoint payload mapping")
+            })?;
+            Ok((key, data))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    for (key, data) in assignments {
+        rebuilt
+            .set_simplex_data(key, data)
+            .map_err(|error| error.to_string())?;
+    }
+
+    Ok(rebuilt)
+}
+
 impl<VertexData: DataSerialize, SimplexData: DataSerialize, const D: usize> Serialize
     for DelaunayBackend<VertexData, SimplexData, D>
 {
@@ -336,19 +426,24 @@ impl<'de, VertexData: DataType, SimplexData: DataType, const D: usize> Deseriali
         let serialized = SerializedDelaunayBackend::deserialize(deserializer)?;
         let topology_guarantee = serialized.topology_guarantee.into();
         let global_topology = serialized.global_topology.into_global_topology()?;
-        let mut dt = DelaunayTriangulation::try_from_tds_with_topology_context(
-            serialized.tds,
-            AdaptiveKernel::new(),
-            topology_guarantee,
-            global_topology,
-        )
-        .map_err(DE::Error::custom)?;
+        let mut dt = if global_topology == GlobalTopology::Euclidean {
+            rebuild_realized_euclidean(&serialized.tds, topology_guarantee)
+                .map_err(DE::Error::custom)?
+        } else {
+            DelaunayTriangulation::try_from_tds_with_topology_context(
+                serialized.tds,
+                AdaptiveKernel::new(),
+                topology_guarantee,
+                global_topology,
+            )
+            .map_err(DE::Error::custom)?
+        };
         dt.set_delaunay_check_policy(
             serialized
                 .delaunay_check_policy
                 .into_delaunay_check_policy()?,
         );
-        Self::from_triangulation(dt).map_err(DE::Error::custom)
+        Self::from_realized_triangulation(dt).map_err(DE::Error::custom)
     }
 }
 
@@ -1054,6 +1149,24 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
         backend.validate_delaunay()?;
         Ok(backend)
     }
+
+    /// Creates a backend from connectivity validated through geometric realization.
+    ///
+    /// This crate-private boundary is used for exact layered CDT construction and
+    /// checkpoint restoration. Both can contain embedding-valid connectivity that
+    /// intentionally does not satisfy the Level 5 Delaunay predicate.
+    pub(crate) fn from_realized_triangulation(
+        dt: DelaunayTriangulation<AdaptiveKernel<f64>, VertexData, SimplexData, D>,
+    ) -> Result<Self, DelaunayError> {
+        let interior_facets_by_edge = Self::build_interior_facets_by_edge(&dt);
+        let backend = Self {
+            dt,
+            interior_facets_by_edge,
+            owner_id: Uuid::new_v4(),
+        };
+        backend.validate_embedding()?;
+        Ok(backend)
+    }
 }
 
 impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, SimplexData, D> {
@@ -1530,7 +1643,7 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
     /// underlying triangulation.
     ///
     /// This exposes the [`GlobalTopology`]
-    /// metadata attached by [`DelaunayTriangulationBuilder`](delaunay::DelaunayTriangulationBuilder)
+    /// metadata attached by [`DelaunayTriangulationBuilder`]
     /// at construction time.
     ///
     /// # Examples
@@ -2433,12 +2546,8 @@ mod tests {
                 )
                 .build()
                 .expect("non-Delaunay quad should pass Levels 1-4 embedding validation");
-        let interior_facets_by_edge = DelaunayBackend2D::build_interior_facets_by_edge(&dt);
-        DelaunayBackend {
-            dt,
-            interior_facets_by_edge,
-            owner_id: Uuid::new_v4(),
-        }
+        DelaunayBackend2D::from_realized_triangulation(dt)
+            .expect("non-Delaunay quad should pass Levels 1-4 embedding validation")
     }
 
     /// `serde_json` wraps custom visitor failures as data errors; assert that
@@ -2469,8 +2578,8 @@ mod tests {
         }
     }
 
-    /// Rewrites a serialized convex-quad TDS to use the non-Delaunay diagonal so
-    /// backend deserialization must fail during checked reconstruction.
+    /// Rewrites a serialized convex-quad TDS to use the embedding-valid
+    /// non-Delaunay diagonal.
     fn set_non_delaunay_quad_diagonal(value: &mut Value) {
         let tds = value
             .get("tds")
@@ -3911,7 +4020,7 @@ mod tests {
     }
 
     #[test]
-    fn backend_rejects_non_delaunay_connectivity() {
+    fn backend_deserialization_accepts_realized_non_delaunay_connectivity() {
         let dt = build_delaunay2_with_data(&[
             ([0.0, 0.0], 0),
             ([4.0, 0.0], 0),
@@ -3922,15 +4031,15 @@ mod tests {
         let backend = validated_backend(dt);
         let mut value = to_value(&backend).expect("backend should serialize");
         set_non_delaunay_quad_diagonal(&mut value);
-        let invalid_json = to_string(&value).expect("corrupt backend should serialize");
+        let non_delaunay_json = to_string(&value).expect("modified backend should serialize");
 
-        let error = from_str::<DelaunayBackend2D>(&invalid_json)
-            .expect_err("non-Delaunay connectivity must be rejected");
+        let restored = from_str::<DelaunayBackend2D>(&non_delaunay_json)
+            .expect("embedding-valid non-Delaunay connectivity should deserialize");
 
-        assert!(
-            error.to_string().contains("Delaunay verification failed"),
-            "unexpected deserialization error: {error}"
-        );
+        restored
+            .validate_embedding()
+            .expect("restored connectivity should satisfy Levels 1-4");
+        assert!(!restored.is_delaunay());
     }
 
     #[test]

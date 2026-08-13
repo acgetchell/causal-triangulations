@@ -52,22 +52,24 @@ vertex's label as `t`. Uniform slices are therefore a regular initial condition,
 
 ## Delaunay Construction
 
-The regular open-boundary strip constructor places vertices in a lightly perturbed layered grid with:
+The regular open-boundary strip constructor places vertices in a spatially perturbed layered grid with:
 
 - **Spatial extent**: 1.0, with `vertices_per_slice` evenly spaced vertices per slice
 - **Temporal gap**: 1.0, with integer y-coordinates `0, 1, 2, ...`
-- **Connectivity**: produced by Delaunay point insertion, then checked for strict Up/Down simplex classification
+- **Connectivity**: explicit regular staircase triangles, imported through upstream Level 1-4 realization validation and then checked for strict Up/Down
+  simplex classification
 
 Parameters: `vertices_per_slice ≥ 4`, `num_slices ≥ 2`.
 
-`from_filtered_delaunay_strip()` is the CDT-plusplus-influenced construction path. It starts from an overcomplete labeled Delaunay triangulation, counts
+`from_filtered_delaunay_strip()` is the CDT-plusplus-influenced construction path. Because this constructor explicitly promises Level 5 Delaunay output, it
+retains a tiny temporal perturbation that puts collinear slice points in general position. It starts from an overcomplete labeled Delaunay triangulation, counts
 non-strict causal simplices, removes a vertex incident to an offending simplex through the backend `remove_vertex` operation, rebuilds foliation bookkeeping
 from live vertex labels, and repeats until the count converges to zero. The current pass budget is bounded, but success is defined by the CDT invariant, not by
 the number of cleanup passes used.
 
-`from_cdt_strip_spatial_vertex_profile()` places each open spatial slice according to the corresponding profile entry and delegates triangulation to the
-Delaunay point-data constructor. The returned mesh must pass the same initial-constructor contract as the regular open strip: upstream Delaunay Level 1-5
-validation plus CDT topology, foliation, causality, and strict Up/Down simplex classification.
+`from_cdt_strip_spatial_vertex_profile()` places each open spatial slice at its exact integer time coordinate and builds balanced staircase connectivity between
+adjacent slices. The returned mesh must pass the same contract as the regular exact strip: upstream Level 1-4 realization validation plus CDT topology,
+foliation, causality, and strict Up/Down simplex classification.
 
 The toroidal constructor starts from an `N × T` lattice in a periodic domain, applies bounded deterministic offsets to put cocircular lattice points in
 generic position, and retries a fixed sequence of candidate embeddings through the upstream periodic image-point Delaunay constructor. It then checks the
@@ -88,14 +90,15 @@ The upstream validation hierarchy separates the properties needed by CDT evoluti
 [`CdtValidationProfile`](../src/cdt/triangulation/validation.rs) names the three lifecycle contracts:
 
 - `InitialDelaunay` requires Levels 1-5, including embedding and Delaunay-ness, plus topology, foliation, causality, and strict simplex classification. It is
-  the constructor profile before evolution.
+  used by constructors that promise a genuinely Delaunay initial mesh.
 - `Evolved` requires the Levels 1-4 embedded/non-overlapping realization plus the same CDT-domain predicates. It is the profile for move finalization,
   checkpoints, results, and ordinary public validation.
 - `StrictDelaunay` adds Level 5 to the evolved contract for optional diagnostics or workflows that intentionally restrict evolved states to Delaunay
   triangulations.
 
-`CdtTriangulation::validate()` is shorthand for `validate_with_profile(CdtValidationProfile::Evolved)`. Initial constructors use `InitialDelaunay`, and callers
-can opt into the stronger `StrictDelaunay` profile without making Level 5 part of the normal evolved-state ensemble.
+`CdtTriangulation::validate()` is shorthand for `validate_with_profile(CdtValidationProfile::Evolved)`. Strict Delaunay constructors use `InitialDelaunay`;
+exact layered constructors use the same Level 1-4 geometry contract plus initialization-time CDT classification. Callers can opt into `StrictDelaunay` without
+making Level 5 part of the normal evolved-state ensemble.
 
 All named CDT profiles require current foliation bookkeeping so strict causal simplex validity is actually evaluated. Raw triangulations from
 `from_random_points()` and `from_seeded_points()` remain available for geometry tests and experiments, but they are outside these named CDT profiles;
@@ -134,7 +137,8 @@ This is a CDT-domain invariant, separate from both upstream geometric checks. Le
 Level 5 asks whether that embedding satisfies the Delaunay empty-circumsphere predicate; strict causal simplex validation asks whether the foliation makes
 every top-dimensional cell an allowed CDT cell.
 
-- initial Delaunay-backed constructors require upstream Levels 1-5 and zero strict causal simplex violations;
+- strict initial Delaunay constructors require upstream Levels 1-5 and zero strict causal simplex violations;
+- exact layered initial constructors require upstream Levels 1-4 and zero strict causal simplex violations;
 - evolved CDT states must preserve the Level 1-4 embedding and keep zero strict causal simplex violations, but they are not required to preserve the Level 5
   Delaunay property.
 

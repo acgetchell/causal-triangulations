@@ -1291,7 +1291,7 @@ class CriterionParser:
             return dim
         # Fallback: extract trailing "<digits>d" or "<digits>D"
         m = re.search(r"(\d+)[dD]$", dim_dir.name)
-        return m.group(1) if m else None
+        return cast("str", m.group(1)) if m else None
 
     @staticmethod
     def _find_estimates_file(point_dir: Path) -> Path | None:
@@ -2557,21 +2557,23 @@ def _parse_github_owner_repo(remote_url: str) -> tuple[str, str] | None:
         if parsed.netloc.lower() in {"github.com", "www.github.com"}:
             parts = parsed.path.strip("/").split("/")
             if len(parts) >= 2:
-                return parts[0], parts[1]
+                owner, repo, *_ = parts
+                return owner, repo
         return None
 
     # git@github.com:OWNER/REPO
     match = re.match(r"^git@github\.com:(?P<owner>[^/]+)/(?P<repo>.+)$", url)
     if match:
-        return match.group("owner"), match.group("repo")
+        return cast("str", match.group("owner")), cast("str", match.group("repo"))
 
     # ssh://git@github.com/OWNER/REPO
     if url.startswith("ssh://"):
         parsed = urlparse(url)
         if (parsed.hostname or "").lower() == "github.com":
-            parts = (parsed.path or "").strip("/").split("/")
+            parts = parsed.path.strip("/").split("/")
             if len(parts) >= 2:
-                return parts[0], parts[1]
+                owner, repo, *_ = parts
+                return owner, repo
 
     return None
 

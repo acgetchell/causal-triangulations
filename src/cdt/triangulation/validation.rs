@@ -26,7 +26,7 @@ use std::num::NonZeroUsize;
 /// use causal_triangulations::prelude::triangulation::*;
 ///
 /// fn main() -> CdtResult<()> {
-///     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
+///     let tri = CdtTriangulation::from_toroidal_cdt(4, 3)?;
 ///     tri.validate_with_profile(CdtValidationProfile::InitialDelaunay)?;
 ///     tri.validate_with_profile(CdtValidationProfile::Evolved)?;
 ///     Ok(())
@@ -60,8 +60,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// does not require the Level 5 Delaunay empty-circumsphere predicate,
     /// because local CDT moves are not expected to preserve Delaunay-ness.
     ///
-    /// Constructors that create initial simulation meshes perform the stricter
-    /// Level 1-5 Delaunay validation before returning.
+    /// Constructors that promise a strict initial Delaunay mesh perform the
+    /// additional Level 5 validation before returning. Exact layered strip
+    /// constructors instead preserve integer time coordinates and require Levels
+    /// 1-4 plus the complete CDT-domain invariant set.
     ///
     /// # Errors
     ///
@@ -279,6 +281,24 @@ impl CdtTriangulation<DelaunayBackend2D> {
         self.require_profile_foliation()?;
         self.validate_geometry_for_profile(
             CdtValidationProfile::InitialDelaunay,
+            EmbeddingValidationState::Required,
+        )?;
+        self.validate_topology()?;
+        self.validate_foliation()?;
+        self.validate_causality()?;
+        self.classify_all_simplices().map(|_| ())
+    }
+
+    /// Validates exact layered initialization without requiring Level 5.
+    ///
+    /// Exact CDT slices intentionally contain collinear points. The upstream
+    /// construction contract preserves those coordinates and guarantees a valid
+    /// Level 1-4 realization, while CDT owns topology, foliation, causality, and
+    /// simplex classification.
+    pub(crate) fn validate_initial_realized_cdt(&mut self) -> CdtResult<()> {
+        self.require_profile_foliation()?;
+        self.validate_geometry_for_profile(
+            CdtValidationProfile::Evolved,
             EmbeddingValidationState::Required,
         )?;
         self.validate_topology()?;
@@ -609,8 +629,8 @@ mod tests {
 
     #[test]
     fn named_profiles_accept_initial_delaunay_state() {
-        let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("initial CDT strip should build");
+        let triangulation = CdtTriangulation::from_toroidal_cdt(4, 3)
+            .expect("strict initial toroidal CDT should build");
 
         for profile in [
             CdtValidationProfile::InitialDelaunay,
@@ -621,6 +641,23 @@ mod tests {
                 .validate_with_profile(profile)
                 .unwrap_or_else(|error| panic!("{profile:?} should accept initial state: {error}"));
         }
+    }
+
+    #[test]
+    fn exact_layered_strip_uses_realized_profile_without_claiming_level_five() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(5, 3).expect("exact layered strip should build");
+
+        triangulation
+            .validate_with_profile(CdtValidationProfile::Evolved)
+            .expect("exact layered strip should satisfy realization and CDT invariants");
+        assert_matches!(
+            triangulation.validate_with_profile(CdtValidationProfile::InitialDelaunay),
+            Err(CdtError::DelaunayValidationFailed {
+                level: DelaunayValidationLevel::Five,
+                ..
+            })
+        );
     }
 
     #[test]

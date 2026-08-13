@@ -80,8 +80,8 @@ Move validation follows a two-layer design:
 Move code lives in the CDT domain layer. It may call `DelaunayBackend2D` methods and trait-backed mutation hooks, but it must not import upstream `delaunay::`
 APIs directly.
 
-The public CDT move interface will be revisited after [`delaunay#252`](https://github.com/acgetchell/delaunay/issues/252) lands. Until then, this crate keeps
-the current CDT-owned move API and maps it onto the available Delaunay k-flip primitives through the geometry backend layer.
+The upstream k-flip surface is available. This crate intentionally retains a CDT-owned move API for causal candidate selection, validation, and metadata
+resynchronization while mapping geometric mutations onto Delaunay k-flip primitives through the geometry backend layer.
 
 ### Bistellar Flips And CDT Moves
 
