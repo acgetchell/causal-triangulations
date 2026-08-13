@@ -2612,6 +2612,29 @@ mod tests {
     }
 
     #[test]
+    fn layered_simplex_builders_report_capacity_overflow() {
+        let results = [
+            open_profile_simplices(&[4, 4], usize::MAX, 8, 1.0),
+            regular_open_strip_simplices(4, 2, usize::MAX, 8, 1.0),
+        ];
+
+        for result in results {
+            assert_matches!(
+                result,
+                Err(CdtError::DelaunayGenerationFailed {
+                    vertex_count: 8,
+                    coordinate_range: (0.0, 1.0),
+                    attempt: 1,
+                    failure: DelaunayGenerationFailure::StorageReservation {
+                        requested_capacity,
+                        ref detail,
+                    },
+                }) if requested_capacity == usize::MAX && !detail.is_empty()
+            );
+        }
+    }
+
+    #[test]
     fn test_open_profile_face_count_rejects_empty_profile() {
         let result = open_profile_face_count(&[]);
 

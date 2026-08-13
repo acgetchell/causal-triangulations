@@ -379,12 +379,16 @@ class TestArchiveChangelog:
     ) -> None:
         """A failed rollback must preserve the recovery copy for manual restoration."""
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text(_full_changelog(), encoding="utf-8")
+        original_root = _full_changelog()
+        changelog.write_text(original_root, encoding="utf-8")
         archive_dir = tmp_path / "docs" / "archive" / "changelog"
         archive_dir.mkdir(parents=True)
         existing_archive = archive_dir / "0.6.md"
         original_archive = "# Changelog - 0.6.x\n\nPrior valid archive\n"
         existing_archive.write_text(original_archive, encoding="utf-8")
+        existing_older_archive = archive_dir / "0.2.md"
+        original_older_archive = "# Changelog - 0.2.x\n\nPrior older archive\n"
+        existing_older_archive.write_text(original_older_archive, encoding="utf-8")
 
         path_type = type(changelog)
         real_replace = path_type.replace
@@ -408,8 +412,27 @@ class TestArchiveChangelog:
 
         recovery_files = list(archive_dir.glob("*.tmp"))
         assert len(recovery_files) == 1
-        assert str(recovery_files[0]) in str(error.value)
+        assert f"{existing_archive} -> {recovery_files[0]}" in str(error.value)
         assert recovery_files[0].read_text(encoding="utf-8") == original_archive
+        assert changelog.read_text(encoding="utf-8") == original_root
+        assert existing_older_archive.read_text(encoding="utf-8") == original_older_archive
+
+    def test_output_directory_is_rejected_before_publication(self, tmp_path: Path) -> None:
+        """A directory at an output path must leave every existing file untouched."""
+        changelog = tmp_path / "CHANGELOG.md"
+        original_root = _full_changelog()
+        changelog.write_text(original_root, encoding="utf-8")
+        archive_dir = tmp_path / "docs" / "archive" / "changelog"
+        directory_output = archive_dir / "0.2.md"
+        directory_output.mkdir(parents=True)
+
+        with pytest.raises(IsADirectoryError) as error:
+            archive_changelog(changelog, archive_dir)
+
+        assert str(error.value) == f"output path exists but is not a file: {directory_output}"
+        assert changelog.read_text(encoding="utf-8") == original_root
+        assert directory_output.is_dir()
+        assert not list(tmp_path.rglob("*.tmp"))
 
     def test_single_minor_no_op(self, tmp_path: Path) -> None:
         """When only one minor series exists, nothing is archived."""

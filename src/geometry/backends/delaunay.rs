@@ -4028,7 +4028,55 @@ mod tests {
             ([1.0, 2.0], 1),
         ])
         .expect("convex quad should build");
-        let backend = validated_backend(dt);
+        let mut backend = validated_backend(dt);
+        let vertices: Vec<_> = backend.vertices().collect();
+        for (vertex, payload) in vertices
+            .into_iter()
+            .zip([Some(2), Some(3), Some(5), Some(7)])
+        {
+            backend
+                .set_vertex_data(&vertex, payload)
+                .expect("fixture vertex payload should update");
+        }
+        let faces: Vec<_> = backend.faces().collect();
+        for (face, payload) in faces.into_iter().zip([Some(11), Some(13)]) {
+            backend
+                .set_simplex_data(&face, payload)
+                .expect("fixture simplex payload should update");
+        }
+        let collect_vertex_payloads = |backend: &DelaunayBackend2D| {
+            let mut payloads: Vec<_> = backend
+                .vertices()
+                .map(|vertex| {
+                    let coordinates = backend
+                        .vertex_coordinates(&vertex)
+                        .expect("vertex coordinates should resolve");
+                    let payload = backend
+                        .vertex_data(&vertex)
+                        .expect("vertex payload should resolve");
+                    (
+                        [coordinates[0].to_bits(), coordinates[1].to_bits()],
+                        payload,
+                    )
+                })
+                .collect();
+            payloads.sort_unstable();
+            payloads
+        };
+        let collect_simplex_payloads = |backend: &DelaunayBackend2D| {
+            let mut payloads: Vec<_> = backend
+                .faces()
+                .map(|face| {
+                    backend
+                        .simplex_data(&face)
+                        .expect("simplex payload should resolve")
+                })
+                .collect();
+            payloads.sort_unstable();
+            payloads
+        };
+        let original_vertex_payloads = collect_vertex_payloads(&backend);
+        let original_simplex_payloads = collect_simplex_payloads(&backend);
         let mut value = to_value(&backend).expect("backend should serialize");
         set_non_delaunay_quad_diagonal(&mut value);
         let non_delaunay_json = to_string(&value).expect("modified backend should serialize");
@@ -4040,6 +4088,43 @@ mod tests {
             .validate_embedding()
             .expect("restored connectivity should satisfy Levels 1-4");
         assert!(!restored.is_delaunay());
+        assert_eq!(collect_vertex_payloads(&restored), original_vertex_payloads);
+        assert_eq!(
+            collect_simplex_payloads(&restored),
+            original_simplex_payloads
+        );
+    }
+
+    #[test]
+    fn backend_deserialization_preserves_vertices_without_payloads() {
+        let vertices = [
+            Vertex::<u32, 2>::try_new([0.0, 0.0]).expect("valid vertex"),
+            Vertex::<u32, 2>::try_new([1.0, 0.0]).expect("valid vertex"),
+            Vertex::<u32, 2>::try_new([0.0, 1.0]).expect("valid vertex"),
+        ];
+        let dt = DelaunayTriangulationBuilder::new(&vertices)
+            .simplex_data_type::<i32>()
+            .build()
+            .expect("unlabeled triangle should build");
+        let backend = validated_backend(dt);
+        assert!(backend.vertices().all(|vertex| {
+            backend
+                .vertex_data(&vertex)
+                .expect("fixture vertex payload should resolve")
+                .is_none()
+        }));
+
+        let serialized = to_string(&backend).expect("unlabeled backend should serialize");
+        let restored = from_str::<DelaunayBackend2D>(&serialized)
+            .expect("unlabeled backend should deserialize");
+
+        assert_eq!(restored.vertex_count(), 3);
+        assert!(restored.vertices().all(|vertex| {
+            restored
+                .vertex_data(&vertex)
+                .expect("restored vertex payload should resolve")
+                .is_none()
+        }));
     }
 
     #[test]

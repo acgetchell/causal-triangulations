@@ -237,6 +237,17 @@ def _stage_output(path: Path, content: bytes) -> Path:
     return temporary_path
 
 
+def _fsync_directory(path: Path) -> None:
+    """Persist directory-entry changes where the platform supports it."""
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def _rollback_outputs(
     published: list[Path],
     backups: dict[Path, Path | None],
@@ -265,7 +276,7 @@ def _publish_outputs(outputs: dict[Path, str]) -> None:
     staged: dict[Path, Path] = {}
     backups: dict[Path, Path | None] = {}
     published: list[Path] = []
-    preserved_backups: set[Path] = set()
+    preserved_backups: dict[Path, Path] = {}
     try:
         for path, text in outputs.items():
             staged[path] = _stage_output(path, text.encode("utf-8"))
@@ -280,17 +291,19 @@ def _publish_outputs(outputs: dict[Path, str]) -> None:
                 staged[path].replace(path)
                 staged.pop(path)
                 published.append(path)
+            for parent in sorted({path.parent for path in outputs}):
+                _fsync_directory(parent)
         except OSError as publish_error:
             rollback_errors = _rollback_outputs(published, backups)
             if rollback_errors:
-                preserved_backups = {backup for path, _error in rollback_errors if (backup := backups.get(path)) is not None}
-                recovery_locations = ", ".join(str(path) for path in sorted(preserved_backups))
+                preserved_backups = {path: backup for path, _error in rollback_errors if (backup := backups.get(path)) is not None}
+                recovery_locations = ", ".join(f"{destination} -> {backup}" for destination, backup in sorted(preserved_backups.items()))
                 recovery_detail = f"; original content retained at {recovery_locations}" if recovery_locations else "; no original-content backup was available"
                 message = f"failed to publish changelog outputs and encountered {len(rollback_errors)} rollback error(s){recovery_detail}"
                 raise RuntimeError(message) from publish_error
             raise
     finally:
-        backup_paths = (path for path in backups.values() if path is not None and path not in preserved_backups)
+        backup_paths = (path for path in backups.values() if path is not None and path not in preserved_backups.values())
         for temporary_path in (*staged.values(), *backup_paths):
             temporary_path.unlink(missing_ok=True)
 
