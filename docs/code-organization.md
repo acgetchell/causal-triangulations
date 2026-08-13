@@ -87,6 +87,8 @@ causal-triangulations/
 │   │   ├── test_archive_changelog.py
 │   │   ├── test_benchmark_models.py
 │   │   ├── test_benchmark_utils.py
+│   │   ├── test_check_release_metadata.py
+│   │   ├── test_check_semgrep_fixtures.py
 │   │   ├── test_coverage_report.py
 │   │   ├── test_hardware_utils.py
 │   │   ├── test_notebook_check.py
@@ -97,6 +99,7 @@ causal-triangulations/
 │   ├── archive_changelog.py
 │   ├── benchmark_models.py
 │   ├── benchmark_utils.py
+│   ├── check_release_metadata.py
 │   ├── check_semgrep_fixtures.py
 │   ├── coverage_report.py
 │   ├── hardware_utils.py

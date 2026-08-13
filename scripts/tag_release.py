@@ -17,6 +17,7 @@ import logging
 import re
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 from subprocess_utils import (
@@ -108,6 +109,38 @@ def find_changelog(start: Path | None = None) -> Path:
             return candidate
     msg = "CHANGELOG.md not found in current directory or parent directory."
     raise FileNotFoundError(msg)
+
+
+def _package_version(changelog: Path) -> str:
+    """Return the authoritative Cargo package version beside the changelog."""
+    cargo_toml = changelog.parent / "Cargo.toml"
+    try:
+        data = tomllib.loads(cargo_toml.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as exc:
+        msg = f"Could not parse {cargo_toml}: {exc}"
+        raise ValueError(msg) from exc
+
+    package = data.get("package")
+    if not isinstance(package, dict):
+        msg = f"{cargo_toml} does not define a [package] table"
+        raise TypeError(msg)
+    version = package.get("version")
+    if not isinstance(version, str) or not version.strip():
+        msg = f"{cargo_toml} does not define a non-empty package version"
+        raise TypeError(msg)
+    return version
+
+
+def _validated_release_target(tag_version: str) -> tuple[str, Path]:
+    """Validate a requested tag and return its version plus changelog path."""
+    validate_semver(tag_version)
+    version = parse_version(tag_version)
+    changelog = find_changelog()
+    package_version = _package_version(changelog)
+    if version != package_version:
+        msg = f"Tag version {version!r} does not match Cargo package version {package_version!r}"
+        raise ValueError(msg)
+    return version, changelog
 
 
 def _archive_path_for_version(changelog: Path, version: str) -> Path | None:
@@ -347,8 +380,7 @@ def create_tag(tag_version: str, *, force: bool = False) -> None:
         tag_version (str): The tag to create (must follow the project's SemVer format, e.g., "v1.2.3").
         force (bool): If True, replace the tag when it already exists; otherwise bail out.
     """
-    validate_semver(tag_version)
-    version = parse_version(tag_version)
+    version, changelog = _validated_release_target(tag_version)
 
     # Check for existing tag (but don't delete yet — validate first)
     tag_existed = _tag_exists(tag_version)
@@ -358,7 +390,6 @@ def create_tag(tag_version: str, *, force: bool = False) -> None:
         sys.exit(1)
 
     # Extract changelog section (before any mutation)
-    changelog = find_changelog()
     section, source = extract_changelog_section(changelog, version)
     section_bytes = len(section.encode("utf-8"))
 
@@ -446,8 +477,9 @@ def main() -> None:
     try:
         create_tag(args.version, force=args.force)
     except (
+        TypeError,
         ValueError,
-        FileNotFoundError,
+        OSError,
         LookupError,
         ExecutableNotFoundError,
         subprocess.CalledProcessError,

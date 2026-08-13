@@ -29,9 +29,17 @@ from postprocess_changelog import normalize_entry_headings_text, postprocess_tex
 
 # Matches ``## [X.Y.Z]`` or ``## [Unreleased]``
 _VERSION_HEADING_RE = re.compile(r"^## \[")
+_HEADING_SUFFIX_PATTERN = r"(?:\([^)]+\))?(?:\s|$)"
+_UNRELEASED_HEADING_RE = re.compile(rf"^## \[Unreleased\]{_HEADING_SUFFIX_PATTERN}")
 
-# Extracts a semver version from a ``## [X.Y.Z]`` heading (linked or plain).
-_VERSION_RE = re.compile(r"^## \[(\d+\.\d+\.\d+[^\]]*)\]")
+# Extracts a strict SemVer 2.0.0 version from a ``## [X.Y.Z]`` heading.
+_SEMVER_ALNUM_ID = r"(?:(?=[0-9A-Za-z-]*[A-Za-z-])[0-9A-Za-z-]+)"
+_SEMVER_PATTERN = (
+    r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)"
+    rf"(?:-(?:(?:0|[1-9]\d*)|{_SEMVER_ALNUM_ID})(?:\.(?:(?:0|[1-9]\d*)|{_SEMVER_ALNUM_ID}))*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
+)
+_VERSION_RE = re.compile(rf"^## \[({_SEMVER_PATTERN})\]{_HEADING_SUFFIX_PATTERN}")
 
 # Matches a reference-style link definition: ``[label]: URL``
 _LINK_DEF_RE = re.compile(r"^\[([^\]]+)\]:\s+\S+")
@@ -160,21 +168,32 @@ def parse_changelog(text: str) -> tuple[str, str, list[tuple[str, str]]]:
     preamble = "\n".join(lines[: headings[0]])
 
     unreleased = ""
+    unreleased_line: int | None = None
     version_blocks: list[tuple[str, str]] = []
+    version_lines: dict[str, int] = {}
 
     for idx, start in enumerate(headings):
         end = headings[idx + 1] if idx + 1 < len(headings) else len(lines)
         block = "\n".join(lines[start:end])
 
         heading_line = lines[start]
-        if "Unreleased" in heading_line:
+        if _UNRELEASED_HEADING_RE.match(heading_line):
+            if unreleased_line is not None:
+                msg = f"Duplicate Unreleased changelog heading at lines {unreleased_line} and {start + 1}"
+                raise ValueError(msg)
             unreleased = block
+            unreleased_line = start + 1
         else:
             m = _VERSION_RE.match(heading_line)
             if not m:
-                # Skip headings that don't contain a recognisable semver.
-                continue
-            version_blocks.append((m.group(1), block))
+                msg = f"Unrecognized changelog version heading at line {start + 1}: {heading_line!r}; expected '## [Unreleased]' or a semantic version"
+                raise ValueError(msg)
+            version = m.group(1)
+            if version in version_lines:
+                msg = f"Duplicate changelog version {version!r} at lines {version_lines[version]} and {start + 1}"
+                raise ValueError(msg)
+            version_lines[version] = start + 1
+            version_blocks.append((version, block))
 
     return preamble, unreleased, version_blocks
 
@@ -237,6 +256,11 @@ def _stage_output(path: Path, content: bytes) -> Path:
     return temporary_path
 
 
+def _replace_path(source: Path, destination: Path) -> Path:
+    """Replace one path through the injectable publication boundary."""
+    return source.replace(destination)
+
+
 def _fsync_directory(path: Path) -> None:
     """Persist directory-entry changes where the platform supports it."""
     if os.name == "nt":
@@ -260,7 +284,7 @@ def _rollback_outputs(
             if backup is None:
                 path.unlink(missing_ok=True)
             else:
-                backup.replace(path)
+                _replace_path(backup, path)
         except OSError as rollback_error:
             rollback_errors.append((path, rollback_error))
         else:
@@ -288,7 +312,7 @@ def _publish_outputs(outputs: dict[Path, str]) -> None:
 
         try:
             for path in outputs:
-                staged[path].replace(path)
+                _replace_path(staged[path], path)
                 staged.pop(path)
                 published.append(path)
             for parent in sorted({path.parent for path in outputs}):
@@ -300,7 +324,8 @@ def _publish_outputs(outputs: dict[Path, str]) -> None:
                 recovery_locations = ", ".join(f"{destination} -> {backup}" for destination, backup in sorted(preserved_backups.items()))
                 recovery_detail = f"; original content retained at {recovery_locations}" if recovery_locations else "; no original-content backup was available"
                 message = f"failed to publish changelog outputs and encountered {len(rollback_errors)} rollback error(s){recovery_detail}"
-                raise RuntimeError(message) from publish_error
+                visible_rollback_errors = [OSError(f"failed to restore {path}: {rollback_error}") for path, rollback_error in rollback_errors]
+                raise ExceptionGroup(message, [publish_error, *visible_rollback_errors]) from None
             raise
     finally:
         backup_paths = (path for path in backups.values() if path is not None and path not in preserved_backups.values())
@@ -507,7 +532,16 @@ def archive_changelog(
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
+def _print_cli_error(error: BaseException, *, indent: str = "") -> None:
+    """Print one expected CLI failure, including nested exception-group details."""
+    prefix = "Error: " if not indent else f"{indent}- "
+    print(f"{prefix}{error}", file=sys.stderr)
+    if isinstance(error, BaseExceptionGroup):
+        for nested_error in error.exceptions:
+            _print_cli_error(nested_error, indent=f"{indent}  ")
+
+
+def main(argv: list[str] | None = None) -> int:
     """CLI entry point for ``archive-changelog``."""
     parser = argparse.ArgumentParser(
         prog="archive-changelog",
@@ -524,16 +558,21 @@ def main() -> None:
         default=None,
         help=f"Archive output directory (default: {_DEFAULT_ARCHIVE_DIR})",
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     changelog = Path(args.path)
     if not changelog.is_file():
         print(f"Error: {changelog} not found", file=sys.stderr)
-        sys.exit(1)
+        return 1
 
     archive_dir = Path(args.archive_dir) if args.archive_dir else None
-    archive_changelog(changelog, archive_dir)
+    try:
+        archive_changelog(changelog, archive_dir)
+    except (ExceptionGroup, OSError, ValueError) as error:
+        _print_cli_error(error)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

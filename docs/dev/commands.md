@@ -287,9 +287,16 @@ Compatibility aliases remain available as granular recipes:
 
 ## CITATION.cff Validation
 
-Citation metadata should pass both YAML style linting and CFF schema validation.
+Citation metadata should pass YAML style linting, CFF schema validation, and the release metadata synchronization gate.
 
-Run:
+Run the metadata gate independently with:
+
+```bash
+just release-metadata-check
+```
+
+It requires exactly one top-level ISO `date-released` value, matches it to the generated current-package changelog heading when present, and validates the
+Python support package's README target. The broader citation check includes this gate:
 
 ```bash
 just citation-check
