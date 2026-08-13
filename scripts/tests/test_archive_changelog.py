@@ -334,6 +334,106 @@ class TestArchiveChangelog:
         assert first_root == second_root
         assert first_a06 == second_a06
 
+    def test_publish_failure_restores_every_prior_output(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A late replacement failure must not leave mixed changelog generations."""
+        changelog = tmp_path / "CHANGELOG.md"
+        original_root = _full_changelog()
+        changelog.write_text(original_root, encoding="utf-8")
+        archive_dir = tmp_path / "docs" / "archive" / "changelog"
+        archive_dir.mkdir(parents=True)
+        existing_archive = archive_dir / "0.6.md"
+        original_archive = "# Changelog - 0.6.x\n\nPrior valid archive\n"
+        existing_archive.write_text(original_archive, encoding="utf-8")
+
+        path_type = type(changelog)
+        real_replace = path_type.replace
+        root_failure_injected = False
+
+        def fail_when_publishing_root(source: Path, destination: Path) -> Path:
+            nonlocal root_failure_injected
+            if destination == changelog and not root_failure_injected:
+                root_failure_injected = True
+                message = "injected root publication failure"
+                raise OSError(message)
+            return real_replace(source, destination)
+
+        monkeypatch.setattr(path_type, "replace", fail_when_publishing_root)
+
+        with pytest.raises(OSError, match="injected root publication failure"):
+            archive_changelog(changelog, archive_dir)
+
+        assert root_failure_injected
+        assert changelog.read_text(encoding="utf-8") == original_root
+        assert existing_archive.read_text(encoding="utf-8") == original_archive
+        assert not (archive_dir / "0.2.md").exists()
+        assert not list(tmp_path.rglob("*.tmp"))
+
+    def test_rollback_failure_retains_original_content_backup(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A failed rollback must preserve the recovery copy for manual restoration."""
+        changelog = tmp_path / "CHANGELOG.md"
+        original_root = _full_changelog()
+        changelog.write_text(original_root, encoding="utf-8")
+        archive_dir = tmp_path / "docs" / "archive" / "changelog"
+        archive_dir.mkdir(parents=True)
+        existing_archive = archive_dir / "0.6.md"
+        original_archive = "# Changelog - 0.6.x\n\nPrior valid archive\n"
+        existing_archive.write_text(original_archive, encoding="utf-8")
+        existing_older_archive = archive_dir / "0.2.md"
+        original_older_archive = "# Changelog - 0.2.x\n\nPrior older archive\n"
+        existing_older_archive.write_text(original_older_archive, encoding="utf-8")
+
+        path_type = type(changelog)
+        real_replace = path_type.replace
+        root_failure_injected = False
+
+        def fail_publication_and_rollback(source: Path, destination: Path) -> Path:
+            nonlocal root_failure_injected
+            if destination == changelog and not root_failure_injected:
+                root_failure_injected = True
+                message = "injected root publication failure"
+                raise OSError(message)
+            if destination == existing_archive and root_failure_injected:
+                message = "injected archive rollback failure"
+                raise OSError(message)
+            return real_replace(source, destination)
+
+        monkeypatch.setattr(path_type, "replace", fail_publication_and_rollback)
+
+        with pytest.raises(RuntimeError, match="original content retained at") as error:
+            archive_changelog(changelog, archive_dir)
+
+        recovery_files = list(archive_dir.glob("*.tmp"))
+        assert len(recovery_files) == 1
+        assert f"{existing_archive} -> {recovery_files[0]}" in str(error.value)
+        assert recovery_files[0].read_text(encoding="utf-8") == original_archive
+        assert changelog.read_text(encoding="utf-8") == original_root
+        assert existing_older_archive.read_text(encoding="utf-8") == original_older_archive
+
+    def test_output_directory_is_rejected_before_publication(self, tmp_path: Path) -> None:
+        """A directory at an output path must leave every existing file untouched."""
+        changelog = tmp_path / "CHANGELOG.md"
+        original_root = _full_changelog()
+        changelog.write_text(original_root, encoding="utf-8")
+        archive_dir = tmp_path / "docs" / "archive" / "changelog"
+        directory_output = archive_dir / "0.2.md"
+        directory_output.mkdir(parents=True)
+
+        with pytest.raises(IsADirectoryError) as error:
+            archive_changelog(changelog, archive_dir)
+
+        assert str(error.value) == f"output path exists but is not a file: {directory_output}"
+        assert changelog.read_text(encoding="utf-8") == original_root
+        assert directory_output.is_dir()
+        assert not list(tmp_path.rglob("*.tmp"))
+
     def test_single_minor_no_op(self, tmp_path: Path) -> None:
         """When only one minor series exists, nothing is archived."""
         changelog = tmp_path / "CHANGELOG.md"

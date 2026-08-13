@@ -95,8 +95,10 @@ and attach uncertainty estimates across independent samples. The crate does not 
 
 ## Geometry Backend Role
 
-The Delaunay backend is an implementation substrate, not the sampled physics ensemble. It gives the crate a robust way to construct an initial
-piecewise-linear manifold, validate topology and adjacency, and perform checked local edit primitives.
+The Delaunay backend is an implementation substrate, not the sampled physics ensemble. It gives the crate a robust way to construct or import an initial
+piecewise-linear manifold, validate its geometric realization, and perform checked local edit primitives. Exact layered strips preserve integer proper-time
+coordinates and require upstream validation Levels 1-4; constructors that explicitly promise a Delaunay mesh additionally require the Level 5
+empty-circumsphere predicate.
 
 After initialization, the simulation does not enforce the Delaunay condition as part of the Markov-chain state. The sampled ensemble is defined by CDT moves,
 foliation/topology/causality constraints, the configured action, and Metropolis-Hastings acceptance.

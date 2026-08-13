@@ -32,8 +32,8 @@ Causal Dynamical Triangulations for quantum gravity in [Rust], built on fast [De
 ## 🌌 Introduction
 
 This library implements **Causal Dynamical Triangulations (CDT)** in [Rust]. CDT is a non-perturbative approach to quantum gravity defining the gravitational
-path integral over causally triangulated spacetimes and evaluating it using Markov Chain Monte Carlo. For an introduction to CDT, see Ambjørn and Loll (2001),
-[“Non-perturbative Lorentzian quantum gravity, causality and topology change”](https://arxiv.org/abs/hep-th/0105267). The library leverages high-performance
+path integral over causally triangulated spacetimes and evaluating it using Markov Chain Monte Carlo. For an introduction to CDT, see Ambjørn and Loll (1998),
+[“Non-perturbative Lorentzian quantum gravity, causality and topology change”](https://arxiv.org/abs/hep-th/9805108). The library leverages high-performance
 [Delaunay triangulation] backends and provides a foundational toolkit for CDT research and exploration.
 
 ## ✨ Features

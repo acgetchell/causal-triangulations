@@ -8,6 +8,11 @@ use causal_triangulations::prelude::simulation::{CdtTarget, Target};
 use causal_triangulations::prelude::triangulation::{CdtTriangulation, CdtTriangulation2D};
 use proptest::prelude::*;
 
+#[path = "common/proptest_config.rs"]
+mod proptest_config;
+
+use proptest_config::with_default_cases;
+
 /// Shared triangulation created once (fixed seed, cheap).
 fn test_triangulation() -> CdtTriangulation2D {
     CdtTriangulation::from_cdt_strip(4, 3).expect("regular open-boundary strip")
@@ -55,7 +60,7 @@ proptest! {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(8))]
+    #![proptest_config(with_default_cases(8))]
 
     /// Random local-move sequences must preserve the full evolved CDT invariant
     /// contract for representative open-boundary and toroidal fixtures.

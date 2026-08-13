@@ -13,7 +13,7 @@ import tempfile
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
-from typing import Any, Literal, override
+from typing import Any, Literal, cast, override
 
 from subprocess_utils import run_safe_command
 
@@ -89,7 +89,7 @@ def parse_cell_type(value: Any, *, path: Path, index: int) -> CellType:
         expected = ", ".join(sorted(VALID_CELL_TYPES))
         msg = f"{path}: cell {index}: expected cell_type to be one of {expected}; got {value!r}"
         raise ValueError(msg)
-    return value
+    return cast("CellType", value)
 
 
 def parse_positive_int(value: str) -> int:
@@ -117,10 +117,13 @@ def resolve_repo_root(path: Path) -> Path:
 def parse_cell_source(source: Any, *, path: Path, index: int) -> str:
     """Parse a notebook cell source as joined text."""
     if isinstance(source, list):
-        if not all(isinstance(part, str) for part in source):
-            msg = f"{path}: cell {index}: source list must contain only strings"
-            raise TypeError(msg)
-        return "".join(source)
+        parts: list[str] = []
+        for part in source:
+            if not isinstance(part, str):
+                msg = f"{path}: cell {index}: source list must contain only strings"
+                raise TypeError(msg)
+            parts.append(part)
+        return "".join(parts)
     if isinstance(source, str):
         return source
     msg = f"{path}: cell {index}: source must be a string or list of strings, got {type(source).__name__}"

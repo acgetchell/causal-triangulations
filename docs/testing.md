@@ -6,8 +6,8 @@ in `docs/dev/testing.md` and `docs/dev/commands.md`.
 ## Current Coverage
 
 - **Library unit tests**: `cargo test --lib` currently runs the core Rust test suite across CDT, geometry, configuration, and utility modules.
-- **Integration tests**: `tests/integration_tests.rs`, `tests/cli.rs`, `tests/proptest_foliation.rs`, and `tests/proptest_metropolis.rs` cover public workflows,
-  CLI validation, foliation invariants, and Metropolis scoring.
+- **Integration tests**: `tests/integration_tests.rs`, `tests/cli.rs`, `tests/proptest_foliation.rs`, `tests/proptest_metropolis.rs`, and
+  `tests/proptest_config.rs` cover public workflows, CLI validation, foliation invariants, Metropolis scoring, and property-test configuration precedence.
 - **Python support-script tests**: `scripts/tests/` covers benchmark, changelog, coverage, hardware, tag, and subprocess utilities.
 - **Documentation tests**: public doctests run through `just test-doc` and as part of the broader CI path.
 - **Examples and benchmark compilation**: `just ci` compiles benchmarks and runs all example programs.
@@ -19,6 +19,18 @@ and χ = 0 at the end.
 Open-boundary simulation entrypoints are covered by crate-root tests that require `run_simulation()` to build a foliated regular CDT strip, preserve
 adjacent-slice causality, classify simplices, and report a non-empty slab-triangle profile. Configuration tests also reject open-boundary totals that cannot be
 split into equal-size spatial slices.
+
+## Property-Test Case Controls
+
+The expensive foliation and Metropolis property suites use eight generated cases during ordinary local runs. Set Proptest's standard `PROPTEST_CASES`
+environment variable to raise or lower both suites for CI, stress runs, or reproduction:
+
+```bash
+PROPTEST_CASES=64 just test-integration
+```
+
+The repository helper only supplies the eight-case fallback when `PROPTEST_CASES` is absent. Proptest remains responsible for parsing valid and invalid values
+and for every other configuration default.
 
 ## Remaining Gaps
 

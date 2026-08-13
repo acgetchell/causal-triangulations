@@ -13,14 +13,36 @@ use crate::errors::{
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::DelaunayVertexHandle;
 use crate::geometry::generators::{
-    DelaunayTriangulation2D, build_delaunay2_with_data, build_periodic_toroidal_delaunay2,
-    generate_delaunay2,
+    DelaunayTriangulation2D, build_delaunay2_with_data, build_layered_delaunay2_from_simplices,
+    build_periodic_toroidal_delaunay2, generate_delaunay2,
 };
 use crate::geometry::traits::TriangulationQuery;
 use std::num::NonZeroU32;
 
 /// Default pass budget for CDT++-style causality filtering.
 const FILTERED_DELAUNAY_MAX_PASSES: u32 = 50;
+
+/// Validates the shared dimensions of regular open-boundary strip constructors.
+fn validate_regular_open_strip_dimensions(
+    vertices_per_slice: u32,
+    num_slices: u32,
+) -> CdtResult<()> {
+    if vertices_per_slice < 4 {
+        return Err(CdtError::InvalidGenerationParameters {
+            issue: GenerationParameterIssue::InsufficientVerticesPerSlice,
+            provided_value: vertices_per_slice.to_string(),
+            expected_range: "≥ 4".to_string(),
+        });
+    }
+    if num_slices < 2 {
+        return Err(CdtError::InvalidGenerationParameters {
+            issue: GenerationParameterIssue::InsufficientNumberOfTimeSlices,
+            provided_value: num_slices.to_string(),
+            expected_range: "≥ 2".to_string(),
+        });
+    }
+    Ok(())
+}
 
 /// Rewrites toroidal builder failures with CDT-level generation context.
 ///
@@ -52,6 +74,16 @@ fn validated_backend(dt: DelaunayTriangulation2D) -> CdtResult<DelaunayBackend2D
     DelaunayBackend2D::from_triangulation(dt).map_err(|err| CdtError::DelaunayValidationFailed {
         level: DelaunayValidationLevel::Five,
         detail: err.to_string(),
+    })
+}
+
+/// Validates exact layered connectivity through upstream realization Level 4.
+fn realized_backend(dt: DelaunayTriangulation2D) -> CdtResult<DelaunayBackend2D> {
+    DelaunayBackend2D::from_realized_triangulation(dt).map_err(|err| {
+        CdtError::DelaunayValidationFailed {
+            level: DelaunayValidationLevel::Four,
+            detail: err.to_string(),
+        }
     })
 }
 
@@ -151,6 +183,137 @@ fn open_profile_face_count(profile: &[u32]) -> CdtResult<u32> {
             provided_value: format!("{profile:?}"),
             expected_range: "open-strip face count must fit in u32".to_string(),
         })
+}
+
+/// Builds balanced staircase connectivity between adjacent open spatial slices.
+///
+/// Every step advances along exactly one slice, so the result contains each
+/// adjacent spacelike edge and only `(2,1)` or `(1,2)` triangles. The upstream
+/// explicit builder remains responsible for validating the resulting geometric
+/// realization.
+fn open_profile_simplices(
+    profile: &[u32],
+    expected_faces: usize,
+    total_vertices: u32,
+    coordinate_max: f64,
+) -> CdtResult<Vec<Vec<usize>>> {
+    let mut simplices = Vec::new();
+    simplices.try_reserve_exact(expected_faces).map_err(|err| {
+        strip_generation_error(
+            total_vertices,
+            coordinate_max,
+            DelaunayGenerationFailure::StorageReservation {
+                requested_capacity: expected_faces,
+                detail: err.to_string(),
+            },
+        )
+    })?;
+
+    let vertex_index = |offset: u32, index: u32| {
+        let flat = offset.checked_add(index).ok_or_else(|| {
+            strip_generation_error(
+                total_vertices,
+                coordinate_max,
+                DelaunayGenerationFailure::NumericConversion {
+                    quantity: DelaunayGenerationQuantity::TotalVertices,
+                    detail: "profile simplex vertex index overflowed u32".to_string(),
+                },
+            )
+        })?;
+        usize::try_from(flat).map_err(|err| {
+            strip_generation_error(
+                total_vertices,
+                coordinate_max,
+                DelaunayGenerationFailure::NumericConversion {
+                    quantity: DelaunayGenerationQuantity::TotalVertices,
+                    detail: err.to_string(),
+                },
+            )
+        })
+    };
+
+    let mut lower_offset = 0_u32;
+    for slices in profile.windows(2) {
+        let lower_count = slices[0];
+        let upper_count = slices[1];
+        let upper_offset = lower_offset.checked_add(lower_count).ok_or_else(|| {
+            strip_generation_error(
+                total_vertices,
+                coordinate_max,
+                DelaunayGenerationFailure::NumericConversion {
+                    quantity: DelaunayGenerationQuantity::TotalVertices,
+                    detail: "profile slice offset overflowed u32".to_string(),
+                },
+            )
+        })?;
+        let mut lower_index = 0_u32;
+        let mut upper_index = 0_u32;
+
+        while lower_index + 1 < lower_count || upper_index + 1 < upper_count {
+            let advance_lower = if upper_index + 1 == upper_count {
+                true
+            } else if lower_index + 1 == lower_count {
+                false
+            } else {
+                u64::from(lower_index + 1) * u64::from(upper_count - 1)
+                    <= u64::from(upper_index + 1) * u64::from(lower_count - 1)
+            };
+
+            if advance_lower {
+                simplices.push(vec![
+                    vertex_index(lower_offset, lower_index)?,
+                    vertex_index(lower_offset, lower_index + 1)?,
+                    vertex_index(upper_offset, upper_index)?,
+                ]);
+                lower_index += 1;
+            } else {
+                simplices.push(vec![
+                    vertex_index(lower_offset, lower_index)?,
+                    vertex_index(upper_offset, upper_index + 1)?,
+                    vertex_index(upper_offset, upper_index)?,
+                ]);
+                upper_index += 1;
+            }
+        }
+
+        lower_offset = upper_offset;
+    }
+
+    debug_assert_eq!(simplices.len(), expected_faces);
+    Ok(simplices)
+}
+
+/// Builds the regular two-triangle split for every open-strip grid cell.
+fn regular_open_strip_simplices(
+    vertices_per_slice: usize,
+    slice_count: usize,
+    expected_faces: usize,
+    total_vertices: u32,
+    coordinate_max: f64,
+) -> CdtResult<Vec<Vec<usize>>> {
+    let mut simplices = Vec::new();
+    simplices.try_reserve_exact(expected_faces).map_err(|err| {
+        strip_generation_error(
+            total_vertices,
+            coordinate_max,
+            DelaunayGenerationFailure::StorageReservation {
+                requested_capacity: expected_faces,
+                detail: err.to_string(),
+            },
+        )
+    })?;
+    for slice in 0..slice_count - 1 {
+        for index in 0..vertices_per_slice - 1 {
+            let lower_left = slice * vertices_per_slice + index;
+            let lower_right = lower_left + 1;
+            let upper_left = (slice + 1) * vertices_per_slice + index;
+            let upper_right = upper_left + 1;
+            simplices.push(vec![lower_left, lower_right, upper_right]);
+            simplices.push(vec![lower_left, upper_right, upper_left]);
+        }
+    }
+    debug_assert_eq!(simplices.len(), expected_faces);
+    Ok(simplices)
 }
 
 /// Verifies that a profiled open-boundary builder returned the requested mesh size.
@@ -458,11 +621,11 @@ fn toroidal_profile_vertices(
 
 /// Computes one labeled open-boundary strip coordinate.
 ///
-/// Both regular and profiled open-strip constructors use this helper so the
-/// same boundary side-arc, interior perturbation, and vertical jitter rules feed
-/// Delaunay generation. Keeping those coordinates centralized preserves the
-/// public constructor contract that initial open-boundary slices validate as
-/// ordered intervals before any Metropolis moves run.
+/// Open-strip constructors use this helper so the same boundary side-arc and
+/// interior perturbation rules feed geometry construction. Exact layered
+/// constructors pass zero vertical jitter; the strict filtered-Delaunay
+/// constructor retains a small nonzero value because its contract additionally
+/// requires the Level 5 empty-circumsphere predicate.
 fn open_strip_vertex_spec(
     slice: u32,
     index: u32,
@@ -515,7 +678,11 @@ fn open_strip_vertex_spec(
 }
 
 /// Builds labeled open-boundary coordinates for a CDT strip profile.
-fn open_profile_vertices(profile: &[u32], total_vertices: u32) -> CdtResult<Vec<([f64; 2], u32)>> {
+fn open_profile_vertices(
+    profile: &[u32],
+    total_vertices: u32,
+    vertical_jitter: f64,
+) -> CdtResult<Vec<([f64; 2], u32)>> {
     let expected_vertices = usize::try_from(total_vertices).map_err(|err| {
         strip_generation_error(
             total_vertices,
@@ -540,8 +707,6 @@ fn open_profile_vertices(profile: &[u32], total_vertices: u32) -> CdtResult<Vec<
     let min_spacing = 1.0_f64 / f64::from(max_slice_volume - 1);
     let side_jitter = min_spacing / 4.0;
     let interior_jitter = min_spacing / (16.0 * f64::from(profile_len));
-    // TODO(acgetchell/delaunay#447): remove once exact collinear CDT boundaries build.
-    let vertical_jitter = 1.0e-9;
     let coordinate_max = f64::from(profile_len).max(2.0);
     let mut vertex_specs = Vec::new();
     vertex_specs
@@ -1021,20 +1186,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         vertices_per_slice: u32,
         num_slices: u32,
     ) -> CdtResult<Self> {
-        if vertices_per_slice < 4 {
-            return Err(CdtError::InvalidGenerationParameters {
-                issue: GenerationParameterIssue::InsufficientVerticesPerSlice,
-                provided_value: vertices_per_slice.to_string(),
-                expected_range: "≥ 4".to_string(),
-            });
-        }
-        if num_slices < 2 {
-            return Err(CdtError::InvalidGenerationParameters {
-                issue: GenerationParameterIssue::InsufficientNumberOfTimeSlices,
-                provided_value: num_slices.to_string(),
-                expected_range: "≥ 2".to_string(),
-            });
-        }
+        validate_regular_open_strip_dimensions(vertices_per_slice, num_slices)?;
 
         let core_vertices = vertices_per_slice.checked_mul(num_slices).ok_or_else(|| {
             CdtError::InvalidGenerationParameters {
@@ -1068,7 +1220,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 )
             })?;
         spatial_vertex_profile.resize(profile_len, vertices_per_slice);
-        let mut vertex_specs = open_profile_vertices(&spatial_vertex_profile, core_vertices)?;
+        let mut vertex_specs =
+            open_profile_vertices(&spatial_vertex_profile, core_vertices, 1.0e-9)?;
         vertex_specs
             .try_reserve_exact(surplus_vertices as usize)
             .map_err(|err| {
@@ -1115,10 +1268,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
 
     /// Construct a Delaunay-backed true 1+1 CDT strip from layered points.
     ///
-    /// Places `vertices_per_slice` vertices on each open spatial slice and
-    /// builds a Delaunay triangulation from the labeled coordinates. The
-    /// resulting finite faces must all classify as Up `(2,1)` or Down `(1,2)`
-    /// triangles before the constructor succeeds.
+    /// Places `vertices_per_slice` vertices at exact integer time coordinates on
+    /// each open spatial slice and imports the regular CDT connectivity through
+    /// the Delaunay backend's Level 1-4 realization validator. The resulting
+    /// finite faces must all classify as Up `(2,1)` or Down `(1,2)` triangles
+    /// before the constructor succeeds. Exact collinear slices are not required
+    /// to satisfy the optional Level 5 empty-circumsphere predicate.
     ///
     /// # Errors
     ///
@@ -1126,10 +1281,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// `num_slices < 2`, or the derived vertex or simplex count overflows `u32`.
     /// Returns [`CdtError::DelaunayGenerationFailed`] if constructor storage cannot
     /// be reserved, if the underlying Delaunay builder rejects the points, if
-    /// [`build_delaunay2_with_data`] returns a vertex or face count that does not
+    /// the upstream layered builder returns a vertex or face count that does not
     /// match the requested strip. Returns [`CdtError::VertexBuildFailed`] if an
     /// upstream vertex cannot be built, or [`CdtError::DelaunayValidationFailed`]
-    /// if the constructed backend does not satisfy the Level 1-5 Delaunay
+    /// if the constructed backend does not satisfy the Level 1-4 realization
     /// validator. Returns [`CdtError::Foliation`],
     /// [`CdtError::CausalityViolation`], or [`CdtError::ValidationFailed`] if the
     /// constructed strip fails CDT validation.
@@ -1148,20 +1303,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// }
     /// ```
     pub fn from_cdt_strip(vertices_per_slice: u32, num_slices: u32) -> CdtResult<Self> {
-        if vertices_per_slice < 4 {
-            return Err(CdtError::InvalidGenerationParameters {
-                issue: GenerationParameterIssue::InsufficientVerticesPerSlice,
-                provided_value: vertices_per_slice.to_string(),
-                expected_range: "≥ 4".to_string(),
-            });
-        }
-        if num_slices < 2 {
-            return Err(CdtError::InvalidGenerationParameters {
-                issue: GenerationParameterIssue::InsufficientNumberOfTimeSlices,
-                provided_value: num_slices.to_string(),
-                expected_range: "≥ 2".to_string(),
-            });
-        }
+        validate_regular_open_strip_dimensions(vertices_per_slice, num_slices)?;
 
         let total_vertices = vertices_per_slice.checked_mul(num_slices).ok_or_else(|| {
             CdtError::InvalidGenerationParameters {
@@ -1211,8 +1353,6 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let min_spacing = 1.0_f64 / f64::from(vertices_per_slice - 1);
         let side_jitter = min_spacing / 4.0;
         let interior_jitter = min_spacing / (16.0 * f64::from(num_slices));
-        // TODO(acgetchell/delaunay#447): remove once exact collinear CDT boundaries build.
-        let vertical_jitter = 1.0e-9;
         let mut vertex_specs: Vec<([f64; 2], u32)> = Vec::new();
         vertex_specs
             .try_reserve_exact(expected_vertices)
@@ -1231,15 +1371,23 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     num_slices,
                     side_jitter,
                     interior_jitter,
-                    vertical_jitter,
+                    0.0,
                 ));
             }
         }
 
-        let dt = build_delaunay2_with_data(&vertex_specs)
+        let simplices = regular_open_strip_simplices(
+            n,
+            t_count,
+            expected_faces,
+            total_vertices,
+            coordinate_max,
+        )?;
+
+        let dt = build_layered_delaunay2_from_simplices(&vertex_specs, &simplices)
             .map_err(|err| remap_strip_generation_error(err, total_vertices, coordinate_max))?;
 
-        let backend = validated_backend(dt)?;
+        let backend = realized_backend(dt)?;
         validate_strip_counts(
             &backend,
             total_vertices,
@@ -1255,7 +1403,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let mut tri = Self::try_new(backend, num_slices, 2)?;
         tri.foliation = Some(foliation);
         tri.mark_foliation_synchronized();
-        tri.validate_initial_delaunay_cdt()?;
+        tri.validate_initial_realized_cdt()?;
 
         Ok(tri)
     }
@@ -1266,8 +1414,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// slice. Unlike [`Self::from_cdt_strip`], adjacent slices may have different
     /// spatial vertex counts; this represents a general nonuniform CDT initial
     /// geometry rather than a regular fixture.
-    /// The triangulation itself is delegated to
-    /// [`crate::geometry::generators::build_delaunay2_with_data`].
+    /// The exact layered triangulation itself is delegated to the geometry
+    /// adapter and validated through upstream realization Level 4.
     ///
     /// # Errors
     ///
@@ -1280,7 +1428,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// requested profile. Returns [`CdtError::VertexBuildFailed`] if an upstream
     /// vertex cannot be built.
     /// Returns [`CdtError::DelaunayValidationFailed`] if the constructed backend
-    /// fails the Level 1-5 Delaunay validator. Returns [`CdtError::TopologyMismatch`],
+    /// fails the Level 1-4 realization validator. Returns [`CdtError::TopologyMismatch`],
     /// [`CdtError::Foliation`], [`CdtError::CausalityViolation`], or
     /// [`CdtError::ValidationFailed`] if the constructed mesh violates CDT
     /// invariants.
@@ -1324,10 +1472,16 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     },
                 )
             })?;
-        let vertex_specs = open_profile_vertices(spatial_vertex_profile, total_vertices)?;
-        let dt = build_delaunay2_with_data(&vertex_specs)
+        let vertex_specs = open_profile_vertices(spatial_vertex_profile, total_vertices, 0.0)?;
+        let simplices = open_profile_simplices(
+            spatial_vertex_profile,
+            expected_faces,
+            total_vertices,
+            coordinate_max,
+        )?;
+        let dt = build_layered_delaunay2_from_simplices(&vertex_specs, &simplices)
             .map_err(|error| remap_strip_generation_error(error, total_vertices, coordinate_max))?;
-        let backend = validated_backend(dt)?;
+        let backend = realized_backend(dt)?;
         validate_profile_strip_counts(
             &backend,
             total_vertices,
@@ -1345,7 +1499,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let mut tri = Self::try_new(backend, num_slices, 2)?;
         tri.foliation = Some(foliation);
         tri.mark_foliation_synchronized();
-        tri.validate_initial_delaunay_cdt()?;
+        tri.validate_initial_realized_cdt()?;
 
         Ok(tri)
     }
@@ -1665,6 +1819,24 @@ mod tests {
         coordinates
     }
 
+    fn assert_time_coordinates_match_labels(triangulation: &CdtTriangulation<DelaunayBackend2D>) {
+        for vertex in triangulation.geometry().vertices() {
+            let coordinates = triangulation
+                .geometry()
+                .vertex_coordinates(&vertex)
+                .expect("strip vertex coordinates should resolve");
+            let label = triangulation
+                .geometry()
+                .vertex_data_by_key(vertex.vertex_key())
+                .expect("strip vertices should carry time labels");
+            assert_eq!(
+                coordinates[1].to_bits(),
+                f64::from(label).to_bits(),
+                "strip time coordinates must exactly match their slice labels"
+            );
+        }
+    }
+
     /// Builds a minimal labeled Delaunay backend for constructor tests.
     fn labeled_triangle_backend(labels: [u32; 3]) -> DelaunayBackend2D {
         let dt = build_delaunay2_with_data(&[
@@ -1687,8 +1859,8 @@ mod tests {
         tri
     }
 
-    /// Builds a Delaunay strip and verifies it is a strict CDT mesh.
-    fn strict_strip(
+    /// Builds an exact layered strip and verifies its realized CDT contract.
+    fn realized_strip(
         vertices_per_slice: u32,
         num_slices: u32,
     ) -> CdtTriangulation<DelaunayBackend2D> {
@@ -1713,8 +1885,8 @@ mod tests {
         tri.validate_topology()
             .expect("Delaunay strip topology should validate");
         tri.geometry()
-            .validate_delaunay()
-            .expect("Delaunay strip should pass upstream Level 1-5 validation");
+            .validate_embedding()
+            .expect("exact strip should pass upstream Level 1-4 validation");
         tri.validate_simplex_classification()
             .expect("all Delaunay strip simplices should classify");
         for face in tri.geometry().faces() {
@@ -2129,7 +2301,7 @@ mod tests {
 
     #[test]
     fn test_from_cdt_strip_all_vertices_labeled() {
-        let tri = strict_strip(5, 3);
+        let tri = realized_strip(5, 3);
         for vertex in tri.geometry().vertices() {
             assert!(tri.time_label(&vertex).is_ok_and(|label| label.is_some()));
         }
@@ -2137,7 +2309,7 @@ mod tests {
 
     #[test]
     fn test_from_cdt_strip_edge_classification() {
-        let tri = strict_strip(5, 3);
+        let tri = realized_strip(5, 3);
         for edge in tri.geometry().edges() {
             assert_matches!(
                 tri.edge_type(&edge),
@@ -2190,28 +2362,27 @@ mod tests {
     }
 
     #[test]
-    fn open_strip_vertex_spec_applies_arc_and_jitter() {
+    fn open_strip_vertex_spec_applies_spatial_perturbations_at_exact_time() {
         let side_jitter = 1.0 / 12.0;
         let interior_jitter = 1.0 / 48.0;
-        let vertical_jitter = 1.0e-9;
 
         let ([left_boundary_x, left_boundary_y], left_boundary_label) =
-            open_strip_vertex_spec(1, 0, 4, 3, side_jitter, interior_jitter, vertical_jitter);
+            open_strip_vertex_spec(1, 0, 4, 3, side_jitter, interior_jitter, 0.0);
         assert_eq!(left_boundary_label, 1);
         assert_relative_eq!(left_boundary_x, 1.0 / 16.0, epsilon = 1e-15);
-        assert_relative_eq!(left_boundary_y, 1.0, epsilon = 1e-15);
+        assert_eq!(left_boundary_y.to_bits(), 1.0_f64.to_bits());
 
         let ([interior_x, interior_y], interior_label) =
-            open_strip_vertex_spec(1, 1, 4, 3, side_jitter, interior_jitter, vertical_jitter);
+            open_strip_vertex_spec(1, 1, 4, 3, side_jitter, interior_jitter, 0.0);
         assert_eq!(interior_label, 1);
         assert_relative_eq!(interior_x, 7.0 / 16.0, epsilon = 1e-15);
-        assert_relative_eq!(interior_y, 1.0 + 1.0e-9 / 9.0, epsilon = 1e-18);
+        assert_eq!(interior_y.to_bits(), 1.0_f64.to_bits());
 
         let ([top_boundary_x, top_boundary_y], top_boundary_label) =
-            open_strip_vertex_spec(2, 3, 4, 3, side_jitter, interior_jitter, vertical_jitter);
+            open_strip_vertex_spec(2, 3, 4, 3, side_jitter, interior_jitter, 0.0);
         assert_eq!(top_boundary_label, 2);
         assert_relative_eq!(top_boundary_x, 13.0 / 12.0, epsilon = 1e-15);
-        assert_relative_eq!(top_boundary_y, 2.0, epsilon = 1e-15);
+        assert_eq!(top_boundary_y.to_bits(), 2.0_f64.to_bits());
     }
 
     #[test]
@@ -2223,6 +2394,7 @@ mod tests {
         assert!(tri.validate_foliation().is_ok());
         assert!(tri.validate_causality_delaunay().is_ok());
         assert!(tri.validate_simplex_classification().is_ok());
+        assert_time_coordinates_match_labels(&tri);
         assert_eq!(
             tri.strict_causal_simplex_violation_count()
                 .expect("Delaunay strip should expose a current strict-causality count"),
@@ -2310,7 +2482,7 @@ mod tests {
 
     #[test]
     fn test_invalid_simplex_removal_candidate_returns_none_for_strict_strip() {
-        let tri = strict_strip(4, 2);
+        let tri = realized_strip(4, 2);
 
         assert!(
             tri.invalid_simplex_removal_candidate(4, 8, 2.0)
@@ -2420,6 +2592,7 @@ mod tests {
         assert!(tri.validate_foliation().is_ok());
         assert!(tri.validate_causality_delaunay().is_ok());
         assert!(tri.validate_simplex_classification().is_ok());
+        assert_time_coordinates_match_labels(&tri);
     }
 
     #[test]
@@ -2436,6 +2609,29 @@ mod tests {
             open_profile_face_count(&[4, 6, 5]).expect("nonuniform strip should count"),
             17
         );
+    }
+
+    #[test]
+    fn layered_simplex_builders_report_capacity_overflow() {
+        let results = [
+            open_profile_simplices(&[4, 4], usize::MAX, 8, 1.0),
+            regular_open_strip_simplices(4, 2, usize::MAX, 8, 1.0),
+        ];
+
+        for result in results {
+            assert_matches!(
+                result,
+                Err(CdtError::DelaunayGenerationFailed {
+                    vertex_count: 8,
+                    coordinate_range: (0.0, 1.0),
+                    attempt: 1,
+                    failure: DelaunayGenerationFailure::StorageReservation {
+                        requested_capacity,
+                        ref detail,
+                    },
+                }) if requested_capacity == usize::MAX && !detail.is_empty()
+            );
+        }
     }
 
     #[test]
@@ -2531,7 +2727,7 @@ mod tests {
 
     #[test]
     fn test_simplex_type_returns_up_or_down() {
-        let tri = strict_strip(5, 3);
+        let tri = realized_strip(5, 3);
         for face in tri.geometry().faces() {
             assert_matches!(
                 tri.simplex_type(&face),
