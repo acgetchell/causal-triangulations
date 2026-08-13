@@ -155,7 +155,7 @@ def _finding_mismatches(
                     for index, (actual_rule_id, start_line, end_line) in enumerate(unmatched_actual)
                     if actual_rule_id == rule_id and start_line <= line <= end_line
                 ),
-                key=lambda index: unmatched_actual[index][2],
+                key=lambda index: unmatched_actual[index][2] - unmatched_actual[index][1],
                 default=None,
             )
             if match_index is None:

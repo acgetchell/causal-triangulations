@@ -6,6 +6,7 @@ These tests ensure the security utilities function correctly and maintain
 their secure-by-default behavior while providing flexibility through kwargs.
 """
 
+import math
 import shutil
 import subprocess
 import sys
@@ -43,6 +44,7 @@ class TestBuildRunKwargs:
     def test_uses_finite_default_timeout(self) -> None:
         kwargs = _build_run_kwargs("test_func")
 
+        assert math.isfinite(kwargs["timeout"])
         assert kwargs["timeout"] == DEFAULT_COMMAND_TIMEOUT_SECONDS
 
     def test_respects_explicit_longer_timeout(self) -> None:

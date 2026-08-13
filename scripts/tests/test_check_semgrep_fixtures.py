@@ -1,5 +1,6 @@
 """Tests for Semgrep fixture-annotation validation."""
 
+import collections
 import json
 from typing import TYPE_CHECKING
 
@@ -108,12 +109,19 @@ def test_main_rejects_findings_at_wrong_lines_even_when_rule_counts_match(
     assert "rust.foo at lines 5: unexpected finding" in captured.err
 
 
-def test_main_matches_overlapping_spans_by_earliest_end_line(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_main_matches_overlapping_spans_by_shortest_span(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fixture = tmp_path / "fixture.rs"
     fixture.write_text("// ruleid: rust.foo\nbad_one();\n// ruleid: rust.foo\nbad_two();\n", encoding="utf-8")
     payload = {"results": [_result("rust.foo", 2, 4), _result("rust.foo", 2)]}
 
     assert _run_main(monkeypatch, fixture, payload) == 0
+
+
+def test_finding_mismatches_consumes_shorter_span_when_it_ends_later() -> None:
+    expected = collections.Counter({("rust.foo", 4): 1})
+    actual = (("rust.foo", 1, 4), ("rust.foo", 3, 5))
+
+    assert check_semgrep_fixtures._finding_mismatches(expected, actual) == ("rust.foo at lines 1-4: unexpected finding",)
 
 
 def test_main_matches_markdown_finding_after_blank_line_and_code_fence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

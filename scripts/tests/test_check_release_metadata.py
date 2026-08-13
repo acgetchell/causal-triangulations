@@ -1,13 +1,11 @@
 """Tests for release-date and Python package metadata validation."""
 
-from typing import TYPE_CHECKING
+# Keep runtime annotation resolution available during test collection.
+from pathlib import Path  # noqa: TC003
 
 import pytest
 
 import check_release_metadata
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _write_repository(
@@ -15,6 +13,7 @@ def _write_repository(
     *,
     citation_dates: tuple[str, ...] = ("2026-06-02",),
     changelog_headings: tuple[str, ...] = ("## [0.1.0] - 2026-06-02",),
+    python_version: str = "0.1.0",
     python_readme: str = "scripts/README.md",
 ) -> None:
     (root / "Cargo.toml").write_text('[package]\nname = "causal-triangulations"\nversion = "0.1.0"\n', encoding="utf-8")
@@ -26,7 +25,7 @@ def _write_repository(
     (root / "scripts").mkdir()
     (root / "scripts" / "README.md").write_text("# Support scripts\n", encoding="utf-8")
     (root / "pyproject.toml").write_text(
-        f'[project]\nname = "causal-triangulations-scripts"\nversion = "0.1.0"\nreadme = "{python_readme}"\n',
+        f'[project]\nname = "causal-triangulations-scripts"\nversion = "{python_version}"\nreadme = "{python_readme}"\n',
         encoding="utf-8",
     )
 
@@ -129,6 +128,13 @@ def test_python_package_readme_must_target_support_documentation(tmp_path: Path)
     _write_repository(tmp_path, python_readme="README.md")
 
     with pytest.raises(ValueError, match=r"pyproject\.toml: \[project\]\.readme must be 'scripts/README\.md'"):
+        check_release_metadata.validate_release_metadata(tmp_path)
+
+
+def test_python_package_version_must_match_cargo_package(tmp_path: Path) -> None:
+    _write_repository(tmp_path, python_version="0.2.0")
+
+    with pytest.raises(ValueError, match=r"\[project\]\.version must match Cargo \[package\]\.version '0\.1\.0', got '0\.2\.0'"):
         check_release_metadata.validate_release_metadata(tmp_path)
 
 

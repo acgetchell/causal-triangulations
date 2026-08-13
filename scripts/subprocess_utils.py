@@ -16,7 +16,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, cast
 
-DEFAULT_COMMAND_TIMEOUT_SECONDS = 300.0
+DEFAULT_COMMAND_TIMEOUT_SECONDS: float = 300.0
 
 
 class ExecutableNotFoundError(Exception):

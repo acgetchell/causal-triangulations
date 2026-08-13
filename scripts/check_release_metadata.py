@@ -111,10 +111,14 @@ def _changelog_release_date(path: Path, version: str) -> ReleaseDate | None:
     return matches[0] if matches else None
 
 
-def _validate_python_readme(root: Path) -> None:
-    """Require package metadata to ship the support-tooling README."""
+def _validate_python_readme(root: Path, cargo_version: str) -> None:
+    """Require Python package metadata to match the Rust package."""
     pyproject = root / "pyproject.toml"
     project = _required_table(_read_toml(pyproject), "project", pyproject)
+    python_version = project.get("version")
+    if python_version != cargo_version:
+        msg = f"{pyproject}: [project].version must match Cargo [package].version {cargo_version!r}, got {python_version!r}"
+        raise ValueError(msg)
     readme = project.get("readme")
     if readme != _EXPECTED_PYTHON_README:
         msg = f"{pyproject}: [project].readme must be {_EXPECTED_PYTHON_README!r}, got {readme!r}"
@@ -129,7 +133,7 @@ def validate_release_metadata(root: Path) -> None:
     """Validate release metadata rooted at one repository checkout."""
     version = _package_version(root / "Cargo.toml")
     citation_date = _citation_release_date(root / "CITATION.cff")
-    _validate_python_readme(root)
+    _validate_python_readme(root, version)
 
     changelog = root / "CHANGELOG.md"
     if not changelog.is_file():
