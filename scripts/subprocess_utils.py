@@ -16,6 +16,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, cast
 
+DEFAULT_COMMAND_TIMEOUT_SECONDS: float = 300.0
+
 
 class ExecutableNotFoundError(Exception):
     """Raised when a required executable is not found in PATH."""
@@ -72,6 +74,7 @@ def _build_run_kwargs(function_name: str, **kwargs: Any) -> dict[str, Any]:
     }
     # Prefer deterministic UTF-8 unless caller overrides
     run_kwargs.setdefault("encoding", "utf-8")
+    run_kwargs.setdefault("timeout", DEFAULT_COMMAND_TIMEOUT_SECONDS)
     return run_kwargs
 
 
@@ -283,8 +286,12 @@ class ProjectRootNotFoundError(Exception):
     """Raised when project root directory cannot be located."""
 
 
-def find_project_root() -> Path:
+def find_project_root(start: Path | None = None) -> Path:
     """Find the project root by looking for Cargo.toml.
+
+    Args:
+        start: File or directory from which to begin walking upward. Defaults to
+            the current working directory.
 
     Returns:
         Path to project root directory
@@ -292,10 +299,11 @@ def find_project_root() -> Path:
     Raises:
         ProjectRootNotFoundError: If Cargo.toml cannot be found in any parent directory
     """
-    current_dir = Path.cwd()
-    project_root = current_dir
+    project_root = (start or Path.cwd()).resolve()
+    if project_root.is_file():
+        project_root = project_root.parent
     while project_root != project_root.parent:
-        if (project_root / "Cargo.toml").exists():
+        if (project_root / "Cargo.toml").is_file():
             return project_root
         project_root = project_root.parent
     msg = "Could not locate Cargo.toml to determine project root"

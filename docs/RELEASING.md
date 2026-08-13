@@ -63,7 +63,9 @@ Alternative: edit `Cargo.toml` manually and update `version = "..."` under `[pac
 
 Update release metadata to match the crate version:
 
-- `CITATION.cff`: update `version` and `date-released`
+- `CITATION.cff`: update `version` and `date-released`; keep the top-level `doi` as the all-versions Zenodo concept DOI and add the concrete release-record DOI
+  under `identifiers` with an explicit version description.
+- `pyproject.toml` and `uv.lock`: keep the support package version synchronized while preserving `scripts/README.md` as the package README.
 
 Review version references in documentation and metadata:
 
@@ -88,6 +90,10 @@ just changelog-unreleased "$TAG"
 just ci
 just publish-check
 ```
+
+The `just ci` citation bucket includes the release metadata check. It requires exactly one top-level ISO CFF release date and compares it with the generated
+UTC date on the current package-version heading in `CHANGELOG.md`. Tag creation separately refuses a requested version that differs from `Cargo.toml` before
+inspecting or changing any Git tag.
 
 5. Stage and commit release artifacts
 

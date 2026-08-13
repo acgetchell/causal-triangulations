@@ -342,6 +342,23 @@ Issue #222 treats cached-observable allocation counts as deterministic correctne
 with the stable Criterion suite, and the performance workflow invokes the same recipe before baseline analysis. Allocation failures are blocking on every path,
 while statistically noisy Criterion regressions retain their existing report-only pull-request behavior.
 
+## Issue #249 Python Release Helper Hardening
+
+Issue #249 ports the fail-closed release and fixture-validation patterns from `la-stack` while preserving CDT's destination-local, directory-fsynced changelog
+publication design. Tag creation now parses `Cargo.toml` directly and rejects a requested tag/package-version mismatch before any Git tag lookup or mutation.
+Changelog headings accept strict SemVer 2.0.0 only, reject duplicate `Unreleased` and release sections, render the complete output set before publication, and
+expose one injectable replace boundary for deterministic publication and rollback tests. CDT retains its stronger recovery-copy behavior when a rollback itself
+fails and reports the publication plus rollback errors together.
+
+The new `release-metadata-check` recipe extends the existing citation gate. It requires one top-level ISO `date-released` value, matches that value
+to the generated UTC date on the current Cargo package-version changelog heading when present, and verifies that the `causal-triangulations-scripts` package
+ships `scripts/README.md` rather than the Rust crate README. `CITATION.cff` keeps the Zenodo concept DOI at top level and records the v0.1.0 record DOI under
+`identifiers`, preserving the CFF distinction between all-version and per-version identifiers.
+
+The Semgrep fixture harness now validates the JSON container and each `check_id`, `start.line`, and `end.line`, then matches annotations by rule ID and source
+line within the reported span. Mismatches go to stderr. Shared subprocess wrappers use a finite five-minute default timeout, while existing benchmark paths
+retain explicit longer limits, and project-root discovery accepts an explicit file or directory start.
+
 ## Deferred Updates
 
 These were evaluated but not ported in this pass:

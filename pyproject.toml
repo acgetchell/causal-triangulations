@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "causal-triangulations-scripts"
 version = "0.1.0"
 description = "Python utility scripts for the causal-triangulations Rust library"
-readme = "README.md"
+readme = "scripts/README.md"
 requires-python = ">=3.14"
 license = "BSD-3-Clause"
 authors = [ { name = "Adam Getchell", email = "adam@adamgetchell.org" } ]
@@ -34,6 +34,7 @@ dependencies = [ "packaging>=26.3" ]
 [project.scripts]
 archive-changelog = "archive_changelog:main"
 benchmark-utils = "benchmark_utils:main"
+check-release-metadata = "check_release_metadata:main"
 coverage-report = "coverage_report:main"
 hardware-utils = "hardware_utils:main"
 notebook-check = "notebook_check:main"
@@ -50,6 +51,7 @@ py-modules = [
     "archive_changelog",
     "benchmark_models",
     "benchmark_utils",
+    "check_release_metadata",
     "coverage_report",
     "hardware_utils",
     "notebook_check",

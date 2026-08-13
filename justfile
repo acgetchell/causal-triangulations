@@ -304,8 +304,12 @@ ci-baseline tag="ci":
 ci-slow: ci test-slow
     @echo "✅ CI + slow tests passed!"
 
-# Validate CITATION.cff against the Citation File Format schema.
-citation-check: _ensure-uv
+# Validate release-date synchronization and support-package metadata.
+release-metadata-check: _ensure-uv
+    uv run check-release-metadata
+
+# Validate CITATION.cff against the Citation File Format schema and release metadata gate.
+citation-check: release-metadata-check _ensure-uv
     uvx --from cffconvert==2.0.0 cffconvert --validate -i CITATION.cff
 
 # Clean build artifacts
@@ -432,7 +436,9 @@ help-workflows:
     @echo "  just tag <ver>                   # Create git tag with changelog content"
     @echo ""
     @echo "Static Analysis:"
+    @echo "  just citation-check      # Validate CFF schema and synchronized release metadata"
     @echo "  just publish-check       # Validate crates.io metadata and dry-run publish"
+    @echo "  just release-metadata-check # Validate release dates and Python package README"
     @echo "  just semgrep             # Run repository-owned Semgrep rules"
     @echo "  just semgrep-test        # Test repository-owned Semgrep rules"
     @echo "  just unused-deps         # Check for unused direct Cargo dependencies"

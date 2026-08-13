@@ -2,11 +2,16 @@
 
 import subprocess
 from pathlib import PureWindowsPath
-from unittest.mock import patch
+from typing import TYPE_CHECKING
+from unittest.mock import MagicMock, patch
 
 import pytest
 
+import tag_release
 from tag_release import _get_repo_url, create_tag, main, validate_semver
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # _get_repo_url
@@ -88,6 +93,10 @@ class TestValidateSemver:
 
 
 class TestCreateTag:
+    @pytest.fixture(autouse=True)
+    def _matching_package_version(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(tag_release, "_package_version", lambda _changelog: "1.2.3")
+
     def test_next_step_sets_release_title(self, tmp_path, capsys: pytest.CaptureFixture[str]) -> None:
         changelog = tmp_path / "CHANGELOG.md"
         with (
@@ -141,6 +150,29 @@ class TestCreateTag:
         mock_delete_tag.assert_not_called()
         mock_run_git_with_input.assert_called_once()
         assert mock_run_git_with_input.call_args.args[0] == ["tag", "-f", "-a", "v1.2.3", "-F", "-", "--cleanup=verbatim"]
+
+    def test_rejects_tag_that_differs_from_cargo_before_git(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        changelog = tmp_path / "CHANGELOG.md"
+        changelog.write_text("# Changelog\n", encoding="utf-8")
+        tag_exists = MagicMock()
+        extract_section = MagicMock()
+        monkeypatch.setattr(tag_release, "find_changelog", lambda: changelog)
+        monkeypatch.setattr(tag_release, "_package_version", lambda _changelog: "1.2.4")
+        monkeypatch.setattr(tag_release, "_tag_exists", tag_exists)
+        monkeypatch.setattr(tag_release, "extract_changelog_section", extract_section)
+
+        with pytest.raises(ValueError, match="does not match Cargo package version"):
+            create_tag("v1.2.3")
+
+        tag_exists.assert_not_called()
+        extract_section.assert_not_called()
+
+
+def test_package_version_reads_cargo_manifest_beside_changelog(tmp_path: Path) -> None:
+    changelog = tmp_path / "CHANGELOG.md"
+    (tmp_path / "Cargo.toml").write_text('[package]\nname = "demo"\nversion = "2.3.4"\n', encoding="utf-8")
+
+    assert tag_release._package_version(changelog) == "2.3.4"
 
 
 # ---------------------------------------------------------------------------

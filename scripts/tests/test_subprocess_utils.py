@@ -6,6 +6,7 @@ These tests ensure the security utilities function correctly and maintain
 their secure-by-default behavior while providing flexibility through kwargs.
 """
 
+import math
 import shutil
 import subprocess
 import sys
@@ -21,9 +22,12 @@ if TYPE_CHECKING:
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from subprocess_utils import (
+    DEFAULT_COMMAND_TIMEOUT_SECONDS,
     ExecutableNotFoundError,
+    _build_run_kwargs,
     check_git_history,
     check_git_repo,
+    find_project_root,
     get_git_commit_hash,
     get_git_remote_url,
     get_safe_executable,
@@ -32,6 +36,21 @@ from subprocess_utils import (
     run_git_command_with_input,
     run_safe_command,
 )
+
+
+class TestBuildRunKwargs:
+    """Test bounded subprocess defaults and explicit overrides."""
+
+    def test_uses_finite_default_timeout(self) -> None:
+        kwargs = _build_run_kwargs("test_func")
+
+        assert math.isfinite(kwargs["timeout"])
+        assert kwargs["timeout"] == DEFAULT_COMMAND_TIMEOUT_SECONDS
+
+    def test_respects_explicit_longer_timeout(self) -> None:
+        kwargs = _build_run_kwargs("test_func", timeout=1800)
+
+        assert kwargs["timeout"] == 1800
 
 
 class TestGetSafeExecutable:
@@ -303,6 +322,27 @@ class TestSecurityFeatures:
         """Test that run_git_command_with_input raises ValueError when executable is overridden."""
         with pytest.raises(ValueError, match="Overriding 'executable' is not allowed"):
             run_git_command_with_input(["hash-object", "--stdin"], "test content", executable="/malicious/fake/git")
+
+
+class TestFindProjectRoot:
+    """Test explicit file and directory project-root discovery."""
+
+    def test_accepts_nested_directory_start(self, tmp_path: Path) -> None:
+        root = tmp_path / "checkout"
+        nested = root / "target" / "wheel"
+        nested.mkdir(parents=True)
+        (root / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+
+        assert find_project_root(nested) == root
+
+    def test_accepts_file_start(self, tmp_path: Path) -> None:
+        root = tmp_path / "checkout"
+        source = root / "scripts" / "tool.py"
+        source.parent.mkdir(parents=True)
+        source.write_text("", encoding="utf-8")
+        (root / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+
+        assert find_project_root(source) == root
 
 
 if __name__ == "__main__":

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+import archive_changelog as archive_changelog_module
 from archive_changelog import (
     _extract_link_defs,
     _format_link_defs,
@@ -158,13 +159,39 @@ class TestParseChangelog:
         assert unreleased == ""
         assert len(blocks) == 2
 
-    def test_skips_non_semver_headings(self) -> None:
+    def test_rejects_non_semver_headings(self) -> None:
         text = _PREAMBLE + _V072 + "## [CustomLabel]\n\n- Something\n\n" + _V071
-        _, _, blocks = parse_changelog(text)
-        # The non-semver heading should be silently skipped.
-        assert len(blocks) == 2
-        assert blocks[0][0] == "0.7.2"
-        assert blocks[1][0] == "0.7.1"
+
+        with pytest.raises(ValueError, match="Unrecognized changelog version heading"):
+            parse_changelog(text)
+
+    def test_rejects_unreleased_heading_without_closing_bracket_boundary(self) -> None:
+        text = _PREAMBLE + "## [Unreleased]invalid\n\n- Something\n\n" + _V072
+
+        with pytest.raises(ValueError, match="Unrecognized changelog version heading"):
+            parse_changelog(text)
+
+    @pytest.mark.parametrize("version", ["01.2.3", "1.02.3", "1.2.03", "1.2.3garbage", "1.2.3-01"])
+    def test_rejects_malformed_semver_headings(self, version: str) -> None:
+        text = _PREAMBLE + f"## [{version}] - 2026-01-01\n"
+
+        with pytest.raises(ValueError, match="semantic version"):
+            parse_changelog(text)
+
+    def test_accepts_strict_semver_prerelease_build_and_inline_link(self) -> None:
+        text = _PREAMBLE + "## [1.2.3-rc.1+build.7](https://example.com/release) - 2026-01-01\n"
+
+        _preamble, _unreleased, blocks = parse_changelog(text)
+
+        assert blocks == [("1.2.3-rc.1+build.7", "## [1.2.3-rc.1+build.7](https://example.com/release) - 2026-01-01\n")]
+
+    def test_rejects_duplicate_unreleased_headings(self) -> None:
+        with pytest.raises(ValueError, match="Duplicate Unreleased"):
+            parse_changelog(_PREAMBLE + _UNRELEASED + _UNRELEASED + _V072)
+
+    def test_rejects_duplicate_release_headings(self) -> None:
+        with pytest.raises(ValueError, match="Duplicate changelog version"):
+            parse_changelog(_PREAMBLE + _V072 + _V072)
 
 
 class TestGroupByMinor:
@@ -349,8 +376,7 @@ class TestArchiveChangelog:
         original_archive = "# Changelog - 0.6.x\n\nPrior valid archive\n"
         existing_archive.write_text(original_archive, encoding="utf-8")
 
-        path_type = type(changelog)
-        real_replace = path_type.replace
+        real_replace = archive_changelog_module._replace_path
         root_failure_injected = False
 
         def fail_when_publishing_root(source: Path, destination: Path) -> Path:
@@ -361,7 +387,7 @@ class TestArchiveChangelog:
                 raise OSError(message)
             return real_replace(source, destination)
 
-        monkeypatch.setattr(path_type, "replace", fail_when_publishing_root)
+        monkeypatch.setattr(archive_changelog_module, "_replace_path", fail_when_publishing_root)
 
         with pytest.raises(OSError, match="injected root publication failure"):
             archive_changelog(changelog, archive_dir)
@@ -390,8 +416,7 @@ class TestArchiveChangelog:
         original_older_archive = "# Changelog - 0.2.x\n\nPrior older archive\n"
         existing_older_archive.write_text(original_older_archive, encoding="utf-8")
 
-        path_type = type(changelog)
-        real_replace = path_type.replace
+        real_replace = archive_changelog_module._replace_path
         root_failure_injected = False
 
         def fail_publication_and_rollback(source: Path, destination: Path) -> Path:
@@ -405,17 +430,43 @@ class TestArchiveChangelog:
                 raise OSError(message)
             return real_replace(source, destination)
 
-        monkeypatch.setattr(path_type, "replace", fail_publication_and_rollback)
+        monkeypatch.setattr(archive_changelog_module, "_replace_path", fail_publication_and_rollback)
 
-        with pytest.raises(RuntimeError, match="original content retained at") as error:
+        with pytest.raises(ExceptionGroup, match="original content retained at") as error:
             archive_changelog(changelog, archive_dir)
 
         recovery_files = list(archive_dir.glob("*.tmp"))
         assert len(recovery_files) == 1
         assert f"{existing_archive} -> {recovery_files[0]}" in str(error.value)
+        failure_messages = [str(failure) for failure in error.value.exceptions]
+        assert "injected root publication failure" in failure_messages[0]
+        assert f"failed to restore {existing_archive}: injected archive rollback failure" in failure_messages[1]
         assert recovery_files[0].read_text(encoding="utf-8") == original_archive
         assert changelog.read_text(encoding="utf-8") == original_root
         assert existing_older_archive.read_text(encoding="utf-8") == original_older_archive
+
+    @pytest.mark.parametrize(
+        "invalid_text",
+        [
+            _PREAMBLE + _UNRELEASED + "## [CustomLabel]\n\n- Invalid\n",
+            _PREAMBLE + _UNRELEASED + _V072 + _V072,
+        ],
+    )
+    def test_invalid_headings_leave_root_and_archives_unchanged(self, tmp_path: Path, invalid_text: str) -> None:
+        changelog = tmp_path / "CHANGELOG.md"
+        changelog.write_text(invalid_text, encoding="utf-8")
+        archive_dir = tmp_path / "docs" / "archive" / "changelog"
+        archive_dir.mkdir(parents=True)
+        existing_archive = archive_dir / "0.6.md"
+        original_archive = b"# Existing archive\r\n"
+        existing_archive.write_bytes(original_archive)
+
+        with pytest.raises(ValueError, match=r"Unrecognized|Duplicate"):
+            archive_changelog(changelog, archive_dir)
+
+        assert changelog.read_text(encoding="utf-8") == invalid_text
+        assert existing_archive.read_bytes() == original_archive
+        assert not list(tmp_path.rglob("*.tmp"))
 
     def test_output_directory_is_rejected_before_publication(self, tmp_path: Path) -> None:
         """A directory at an output path must leave every existing file untouched."""
@@ -563,6 +614,61 @@ class TestArchiveChangelog:
         assert "path is on mount 'D:', start on mount 'C:'" in caplog.text
         assert str(archive_dir) in caplog.text
         assert str(changelog_dir) in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# CLI tests
+# ---------------------------------------------------------------------------
+
+
+class TestArchiveChangelogCli:
+    def test_malformed_heading_reports_stderr_without_modifying_files(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        changelog = tmp_path / "CHANGELOG.md"
+        malformed = _PREAMBLE + _UNRELEASED + "## [CustomLabel]\n\n- Invalid\n"
+        changelog.write_text(malformed, encoding="utf-8")
+        archive_dir = tmp_path / "archive"
+
+        status = archive_changelog_module.main([str(changelog), "--archive-dir", str(archive_dir)])
+
+        captured = capsys.readouterr()
+        assert status == 1
+        assert captured.out == ""
+        assert "Error: Unrecognized changelog version heading" in captured.err
+        assert "Traceback" not in captured.err
+        assert changelog.read_text(encoding="utf-8") == malformed
+        assert not archive_dir.exists()
+
+    def test_publication_and_rollback_failures_remain_visible(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        changelog = tmp_path / "CHANGELOG.md"
+        changelog.write_text(_PREAMBLE + _V072, encoding="utf-8")
+        grouped_error = ExceptionGroup(
+            "publication failed and rollback failed",
+            [OSError("root replacement failed"), OSError("archive restoration failed")],
+        )
+
+        def fail_publication(_changelog: Path, _archive_dir: Path | None) -> None:
+            raise grouped_error
+
+        monkeypatch.setattr(archive_changelog_module, "archive_changelog", fail_publication)
+
+        status = archive_changelog_module.main([str(changelog)])
+
+        captured = capsys.readouterr()
+        assert status == 1
+        assert captured.out == ""
+        assert "Error: publication failed and rollback failed" in captured.err
+        assert "root replacement failed" in captured.err
+        assert "archive restoration failed" in captured.err
+        assert "Traceback" not in captured.err
 
 
 # ---------------------------------------------------------------------------
