@@ -586,11 +586,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             .transpose()?;
         Ok(CdtTriangulationCheckpointWireV1 {
             geometry: self.geometry.checkpoint_wire_v1().map_err(|error| {
-                CdtError::CheckpointSerializationFailed {
-                    operation: CheckpointOperation::Serialize,
-                    target: "MCMC triangulation".to_string(),
-                    detail: error.to_string(),
-                }
+                triangulation_checkpoint_failure(CheckpointOperation::Serialize, error.to_string())
             })?,
             metadata: CdtCheckpointMetadataWireV1 {
                 time_slices: self.metadata.time_slices.get(),
@@ -647,6 +643,16 @@ impl CdtTriangulation<DelaunayBackend2D> {
                         "foliation `num_slices` must be nonzero".to_string(),
                     )
                 })?;
+                if num_slices.get() != metadata.time_slices {
+                    return Err(triangulation_checkpoint_failure(
+                        CheckpointOperation::Deserialize,
+                        format!(
+                            "foliation `num_slices` {} does not match metadata `time_slices` {}",
+                            num_slices.get(),
+                            metadata.time_slices
+                        ),
+                    ));
+                }
                 Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)
             })
             .transpose()?;

@@ -63,7 +63,7 @@ fn main() -> CdtResult<()> {
     fs::write(&checkpoint_path, checkpoint_json).map_err(|err| CdtError::OutputWriteFailed {
         path: checkpoint_path.display().to_string(),
         format: OutputFormat::Json,
-        stage: OutputWriteStage::Serialize,
+        stage: OutputWriteStage::CreateFile,
         detail: err.to_string(),
     })?;
     let checkpoint_json = read_output(&checkpoint_path, OutputFormat::Json)?;

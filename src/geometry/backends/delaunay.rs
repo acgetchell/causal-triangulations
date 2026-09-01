@@ -310,6 +310,8 @@ pub(crate) enum DelaunayCheckpointWireError {
     UnassignedLiveNeighborSlot { simplex_index: usize, slot: usize },
     #[error("checkpoint Delaunay interval {interval} cannot be represented on this platform")]
     PolicyIntervalOverflow { interval: u64 },
+    #[error("Delaunay interval {interval} cannot be encoded as u64 for checkpoint storage")]
+    PolicyIntervalEncodingOverflow { interval: usize },
     #[error(
         "checkpoint vertex {vertex_index} has coordinate dimension {actual}; expected {expected}"
     )]
@@ -644,7 +646,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
             .collect();
         let mut checkpoint_simplices = Vec::with_capacity(simplices.len());
         for (simplex_index, (_, simplex)) in simplices.into_iter().enumerate() {
-            let vertex_indices = simplex
+            let mapped_vertex_indices = simplex
                 .vertices()
                 .iter()
                 .map(|key| {
@@ -682,7 +684,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             checkpoint_simplices.push(DelaunayCheckpointSimplexV1 {
-                vertex_indices,
+                vertex_indices: mapped_vertex_indices,
                 neighbor_indices,
                 periodic_vertex_offsets: simplex
                     .periodic_vertex_offsets()
@@ -907,10 +909,7 @@ impl TryFrom<DelaunayCheckPolicy> for DelaunayCheckpointPolicyV1 {
             DelaunayCheckPolicy::EveryN(interval) => {
                 let interval = interval.get();
                 Ok(Self::EveryN(u64::try_from(interval).map_err(|_| {
-                    DelaunayCheckpointWireError::IndexEncodingOverflow {
-                        entity: "Delaunay validation interval",
-                        index: interval,
-                    }
+                    DelaunayCheckpointWireError::PolicyIntervalEncodingOverflow { interval }
                 })?))
             }
         }

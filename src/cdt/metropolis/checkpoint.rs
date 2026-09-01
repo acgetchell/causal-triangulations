@@ -1498,6 +1498,7 @@ mod tests {
     use crate::cdt::triangulation::CdtTriangulation;
     use serde_json::{json, to_value};
     use std::assert_matches;
+    use std::num::NonZeroUsize;
 
     fn one_step_checkpoint() -> CdtMcmcCheckpoint {
         MetropolisAlgorithm::new(
@@ -1508,6 +1509,33 @@ mod tests {
         )
         .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3).expect("CDT strip should build"))
         .expect("one-step run should checkpoint")
+    }
+
+    fn one_step_checkpoint_payload() -> Value {
+        to_value(
+            one_step_checkpoint()
+                .wire_v1()
+                .expect("wire projection should work"),
+        )
+        .expect("wire should serialize")
+    }
+
+    fn assert_checkpoint_deserialization_detail(error: CdtError, expected: &str) {
+        assert_matches!(
+            error,
+            CdtError::CheckpointSerializationFailed {
+                operation: CheckpointOperation::Deserialize,
+                ref detail,
+                ..
+            } if detail.contains(expected)
+        );
+    }
+
+    fn checkpoint_json_error(json: &str, expectation: &str) -> CdtError {
+        let Err(error) = CdtMcmcCheckpoint::from_json(json) else {
+            panic!("{expectation}");
+        };
+        error
     }
 
     #[test]
@@ -1566,6 +1594,151 @@ mod tests {
                 encountered: 2,
                 supported: CdtMcmcCheckpoint::FORMAT_VERSION,
             }
+        );
+    }
+
+    #[test]
+    fn checkpoint_json_wraps_malformed_document() {
+        let error = checkpoint_json_error("{", "malformed checkpoint JSON should be rejected");
+
+        assert_checkpoint_deserialization_detail(error, "EOF while parsing");
+    }
+
+    #[test]
+    fn checkpoint_json_wraps_malformed_v1_body() {
+        let mut payload = one_step_checkpoint_payload();
+        payload
+            .as_object_mut()
+            .expect("wire should be a JSON object")
+            .remove("accepted");
+
+        let error = checkpoint_json_error(
+            &payload.to_string(),
+            "incomplete version 1 body should be rejected",
+        );
+
+        assert_checkpoint_deserialization_detail(error, "missing field `accepted`");
+    }
+
+    #[test]
+    fn checkpoint_serde_rejects_unknown_version() {
+        let mut payload = one_step_checkpoint_payload();
+        payload["format_version"] = json!(2);
+
+        let Err(error) = serde_json::from_value::<CdtMcmcCheckpoint>(payload) else {
+            panic!("Serde entry point should enforce the wire version");
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("Unsupported MCMC checkpoint format version 2")
+        );
+    }
+
+    #[test]
+    fn checkpoint_json_rejects_all_zero_rng_states() {
+        let mut acceptance_payload = one_step_checkpoint_payload();
+        acceptance_payload["acceptance_rng"]["state"] = json!([0, 0, 0, 0]);
+        let acceptance_error = checkpoint_json_error(
+            &acceptance_payload.to_string(),
+            "all-zero acceptance RNG should be rejected",
+        );
+        assert_checkpoint_deserialization_detail(acceptance_error, "invalid all-zero state");
+
+        let mut proposal_payload = one_step_checkpoint_payload();
+        proposal_payload["ergodics"]["rng"]["state"] = json!([0, 0, 0, 0]);
+        let proposal_error = checkpoint_json_error(
+            &proposal_payload.to_string(),
+            "all-zero proposal RNG should be rejected",
+        );
+        assert_checkpoint_deserialization_detail(proposal_error, "invalid all-zero state");
+    }
+
+    #[test]
+    fn checkpoint_json_rejects_non_normalized_duration() {
+        let mut payload = one_step_checkpoint_payload();
+        payload["elapsed_time"]["nanos"] = json!(1_000_000_000_u64);
+
+        let error = checkpoint_json_error(
+            &payload.to_string(),
+            "non-normalized duration should be rejected",
+        );
+
+        assert_checkpoint_deserialization_detail(error, "must be less than 1000000000");
+    }
+
+    #[test]
+    fn checkpoint_json_rejects_wrong_geometry_dimension() {
+        let mut payload = one_step_checkpoint_payload();
+        payload["triangulation"]["geometry"]["vertices"][0]["coordinates"] = json!([0.0]);
+
+        let error = checkpoint_json_error(
+            &payload.to_string(),
+            "wrong-dimensional geometry should be rejected",
+        );
+
+        assert_checkpoint_deserialization_detail(error, "coordinate dimension 1; expected 2");
+    }
+
+    #[test]
+    fn checkpoint_json_rejects_zero_foliation_slice_count() {
+        let mut payload = one_step_checkpoint_payload();
+        payload["triangulation"]["foliation"]["num_slices"] = json!(0);
+
+        let error = checkpoint_json_error(
+            &payload.to_string(),
+            "zero foliation slice count should be rejected",
+        );
+
+        assert_checkpoint_deserialization_detail(error, "`num_slices` must be nonzero");
+    }
+
+    #[test]
+    fn checkpoint_json_rejects_foliation_metadata_slice_count_mismatch() {
+        let mut payload = one_step_checkpoint_payload();
+        payload["triangulation"]["foliation"]["num_slices"] = json!(2);
+
+        let error = checkpoint_json_error(
+            &payload.to_string(),
+            "foliation and metadata slice counts should agree",
+        );
+
+        assert_checkpoint_deserialization_detail(
+            error,
+            "foliation `num_slices` 2 does not match metadata `time_slices` 3",
+        );
+    }
+
+    #[test]
+    fn checkpoint_v1_preserves_delaunay_check_interval() {
+        let mut triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("CDT strip should build");
+        triangulation.set_delaunay_check_interval(NonZeroUsize::new(8));
+        let checkpoint = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 1, 0, 1)
+                .expect("test configuration should validate")
+                .with_seed(17),
+            ActionConfig::default(),
+        )
+        .run_to_checkpoint(triangulation)
+        .expect("one-step run should checkpoint");
+
+        let json = checkpoint.to_json().expect("checkpoint should serialize");
+        let restored = CdtMcmcCheckpoint::from_json(&json)
+            .expect("checkpoint with validation cadence should restore");
+
+        assert!(
+            !restored
+                .triangulation()
+                .geometry()
+                .should_check_delaunay_after(7)
+        );
+        assert!(
+            restored
+                .triangulation()
+                .geometry()
+                .should_check_delaunay_after(8)
         );
     }
 
