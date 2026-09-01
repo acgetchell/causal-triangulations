@@ -527,10 +527,14 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Validates a deserialized checkpoint before exposing restored CDT state.
     ///
     /// This keeps serde deserialization aligned with the public constructor and
-    /// post-move contracts. Foliated checkpoint data must restore to a fully
-    /// valid CDT triangulation, including geometry, topology, foliation, and
-    /// causality; explicitly unfoliated geometry experiments restore through the
-    /// separate geometry/topology contract.
+    /// post-move contracts without conflating them: the backend first restores
+    /// exact serialized connectivity through topology-aware Levels 1-4 validation,
+    /// then this boundary checks the evolved CDT invariants. It deliberately does
+    /// not run Level 5 repair or certification. Foliated checkpoint data must
+    /// restore to a fully valid CDT triangulation, including geometry, topology,
+    /// foliation, causality, and strict simplex classification; explicitly
+    /// unfoliated geometry experiments restore through the separate
+    /// geometry/topology contract.
     fn validate_checkpoint_invariants(&self) -> CdtResult<()> {
         self.validate_supported_state()
     }
@@ -1205,10 +1209,13 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DelaunayValidationLevel;
+    use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult};
     use crate::geometry::backends::mock::MockBackend;
     use crate::geometry::generators::build_delaunay2_with_data;
-    use serde_json::{Error as JsonError, error::Category, from_str, to_string};
+    use serde_json::{Error as JsonError, Value, error::Category, from_str, to_string, to_value};
     use std::assert_matches;
+    use std::collections::HashMap;
     use std::time::Duration;
 
     const TEST_POINT_SEED: u64 = 0xCD7_5EED;
@@ -1225,6 +1232,264 @@ mod tests {
                 "checkpoint deserialization error {message:?} did not contain {expected_detail:?}"
             );
         }
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct PeriodicVertexIdentity {
+        point_bits: [u64; 2],
+        data: u32,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct PeriodicVertexSignature {
+        identity: PeriodicVertexIdentity,
+        offset: [i64; 2],
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct PeriodicSimplexIdentity {
+        vertices: Vec<PeriodicVertexSignature>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct PeriodicNeighborSignature {
+        opposite_vertex: PeriodicVertexIdentity,
+        neighbor: Option<PeriodicSimplexIdentity>,
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct PeriodicSimplexSignature {
+        identity: PeriodicSimplexIdentity,
+        data: i32,
+        neighbors: Vec<PeriodicNeighborSignature>,
+    }
+
+    /// Extracts UUID-independent periodic connectivity and payload signatures.
+    ///
+    /// TDS UUIDs and slot-map iteration order are runtime storage details that may
+    /// change when Serde reconstructs storage. Coordinates identify this fixture's
+    /// vertices uniquely, so their exact IEEE-754 bits form stable logical identities.
+    /// Lift offsets are normalized by a common simplex translation because periodic
+    /// covering charts identify those realizations. Neighbor slots are paired with
+    /// their opposite logical vertex, retaining the ordered adjacency relationship
+    /// while ignoring runtime simplex slot order. The resulting signatures compare
+    /// exact logical connectivity, adjacency, payloads, and relative periodic lifts.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "test helper decodes one coupled periodic TDS snapshot"
+    )]
+    fn periodic_simplex_signatures(backend: &Value) -> Vec<PeriodicSimplexSignature> {
+        let tds = backend
+            .get("tds")
+            .and_then(Value::as_object)
+            .expect("serialized backend should contain a TDS object");
+        let vertex_by_uuid: HashMap<_, _> = tds
+            .get("vertices")
+            .and_then(Value::as_array)
+            .expect("serialized TDS should contain vertex records")
+            .iter()
+            .map(|vertex| {
+                let uuid = vertex
+                    .get("uuid")
+                    .and_then(Value::as_str)
+                    .expect("serialized vertex should contain a UUID")
+                    .to_string();
+                let point = vertex
+                    .get("point")
+                    .and_then(Value::as_array)
+                    .expect("serialized vertex should contain coordinates");
+                let point_bits = [
+                    point[0]
+                        .as_f64()
+                        .expect("serialized x coordinate should be finite")
+                        .to_bits(),
+                    point[1]
+                        .as_f64()
+                        .expect("serialized y coordinate should be finite")
+                        .to_bits(),
+                ];
+                let data = vertex
+                    .get("data")
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok())
+                    .expect("serialized CDT vertex should contain a u32 time label");
+                (uuid, PeriodicVertexIdentity { point_bits, data })
+            })
+            .collect();
+        let simplex_data_by_uuid: HashMap<_, _> = tds
+            .get("simplices")
+            .and_then(Value::as_array)
+            .expect("serialized TDS should contain simplex records")
+            .iter()
+            .map(|simplex| {
+                let uuid = simplex
+                    .get("uuid")
+                    .and_then(Value::as_str)
+                    .expect("serialized simplex should contain a UUID")
+                    .to_string();
+                let data = simplex
+                    .get("data")
+                    .and_then(Value::as_i64)
+                    .and_then(|value| i32::try_from(value).ok())
+                    .expect("serialized CDT simplex should contain an i32 classification");
+                (uuid, data)
+            })
+            .collect();
+        let simplex_vertices = tds
+            .get("simplex_vertices")
+            .and_then(Value::as_object)
+            .expect("serialized TDS should contain simplex connectivity");
+        let simplex_offsets = tds
+            .get("simplex_vertex_offsets")
+            .and_then(Value::as_object)
+            .expect("serialized torus should contain periodic lift offsets");
+        let simplex_neighbors = tds
+            .get("simplex_neighbors")
+            .and_then(Value::as_object)
+            .expect("serialized TDS should contain simplex neighbors");
+
+        let simplex_identity_by_uuid: HashMap<_, _> = simplex_vertices
+            .iter()
+            .map(|(simplex_uuid, vertex_uuids)| {
+                let vertex_uuids = vertex_uuids
+                    .as_array()
+                    .expect("serialized simplex connectivity should be an array");
+                let offsets = simplex_offsets
+                    .get(simplex_uuid)
+                    .and_then(Value::as_array)
+                    .expect("serialized toroidal simplex should contain lift offsets");
+                assert_eq!(vertex_uuids.len(), offsets.len());
+                let mut vertices: Vec<_> = vertex_uuids
+                    .iter()
+                    .zip(offsets)
+                    .map(|(vertex_uuid, offset)| {
+                        let vertex_uuid = vertex_uuid
+                            .as_str()
+                            .expect("simplex vertex reference should be a UUID");
+                        let identity = vertex_by_uuid
+                            .get(vertex_uuid)
+                            .cloned()
+                            .expect("simplex vertex UUID should resolve");
+                        let offset = offset
+                            .as_array()
+                            .expect("periodic lift offset should be an array");
+                        PeriodicVertexSignature {
+                            identity,
+                            offset: [
+                                offset[0]
+                                    .as_i64()
+                                    .expect("periodic x offset should be integral"),
+                                offset[1]
+                                    .as_i64()
+                                    .expect("periodic y offset should be integral"),
+                            ],
+                        }
+                    })
+                    .collect();
+                vertices.sort_unstable();
+                let anchor = vertices
+                    .first()
+                    .expect("serialized simplex should contain vertices")
+                    .offset;
+                for vertex in &mut vertices {
+                    vertex.offset[0] -= anchor[0];
+                    vertex.offset[1] -= anchor[1];
+                }
+                (simplex_uuid.clone(), PeriodicSimplexIdentity { vertices })
+            })
+            .collect();
+
+        let mut signatures: Vec<_> = simplex_vertices
+            .iter()
+            .map(|(simplex_uuid, vertex_uuids)| {
+                let vertex_uuids = vertex_uuids
+                    .as_array()
+                    .expect("serialized simplex connectivity should be an array");
+                let neighbor_uuids = simplex_neighbors
+                    .get(simplex_uuid)
+                    .and_then(Value::as_array)
+                    .expect("serialized simplex should contain neighbor slots");
+                assert_eq!(vertex_uuids.len(), neighbor_uuids.len());
+                let mut neighbors: Vec<_> = vertex_uuids
+                    .iter()
+                    .zip(neighbor_uuids)
+                    .map(|(vertex_uuid, neighbor_uuid)| {
+                        let vertex_uuid = vertex_uuid
+                            .as_str()
+                            .expect("simplex vertex reference should be a UUID");
+                        let neighbor = neighbor_uuid.as_str().map(|neighbor_uuid| {
+                            simplex_identity_by_uuid
+                                .get(neighbor_uuid)
+                                .cloned()
+                                .expect("simplex neighbor UUID should resolve")
+                        });
+                        PeriodicNeighborSignature {
+                            opposite_vertex: vertex_by_uuid
+                                .get(vertex_uuid)
+                                .cloned()
+                                .expect("simplex vertex UUID should resolve"),
+                            neighbor,
+                        }
+                    })
+                    .collect();
+                neighbors.sort_unstable();
+                PeriodicSimplexSignature {
+                    identity: simplex_identity_by_uuid
+                        .get(simplex_uuid)
+                        .cloned()
+                        .expect("simplex identity UUID should resolve"),
+                    data: *simplex_data_by_uuid
+                        .get(simplex_uuid)
+                        .expect("simplex payload UUID should resolve"),
+                    neighbors,
+                }
+            })
+            .collect();
+        signatures.sort_unstable();
+        signatures
+    }
+
+    #[test]
+    fn periodic_checkpoint_signature_detects_bitwise_geometry_and_adjacency_changes() {
+        let triangulation =
+            CdtTriangulation::from_toroidal_cdt(4, 3).expect("periodic torus should build");
+        let geometry = to_value(triangulation.geometry()).expect("backend should serialize");
+        let expected = periodic_simplex_signatures(&geometry);
+
+        let mut changed_coordinate = geometry.clone();
+        let coordinate = changed_coordinate
+            .get_mut("tds")
+            .and_then(|tds| tds.get_mut("vertices"))
+            .and_then(Value::as_array_mut)
+            .and_then(|vertices| vertices.first_mut())
+            .and_then(|vertex| vertex.get_mut("point"))
+            .and_then(Value::as_array_mut)
+            .and_then(|point| point.first_mut())
+            .expect("serialized backend should contain a vertex coordinate");
+        let original = coordinate
+            .as_f64()
+            .expect("serialized vertex coordinate should be finite");
+        *coordinate = Value::from(f64::from_bits(original.to_bits() + 1));
+        assert_ne!(
+            periodic_simplex_signatures(&changed_coordinate),
+            expected,
+            "a one-ULP coordinate change must not survive checkpoint comparison"
+        );
+
+        let mut changed_adjacency = geometry;
+        let neighbor_slots = changed_adjacency
+            .get_mut("tds")
+            .and_then(|tds| tds.get_mut("simplex_neighbors"))
+            .and_then(Value::as_object_mut)
+            .and_then(|neighbors| neighbors.values_mut().find_map(Value::as_array_mut))
+            .expect("serialized torus should contain neighbor slots");
+        assert_ne!(neighbor_slots[0], neighbor_slots[1]);
+        neighbor_slots.swap(0, 1);
+        assert_ne!(
+            periodic_simplex_signatures(&changed_adjacency),
+            expected,
+            "neighbor-slot changes must not survive checkpoint comparison"
+        );
     }
 
     /// Builds a minimal labeled Delaunay backend for foliation and causality tests.
@@ -1904,6 +2169,110 @@ mod tests {
         assert_eq!(restored.vertex_count(), triangulation.vertex_count());
         assert_eq!(restored.edge_count(), triangulation.edge_count());
         assert_eq!(restored.face_count(), triangulation.face_count());
+    }
+
+    #[test]
+    fn evolved_non_delaunay_toroidal_checkpoint_preserves_exact_state() {
+        let mut triangulation =
+            CdtTriangulation::from_toroidal_cdt(8, 8).expect("periodic torus should build");
+        triangulation
+            .validate_with_profile(CdtValidationProfile::InitialDelaunay)
+            .expect("fresh toroidal CDT should satisfy the strict Levels 1-5 contract");
+
+        let mut moves = ErgodicsSystem::with_seed(7);
+        assert_eq!(
+            moves.attempt_13_move(&mut triangulation),
+            MoveResult::Success,
+            "seeded toroidal (1,3) move should be accepted"
+        );
+        triangulation
+            .validate_checkpoint_invariants()
+            .expect("evolved toroidal CDT should satisfy checkpoint invariants");
+        assert_matches!(
+            triangulation.validate_with_profile(CdtValidationProfile::StrictDelaunay),
+            Err(CdtError::DelaunayValidationFailed {
+                level: DelaunayValidationLevel::Five,
+                ..
+            }),
+            "seeded evolved fixture should intentionally fail Level 5"
+        );
+
+        let expected_metadata = (
+            triangulation.metadata.time_slices,
+            triangulation.metadata.dimension,
+            triangulation.metadata.topology,
+            triangulation.metadata.modification_count,
+            triangulation.metadata.initial_vertex_count,
+        );
+        let expected_counts = (
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+        );
+        let expected_slice_sizes = triangulation.slice_sizes().to_vec();
+        let checkpoint = to_string(&triangulation).expect("evolved checkpoint should serialize");
+        let checkpoint_value: Value =
+            from_str(&checkpoint).expect("serialized checkpoint should remain valid JSON");
+        let expected_geometry = checkpoint_value
+            .get("geometry")
+            .cloned()
+            .expect("serialized checkpoint should contain backend geometry");
+        let expected_simplices = periodic_simplex_signatures(&expected_geometry);
+
+        let restored = from_str::<CdtTriangulation<DelaunayBackend2D>>(&checkpoint)
+            .expect("valid evolved non-Delaunay toroidal checkpoint should deserialize");
+
+        // Successful deserialization is the evolved Levels 1-4 invariant gate:
+        // `Deserialize` validates geometry, topology, foliation, causality, and
+        // simplex classification before publishing `restored`.
+        assert_matches!(
+            restored.validate_with_profile(CdtValidationProfile::StrictDelaunay),
+            Err(CdtError::DelaunayValidationFailed {
+                level: DelaunayValidationLevel::Five,
+                ..
+            }),
+            "restoration must not repair or require Level 5"
+        );
+        assert_eq!(
+            (
+                restored.metadata.time_slices,
+                restored.metadata.dimension,
+                restored.metadata.topology,
+                restored.metadata.modification_count,
+                restored.metadata.initial_vertex_count,
+            ),
+            expected_metadata,
+            "checkpoint should preserve serialized CDT metadata"
+        );
+        assert_eq!(
+            (
+                restored.vertex_count(),
+                restored.edge_count(),
+                restored.face_count(),
+            ),
+            expected_counts,
+            "checkpoint should preserve simplex counts"
+        );
+        assert_eq!(restored.slice_sizes(), expected_slice_sizes);
+
+        let restored_geometry =
+            to_value(restored.geometry()).expect("restored backend should serialize");
+        for field in [
+            "global_topology",
+            "topology_guarantee",
+            "delaunay_check_policy",
+        ] {
+            assert_eq!(
+                restored_geometry.get(field),
+                expected_geometry.get(field),
+                "checkpoint should preserve exact serialized backend field {field}"
+            );
+        }
+        assert_eq!(
+            periodic_simplex_signatures(&restored_geometry),
+            expected_simplices,
+            "checkpoint should preserve exact periodic connectivity, adjacency, relative lift offsets, and payloads"
+        );
     }
 
     #[test]

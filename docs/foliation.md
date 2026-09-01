@@ -100,6 +100,11 @@ The upstream validation hierarchy separates the properties needed by CDT evoluti
 exact layered constructors use the same Level 1-4 geometry contract plus initialization-time CDT classification. Callers can opt into `StrictDelaunay` without
 making Level 5 part of the normal evolved-state ensemble.
 
+Checkpoint restoration follows the evolved contract, not the initialization contract. The geometry adapter reconstructs the serialized topology-aware
+Levels 1-4 owner in strict representation-preserving mode, retaining periodic domains, periodic realizations (including relative lift offsets), exact
+connectivity, and payloads. It does not run Level 5 repair or retriangulation, because either would change the sampled Markov-chain state. The restored
+wrapper then validates toroidal topology, foliation, causality, and strict simplex classification before publishing the checkpoint.
+
 All named CDT profiles require current foliation bookkeeping so strict causal simplex validity is actually evaluated. Raw triangulations from
 `from_random_points()` and `from_seeded_points()` remain available for geometry tests and experiments, but they are outside these named CDT profiles;
 `validate()` returns `FoliationError::MissingBookkeeping` until foliation is assigned.
