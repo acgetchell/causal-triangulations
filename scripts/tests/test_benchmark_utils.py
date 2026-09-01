@@ -954,32 +954,36 @@ class TestEdgeCases:
 class TestWorkflowHelper:
     """Test cases for WorkflowHelper class."""
 
-    @patch.dict(os.environ, {"GITHUB_REF": "refs/tags/v1.2.3"}, clear=False)
     def test_determine_tag_name_from_github_ref(self):
         """Test tag name determination from GITHUB_REF with tag."""
-        tag_name = WorkflowHelper.determine_tag_name()
-        assert tag_name == "v1.2.3"
+        with patch.dict(os.environ, {"GITHUB_REF": "refs/tags/v1.2.3"}, clear=False):
+            tag_name = WorkflowHelper.determine_tag_name()
+            assert tag_name == "v1.2.3"
 
-    @patch.dict(os.environ, {"GITHUB_REF": "refs/heads/main"}, clear=False)
-    @patch("benchmark_utils.datetime")
-    def test_determine_tag_name_generated(self, mock_datetime):
+    def test_determine_tag_name_generated(self):
         """Test tag name generation when not from a tag push."""
-        # Mock datetime
-        mock_now = Mock()
-        mock_now.strftime.return_value = "20231215-143000"
-        mock_datetime.now.return_value = mock_now
+        with (
+            patch.dict(os.environ, {"GITHUB_REF": "refs/heads/main"}, clear=False),
+            patch("benchmark_utils.datetime") as mock_datetime,
+        ):
+            # Mock datetime
+            mock_now = Mock()
+            mock_now.strftime.return_value = "20231215-143000"
+            mock_datetime.now.return_value = mock_now
 
-        tag_name = WorkflowHelper.determine_tag_name()
-        assert tag_name == "manual-20231215-143000"
+            tag_name = WorkflowHelper.determine_tag_name()
+            assert tag_name == "manual-20231215-143000"
 
-    @patch.dict(os.environ, {"GITHUB_REF": "refs/tags/v2.0.0"}, clear=False)
     def test_determine_tag_name_with_github_output(self):
         """Test tag name determination with GITHUB_OUTPUT file."""
         with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
             output_file = f.name
 
         try:
-            with patch.dict(os.environ, {"GITHUB_OUTPUT": output_file}):
+            with (
+                patch.dict(os.environ, {"GITHUB_REF": "refs/tags/v2.0.0"}, clear=False),
+                patch.dict(os.environ, {"GITHUB_OUTPUT": output_file}),
+            ):
                 tag_name = WorkflowHelper.determine_tag_name()
                 assert tag_name == "v2.0.0"
 

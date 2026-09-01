@@ -53,7 +53,7 @@ Some differences remain because CDT has different workflows and project invarian
   `CODACY_PROJECT_TOKEN` setup and would duplicate the existing repository-rule SARIF signal until Codacy is configured for this repository.
 - CDT Semgrep rules include geometry-backend isolation, foliation/topology validation, focused prelude imports, doctest assertion-idiom enforcement,
   Python support-script discipline, and typed error policies. These are repository-specific and should not be weakened while porting generic rules. The
-  `prefer-assert-matches-in-doctests` rule keeps public `///` examples on `std::assert_matches` (Rust 1.97.1) so documentation teaches the diagnostic-friendly
+  `prefer-assert-matches-in-doctests` rule keeps public `///` examples on `std::assert_matches` (Rust 1.98.0) so documentation teaches the diagnostic-friendly
   idiom rather than `assert!(matches!(...))`.
 - CDT requires Python `>=3.14` for repository-managed support tooling, matching the local `.python-version`, Ruff target, Ty environment, and CI setup.
 
@@ -310,6 +310,33 @@ lock is refreshed rather than limiting resolution to those exact requirements, a
 to advance together. Semgrep 1.172.0 still declares `mcp==1.23.3`, so the security override remains at compatible MCP 1.28.1 instead of crossing to MCP 2.0.0.
 GitHub Actions continue to consume the single `justfile` rumdl pin through `just --evaluate`; no workflow-local rumdl literal needs updating. The independent
 action-release audit advances `astral-sh/setup-uv` from 9.0.0 to 10.0.0 at its immutable release commit, while every other pinned action remains current.
+
+## 31 August 2026 Rust And Backend Refresh
+
+The end-of-August refresh raises the crate MSRV and contributor toolchain together to Rust 1.98.0, matching the published minimums of the selected backend
+releases. The manifest now selects `delaunay` 0.8.1 and `markov-chain-monte-carlo` 0.4.2. `la-stack` remains an implementation dependency of `delaunay`, not a
+direct CDT dependency; resolving `delaunay` 0.8.1 updates the lockfile to `la-stack` 0.4.5 without exposing that numerical backend in CDT's manifest or source.
+
+The `delaunay` 0.8.1 boundary separates mutable Level 1–4 `Triangulation` ownership from certified Level 1–5 `DelaunayTriangulation` ownership and unifies
+its proof-bearing builders. The CDT geometry adapter absorbs those upstream ownership changes so the domain layer continues to use crate-owned traits and
+handles.
+The MCMC 0.4.2 boundary re-scores current states before transitions, strengthens delayed-commit rollback and mismatch diagnostics, and corrects discrete
+proposal ratios for state-dependent family normalizers. Focused adapter tests and the full repository CI path verify that CDT checkpoint continuation,
+proposal accounting, geometry mutation, and validation semantics remain intact across both upgrades.
+
+The same refresh advances the repository uv pin from 0.12.3 to Homebrew's current 0.12.7 and aligns stale Cargo-hosted validator pins with the installed
+toolchain. CDT now shares the sibling repositories' `just update` contract: Cargo requirements and locks, exact Python development-tool pins, managed Cargo
+CLI installations, the uv lock, and root justfile pins have explicit component recipes plus one aggregate entry point. The Python pin updaters are
+transactional so a resolver failure or collateral manifest edit restores the prior `pyproject.toml` and `uv.lock`.
+
+The first `just update` execution advances the direct Rust requirements for Clap 4.6.6, Log 0.4.34, and Thiserror 2.0.20 while retaining Delaunay 0.8.1 and
+MCMC 0.4.2 as the latest compatible backend releases. Exact Python tool pins advance to Ruff 0.16.5, Semgrep 1.175.0, shfmt-py 4.1.0, and Ty 0.0.77; Cargo
+and uv refresh their compatible transitive locks together. Every managed Cargo CLI already matches its reconciled justfile pin, so the command performs no
+local Cargo tool reinstall on this workstation.
+
+Zizmor 1.30 additionally requires GitHub's dedicated `$/...` syntax for repository-local actions. All workflows now use that spelling for the shared
+`setup-just` action. Actionlint 1.7.12 does not parse the newer syntax yet, so its recipe ignores only the corresponding “missing ref” diagnostic; YAML,
+action-policy, and Zizmor checks continue to validate the same workflow files.
 
 ## Issue #205 Orthogonal CI And Notebook Checker Alignment
 

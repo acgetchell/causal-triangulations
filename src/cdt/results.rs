@@ -1212,7 +1212,7 @@ fn validate_result_telemetry(
 }
 
 /// Recognizes a construction-only result before Metropolis steps have run.
-fn is_initial_construction_snapshot(
+const fn is_initial_construction_snapshot(
     move_stats: &MoveStatistics,
     proposal_stats: &ProposalStatistics,
     steps: &[MonteCarloStep],
@@ -4813,7 +4813,7 @@ mod tests {
 
         assert_eq!(trace.len(), results.steps().len());
         assert_eq!(trace.records()[0].chain_id(), ChainId::new(0));
-        assert!(trace.records()[0].outcome().had_proposal());
+        assert!(trace.records()[0].outcome().has_proposal());
         assert!(
             trace
                 .observable_names()

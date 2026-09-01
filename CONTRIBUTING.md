@@ -12,7 +12,7 @@ verify, reproduce, or extend.
 
 Prerequisites:
 
-- Rust 1.97.1, pinned by `rust-toolchain.toml`; `Cargo.toml` also specifies `rust-version = "1.97.1"` as the required toolchain
+- Rust 1.98.0, pinned by `rust-toolchain.toml`; `Cargo.toml` also specifies `rust-version = "1.98.0"` as the required toolchain
 - Git
 - [Just] command runner: `cargo install just`
 - `uv` for Python support tooling
@@ -45,6 +45,7 @@ Common commands:
 ```bash
 just --list          # Show available recipes
 just setup           # Complete environment setup
+just update          # Update dependencies, managed Cargo tools, and tool pins
 just check           # Non-mutating validation
 just fix             # Formatters and auto-fixes
 just ci              # CI parity
@@ -55,8 +56,12 @@ just perf-check      # Local performance regression check
 just perf-help       # Performance analysis command index
 ```
 
-`just setup` installs or verifies Cargo-hosted tools such as `dprint`, `rumdl`, `taplo-cli`, `typos-cli`, `cargo-nextest`, `cargo-llvm-cov`, and `zizmor`.
-It also prints a checklist for external tools such as `uv`, `actionlint`, `shfmt`, `shellcheck`, and `jq`.
+`just setup` installs or verifies Cargo-hosted tools such as `cargo-audit`, `cargo-edit`, `cargo-update`, `dprint`, `rumdl`, `taplo-cli`, `typos-cli`,
+`cargo-nextest`, `cargo-llvm-cov`, and `zizmor`. It also prints a checklist for external tools such as `uv`, `actionlint`, `shfmt`, `shellcheck`, and `jq`.
+
+`just update` advances Cargo dependency requirements and lockfile entries, resolves the latest compatible versions for exact Python development-tool pins,
+upgrades the Cargo-installed CLI tools managed by `just setup`, and reconciles their root justfile pins together with the active uv version. Review the
+resulting manifest, lockfile, and tool-pin changes before committing them.
 
 Ready-to-use shell workflows live under `examples/scripts/`:
 
@@ -95,7 +100,7 @@ Before opening a PR:
 Rust code uses:
 
 - Rust 2024 edition
-- MSRV 1.97.1
+- MSRV 1.98.0
 - `#![forbid(unsafe_code)]`
 - `rustfmt` and strict Clippy
 - narrow `CdtError` variants and `CdtResult<T>` for production errors

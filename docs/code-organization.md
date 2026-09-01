@@ -94,7 +94,9 @@ causal-triangulations/
 │   │   ├── test_notebook_check.py
 │   │   ├── test_postprocess_changelog.py
 │   │   ├── test_subprocess_utils.py
-│   │   └── test_tag_release.py
+│   │   ├── test_tag_release.py
+│   │   ├── test_update_cargo_tool_pins.py
+│   │   └── test_update_python_dev_pins.py
 │   ├── README.md
 │   ├── archive_changelog.py
 │   ├── benchmark_models.py
@@ -108,7 +110,9 @@ causal-triangulations/
 │   ├── postprocess_changelog.py
 │   ├── run_all_examples.sh
 │   ├── subprocess_utils.py
-│   └── tag_release.py
+│   ├── tag_release.py
+│   ├── update_cargo_tool_pins.py
+│   └── update_python_dev_pins.py
 ├── src/
 │   ├── cdt/
 │   │   ├── action.rs
@@ -375,14 +379,15 @@ See `docs/metropolis.md` for the current planned-proposal ordering and enforced 
 
 ### `geometry/backends/delaunay.rs` — Delaunay adapter
 
-- Wraps the upstream `delaunay` triangulation in `DelaunayBackend`
+- Wraps the upstream Level 1–4 `Triangulation` in `DelaunayBackend`; certified Level 1–5 `DelaunayTriangulation` values are accepted at strict construction
+  boundaries and then demoted to the mutable representation
 - Defines crate-owned opaque handles (`DelaunayVertexHandle`, `DelaunayEdgeHandle`, `DelaunayFaceHandle`) so CDT code does not depend on upstream key types.
   Handles are hashable for runtime maps and sets, but owner and topology-generation provenance makes them non-durable; clones, deserialization, and topology
   mutation reject old handles with typed foreign/stale errors.
 - Translates upstream Delaunay operations and errors into this crate's trait contracts
 - Exposes named validation adapters for Level 1–3 structure, Level 1–4 embedding/realization, and Level 1–5 Delaunay validity
-- Rebuilds Euclidean checkpoints through explicit Level 1–4 realization validation so exact layered and evolved non-Delaunay states remain restorable while
-  preserving vertex and simplex payloads
+- Rebuilds checkpoints through explicit Level 1–4 realization validation so exact layered and evolved non-Delaunay states remain restorable while preserving
+  vertex and simplex payloads; temporary persistence and visualization mirrors are tracked by #268 pending upstream delaunay#591
 - Together with `geometry/generators.rs`, this is the only place that directly imports from the `delaunay` crate
 
 ### `geometry/generators.rs` — Delaunay triangulation generators
@@ -424,7 +429,7 @@ Notebook files live in `notebooks/` and should wrap the CLI or consume generated
 
 ## Key Dependencies
 
-- `delaunay` (v0.8) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
+- `delaunay` (v0.8.1) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
   `set_vertex_data_by_key` for O(1) label mutation)
-- `markov-chain-monte-carlo` (v0.4.1) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, invariant-bearing `Step<Info>` telemetry, `Target`)
+- `markov-chain-monte-carlo` (v0.4.2) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, invariant-bearing `Step<Info>` telemetry, `Target`)
 - `num-traits` — `ToPrimitive` and `NumCast` for checked or saturating numeric conversions

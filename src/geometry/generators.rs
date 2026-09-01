@@ -18,13 +18,18 @@ use delaunay::geometry::{
 };
 use delaunay::prelude::Vertex;
 pub use delaunay::topology::traits::{GlobalTopology, ToroidalConstructionMode, ToroidalDomain};
-use delaunay::{ConstructionOptions, DelaunayTriangulation, DelaunayTriangulationBuilder};
+use delaunay::{
+    ConstructionOptions, DelaunayTriangulation, DelaunayTriangulationBuilder, Triangulation,
+};
 
 /// Type alias for the 2D Delaunay triangulation returned by this crate's generators.
 ///
 /// Uses [`AdaptiveKernel`] (the default for [`DelaunayTriangulationBuilder::build`]) and
 /// `u32` vertex data storing the per-vertex time-slice label (foliation).
 pub type DelaunayTriangulation2D = DelaunayTriangulation<AdaptiveKernel<f64>, u32, i32, 2>;
+
+/// Mutable Levels 1-4 owner used internally for exact layered CDT connectivity.
+pub(crate) type RealizedTriangulation2D = Triangulation<AdaptiveKernel<f64>, u32, i32, 2>;
 
 /// Keeps `generate_delaunay2` vertex-build failures tied to the public constructor name.
 fn generate_delaunay2_vertex_build_error(
@@ -253,14 +258,53 @@ pub fn build_delaunay2_with_data(
 pub(crate) fn build_layered_delaunay2_from_simplices(
     coords_with_data: &[([f64; 2], u32)],
     simplices: &[Vec<usize>],
-) -> CdtResult<DelaunayTriangulation2D> {
-    build_delaunay2_with_topology_options(
-        coords_with_data,
-        simplices,
-        TopologyGuarantee::DEFAULT,
-        GlobalTopology::Euclidean,
-        ConstructionOptions::default().without_final_delaunay_enforcement(),
-    )
+) -> CdtResult<RealizedTriangulation2D> {
+    validate_explicit_coordinates(coords_with_data)?;
+
+    let vertices: Vec<_> = coords_with_data
+        .iter()
+        .enumerate()
+        .map(|(i, (coord, data))| {
+            Vertex::<u32, 2>::try_new_with_data(*coord, *data).map_err(|e| {
+                CdtError::VertexBuildFailed {
+                    context: format!("vertex {i}"),
+                    underlying_error: e.to_string(),
+                }
+            })
+        })
+        .collect::<CdtResult<Vec<_>>>()?;
+    let vertex_count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
+    let coordinate_range = coords_with_data
+        .iter()
+        .flat_map(|(coordinates, _)| coordinates.iter().copied())
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), value| {
+            (lo.min(value), hi.max(value))
+        });
+
+    DelaunayTriangulationBuilder::try_from_vertices_and_simplices(&vertices, simplices)
+        .map_err(|error| CdtError::DelaunayGenerationFailed {
+            vertex_count,
+            coordinate_range,
+            attempt: 1,
+            failure: DelaunayGenerationFailure::Upstream {
+                stage: DelaunayGenerationStage::TriangulationConstruction,
+                detail: error.to_string(),
+            },
+        })?
+        .simplex_data_type::<i32>()
+        .topology_guarantee(TopologyGuarantee::DEFAULT)
+        .global_topology(GlobalTopology::Euclidean)
+        .construction_options(ConstructionOptions::default().without_final_delaunay_enforcement())
+        .build_triangulation()
+        .map_err(|error| CdtError::DelaunayGenerationFailed {
+            vertex_count,
+            coordinate_range,
+            attempt: 1,
+            failure: DelaunayGenerationFailure::Upstream {
+                stage: DelaunayGenerationStage::TriangulationConstruction,
+                detail: error.to_string(),
+            },
+        })
 }
 
 /// Builds a 2D triangulation from explicit vertex coordinates, data, and simplex connectivity.

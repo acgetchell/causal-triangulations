@@ -5,7 +5,7 @@
 use super::helpers::action_delta_matches;
 use crate::cdt::ergodic_moves::MoveType;
 use crate::errors::{CdtError, CdtResult, CheckpointResumeFailure};
-use markov_chain_monte_carlo::DiscreteProposalRatio;
+use markov_chain_monte_carlo::{DiscreteProposalEndpoint, DiscreteProposalRatio};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as DeError};
 use std::error::Error;
 use std::fmt;
@@ -277,9 +277,12 @@ impl ProposalKernelTelemetry {
     #[must_use]
     pub fn log_family_probability_ratio(self) -> Option<f64> {
         let reverse = self.reverse_family_probability?;
-        DiscreteProposalRatio::new(self.forward_family_probability, 1, reverse, 1)
-            .ok()
-            .map(DiscreteProposalRatio::log_q_ratio)
+        DiscreteProposalRatio::from_endpoints(
+            DiscreteProposalEndpoint::new(self.forward_family_probability, 1.0, 1),
+            DiscreteProposalEndpoint::new(reverse, 1.0, 1),
+        )
+        .ok()
+        .map(DiscreteProposalRatio::log_q_ratio)
     }
 
     /// Returns the offered-site-count log-ratio component for a concrete plan.
@@ -340,11 +343,13 @@ impl ProposalKernelTelemetry {
     pub fn log_proposal_ratio(self) -> Option<f64> {
         let reverse_probability = self.reverse_family_probability?;
         let reverse_sites = self.reverse_site_count?;
-        DiscreteProposalRatio::new(
-            self.forward_family_probability,
-            self.forward_site_count,
-            reverse_probability,
-            reverse_sites,
+        DiscreteProposalRatio::from_endpoints(
+            DiscreteProposalEndpoint::new(
+                self.forward_family_probability,
+                1.0,
+                self.forward_site_count,
+            ),
+            DiscreteProposalEndpoint::new(reverse_probability, 1.0, reverse_sites),
         )
         .ok()
         .map(DiscreteProposalRatio::log_q_ratio)

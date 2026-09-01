@@ -1364,7 +1364,9 @@ mod tests {
     use crate::errors::{BackendMutationOperation, CheckpointMoveCounter};
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
-    use markov_chain_monte_carlo::{DelayedProposal, DiscreteProposalRatio, McmcError, Target};
+    use markov_chain_monte_carlo::{
+        DelayedProposal, DiscreteProposalEndpoint, DiscreteProposalRatio, McmcError, Target,
+    };
     use rand::{Rng, RngExt, rngs::StdRng};
     use serde_json::{from_str, to_string, to_value};
     use std::assert_matches;
@@ -3439,8 +3441,11 @@ mod tests {
 
     #[test]
     fn planned_step_error_preserves_proposal_ratio_step_and_move_context() {
-        let source = DiscreteProposalRatio::new(0.0, 1, 1.0, 1)
-            .expect_err("zero forward probability should be rejected");
+        let source = DiscreteProposalRatio::from_endpoints(
+            DiscreteProposalEndpoint::new(0.0, 1.0, 1),
+            DiscreteProposalEndpoint::new(1.0, 1.0, 1),
+        )
+        .expect_err("zero forward probability should be rejected");
         let error = CdtProposalError::ProposalRatio {
             move_type: MoveType::Move13Add,
             source,
@@ -3923,8 +3928,11 @@ mod tests {
             }
         );
 
-        let ratio_source = DiscreteProposalRatio::new(0.0, 1, 1.0, 1)
-            .expect_err("zero forward probability should be rejected");
+        let ratio_source = DiscreteProposalRatio::from_endpoints(
+            DiscreteProposalEndpoint::new(0.0, 1.0, 1),
+            DiscreteProposalEndpoint::new(1.0, 1.0, 1),
+        )
+        .expect_err("zero forward probability should be rejected");
         let ratio_error = CdtProposalError::ProposalRatio {
             move_type: MoveType::Move13Add,
             source: ratio_source,

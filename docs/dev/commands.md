@@ -14,6 +14,7 @@ Typical development loop:
 just check
 just fix
 just test
+just update
 ```
 
 These commands ensure:
@@ -23,6 +24,10 @@ These commands ensure:
 - static analysis
 - tests
 - notebook execution and output hygiene
+
+`just update` is the mutating maintenance workflow. It advances Cargo dependency requirements and lockfiles, resolves exact Python development-tool pins,
+upgrades the managed Cargo CLI tools, and reconciles the justfile tool pins with those installations and the active uv version. Review every resulting
+manifest, lockfile, and pin change before committing it.
 
 ## Justfile Usage
 

@@ -18,8 +18,8 @@ use crate::errors::{
     CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, MetropolisMoveApplicationFailure,
 };
 use markov_chain_monte_carlo::{
-    Chain, ChainCheckpoint, DelayedProposal, DiscreteProposalRatio, DiscreteProposalRatioError,
-    McmcError, Target,
+    Chain, ChainCheckpoint, DelayedProposal, DiscreteProposalEndpoint, DiscreteProposalRatio,
+    DiscreteProposalRatioError, McmcError, Target,
 };
 use rand::Rng;
 use std::error::Error;
@@ -410,11 +410,9 @@ impl CdtProposalPlan {
     /// ```
     #[must_use]
     pub fn log_family_probability_ratio(&self) -> f64 {
-        DiscreteProposalRatio::new(
-            self.forward_family_probability,
-            1,
-            self.reverse_family_probability,
-            1,
+        DiscreteProposalRatio::from_endpoints(
+            DiscreteProposalEndpoint::new(self.forward_family_probability, 1.0, 1),
+            DiscreteProposalEndpoint::new(self.reverse_family_probability, 1.0, 1),
         )
         .map_or(f64::NEG_INFINITY, DiscreteProposalRatio::log_q_ratio)
     }
@@ -1040,11 +1038,17 @@ where
             };
         plan.forward_family_probability = forward_family_probability;
         plan.reverse_family_probability = reverse_distribution.probability(move_type.reverse());
-        plan.log_proposal_ratio = match DiscreteProposalRatio::new(
-            plan.forward_family_probability,
-            plan.forward_site_count,
-            plan.reverse_family_probability,
-            plan.reverse_site_count,
+        plan.log_proposal_ratio = match DiscreteProposalRatio::from_endpoints(
+            DiscreteProposalEndpoint::new(
+                plan.forward_family_probability,
+                1.0,
+                plan.forward_site_count,
+            ),
+            DiscreteProposalEndpoint::new(
+                plan.reverse_family_probability,
+                1.0,
+                plan.reverse_site_count,
+            ),
         ) {
             Ok(ratio) => ratio.log_q_ratio(),
             Err(source) => {
@@ -1062,7 +1066,7 @@ where
         self.last_no_plan_info.take()
     }
 
-    fn proposed_log_prob<T: Target<CdtTriangulation2D>>(
+    fn proposed_log_prob<T: Target<CdtTriangulation2D> + ?Sized>(
         &self,
         _state: &CdtTriangulation2D,
         plan: &Self::Plan,

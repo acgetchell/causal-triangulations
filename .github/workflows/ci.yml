@@ -65,7 +65,7 @@ jobs:
         run: cargo check --locked --workspace --target ${{ matrix.target }} --all-features --lib --bins
 
       - name: Set up just
-        uses: ./.github/actions/setup-just
+        uses: $/.github/actions/setup-just
 
       - name: Export tool versions
         id: tool_versions
