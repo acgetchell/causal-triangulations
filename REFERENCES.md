@@ -37,10 +37,10 @@ that crate and its bibliography for detailed computational-geometry citations:
 
 ### Lattice Approaches to Quantum Gravity
 
-- Sorkin, R. D. "Causal sets: discrete gravity." In _Lectures on Quantum Gravity_, edited by A. Gomberoff and D. Marolf, 305-327. Boston: Springer, 2005. arXiv:
-  [gr-qc/0309009](https://arxiv.org/abs/gr-qc/0309009)
+- Sorkin, R. D. "Causal sets: discrete gravity." In _Lectures on Quantum Gravity_, edited by A. Gomberoff and D. Marolf, 305-327. Boston: Springer, 2005. DOI:
+  [10.1007/0-387-24992-3_7](https://doi.org/10.1007/0-387-24992-3_7). arXiv: [gr-qc/0309009](https://arxiv.org/abs/gr-qc/0309009)
 
-- Williams, R. M., and Tuckey, P. A. "Regge calculus: a brief review and bibliography." _Classical and Quantum Gravity_ 9, no. 5 (1992): 1409. DOI:
+- Williams, R. M., and Tuckey, P. A. "Regge calculus: a brief review and bibliography." _Classical and Quantum Gravity_ 9, no. 5 (1992): 1409-1422. DOI:
   [10.1088/0264-9381/9/5/021](https://doi.org/10.1088/0264-9381/9/5/021)
 
 ### Spin Foam Models and Loop Quantum Gravity
@@ -99,14 +99,14 @@ These references provide the algorithmic foundations for Monte Carlo simulations
 
 ### CDT Simulation Implementation and Ensembles
 
-- Brunekreef, J., Görlich, A., and Loll, R. "Simulating CDT quantum gravity." _Computer Physics Communications_ 300 (2024): 109170. DOI:
+- Brunekreef, J., Loll, R., and Görlich, A. "Simulating CDT quantum gravity." _Computer Physics Communications_ 300 (2024): 109170. DOI:
   [10.1016/j.cpc.2024.109170](https://doi.org/10.1016/j.cpc.2024.109170). arXiv: [2310.16744](https://arxiv.org/abs/2310.16744)
 
 - Israel, N. S., and Lindner, J. F. "Quantum gravity on a laptop: 1+1 Dimensional Causal Dynamical Triangulation simulation." _Results in Physics_ 2 (2012):
   164-169. DOI: [10.1016/j.rinp.2012.10.001](https://doi.org/10.1016/j.rinp.2012.10.001)
 
-- Getchell, Adam. "CDT-plusplus: Causal Dynamical Triangulations in C++." Repository: <https://github.com/acgetchell/CDT-plusplus>. A Zenodo DOI will be added
-  after a formal release.
+- Getchell, Adam. "CDT-plusplus: Causal Dynamical Triangulations in C++." Version 1.0.0. Zenodo, 2026. DOI:
+  [10.5281/zenodo.21487043](https://doi.org/10.5281/zenodo.21487043). Repository: <https://github.com/acgetchell/CDT-plusplus>
 
 ### Ergodic Moves and Alexander Moves
 
@@ -132,7 +132,11 @@ improvements to the `markov-chain-monte-carlo` crate. Refer to that crate and it
 - Hastings, W. K. "Monte Carlo sampling methods using Markov chains and their applications." _Biometrika_ 57, no. 1 (1970): 97-109. DOI:
   [10.1093/biomet/57.1.97](https://doi.org/10.1093/biomet/57.1.97)
 
-### 1+1 CDT Coupling Calibration
+### Exact 1+1 CDT Benchmarks and Coupling Calibration
+
+- Ambjørn, J., Anagnostopoulos, K. N., and Loll, R. "A new perspective on matter coupling in 2d quantum gravity." _Physical Review D_ 60, no. 10 (1999):
+  104035. DOI: [10.1103/PhysRevD.60.104035](https://doi.org/10.1103/PhysRevD.60.104035). arXiv:
+  [hep-th/9904012](https://arxiv.org/abs/hep-th/9904012)
 
 - The default non-volume-fixed 1+1 CDT action constants use the critical 2D CDT cosmological coupling `lambda_c = ln 2` from the exactly solved model described
   by Ambjørn and Loll (1998) and reviewed by Ambjørn, Görlich, Jurkiewicz, and Loll (2012). Because this crate's action writes the cosmological term as
@@ -151,13 +155,16 @@ improvements to the `markov-chain-monte-carlo` crate. Refer to that crate and it
 
 ### Formal Verification in Scientific Computing
 
-- Boldo, S., and Melquiond, G. "Computer Arithmetic and Formal Proofs." London: ISTE Press, 2017. ISBN: 978-1-78548-254-3
+- Boldo, S., and Melquiond, G. "Computer Arithmetic and Formal Proofs: Verifying Floating-point Algorithms with the Coq System." London: ISTE Press, 2017.
+  ISBN: 978-1-78548-112-3
 
 - Muller, J.-M., et al. "Handbook of Floating-Point Arithmetic." 2nd ed. Basel: Birkhäuser, 2018. DOI:
   [10.1007/978-3-319-76526-6](https://doi.org/10.1007/978-3-319-76526-6)
 
 ### High-Performance Scientific Computing
 
-- Golub, G. H., and Van Loan, C. F. "Matrix Computations." 4th ed. Baltimore: Johns Hopkins University Press, 2013. ISBN: 978-1-4214-0794-4
+- Golub, G. H., and Van Loan, C. F. "Matrix Computations." 4th ed. Baltimore: Johns Hopkins University Press, 2013 (DOI metadata 2012). ISBN:
+  978-1-4214-0794-4. DOI:
+  [10.56021/9781421407944](https://doi.org/10.56021/9781421407944)
 
 - Press, W. H., et al. "Numerical Recipes: The Art of Scientific Computing." 3rd ed. Cambridge: Cambridge University Press, 2007. ISBN: 978-0-521-88068-8

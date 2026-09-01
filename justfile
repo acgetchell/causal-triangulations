@@ -245,20 +245,44 @@ action-lint: _ensure-actionlint
     fi
 
 # Benchmarks
-bench:
-    cargo bench --workspace
-
 allocation-check:
     cargo bench --profile perf --bench allocation_profile
 
+bench:
+    cargo bench --workspace
+
 bench-ci: allocation-check
     cargo bench --profile perf --bench ci_performance_suite
+
+# Compare existing current Criterion output with a retained named baseline.
+bench-compare baseline="last": _ensure-uv
+    uv run release-performance compare --baseline "{{ baseline }}"
 
 # Compile benchmarks without running them, treating warnings as errors.
 # This catches bench/release-profile-only warnings (e.g. debug_assertions-gated unused vars)
 # that won't show up in normal debug-profile `cargo test` / `cargo clippy` runs.
 bench-compile:
     CARGO_BUILD_WARNINGS=deny cargo bench --workspace --no-run
+
+# Run the correctness gate before producing release-signal measurements.
+benchmark-input-check:
+    cargo test --locked --release --test integration_tests --test physics_integration
+
+# Produce the correctness-gated current release signal.
+bench-latest: benchmark-input-check
+    cargo bench --locked --profile perf --bench ci_performance_suite -- --noplot
+
+# Produce the current release signal and compare it with the conventional local baseline.
+bench-latest-vs-last: bench-latest _ensure-uv
+    uv run release-performance compare --baseline last
+
+# Produce a named native Criterion baseline after validating benchmark inputs.
+bench-save-baseline tag: benchmark-input-check
+    cargo bench --locked --profile perf --bench ci_performance_suite -- --save-baseline "{{ tag }}" --noplot
+
+# Refresh the conventional local comparison baseline.
+bench-save-last: benchmark-input-check
+    cargo bench --locked --profile perf --bench ci_performance_suite -- --save-baseline last --noplot
 
 # Smoke-test benchmark harnesses with minimal samples; not for performance data.
 bench-smoke:
@@ -303,6 +327,7 @@ changelog-unreleased version: _ensure-git-cliff _ensure-rumdl python-sync
     set -euo pipefail
     GIT_CLIFF_OFFLINE=true git-cliff --tag {{ version }} -o CHANGELOG.md
     uv run postprocess-changelog
+    uv run update-release-version {{ version }} --sync-changelog-date
     uv run archive-changelog
     archive_files=()
     if [ -d docs/archive/changelog ]; then
@@ -344,9 +369,13 @@ ci-baseline tag="ci":
 ci-slow: ci test-slow
     @echo "✅ CI + slow tests passed!"
 
-# Validate release-date synchronization and support-package metadata.
+# Validate release-version/date synchronization, concept DOI, and support-package metadata.
 release-metadata-check: _ensure-uv
     uv run check-release-metadata
+
+# Require the generated current-version changelog heading for final release publication.
+release-version-check: _ensure-uv
+    uv run check-release-metadata --final-release
 
 # Validate CITATION.cff against the Citation File Format schema and release metadata gate.
 citation-check: release-metadata-check _ensure-uv
@@ -456,7 +485,13 @@ help-workflows:
     @echo "  just bench              # Run all benchmarks"
     @echo "  just allocation-check   # Run deterministic allocation assertions"
     @echo "  just bench-ci           # Run allocation assertions and CI regression benchmarks"
+    @echo "  just bench-compare      # Compare current Criterion output with a named baseline"
     @echo "  just bench-compile      # Compile benchmarks without running"
+    @echo "  just benchmark-input-check # Validate release benchmark inputs"
+    @echo "  just bench-latest       # Produce the correctness-gated release signal"
+    @echo "  just bench-latest-vs-last # Produce the release signal and compare with 'last'"
+    @echo "  just bench-save-baseline # Save a named native Criterion baseline"
+    @echo "  just bench-save-last    # Refresh the conventional 'last' baseline"
     @echo "  just bench-smoke        # Smoke-test benchmark harnesses with minimal samples"
     @echo "  just bench-test-compile # Compile benches + release integration tests without running"
     @echo "  just debug-large-scale-1p1 # Run one toroidal 1+1 CDT debug case"
@@ -469,6 +504,11 @@ help-workflows:
     @echo "  just perf-help     # Show performance analysis commands"
     @echo "  just perf-report   # Generate performance report"
     @echo "  just perf-trends   # Analyze performance trends"
+    @echo "  just performance-doc # Render reports from retained CSV/provenance only"
+    @echo "  just performance-github-assets # Compare GitHub Release-native Criterion assets"
+    @echo "  just performance-local # Measure HEAD against the latest stable release"
+    @echo "  just performance-readme # Update the owned README summary from retained evidence"
+    @echo "  just performance-release # Measure, retain, reload, and publish release evidence"
     @echo ""
     @echo "Changelog:"
     @echo "  just changelog                   # Generate/update CHANGELOG.md"
@@ -683,6 +723,49 @@ perf-report file="": _ensure-uv
 perf-trends days="7": _ensure-uv
     uv run performance-analysis --trends {{ days }}
 
+# Render tracked performance reports from the validated retained pair only.
+performance-doc report_bundle="": _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(document)
+    if [[ -n "{{ report_bundle }}" ]]; then args+=(--bundle-dir "{{ report_bundle }}"); fi
+    uv run release-performance "${args[@]}"
+
+# Compare two GitHub Release-native Criterion assets without invoking Cargo.
+performance-github-assets current_tag="" baseline_tag="": _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(github-assets)
+    if [[ -n "{{ current_tag }}" ]]; then args+=(--current-tag "{{ current_tag }}"); fi
+    if [[ -n "{{ baseline_tag }}" ]]; then args+=(--baseline-tag "{{ baseline_tag }}"); fi
+    uv run release-performance "${args[@]}"
+
+# Compare the current tracked source state with the latest published stable release.
+performance-local current_tag="" baseline_tag="": _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(local)
+    if [[ -n "{{ current_tag }}" ]]; then args+=(--current-tag "{{ current_tag }}"); fi
+    if [[ -n "{{ baseline_tag }}" ]]; then args+=(--baseline-tag "{{ baseline_tag }}"); fi
+    uv run release-performance "${args[@]}"
+
+# Persist release evidence, reload it, and atomically publish reports and README assets.
+performance-release current_tag="" baseline_tag="": _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(release)
+    if [[ -n "{{ current_tag }}" ]]; then args+=(--current-tag "{{ current_tag }}"); fi
+    if [[ -n "{{ baseline_tag }}" ]]; then args+=(--baseline-tag "{{ baseline_tag }}"); fi
+    uv run release-performance "${args[@]}"
+
+# Update only the owned README summary and visual from the validated retained pair.
+performance-readme report_bundle="": _ensure-uv
+    #!/usr/bin/env bash
+    set -euo pipefail
+    args=(document --readme-only)
+    if [[ -n "{{ report_bundle }}" ]]; then args+=(--bundle-dir "{{ report_bundle }}"); fi
+    uv run release-performance "${args[@]}"
+
 publish-check: _ensure-jq
     #!/usr/bin/env bash
     set -euo pipefail
@@ -825,11 +908,12 @@ setup-tools:
     echo ""
 
     have() { command -v "$1" >/dev/null 2>&1; }
-    if ! have uv; then
-        echo "❌ 'uv' not found. Install uv and re-run: just setup-tools"
-        echo "   https://docs.astral.sh/uv/getting-started/installation/"
-        exit 1
-    fi
+    for prerequisite in uv rustup cargo gh jq; do
+        if ! have "$prerequisite"; then
+            echo "❌ '$prerequisite' not found. Install it and re-run: just setup-tools"
+            exit 1
+        fi
+    done
     uv_version="{{ uv_version }}"
     if [[ "$(uv --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$uv_version" ]]; then
         echo "❌ 'uv' ${uv_version} is required. Update uv and re-run: just setup-tools"
@@ -837,10 +921,6 @@ setup-tools:
     fi
 
     echo "Ensuring Rust toolchain + components..."
-    if ! have rustup; then
-        echo "❌ 'rustup' not found. Install Rust via https://rustup.rs and re-run: just setup-tools"
-        exit 1
-    fi
     rustup component add clippy rustfmt rust-docs rust-src
     rustup component add llvm-tools-preview
     echo ""
@@ -958,7 +1038,7 @@ setup-tools:
     echo "Verifying required commands are available..."
     missing=0
 
-    cmds=(uv jq cargo-install-update cargo-upgrade cargo-audit just taplo dprint rumdl git-cliff typos cargo-llvm-cov zizmor)
+    cmds=(uv gh jq cargo-install-update cargo-upgrade cargo-audit just taplo dprint rumdl git-cliff typos cargo-llvm-cov zizmor)
     for cmd in "${cmds[@]}"; do
         if have "$cmd"; then
             echo "  ✓ $cmd"
@@ -1202,6 +1282,10 @@ update-python-dependencies: _ensure-uv-available
     uv run --locked update-python-dev-pins
     uv lock --upgrade
     uv sync --locked --group dev
+
+# Synchronize deterministic release metadata from one stable GitHub tag.
+update-version version: _ensure-uv
+    uv run update-release-version {{ version }}
 
 # File validation
 validate-json: _ensure-jq

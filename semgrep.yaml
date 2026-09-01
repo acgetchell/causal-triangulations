@@ -127,6 +127,51 @@ rules:
       - pattern: $VALUE.unwrap_or_else(|| std::f64::INFINITY)
       - pattern: $VALUE.unwrap_or_else(|| std::f64::NEG_INFINITY)
 
+  - id: causal-triangulations.rust.no-algebraic-f64-operations
+    languages:
+      - rust
+    severity: WARNING
+    message: "Use defined IEEE-754 operators or deliberate f64::mul_add; f64 algebraic operations are forbidden."
+    metadata:
+      category: correctness
+      rationale: >-
+        Algebraic f64 operations permit real-number transformations with
+        unspecified precision. Reassociation and relaxed NaN, infinity, or
+        signed-zero behavior can change seeded Monte Carlo decisions,
+        observables, validation evidence, and benchmark provenance.
+    paths:
+      include:
+        - "/src/**/*.rs"
+        - "/examples/**/*.rs"
+        - "/benches/**/*.rs"
+        - "/tests/**/*.rs"
+    pattern-either:
+      - pattern: $VALUE.algebraic_add(...)
+      - pattern: $VALUE.algebraic_sub(...)
+      - pattern: $VALUE.algebraic_mul(...)
+      - pattern: $VALUE.algebraic_div(...)
+      - pattern: $VALUE.algebraic_rem(...)
+      - patterns:
+          - pattern: <f64>::$METHOD(...)
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^algebraic_(?:add|sub|mul|div|rem)$
+      - patterns:
+          - pattern: <f64>::$METHOD
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^algebraic_(?:add|sub|mul|div|rem)$
+          - pattern-not-inside: <f64>::$METHOD(...)
+      - patterns:
+          - pattern: $FLOAT::$METHOD
+          - metavariable-regex:
+              metavariable: $FLOAT
+              regex: ^f64$
+          - metavariable-regex:
+              metavariable: $METHOD
+              regex: ^algebraic_(?:add|sub|mul|div|rem)$
+          - pattern-not-inside: $FLOAT::$METHOD(...)
+
   - id: causal-triangulations.rust.no-silent-conversion-fallbacks
     languages:
       - rust
@@ -1084,7 +1129,7 @@ rules:
         - "/tests/semgrep/.github/workflows/**/*.yml"
         - "/tests/semgrep/.github/workflows/**/*.yaml"
     patterns:
-      - pattern-regex: '(?m)^\s*uses:\s*(?!\./)(?!docker://)(?!(?:actions/checkout|actions/cache|actions/upload-artifact|actions/github-script|actions/setup-python|actions-rust-lang/setup-rust-toolchain|astral-sh/setup-uv|taiki-e/cache-cargo-install-action|github/codeql-action/(?:upload-sarif|init|analyze)|codecov/codecov-action|zizmorcore/zizmor-action)@)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?@' # yamllint disable-line rule:line-length
+      - pattern-regex: '(?m)^\s*uses:\s*(?!\./)(?!docker://)(?!(?:actions/checkout|actions/cache|actions/upload-artifact|actions/download-artifact|actions/github-script|actions/setup-python|actions-rust-lang/setup-rust-toolchain|astral-sh/setup-uv|taiki-e/cache-cargo-install-action|github/codeql-action/(?:upload-sarif|init|analyze)|codecov/codecov-action|zizmorcore/zizmor-action)@)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?@' # yamllint disable-line rule:line-length
 
   - id: causal-triangulations.github-actions.external-action-version-comment
     languages:

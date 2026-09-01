@@ -30,6 +30,7 @@ causal-triangulations/
 │   │   ├── codeql.yml
 │   │   ├── dependabot-auto-merge.yml
 │   │   ├── performance.yml
+│   │   ├── release-benchmarks.yml
 │   │   ├── rust-clippy.yml
 │   │   ├── semgrep-sarif.yml
 │   │   └── zizmor.yml
@@ -43,15 +44,22 @@ causal-triangulations/
 │   ├── cdt_benchmarks.rs
 │   └── ci_performance_suite.rs
 ├── docs/
+│   ├── archive/
+│   │   ├── changelog/
+│   │   │   └── 0.0.md
+│   │   └── performance/
+│   │       └── README.md
 │   ├── assets/
 │   │   ├── cdt_spacetime.png
-│   │   └── cdt_spacetime.svg
+│   │   ├── cdt_spacetime.svg
+│   │   └── performance-comparison.svg
 │   ├── dev/
 │   │   ├── commands.md
 │   │   ├── python.md
 │   │   ├── rust.md
 │   │   ├── testing.md
 │   │   └── tooling-alignment.md
+│   ├── PERFORMANCE.md
 │   ├── RELEASING.md
 │   ├── cli-examples.md
 │   ├── code-organization.md
@@ -92,11 +100,14 @@ causal-triangulations/
 │   │   ├── test_coverage_report.py
 │   │   ├── test_hardware_utils.py
 │   │   ├── test_notebook_check.py
+│   │   ├── test_performance_artifacts.py
+│   │   ├── test_release_performance.py
 │   │   ├── test_postprocess_changelog.py
 │   │   ├── test_subprocess_utils.py
 │   │   ├── test_tag_release.py
 │   │   ├── test_update_cargo_tool_pins.py
-│   │   └── test_update_python_dev_pins.py
+│   │   ├── test_update_python_dev_pins.py
+│   │   └── test_update_release_version.py
 │   ├── README.md
 │   ├── archive_changelog.py
 │   ├── benchmark_models.py
@@ -107,12 +118,15 @@ causal-triangulations/
 │   ├── hardware_utils.py
 │   ├── notebook_check.py
 │   ├── performance_analysis.py
+│   ├── performance_artifacts.py
 │   ├── postprocess_changelog.py
+│   ├── release_performance.py
 │   ├── run_all_examples.sh
 │   ├── subprocess_utils.py
 │   ├── tag_release.py
 │   ├── update_cargo_tool_pins.py
-│   └── update_python_dev_pins.py
+│   ├── update_python_dev_pins.py
+│   └── update_release_version.py
 ├── src/
 │   ├── cdt/
 │   │   ├── action.rs
@@ -165,6 +179,7 @@ causal-triangulations/
 │   │   │       └── python_exceptions.py
 │   │   └── src/
 │   │       └── project_rules/
+│   │           ├── algebraic_float.rs
 │   │           ├── bench_example_usage.rs
 │   │           └── rust_style.rs
 │   ├── cli.rs

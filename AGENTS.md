@@ -112,6 +112,15 @@ When using the `gh` CLI to view issues, PRs, or other GitHub objects:
 - Keep production module preambles free of test-only imports; place `#[cfg(test)]` imports inside the relevant `tests` module instead
 - Detailed import guidance lives in `docs/dev/rust.md`
 
+### Floating-Point Reproducibility
+
+- **NEVER** use `f64::algebraic_add`, `f64::algebraic_sub`, `f64::algebraic_mul`, `f64::algebraic_div`, or `f64::algebraic_rem` in repository-owned Rust,
+  including production code, tests, examples, benchmarks, and doctest mirrors
+- Ordinary IEEE operators and deliberate `f64::mul_add` remain allowed; FMA's defined single-rounding behavior may be part of a numerical contract
+- Any other relaxed or fast-math facility requires a separate tracked scientific review with explicit special-value, reproducibility, correctness, and
+  benchmark evidence
+- Detailed numerical guidance lives in `docs/dev/rust.md`
+
 ### Geometry Validation Ownership
 
 - Delegate structural geometry validation—including incidence, orientation, manifold, embedding, and Euler-topology checks—to `delaunay` through the

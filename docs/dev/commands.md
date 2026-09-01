@@ -29,6 +29,33 @@ These commands ensure:
 upgrades the managed Cargo CLI tools, and reconciles the justfile tool pins with those installations and the active uv version. Review every resulting
 manifest, lockfile, and pin change before committing it.
 
+Release metadata is a separate deterministic transaction:
+
+```bash
+TAG=vX.Y.Z
+just update-version "$TAG"
+```
+
+The updater derives the previous stable version from published GitHub Releases, updates Cargo/Python/CFF versions and owned active-documentation references,
+records the current UTC date, removes legacy version-specific DOI identifiers, validates the complete candidate tree before replacement, and rolls back
+byte-for-byte on a caught publication failure. It does not update dependencies, generate the changelog, or run benchmarks.
+
+Release performance is a separate evidence transaction:
+
+```bash
+just bench-latest
+just bench-latest-vs-last
+just performance-local
+just performance-release vX.Y.Z vW.Y.Z
+just performance-doc
+just performance-readme
+```
+
+`bench-latest` runs the release benchmark correctness gate before `ci_performance_suite`. `performance-local` compares current tracked source with the latest
+older stable release without changing tracked documentation. `performance-release` retains the schema-validated CSV/provenance pair before temporary
+worktree cleanup, reloads it, and transactionally publishes the owned report, archive, visual, and README destinations. The two render recipes consume only
+that retained pair; they do not invoke Cargo or create worktrees.
+
 ## Justfile Usage
 
 This repository standardizes development tasks through the `justfile`.
@@ -301,10 +328,17 @@ just release-metadata-check
 ```
 
 It requires exactly one top-level ISO `date-released` value, matches it to the generated current-package changelog heading when present, and validates the
-Python support package's README target. The broader citation check includes this gate:
+Cargo/Python/CFF version set, the permanent Zenodo concept DOI, active dependency examples and non-performance tag-pinned README links, and the Python
+support package's README target. The broader citation check includes this gate:
 
 ```bash
 just citation-check
+```
+
+For final publication, require the generated current-version changelog heading as well:
+
+```bash
+just release-version-check
 ```
 
 ---

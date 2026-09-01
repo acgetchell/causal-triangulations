@@ -1,199 +1,169 @@
 # Releasing causal-triangulations
 
-This guide documents the release flow for `vX.Y.Z`: prepare a dedicated release PR, merge it, create the final annotated tag from the generated changelog,
-publish to crates.io, and create the GitHub release.
+This is the canonical release flow for a stable `vX.Y.Z` release. Release preparation is content-idempotent: rerunning the deterministic commands on the
+same UTC day produces the same tracked files. Performance measurements are deliberately separate because measurement output is not idempotent.
 
-The release changelog is generated with `git-cliff --tag` through `just changelog-unreleased`, so no temporary local tag is needed.
+## Prerequisites
 
-Prefer updating release-facing documentation before publishing to crates.io. README, `docs/`, notebook guidance, and citation metadata are versioned with the
-release artifacts that reviewers and downstream users will see.
+Install these external tools before running `just setup`:
 
----
+- Rustup and Cargo, with the repository toolchain available
+- [uv](https://docs.astral.sh/uv/)
+- [GitHub CLI](https://cli.github.com/) authenticated for this repository
+- `jq`
+- `just`
 
-## Conventions and environment
+`just setup-tools` checks `uv`, `rustup`, `cargo`, `gh`, and `jq` before installing or changing any managed tool.
 
-Set these variables to avoid repeating the version string:
-
-```bash
-# tag has the leading v, version does not
-TAG=vX.Y.Z
-VERSION=${TAG#v}
-```
-
-Verify your git remotes:
-
-```bash
-git remote -v
-```
-
-Ensure your local `main` is up to date before beginning:
+Start from an up-to-date `main` and choose the exact stable tag:
 
 ```bash
 git switch main
 git pull --ff-only
+git remote -v
+gh auth status
+
+TAG=vX.Y.Z
 ```
 
----
+Do not set a second version variable. The release commands parse and validate `TAG` themselves.
 
-## Step 1: Create a clean release PR
+## 1. Refresh dependencies separately
 
-This PR should primarily include version bumps, changelog updates, citation metadata updates, and documentation updates. All major code changes should already
-be on `main`.
+Run the canonical repository refresh before opening the release branch:
 
-Small, critical fixes discovered during the release process may be included, but keep them minimal and release-critical.
+```bash
+just update
+```
 
-Update release-facing documentation on this PR branch before publishing. Do not defer README, `docs/`, notebook, or citation fixes until after the release:
-crates.io, docs.rs, and GitHub release readers will see the merged release artifacts.
+`just update` updates Rust dependencies and lockfiles, resolves exact Python development pins in one transaction, upgrades managed Cargo tools, synchronizes
+the root tool pins, refreshes `uv.lock`, and syncs the development environment. Review and land these changes separately from the release PR.
 
-1. Create the release branch
+Do not continue until `main` contains the reviewed dependency/tool refresh.
+
+## 2. Prepare the release PR
+
+Create a focused release branch:
 
 ```bash
 git switch -c "release/$TAG"
 ```
 
-2. Bump versions
-
-Preferred, if `cargo-edit` is installed:
+Apply the deterministic version and metadata transaction:
 
 ```bash
-cargo set-version "$VERSION"
+just update-version "$TAG"
 ```
 
-Alternative: edit `Cargo.toml` manually and update `version = "..."` under `[package]`.
+The updater:
 
-Update release metadata to match the crate version:
+- accepts only a stable `vX.Y.Z` tag;
+- discovers the latest published stable GitHub release while excluding drafts, prereleases, and malformed tags;
+- synchronizes `Cargo.toml`, the root package in `Cargo.lock`, `pyproject.toml`, the editable project in `uv.lock`, and `CITATION.cff`;
+- uses the current UTC date for `date-released`;
+- preserves the permanent Zenodo concept DOI and removes the recognized legacy version-record DOI block;
+- updates active dependency snippets and non-artifact release links while preserving historical benchmark artifact links;
+- validates the complete candidate tree before writing and restores every changed file byte-for-byte if a later write fails.
 
-- `CITATION.cff`: update `version` and `date-released`; keep the top-level `doi` as the all-versions Zenodo concept DOI and add the concrete release-record DOI
-  under `identifiers` with an explicit version description.
-- `pyproject.toml` and `uv.lock`: keep the support package version synchronized while preserving `scripts/README.md` as the package README.
+The command fails without writing when release history is missing or malformed, the target is older than the latest stable release, an unexpected version
+reference is present, or citation metadata has an unrecognized DOI structure.
 
-Review version references in documentation and metadata:
+Generate the release changelog:
 
 ```bash
-rg -n "\bv?[0-9]+\.[0-9]+\.[0-9]+\b" README.md docs/ CITATION.cff pyproject.toml || true
-```
-
-3. Generate the release changelog
-
-```bash
-# Generates CHANGELOG.md as though TAG already exists, then applies
-# markdown hygiene and archives completed minor release series.
 just changelog-unreleased "$TAG"
 ```
 
-`just changelog-unreleased` runs `GIT_CLIFF_OFFLINE=true git-cliff --tag "$TAG" -o CHANGELOG.md`, then `postprocess-changelog`, then
-`archive-changelog`. The root changelog keeps Unreleased plus the active minor series; older completed minor series live under `docs/archive/changelog/`.
+This runs `git-cliff` without creating a temporary tag, applies Markdown hygiene, synchronizes the generated heading to the same UTC release date, and
+archives completed minor release series.
 
-4. Validate the release branch
+Generate the retained performance evidence and tracked publication files:
+
+```bash
+just performance-release "$TAG"
+```
+
+The baseline defaults to the newest published stable release older than `$TAG`; pass it as the second argument when the comparison must be explicit. The
+command measures the baseline tag and current tracked source in isolated worktrees, writes the CSV/provenance pair under `target/bench-reports/`, reloads
+and validates it after measurement, then atomically updates `docs/PERFORMANCE.md`, its archived release-pair report and index, the performance SVG, and the
+owned README summary. Inspect the retained pair and tracked outputs before continuing. Untracked files are intentionally excluded from the measured source
+state.
+
+Run the release gates:
 
 ```bash
 just ci
-just publish-check
+just release-version-check
+cargo publish --locked --allow-dirty --dry-run
 ```
 
-The `just ci` citation bucket includes the release metadata check. It requires exactly one top-level ISO CFF release date and compares it with the generated
-UTC date on the current package-version heading in `CHANGELOG.md`. Tag creation separately refuses a requested version that differs from `Cargo.toml` before
-inspecting or changing any Git tag.
+`release-version-check` requires all package versions, the CFF version/date, the active changelog heading, dependency snippets, and non-artifact release links
+to agree. It also requires the permanent concept DOI and rejects version-specific top-level citation identifiers.
 
-5. Stage and commit release artifacts
+`performance-doc` and `performance-readme` are deterministic render-only recovery commands. They require both retained pair members, validate their digest
+and release identity, and never invoke Cargo or create worktrees. If either member is missing, rerun `performance-release`; do not combine files from
+different comparisons.
 
-```bash
-git add Cargo.toml Cargo.lock CITATION.cff CHANGELOG.md README.md docs/ notebooks/
-
-git commit -m "chore(release): release $TAG
-
-- Bump version to $TAG
-- Update citation metadata
-- Update changelog with latest changes
-- Update documentation for release"
-```
-
-6. Push the branch and open a PR
+Review the complete diff, then stage the actual release artifacts and commit them manually:
 
 ```bash
+git status --short
+git diff --check
+git diff
+
+git add Cargo.toml Cargo.lock pyproject.toml uv.lock CITATION.cff CHANGELOG.md README.md docs/
+git commit -m "chore(release): release $TAG"
 git push -u origin "release/$TAG"
 ```
 
-PR metadata:
+Open a PR titled `chore(release): release $TAG`. Keep feature work and ordinary dependency updates out of this PR.
 
-- Title: `chore(release): release $TAG`
-- Description: Clean release PR with version bump, changelog, citation metadata, and documentation updates. No feature work.
+If a release-critical fix lands on the branch, rerun `just update-version "$TAG"` and `just changelog-unreleased "$TAG"`, then repeat every release gate.
 
-### Handling fixes discovered during the release process
+## 3. Publish after merge
 
-If you discover issues after generating the changelog:
-
-1. For critical fixes that must be in this release, make and commit the fix, then regenerate the release changelog:
-
-   ```bash
-   just changelog-unreleased "$TAG"
-   git add CHANGELOG.md docs/archive/changelog/
-   git commit -m "docs: update changelog with release fixes"
-   ```
-
-2. For non-critical fixes, document them as known issues in the release notes or include them in the next release.
-
----
-
-## Step 2: After the PR is merged into main
-
-1. Sync your local `main` to the merge commit
+Synchronize to the exact merged `main`:
 
 ```bash
 git switch main
 git pull --ff-only
+just release-version-check
 ```
 
-2. Create the final annotated tag using the changelog content
+Create and inspect the annotated tag:
 
 ```bash
-# Creates the annotated tag from the matching CHANGELOG.md section.
-# Archived versions are read from docs/archive/changelog/ automatically.
-# For large changelogs (>125KB), the tag message points to the changelog
-# section instead of embedding the full content.
 just tag "$TAG"
-```
-
-3. Optional: verify the tag message content
-
-```bash
 git tag -l --format='%(contents)' "$TAG"
-```
-
-4. Push the tag
-
-```bash
 git push origin "$TAG"
 ```
 
-5. Publish to crates.io
+Publish the locked crate and create the GitHub release:
 
 ```bash
 cargo publish --locked
-```
-
-6. Create the GitHub release with notes from the tag annotation
-
-```bash
 gh release create "$TAG" --title "$TAG" --notes-from-tag
 ```
 
-Always set the GitHub release title to the exact tag string, including the leading `v`.
+Publishing the GitHub release triggers `.github/workflows/release-benchmarks.yml`. Wait for that workflow to pass and verify that
+`causal-triangulations-$TAG-criterion-baseline.tar.gz` is attached to the release. The workflow checks out the exact tag, reruns the correctness-gated
+release signal, embeds source and host provenance, and publishes the native Criterion archive through a separate least-privilege job. To reconstruct a
+comparison from two published assets without Cargo or worktrees, run `just performance-github-assets "$TAG" "$PREVIOUS_TAG"`.
 
-7. Clean up the release branch
+Verify the Zenodo record through the permanent concept DOI in `CITATION.cff`. The citation file must continue to contain the concept DOI rather than a
+release-record DOI; Zenodo resolves the concept record to the latest release while retaining the version history.
+
+Only after the tag, crates.io package, GitHub release, benchmark assets, and Zenodo record are verified should the release branch be removed:
 
 ```bash
 git push origin --delete "release/$TAG"
 git branch -d "release/$TAG"
 ```
 
----
+## Reruns and failure recovery
 
-## Notes and tips
-
-- Do not create a temporary local release tag for changelog generation; use `just changelog-unreleased "$TAG"`.
-- Keep the release PR scoped to version, changelog, archive, citation metadata, and documentation changes.
-- `just changelog` regenerates the current changelog from existing tags and may update `docs/archive/changelog/`.
-- `just changelog-unreleased "$TAG"` is for release PR preparation before the final tag exists.
-- `just tag "$TAG"` is for the final post-merge annotated tag.
-- If multiple files reference the version, confirm all of them are updated consistently.
+- A same-day rerun of `just update-version "$TAG"` is content-idempotent.
+- A rerun on a later UTC day intentionally advances `date-released` and the matching changelog heading.
+- Version preparation writes nothing unless every planned file passes validation.
+- An interrupted multi-file write restores the original bytes, including original newline style.
+- Dependency updates and performance measurements are separate operations and have their own rollback or evidence rules.

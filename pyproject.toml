@@ -40,8 +40,10 @@ hardware-utils = "hardware_utils:main"
 notebook-check = "notebook_check:main"
 performance-analysis = "performance_analysis:main"
 postprocess-changelog = "postprocess_changelog:main"
+release-performance = "release_performance:main"
 tag-release = "tag_release:main"
 update-python-dev-pins = "update_python_dev_pins:main"
+update-release-version = "update_release_version:main"
 update-tool-pins = "update_cargo_tool_pins:main"
 # Backwards-compatible alias
 coverage_report = "coverage_report:main"
@@ -58,11 +60,14 @@ py-modules = [
     "hardware_utils",
     "notebook_check",
     "performance_analysis",
+    "performance_artifacts",
     "postprocess_changelog",
+    "release_performance",
     "subprocess_utils",
     "tag_release",
     "update_cargo_tool_pins",
     "update_python_dev_pins",
+    "update_release_version",
 ]
 
 [tool.ruff]
@@ -142,6 +147,8 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/test_*.py" = [ "S101", "SLF001" ]
+"scripts/performance_artifacts.py" = [ "EM101", "PLR0913" ]
+"scripts/release_performance.py" = [ "EM101" ]
 
 [tool.ruff.lint.isort]
 known-first-party = [
@@ -152,11 +159,14 @@ known-first-party = [
     "hardware_utils",
     "notebook_check",
     "performance_analysis",
+    "performance_artifacts",
     "postprocess_changelog",
+    "release_performance",
     "subprocess_utils",
     "tag_release",
     "update_cargo_tool_pins",
     "update_python_dev_pins",
+    "update_release_version",
 ]
 force-single-line = false
 split-on-trailing-comma = true

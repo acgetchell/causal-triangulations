@@ -16,6 +16,7 @@ Prerequisites:
 - Git
 - [Just] command runner: `cargo install just`
 - `uv` for Python support tooling
+- GitHub CLI (`gh`) and `jq` for release and repository automation
 
 Recommended setup:
 
@@ -56,8 +57,9 @@ just perf-check      # Local performance regression check
 just perf-help       # Performance analysis command index
 ```
 
-`just setup` installs or verifies Cargo-hosted tools such as `cargo-audit`, `cargo-edit`, `cargo-update`, `dprint`, `rumdl`, `taplo-cli`, `typos-cli`,
-`cargo-nextest`, `cargo-llvm-cov`, and `zizmor`. It also prints a checklist for external tools such as `uv`, `actionlint`, `shfmt`, `shellcheck`, and `jq`.
+`just setup` preflights `uv`, `rustup`, `cargo`, `gh`, and `jq` before changing the environment. It installs or verifies Cargo-hosted tools such as
+`cargo-audit`, `cargo-edit`, `cargo-update`, `dprint`, `rumdl`, `taplo-cli`, `typos-cli`, `cargo-nextest`, `cargo-llvm-cov`, and `zizmor`, then synchronizes
+uv-managed tools such as `actionlint`, `shfmt`, and `shellcheck`.
 
 `just update` advances Cargo dependency requirements and lockfile entries, resolves the latest compatible versions for exact Python development-tool pins,
 upgrades the Cargo-installed CLI tools managed by `just setup`, and reconciles their root justfile pins together with the active uv version. Review the
@@ -75,7 +77,10 @@ Release-support recipes are documented in [docs/RELEASING.md](docs/RELEASING.md)
 
 ```bash
 just changelog                       # Regenerate CHANGELOG.md
+just update-version v0.1.0           # Synchronize release versions and citation metadata
 just changelog-unreleased v0.1.0     # Generate a release changelog before the final tag exists
+just performance-release v0.1.0      # Retain and publish the release comparison
+just release-version-check           # Validate the final release metadata and changelog
 just tag v0.1.0                      # Create an annotated git tag from changelog content
 ```
 
@@ -159,6 +164,10 @@ just bench-ci
 just perf-baseline pre-change
 just perf-check
 ```
+
+The `perf-*` commands are the PR and development-regression surface. During release preparation, use `just performance-release vX.Y.Z` for the isolated,
+correctness-gated comparison and durable CSV/provenance contract. `just performance-doc` and `just performance-readme` reproduce tracked publication files
+from that retained pair without rerunning benchmarks.
 
 ## Pull Requests
 

@@ -147,7 +147,12 @@ The design separates geometry, sampling, and CDT-specific physics. Within this c
 ## 📈 Benchmarking
 
 Performance validation uses [Criterion] benchmark suites plus repository recipes for repeatable local and CI checks. Run `just bench-ci` for the CI benchmark
-contract and `just perf-check` for a local regression check.
+contract and `just perf-check` for a local regression check. Release comparisons use `just performance-release`, which retains a schema-validated CSV and
+matching provenance before updating the tracked report and summary.
+
+<!-- performance-summary:start -->
+No release-to-release comparison has been published with the retained artifact workflow yet. Run `just performance-release` during release preparation.
+<!-- performance-summary:end -->
 
 See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/performance-testing.md`](docs/performance-testing.md) for comprehensive
 performance testing workflow documentation.
