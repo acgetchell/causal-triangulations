@@ -369,6 +369,15 @@ Issue #222 treats cached-observable allocation counts as deterministic correctne
 with the stable Criterion suite, and the performance workflow invokes the same recipe before baseline analysis. Allocation failures are blocking on every path,
 while statistically noisy Criterion regressions retain their existing report-only pull-request behavior.
 
+## Issue #271 Stable uv Update Preflight
+
+Issue #271 compares CDT's update workflow with la-stack's early stable-uv guard while preserving CDT's existing exact-pin policy for ordinary uv-backed
+commands. The aggregate `just update` path validates that the active `uv --version` output contains one stable `X.Y.Z` version before dependency mutation,
+and the direct `update-cargo-tools` path runs the same preflight before `cargo install-update`. Unlike the exact `_ensure-uv` guard, this update-only check
+accepts a newer stable uv so the atomic tool-pin reconciler can advance `uv_version`. The CDT variant also rejects missing or ambiguous version output in
+addition to prerelease and embedded versions, matching the reconciler's single-stable-version contract. Fake-executable regression tests cover the rejected
+forms and Just dry-run tests preserve both pre-mutation ordering guarantees.
+
 ## Issue #249 Python Release Helper Hardening
 
 Issue #249 ports the fail-closed release and fixture-validation patterns from `la-stack` while preserving CDT's destination-local, directory-fsynced changelog
