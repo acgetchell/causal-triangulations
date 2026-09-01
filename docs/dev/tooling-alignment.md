@@ -424,8 +424,8 @@ Issues #264 and #265 compare the repository against `la-stack` while preserving 
   and the checked-in workflow contract aligned.
 - The zizmor SARIF workflow pins zizmor-action and the underlying zizmor tool instead of floating to the action's latest default. Authenticated local
   `just zizmor` runs use online audits through an environment or GitHub CLI token, while unauthenticated runs state that they are using the offline subset.
-  Repository-owned Semgrep rules enforce the static release-cache and scanner-version preconditions; zizmor's online audit remains the authority for resolving
-  whether an action SHA matches its human-readable version tag.
+  Repository-owned Semgrep rules enforce the static release-cache precondition and require the workflow scanner version to match the repository's exact
+  `1.30.0` pin; zizmor's online audit remains the authority for resolving whether an action SHA matches its human-readable version tag.
 - The release workflow comparison covered `delaunay`, `markov-chain-monte-carlo`, and `la-stack`. All three use tag-keyed, non-canceling concurrency and bounded
   release jobs, so CDT adopts those controls; MCMC and la-stack also confirm the separate read-only producer and write-privileged publisher shape. Delaunay
   provides the directly applicable explicit setup-uv cache disablement. The siblings' zizmor workflows still float the scanner version and their local

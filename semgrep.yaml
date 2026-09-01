@@ -1201,7 +1201,7 @@ rules:
         - "/tests/semgrep/.github/workflows/**/*.yml"
         - "/tests/semgrep/.github/workflows/**/*.yaml"
     patterns:
-      - pattern-regex: '(?m)^[ \t]*(?:-[ \t]*)?uses:[ \t]*zizmorcore/zizmor-action@[a-fA-F0-9]{40}[^\n]*\n(?!(?:[ \t]*with:\n)?(?:[ \t]{10,}\S[^\n]*\n){0,8}[ \t]{10,}version:[ \t]*"?[0-9]+\.[0-9]+\.[0-9]+"?[ \t]*(?:#.*)?$)' # yamllint disable-line rule:line-length
+      - pattern-regex: '(?m)^[ \t]*(?:-[ \t]*)?uses:[ \t]*zizmorcore/zizmor-action@[a-fA-F0-9]{40}[^\n]*\n(?!(?:[ \t]*with:\n)?(?:[ \t]{10,}\S[^\n]*\n){0,8}[ \t]{10,}version:[ \t]*(?:"1\.30\.0"|1\.30\.0)[ \t]*(?:#.*)?$)' # yamllint disable-line rule:line-length
 
   - id: causal-triangulations.github-actions.no-pull-request-target
     languages:
