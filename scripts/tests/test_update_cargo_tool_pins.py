@@ -1,16 +1,16 @@
 """Tests for atomic repository tool-pin reconciliation."""
 
 import os
+import shutil
+import stat
 import subprocess
-from typing import TYPE_CHECKING, Never
+from pathlib import Path
+from typing import Never
 
 import pytest
 
 import update_cargo_tool_pins
 from subprocess_utils import ExecutableNotFoundError
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 EXPECTED_PIN_TO_PACKAGE = {
     "cargo_audit_version": "cargo-audit",
@@ -28,6 +28,25 @@ EXPECTED_PIN_TO_PACKAGE = {
     "zizmor_version": "zizmor",
 }
 EXPECTED_PIN_TO_TOOL = {**EXPECTED_PIN_TO_PACKAGE, "uv_version": "uv"}
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def run_just(
+    *args: str,
+    check: bool = True,
+    env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run the repository's installed Just executable without a shell."""
+    executable = shutil.which("just")
+    assert executable is not None
+    return subprocess.run(  # noqa: S603 - executable is resolved; arguments are fixed by tests.
+        [executable, *args],
+        cwd=REPO_ROOT,
+        check=check,
+        capture_output=True,
+        encoding="utf-8",
+        env=env,
+    )
 
 
 def installed_output(*, override: tuple[str, str] | None = None) -> str:
@@ -137,6 +156,60 @@ def test_update_pin_text_rejects_prerelease_managed_tool() -> None:
 def test_parse_tool_version_rejects_nonstable_or_embedded_versions(output: str) -> None:
     with pytest.raises(ValueError, match="expected exactly one uv version"):
         update_cargo_tool_pins.parse_tool_version(output, "uv")
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "uv 9.9.9-beta.1",
+        "uv 9.9.9.1",
+        "uv release-9.9.9",
+        "uv version unknown",
+        "uv 9.9.9 and 8.8.8",
+    ],
+)
+def test_stable_uv_preflight_rejects_unreconcilable_versions(tmp_path: Path, output: str) -> None:
+    """Update preflights should reject uv versions the pin reconciler cannot store."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text(f"#!/bin/sh\nprintf '%s\\n' '{output}'\n", encoding="utf-8")
+    fake_uv.chmod(fake_uv.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+
+    result = run_just("_ensure-stable-uv-version", check=False, env=environment)
+
+    assert result.returncode != 0
+    assert "must report exactly one stable X.Y.Z version" in result.stderr
+
+
+def test_stable_uv_preflight_accepts_newer_stable_version(tmp_path: Path) -> None:
+    """The update-only preflight should allow reconciliation to advance the uv pin."""
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_uv = fake_bin / "uv"
+    fake_uv.write_text("#!/bin/sh\nprintf '%s\\n' 'uv 9.9.9 (Homebrew test build)'\n", encoding="utf-8")
+    fake_uv.chmod(fake_uv.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    environment = os.environ.copy()
+    environment["PATH"] = f"{fake_bin}{os.pathsep}{environment['PATH']}"
+
+    result = run_just("_ensure-stable-uv-version", env=environment)
+
+    assert result.returncode == 0
+
+
+def test_update_preflights_stable_uv_before_mutations() -> None:
+    """Aggregate and direct tool updates must validate uv before their first mutation."""
+    stable_uv_diagnostic = "must report exactly one stable X.Y.Z version"
+
+    aggregate_result = run_just("--dry-run", "update")
+    aggregate_update = aggregate_result.stdout + aggregate_result.stderr
+    assert aggregate_update.index(stable_uv_diagnostic) < aggregate_update.index("cargo upgrade --incompatible allow")
+
+    tool_result = run_just("--dry-run", "update-cargo-tools")
+    tool_update = tool_result.stdout + tool_result.stderr
+    assert tool_update.index(stable_uv_diagnostic) < tool_update.index("cargo install-update --locked")
 
 
 def test_main_reports_missing_cargo_without_traceback(

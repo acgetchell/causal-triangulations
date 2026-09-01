@@ -208,6 +208,18 @@ _ensure-uv-available:
     }
     uv --version >/dev/null
 
+_ensure-stable-uv-version: _ensure-uv-available
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version_output="$(uv --version 2>&1)"
+    stable_version_pattern='[0-9]+\.[0-9]+\.[0-9]+'
+    stable_output_pattern="^uv[[:space:]]+v?${stable_version_pattern}([[:space:]]|$)"
+    version_matches="$(grep -oE "$stable_version_pattern" <<< "$version_output" || true)"
+    if [[ ! "$version_output" =~ $stable_output_pattern || -z "$version_matches" || "$version_matches" == *$'\n'* ]]; then
+        echo "❌ 'uv --version' must report exactly one stable X.Y.Z version; got: $version_output" >&2
+        exit 1
+    fi
+
 _ensure-yamllint:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -1243,7 +1255,7 @@ unused-deps: _ensure-cargo-machete
     cargo machete
 
 # Update dependency requirements, locks, managed Cargo tools, and the active uv pin.
-update: _ensure-cargo-install-update update-dependencies update-cargo-tools
+update: _ensure-cargo-install-update _ensure-stable-uv-version update-dependencies update-cargo-tools
     @echo "✅ Repository dependencies and tools updated."
 
 # Advance Cargo dependency declarations and lockfile entries.
@@ -1252,7 +1264,7 @@ update-cargo-dependencies: _ensure-cargo-edit
     cargo update
 
 # Update locally installed Cargo CLI tools and reconcile their pins plus the active uv version.
-update-cargo-tools: _ensure-cargo-install-update _ensure-uv-available
+update-cargo-tools: _ensure-stable-uv-version _ensure-cargo-install-update
     #!/usr/bin/env bash
     set -euo pipefail
 
