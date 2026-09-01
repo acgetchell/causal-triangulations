@@ -34,7 +34,60 @@ jobs:
         # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
-        uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d # v0.5.6
+        # ok: causal-triangulations.github-actions.zizmor-tool-version-pinned
+        uses: zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99 # v0.6.3
+        with:
+          version: "1.30.0"
+
+      - name: Floating zizmor tool version
+        # ok: causal-triangulations.github-actions.external-action-sha-pinned
+        # ok: causal-triangulations.github-actions.external-action-approved-allowlist
+        # ok: causal-triangulations.github-actions.external-action-version-comment
+        # ruleid: causal-triangulations.github-actions.zizmor-tool-version-pinned
+        uses: zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99 # v0.6.3
+        with:
+          inputs: .github
+
+      - name: Mismatched zizmor tool version
+        # ok: causal-triangulations.github-actions.external-action-sha-pinned
+        # ok: causal-triangulations.github-actions.external-action-approved-allowlist
+        # ok: causal-triangulations.github-actions.external-action-version-comment
+        # ruleid: causal-triangulations.github-actions.zizmor-tool-version-pinned
+        uses: zizmorcore/zizmor-action@70fb788f84895a7701f5643d103d587e460b5c99 # v0.6.3
+        with:
+          version: "1.29.0"
+
+      - name: Release setup-uv cache default
+        # ok: causal-triangulations.github-actions.external-action-sha-pinned
+        # ok: causal-triangulations.github-actions.external-action-approved-allowlist
+        # ok: causal-triangulations.github-actions.external-action-version-comment
+        # ruleid: causal-triangulations.github-actions.release-setup-uv-cache-disabled
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.7"
+          prune-cache: true
+
+      - name: Release setup-uv cache disabled
+        # ok: causal-triangulations.github-actions.external-action-sha-pinned
+        # ok: causal-triangulations.github-actions.external-action-approved-allowlist
+        # ok: causal-triangulations.github-actions.external-action-version-comment
+        # ok: causal-triangulations.github-actions.release-setup-uv-cache-disabled
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.7"
+          enable-cache: false
+          prune-cache: true
+
+      - name: Release setup-uv cache enabled
+        # ok: causal-triangulations.github-actions.external-action-sha-pinned
+        # ok: causal-triangulations.github-actions.external-action-approved-allowlist
+        # ok: causal-triangulations.github-actions.external-action-version-comment
+        # ruleid: causal-triangulations.github-actions.release-setup-uv-cache-disabled
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.7"
+          enable-cache: true
+          prune-cache: true
 
       - name: Unsafe github-script interpolation
         # ok: causal-triangulations.github-actions.external-action-sha-pinned

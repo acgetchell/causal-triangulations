@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="110" viewBox="0 0 900 110" role="img" aria-labelledby="title desc">
+  <title id="title">Release performance comparison pending</title>
+  <desc id="desc">No release comparison has been published with the retained artifact workflow yet.</desc>
+  <rect width="900" height="110" fill="#fff"/>
+  <text x="20" y="42" font-family="system-ui, sans-serif" font-size="18" font-weight="600" fill="#24292f">Release performance comparison</text>
+  <text x="20" y="72" font-family="system-ui, sans-serif" font-size="14" fill="#57606a">No retained release comparison has been published yet.</text>
+</svg>

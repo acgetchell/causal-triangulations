@@ -17,8 +17,14 @@ def _write_repository(
     python_readme: str = "scripts/README.md",
 ) -> None:
     (root / "Cargo.toml").write_text('[package]\nname = "causal-triangulations"\nversion = "0.1.0"\n', encoding="utf-8")
+    (root / "Cargo.lock").write_text(
+        'version = 4\n\n[[package]]\nname = "causal-triangulations"\nversion = "0.1.0"\n',
+        encoding="utf-8",
+    )
     (root / "CITATION.cff").write_text(
-        "cff-version: 1.2.0\nversion: 0.1.0\n" + "".join(f"date-released: {release_date}\n" for release_date in citation_dates),
+        "cff-version: 1.2.0\nversion: 0.1.0\n"
+        + "".join(f"date-released: {release_date}\n" for release_date in citation_dates)
+        + "doi: 10.5281/zenodo.20513228\n",
         encoding="utf-8",
     )
     (root / "CHANGELOG.md").write_text("# Changelog\n\n" + "\n\n".join(changelog_headings) + "\n", encoding="utf-8")
@@ -26,6 +32,10 @@ def _write_repository(
     (root / "scripts" / "README.md").write_text("# Support scripts\n", encoding="utf-8")
     (root / "pyproject.toml").write_text(
         f'[project]\nname = "causal-triangulations-scripts"\nversion = "{python_version}"\nreadme = "{python_readme}"\n',
+        encoding="utf-8",
+    )
+    (root / "uv.lock").write_text(
+        f'version = 1\n\n[[package]]\nname = "causal-triangulations-scripts"\nversion = "{python_version}"\nsource = {{ editable = "." }}\n',
         encoding="utf-8",
     )
 
@@ -134,8 +144,37 @@ def test_python_package_readme_must_target_support_documentation(tmp_path: Path)
 def test_python_package_version_must_match_cargo_package(tmp_path: Path) -> None:
     _write_repository(tmp_path, python_version="0.2.0")
 
-    with pytest.raises(ValueError, match=r"\[project\]\.version must match Cargo \[package\]\.version '0\.1\.0', got '0\.2\.0'"):
+    with pytest.raises(ValueError, match=r"release-version references must match Cargo \[package\]\.version '0\.1\.0'.*pyproject\.toml:3 has '0\.2\.0'"):
         check_release_metadata.validate_release_metadata(tmp_path)
+
+
+def test_version_specific_citation_identifiers_are_forbidden(tmp_path: Path) -> None:
+    _write_repository(tmp_path)
+    citation = tmp_path / "CITATION.cff"
+    citation.write_text(
+        citation.read_text(encoding="utf-8")
+        + "identifiers:\n  - type: doi\n    value: 10.5281/zenodo.20513229\n    description: Zenodo DOI for version 0.1.0\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="version-specific identifiers are forbidden"):
+        check_release_metadata.validate_release_metadata(tmp_path)
+
+
+def test_concept_doi_must_not_rotate(tmp_path: Path) -> None:
+    _write_repository(tmp_path)
+    citation = tmp_path / "CITATION.cff"
+    citation.write_text(citation.read_text(encoding="utf-8").replace("20513228", "20513229"), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"must remain the Zenodo concept DOI 10\.5281/zenodo\.20513228"):
+        check_release_metadata.validate_release_metadata(tmp_path)
+
+
+def test_final_release_requires_current_version_changelog_heading(tmp_path: Path) -> None:
+    _write_repository(tmp_path, changelog_headings=("## [Unreleased]",))
+
+    with pytest.raises(ValueError, match="final release validation requires exactly one generated heading"):
+        check_release_metadata.validate_release_metadata(tmp_path, final_release=True)
 
 
 def test_cli_reports_validation_failures_on_stderr(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

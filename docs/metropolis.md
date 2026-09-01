@@ -160,7 +160,7 @@ current state. These exact deterministic preflights come from
 they promise that the later primitive in a composite foliated move or post-mutation CDT finalization cannot produce an ordinary self-loop rejection.
 
 This is the ordinary Metropolis-Hastings proposal-ratio correction: it uses the actual proposal kernel, not empirical acceptance counts from the run. Hastings'
-original Markov-chain sampling paper gives the general acceptance rule, and Brunekreef, Görlich, and Loll describe CDT Monte Carlo moves together with their
+original Markov-chain sampling paper gives the general acceptance rule, and Brunekreef, Loll, and Görlich describe CDT Monte Carlo moves together with their
 detailed-balance equations. See [REFERENCES.md](../REFERENCES.md) for the full citations.
 
 The integration test `test_toroidal_metropolis_accepts_periodic_moves_and_preserves_topology` covers this contract by running a seeded S¹×S¹ simulation,

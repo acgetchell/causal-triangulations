@@ -25,6 +25,20 @@ The repository MSRV is Rust 1.98.0. `Cargo.toml` and `rust-toolchain.toml` must 
 Tests and public doctests use `std::assert_matches` instead of `assert!(matches!(...))` when checking enum or result shapes so failures show the unexpected
 value directly. The `causal-triangulations.rust.prefer-assert-matches-in-doctests` Semgrep rule enforces this idiom in `src/` documentation examples.
 
+## Floating-Point Reproducibility
+
+Rust 1.98's `f64::algebraic_{add,sub,mul,div,rem}` methods are forbidden throughout repository-owned Rust. They permit real-number rewrites whose exact
+optimization set and elementary-operation precision are unspecified. Reassociation and relaxed NaN, infinity, and signed-zero behavior can change action
+differences, seeded acceptance decisions, observables, validation fixtures, and benchmark provenance even for identical inputs.
+
+Use ordinary IEEE arithmetic operators when their operation order is part of the calculation. Deliberate `f64::mul_add` remains allowed: it specifies a
+single-rounding fused operation and must not be replaced mechanically. Any other relaxed or fast-math facility requires a separate tracked scientific review
+with an explicit numerical contract, adversarial special-value and reproducibility tests, and representative benchmark evidence.
+
+The `causal-triangulations.rust.no-algebraic-f64-operations` Semgrep rule enforces receiver, associated-function, qualified, function-item, alias, and callback
+forms across source, tests, examples, and benchmarks. Its sole policy exception is `tests/semgrep/src/project_rules/algebraic_float.rs`, which intentionally
+contains prohibited operations as positive rule fixtures.
+
 ---
 
 ## Safety

@@ -195,10 +195,8 @@ dimension before they are reused for 2+1 CDT.
 
 The v0.3.x series develops conventional 2+1 CDT with compact spherical S² spatial slices and periodic time. The full spacetime topology is
 S¹(time) × S²(space), matching Brunekreef's `3d-cdt` implementation. The primary implementation references are
-[`JorenB/3d-cdt`](https://github.com/JorenB/3d-cdt) and J. Brunekreef, A. Görlich, and R. Loll, “Simulating CDT quantum gravity,” Computer Physics
-Communications 300 (2024), [doi:10.1016/j.cpc.2024.109170](https://doi.org/10.1016/j.cpc.2024.109170). J. Brunekreef and R. Loll, “A practical guide to
-causal dynamical triangulations,” [doi:10.48550/arXiv.2110.11100](https://doi.org/10.48550/arXiv.2110.11100), provides supplementary model and simulation
-guidance.
+[`JorenB/3d-cdt`](https://github.com/JorenB/3d-cdt) and J. Brunekreef, R. Loll, and A. Görlich, “Simulating CDT quantum gravity,” Computer Physics
+Communications 300 (2024), [doi:10.1016/j.cpc.2024.109170](https://doi.org/10.1016/j.cpc.2024.109170).
 
 ### v0.3.0 foundation
 

@@ -26,13 +26,15 @@ just changelog-unreleased v0.1.0
 uv run postprocess-changelog --help
 uv run archive-changelog --help
 uv run check-release-metadata --help
+uv run update-release-version --help
 uv run tag-release v0.1.0 --help
 just tag v0.1.0
 ```
 
 `just changelog` runs `git-cliff`, applies markdown hygiene, and archives completed minor release series under `docs/archive/changelog/`. Use
-`just changelog-unreleased vX.Y.Z` while preparing a release PR before the final tag exists. `just release-metadata-check` requires the CFF release date to
-match the generated current-version changelog heading when present and verifies that the Python support package ships this README.
+`just update-version vX.Y.Z` followed by `just changelog-unreleased vX.Y.Z` while preparing a release PR before the final tag exists.
+`just release-metadata-check` validates synchronized package/CFF versions, the permanent concept DOI, and active documentation references;
+`just release-version-check` additionally requires the matching dated changelog heading.
 
 Shared subprocess wrappers apply a five-minute default timeout. Benchmark paths that may run longer pass their own explicit benchmark-specific timeout.
 
@@ -56,6 +58,23 @@ benchmark layouts that are still being unified across repos.
 uv run benchmark-utils generate-baseline
 uv run benchmark-utils compare --baseline baseline-artifact/baseline_results.txt
 ```
+
+Release-to-release evidence uses the stricter `release-performance` entrypoint through canonical recipes:
+
+```bash
+just bench-latest
+just bench-save-last
+just bench-latest-vs-last
+just performance-local
+just performance-release v0.2.0 v0.1.0
+just performance-doc
+just performance-readme
+just performance-github-assets v0.2.0 v0.1.0
+```
+
+`performance_artifacts.py` defines the fixed CSV schema, provenance binding, strict reload checks, and rollback-safe multi-file replacement.
+`release_performance.py` owns stable-tag resolution, isolated worktrees, Criterion parsing, native archive safety, and rendering. The retained pair lives under
+`target/bench-reports/`; report and README commands refuse to write when a member is missing or the pair does not match.
 
 ### Hardware utilities
 

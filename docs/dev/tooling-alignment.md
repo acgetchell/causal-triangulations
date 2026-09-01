@@ -379,8 +379,7 @@ fails and reports the publication plus rollback errors together.
 
 The new `release-metadata-check` recipe extends the existing citation gate. It requires one top-level ISO `date-released` value, matches that value
 to the generated UTC date on the current Cargo package-version changelog heading when present, and verifies that the `causal-triangulations-scripts` package
-ships `scripts/README.md` rather than the Rust crate README. `CITATION.cff` keeps the Zenodo concept DOI at top level and records the v0.1.0 record DOI under
-`identifiers`, preserving the CFF distinction between all-version and per-version identifiers.
+ships `scripts/README.md` rather than the Rust crate README. The later issue #264 policy below supersedes this pass's version-record `identifiers` choice.
 
 The Semgrep fixture harness now validates the JSON container and each `check_id`, `start.line`, and `end.line`, then matches annotations by rule ID and source
 line within the reported span. Mismatches go to stderr. Shared subprocess wrappers use a finite five-minute default timeout, while existing benchmark paths
@@ -396,3 +395,38 @@ These were evaluated but not ported in this pass:
   layout.
 - Delaunay's `profiling_suite` and same-machine baseline recipes: defer because CDT's `ci_performance_suite` now provides the portable regression contract,
   while deeper profiling still needs CDT-specific benchmark interpretation.
+
+## August 2026 Release And Floating-Point Policy Alignment
+
+Issues #264 and #265 compare the repository against `la-stack` while preserving CDT's scientific and publication boundaries.
+
+- The release workflow uses a plan-before-write `update-version` transaction. It accepts one stable `vX.Y.Z` tag, obtains the previous stable version from
+  published GitHub releases, excludes drafts and prereleases, synchronizes Rust/Python/CFF metadata and owned active-documentation references, and validates a
+  temporary candidate tree before atomic publication. A caught partial write restores the original bytes and newline style.
+- `CITATION.cff` now carries only the permanent Zenodo concept DOI. The release checker rejects top-level version-record `identifiers`, requires synchronized
+  versions, and provides a stricter final-release gate for the generated changelog date. This intentionally supersedes issue #249's per-version DOI policy.
+- The existing `just update` transaction already covers Cargo requirements and locks, exact Python development pins, managed Cargo tools, root tool pins,
+  `uv.lock`, and environment synchronization. Release preparation therefore composes with that canonical command instead of duplicating its mutations.
+- Issue #184 adds a CDT-specific release-performance path around the existing `ci_performance_suite`. Like the `la-stack` reference, it keeps a fixed CSV
+  schema, digest-bound provenance, isolated source states, strict retained-pair reloads, native Criterion GitHub Release assets, render-only documentation
+  commands, and rollback-safe tracked publication. CDT deliberately keeps the implementation smaller: the stable suite is already the correctness-valid
+  release signal, so this does not import `la-stack`'s broader benchmark registry, project-specific Codacy filtering, or profiling-suite interpretation.
+- The release-asset workflow pins and allowlists `actions/download-artifact` alongside the already approved upload action. It is used only for same-run
+  transport into a separate `contents: write` publisher job; the durable public contract is the native `.tar.gz` attached to the GitHub Release.
+- The existing `performance.yml` and `perf-*` commands remain the PR/main-branch regression and exploratory analyzer surface. The canonical `bench-latest`,
+  `bench-compare`, `bench-save-*`, and `performance-*` commands form the independent durable release-evidence surface; neither is an alias for the other.
+- Semgrep categorically rejects `f64::algebraic_add`, `algebraic_sub`, `algebraic_mul`, `algebraic_div`, and `algebraic_rem` across production Rust, tests,
+  examples, and benchmarks, including receiver, associated, qualified, and function-item forms. Ordinary IEEE operators and deliberate `mul_add` calls
+  remain allowed. The positive rule fixture in `tests/semgrep/src/project_rules/algebraic_float.rs` is the sole policy exception. Any future relaxed or
+  fast-math facility requires a separate tracked scientific review.
+- The release-asset workflow explicitly disables setup-uv caching because its benchmark job produces an artifact consumed by a separate write-privileged
+  publisher. This remains explicit even though current setup-uv `auto` behavior excludes release events, keeping older GitHub Advanced Security zizmor audits
+  and the checked-in workflow contract aligned.
+- The zizmor SARIF workflow pins zizmor-action and the underlying zizmor tool instead of floating to the action's latest default. Authenticated local
+  `just zizmor` runs use online audits through an environment or GitHub CLI token, while unauthenticated runs state that they are using the offline subset.
+  Repository-owned Semgrep rules enforce the static release-cache precondition and require the workflow scanner version to match the repository's exact
+  `1.30.0` pin; zizmor's online audit remains the authority for resolving whether an action SHA matches its human-readable version tag.
+- The release workflow comparison covered `delaunay`, `markov-chain-monte-carlo`, and `la-stack`. All three use tag-keyed, non-canceling concurrency and bounded
+  release jobs, so CDT adopts those controls; MCMC and la-stack also confirm the separate read-only producer and write-privileged publisher shape. Delaunay
+  provides the directly applicable explicit setup-uv cache disablement. The siblings' zizmor workflows still float the scanner version and their local
+  recipes remain offline, so CDT deliberately does not copy those two gaps.
