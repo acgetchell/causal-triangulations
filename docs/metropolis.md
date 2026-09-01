@@ -85,6 +85,11 @@ compatibility. In particular, checkpoints written through Delaunay 0.7 cannot be
 Checkpoints written before `initial_vertex_count` became required cannot be read by this release and must be regenerated; the field remains required because it
 reconstructs the initial `SimulationEvent::Created` vertex count rather than guessing from the final triangulation.
 
+Within that version-bound format, restoration preserves the sampled state rather than rebuilding an initial Delaunay mesh. Fresh toroidal constructors require
+the strict Levels 1-5 initialization contract. A restored evolved toroidal checkpoint instead preserves its serialized periodic domain, periodic realization
+(including relative lift offsets), exact connectivity, and payloads, validates geometry through Levels 1-4 plus all CDT invariants, and does not perform
+Level 5 repair or retriangulation.
+
 Use trace CSV and JSON summary exports for durable cross-version analysis artifacts. A future CDT-owned, versioned checkpoint wire format is tracked in
 [`causal-triangulations#218`](https://github.com/acgetchell/causal-triangulations/issues/218).
 

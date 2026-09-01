@@ -19,7 +19,7 @@ just_version := "1.58.0"
 rumdl_version := "0.2.62"
 sarif_fmt_version := "0.8.0"
 taplo_version := "0.10.0"
-typos_version := "1.50.0"
+typos_version := "1.50.1"
 uv_version := "0.12.8"
 zizmor_version := "1.30.0"
 

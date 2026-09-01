@@ -447,6 +447,10 @@ impl<'de, VertexData: DataType, SimplexData: DataType, const D: usize> Deseriali
         let serialized = SerializedDelaunayBackend::deserialize(deserializer)?;
         let topology_guarantee = serialized.topology_guarantee.into();
         let global_topology = serialized.global_topology.into_global_topology()?;
+        // `TriangulationBuilder` is the upstream topology-aware Levels 1-4
+        // restoration boundary. Its default strict mode preserves the supplied
+        // TDS representation: it neither canonicalizes connectivity nor performs
+        // the Level 5 repair/certification reserved for fresh Delaunay builders.
         let dt = TriangulationBuilder::new(serialized.tds, AdaptiveKernel::new())
             .topology_guarantee(topology_guarantee)
             .global_topology(global_topology)
@@ -4224,6 +4228,32 @@ mod tests {
             collect_simplex_payloads(&restored),
             original_simplex_payloads
         );
+    }
+
+    #[test]
+    fn backend_deserialization_rejects_invalid_realization_without_repair() {
+        let dt =
+            build_delaunay2_with_data(&[([0.0, 0.0], 0_u32), ([1.0, 0.0], 0), ([0.0, 1.0], 1)])
+                .expect("labeled triangle should build");
+        let backend = validated_backend(dt);
+        let mut value = to_value(&backend).expect("backend should serialize");
+        let vertices = value
+            .get_mut("tds")
+            .and_then(|tds| tds.get_mut("vertices"))
+            .and_then(Value::as_array_mut)
+            .expect("serialized TDS should contain vertices");
+        for (vertex, point) in vertices
+            .iter_mut()
+            .zip([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])
+        {
+            vertex["point"] = serde_json::json!(point);
+        }
+        let invalid_json = to_string(&value).expect("modified backend should serialize");
+
+        let error = from_str::<DelaunayBackend2D>(&invalid_json)
+            .expect_err("degenerate Level 4 realization must be rejected without repair");
+
+        assert_json_data_error(&error, &["realization"]);
     }
 
     #[test]
