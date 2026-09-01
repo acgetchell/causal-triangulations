@@ -47,8 +47,8 @@ path integral over causally triangulated spacetimes and evaluating it using Mark
 - Notebook-first quickstart for physicists, AI/ML users, and Rust contributors
 - Proposal-before-mutation Metropolis-Hastings simulation with rollback on failed accepted moves
 - Regge action calculation with configurable coupling constants
-- Resumable serde-backed CDT/MCMC checkpoints for continuation within a compatible build; serialized checkpoint files are
-  [version-bound](docs/metropolis.md#serialized-checkpoint-compatibility)
+- Versioned, CDT-owned JSON checkpoints for exact MCMC continuation across compatible crate and dependency upgrades, with checked geometry and state restore;
+  see the [checkpoint compatibility policy](docs/metropolis.md#serialized-checkpoint-compatibility)
 - Trace CSV simulation output for external analysis workflows; JSON summary/metadata for CLI/config export
 - Spatial-vertex input profiles, slab-triangle output profiles, and explicitly finite-window effective dimensional observables
 

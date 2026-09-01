@@ -3,12 +3,11 @@
 //! Example: writing simulation output files and using CDT checkpoints.
 //!
 //! This example runs a short CDT simulation, writes the configured trace CSV and
-//! JSON outputs, round-trips a Delaunay-valid triangulation checkpoint, and
-//! resumes an in-memory MCMC checkpoint.
+//! JSON outputs, persists a versioned CDT-owned MCMC checkpoint, and resumes it.
 
-use causal_triangulations::prelude::errors::{CheckpointOperation, OutputFormat};
+use causal_triangulations::prelude::errors::{OutputFormat, OutputWriteStage};
 use causal_triangulations::prelude::simulation::*;
-use serde_json::{Value, from_str, to_string};
+use serde_json::{Value, from_str};
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -19,6 +18,7 @@ fn main() -> CdtResult<()> {
         env::temp_dir().join(format!("causal-triangulations-output-{}", process::id()));
     let csv_path = output_dir.join("trace.csv");
     let json_path = output_dir.join("summary.json");
+    let checkpoint_path = output_dir.join("checkpoint-v1.json");
 
     let config = CdtConfig {
         simulate: true,
@@ -54,34 +54,29 @@ fn main() -> CdtResult<()> {
         results.measurements().len()
     );
 
-    let checkpoint_source = CdtTriangulation2D::from_cdt_strip(4, 3)?;
-    let checkpoint =
-        to_string(&checkpoint_source).map_err(|err| CdtError::CheckpointSerializationFailed {
-            operation: CheckpointOperation::Serialize,
-            target: "Delaunay-valid triangulation".to_string(),
-            detail: err.to_string(),
-        })?;
-    let restored: CdtTriangulation2D =
-        from_str(&checkpoint).map_err(|err| CdtError::CheckpointSerializationFailed {
-            operation: CheckpointOperation::Deserialize,
-            target: "Delaunay-valid triangulation".to_string(),
-            detail: err.to_string(),
-        })?;
-    restored.validate_topology()?;
-    restored.validate_foliation()?;
-    restored.validate_causality()?;
-    restored.validate_simplex_classification()?;
-
     let mcmc_checkpoint = MetropolisAlgorithm::new(
         MetropolisConfig::new(1.0, 2, 0, 1)?.with_seed(13),
         ActionConfig::default(),
     )
     .run_to_checkpoint(CdtTriangulation2D::from_cdt_strip(4, 3)?)?;
+    let checkpoint_json = mcmc_checkpoint.to_json()?;
+    fs::write(&checkpoint_path, checkpoint_json).map_err(|err| CdtError::OutputWriteFailed {
+        path: checkpoint_path.display().to_string(),
+        format: OutputFormat::Json,
+        stage: OutputWriteStage::Serialize,
+        detail: err.to_string(),
+    })?;
+    let checkpoint_json = read_output(&checkpoint_path, OutputFormat::Json)?;
+    let restored = CdtMcmcCheckpoint::from_json(&checkpoint_json)?;
+    restored.triangulation().validate_topology()?;
+    restored.triangulation().validate_foliation()?;
+    restored.triangulation().validate_causality()?;
+    restored.triangulation().validate_simplex_classification()?;
     let resumed = MetropolisAlgorithm::new(
         MetropolisConfig::new(1.0, 2, 0, 1)?.with_seed(999),
         ActionConfig::default(),
     )
-    .resume_from_checkpoint(mcmc_checkpoint)?;
+    .resume_from_checkpoint(restored)?;
 
     println!("Trace CSV rows: {}", csv.lines().count().saturating_sub(1));
     println!(
@@ -89,11 +84,8 @@ fn main() -> CdtResult<()> {
         summary["measurements"].as_array().map_or(0, Vec::len)
     );
     println!(
-        "Delaunay-valid checkpoint roundtrip vertices: {}",
-        restored.vertex_count()
-    );
-    println!(
-        "Resumed MCMC checkpoint steps (in-memory): {}",
+        "Resumed MCMC checkpoint steps (v{} JSON): {}",
+        CdtMcmcCheckpoint::FORMAT_VERSION,
         resumed.steps().len()
     );
     println!("Output and checkpoint example completed successfully!");

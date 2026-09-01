@@ -78,20 +78,28 @@ together between chunks.
 
 ### Serialized Checkpoint Compatibility
 
-In-memory continuation and Serde round trips produced and consumed by the same build are supported. Serialized checkpoint files are otherwise version-bound:
-their representation includes internal state from `causal-triangulations`, `delaunay`, and `markov-chain-monte-carlo`, and compatibility is not guaranteed
-across crate or dependency upgrades. Read a serialized checkpoint with the same build that wrote it, or with a release that explicitly documents checkpoint
-compatibility. In particular, checkpoints written through Delaunay 0.7 cannot be deserialized after the Delaunay 0.8 upgrade.
-Checkpoints written before `initial_vertex_count` became required cannot be read by this release and must be regenerated; the field remains required because it
-reconstructs the initial `SimulationEvent::Created` vertex count rather than guessing from the final triangulation.
+`CdtMcmcCheckpoint::to_json()` writes the CDT-owned format named by `CdtMcmcCheckpoint::FORMAT_VERSION` (currently version 1), and `from_json()` reads and fully
+validates it. The top-level `format_version` tag is mandatory. Unknown tags return `CdtError::UnsupportedCheckpointVersion` with both the encountered and
+supported versions, allowing callers to distinguish an upgrade requirement from malformed state.
 
-Within that version-bound format, restoration preserves the sampled state rather than rebuilding an initial Delaunay mesh. Fresh toroidal constructors require
-the strict Levels 1-5 initialization contract. A restored evolved toroidal checkpoint instead preserves its serialized periodic domain, periodic realization
-(including relative lift offsets), exact connectivity, and payloads, validates geometry through Levels 1-4 plus all CDT invariants, and does not perform
-Level 5 repair or retriangulation.
+Version 1 freezes a dependency-neutral representation. Geometry contains coordinate and payload arrays whose connectivity and neighbor relations use numeric
+array indices; it does not embed Delaunay UUIDs or a TDS snapshot. Accepted/rejected chain counters are CDT fields rather than a serialized
+`markov-chain-monte-carlo::ChainCheckpoint`. The record also preserves the Metropolis and action configurations, current action and step, move and proposal
+counters, step telemetry, measurements, scalar trace rows, normalized elapsed time, and explicit state words for the acceptance and ergodic-proposal RNGs.
+Transient geometry and proposal-site caches are rebuilt on load.
 
-Use trace CSV and JSON summary exports for durable cross-version analysis artifacts. A future CDT-owned, versioned checkpoint wire format is tracked in
-[`causal-triangulations#218`](https://github.com/acgetchell/causal-triangulations/issues/218).
+Restoration translates version 1 geometry inside the `src/geometry/` adapter, validates exact connectivity through Delaunay Levels 1–4, and then checks CDT
+topology, foliation, causality, simplex classification, action consistency, counters, and telemetry before exposing the checkpoint. Evolved state need not
+satisfy the Level 5 empty-circumsphere predicate, and restore performs no repair or retriangulation. Toroidal records preserve their periodic domain,
+realization mode, relative lift offsets, connectivity, and payloads.
+
+Releases that continue to support version 1 must read this representation across compatible CDT and dependency upgrades; an incompatible future shape receives
+a new version tag. Unversioned legacy payloads are deliberately rejected. There is no migration reader for checkpoints written through the old Delaunay 0.7
+representation or before required CDT fields such as `initial_vertex_count`; regenerate those checkpoints with the originating build if continued sampling is
+needed.
+
+Checkpoint JSON is an exact stochastic-continuation artifact, not the preferred long-term analysis format. Use trace CSV for rectangular per-step diagnostics
+and the simulation-summary JSON for durable cross-version results and metadata. Those exports intentionally omit resumable RNG and live geometry state.
 
 Chunk execution is implemented through `markov-chain-monte-carlo::Sampler::step_delayed` on the CDT proposal-plan adapter. The upstream sampler owns the
 Metropolis-Hastings accept/reject draw, log-probability cache, chain counters, and checkpoint-compatible continuation view. CDT keeps domain-specific state

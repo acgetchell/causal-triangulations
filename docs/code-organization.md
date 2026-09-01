@@ -163,6 +163,8 @@ causal-triangulations/
 ├── tests/
 │   ├── common/
 │   │   └── proptest_config.rs
+│   ├── fixtures/
+│   │   └── checkpoint_v1.json
 │   ├── semgrep/
 │   │   ├── .github/
 │   │   │   └── workflows/
@@ -249,7 +251,7 @@ enforce this boundary against new CDT-local generic acceptance draws or manual a
 - `notebooks/` — notebook front ends and analysis consumers for CLI-generated artifacts such as trace CSV and JSON summary files. Notebook code may run the
   binary for tutorials, but simulation logic stays in Rust.
 - `tests/` — CLI, integration, physics, property-based, property-configuration, regression, slow-debug, and project-rule tests, with shared property-test
-  configuration under `tests/common/`.
+  configuration under `tests/common/` and committed compatibility artifacts under `tests/fixtures/`.
 - `benches/` — Criterion benchmark harnesses and CI performance suites, with shared fail-fast fixture setup support under `benches/support/`.
 - `docs/` — user guides, architecture notes, development rules, and release/testing/performance documentation.
 - `scripts/` — Python and shell support tooling for benchmarks, coverage, changelog/release work, examples, and validation.
@@ -329,8 +331,9 @@ The module tree is declared from `src/lib.rs` to avoid the `metropolis.rs` plus 
 for `markov-chain-monte-carlo` proposal and target traits. `runner.rs` owns `MetropolisAlgorithm::run_steps`, which rebuilds the upstream `Chain`/`Sampler`
 continuation view, delegates generic acceptance, proposal-ratio application, chain counters, and planned-proposal commit ordering to the upstream MCMC crate,
 then consumes the chain state back into the CDT result without cloning topology per step or per chunk. CDT-owned telemetry and RNG state travel beside that
-single canonical triangulation owner. `checkpoint.rs` owns resumable checkpoint state and resume validation, `telemetry.rs` owns
-public step/proposal telemetry, and `helpers.rs` holds shared CDT-domain calculations.
+single canonical triangulation owner. `checkpoint.rs` owns resumable state, the versioned CDT-owned JSON envelope, dependency-neutral RNG/duration adapters,
+and resume validation. The committed `tests/fixtures/checkpoint_v1.json` artifact guards that compatibility boundary. `telemetry.rs` owns public step/proposal
+telemetry, and `helpers.rs` holds shared CDT-domain calculations.
 
 See `docs/metropolis.md` for the current planned-proposal ordering and enforced MCMC backend boundary.
 
@@ -401,8 +404,9 @@ See `docs/metropolis.md` for the current planned-proposal ordering and enforced 
   mutation reject old handles with typed foreign/stale errors.
 - Translates upstream Delaunay operations and errors into this crate's trait contracts
 - Exposes named validation adapters for Level 1–3 structure, Level 1–4 embedding/realization, and Level 1–5 Delaunay validity
-- Rebuilds checkpoints through explicit Level 1–4 realization validation so exact layered and evolved non-Delaunay states remain restorable while preserving
-  vertex and simplex payloads; temporary persistence and visualization mirrors are tracked by #268 pending upstream delaunay#591
+- Projects MCMC checkpoint geometry into CDT-owned coordinate, payload, and index-relation arrays, then rebuilds that stable record through explicit Level 1–4
+  realization validation so exact layered and evolved non-Delaunay states remain restorable. The current upstream-shaped hydration adapter stays confined here
+  and is tracked for removal by #268 pending upstream delaunay#591.
 - Together with `geometry/generators.rs`, this is the only place that directly imports from the `delaunay` crate
 
 ### `geometry/generators.rs` — Delaunay triangulation generators

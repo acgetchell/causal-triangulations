@@ -935,6 +935,20 @@ impl ErgodicsSystem {
         &self.stats
     }
 
+    /// Returns the proposal RNG for CDT-owned checkpoint projection.
+    pub(crate) const fn checkpoint_rng(&self) -> &Xoshiro256PlusPlus {
+        &self.rng
+    }
+
+    /// Rebuilds the durable parts of an ergodic system after checkpoint hydration.
+    pub(crate) fn from_checkpoint_parts(stats: MoveStatistics, rng: Xoshiro256PlusPlus) -> Self {
+        Self {
+            stats,
+            rng,
+            site_cache: MoveSiteCache::default(),
+        }
+    }
+
     /// Replaces move statistics after an internal speculative operation.
     ///
     /// This keeps public callers from mutating sampler accounting independently
