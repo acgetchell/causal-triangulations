@@ -4866,6 +4866,7 @@ mod tests {
             .expect("summary mesh should satisfy Delaunay's export invariants");
         assert_eq!(mesh_export.metadata.schema, "delaunay.simplicial_complex");
         assert_eq!(mesh_export.metadata.schema_version, 1);
+        assert_eq!(mesh_export.metadata.producer, env!("CARGO_PKG_NAME"));
         assert_eq!(mesh_export.metadata.dimension, 2);
         assert_eq!(mesh_export.metadata.vertex_count, 12);
         assert_eq!(mesh_export.metadata.simplex_count, 12);

@@ -175,8 +175,9 @@ struct SerializedDelaunayBackendRef<'a, VertexData, SimplexData, const D: usize>
 
 /// Borrowed equivalent of Delaunay's durable UUID-based TDS snapshot.
 ///
-/// TODO(#268): replace this mirror when acgetchell/delaunay#591 exposes
-/// Level 1-4 persistence adapters.
+/// TODO(#268, acgetchell/delaunay#591): remove this mirror together with the
+/// [`DelaunayBackend::mesh_export`] projection when upstream exposes Level 1-4
+/// persistence and visualization adapters.
 #[derive(Serialize)]
 struct BorrowedTdsSnapshot<'a, VertexData, SimplexData, const D: usize> {
     vertices: Vec<&'a Vertex<VertexData, D>>,
@@ -1070,18 +1071,20 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
             })
     }
 
-    /// Validates embedding after a mutation without an upstream realization postcondition.
-    ///
-    /// High-level upstream bistellar flips already run cumulative Level 1-4
-    /// realization validation transactionally and therefore do not call this
-    /// helper. Other mutation paths are checked here so every successful backend
-    /// edit has the same postcondition without duplicating whole-mesh scans.
-    fn validate_embedding_after_mutation(
-        &self,
+    /// Validates an unpublished mutation candidate before replacing canonical state.
+    fn validate_candidate_embedding(
+        candidate: &RawTriangulation<VertexData, SimplexData, D>,
         operation: DelaunayOperation,
         target: impl Display,
     ) -> Result<(), DelaunayError> {
-        Self::map_embedding_validation_error(self.validate_embedding(), operation, target)
+        let validation =
+            candidate
+                .validate_realization()
+                .map_err(|err| DelaunayError::ValidationFailed {
+                    level: DelaunayValidationLevel::Four,
+                    detail: err.to_string(),
+                });
+        Self::map_embedding_validation_error(validation, operation, target)
     }
 
     /// Adds mutation context to an embedding validation failure.
@@ -1504,6 +1507,9 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
         VertexData: DataType,
         SimplexData: DataType,
     {
+        // The public borrowed report on `Triangulation` implements the Euclidean
+        // empty-circumsphere scan only. Keep the consuming promotion over a clone
+        // so validation remains topology-aware for every supported owner.
         DelaunayRefinementBuilder::new(self.dt.clone())
             .build()
             .map(|_| ())
@@ -1740,8 +1746,9 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
 
     /// Returns Delaunay's stable, detached mesh-interchange export.
     ///
-    /// TODO(#268): delegate this projection when acgetchell/delaunay#591
-    /// exposes visualization for Level 1-4 triangulations.
+    /// TODO(#268, acgetchell/delaunay#591): remove this projection together with
+    /// [`BorrowedTdsSnapshot`] when upstream exposes Level 1-4 persistence and
+    /// visualization adapters.
     pub(crate) fn mesh_export(&self) -> Result<DelaunayMeshExport<D>, VisualizationExportError> {
         let mut vertices: Vec<_> = self
             .dt
@@ -1821,7 +1828,7 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
             metadata: VisualizationMetadata {
                 schema: VISUALIZATION_SCHEMA.to_owned(),
                 schema_version: VISUALIZATION_SCHEMA_VERSION,
-                producer: "delaunay".to_owned(),
+                producer: env!("CARGO_PKG_NAME").to_owned(),
                 dimension: D,
                 vertex_count: vertices.len(),
                 simplex_count: simplices.len(),
@@ -2262,65 +2269,59 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     ) -> Result<DelaunayRemovalResult, DelaunayError> {
         let vertex_key = self.validate_vertex_handle(vertex)?;
 
-        let inverse_k1 = self.dt.can_flip_k1_remove(vertex_key).ok();
-        let removed_edges = inverse_k1
-            .as_ref()
-            .map(|feasibility| {
-                self.local_edges_for_simplices(
-                    &feasibility.removed_simplices,
-                    DelaunayOperation::FlipK1Remove,
-                )
-            })
-            .transpose()?;
+        let Some(inverse_k1) = self.dt.can_flip_k1_remove(vertex_key).ok() else {
+            let target = format!("vertex {:?}", vertex.key);
+            let mut certified = DelaunayRefinementBuilder::new(self.dt.clone())
+                .build()
+                .map_err(|err| DelaunayError::RemovalFailed {
+                    operation: DelaunayOperation::RemoveVertex,
+                    target: target.clone(),
+                    detail: err.to_string(),
+                })?;
+            certified
+                .delete_vertex(vertex_key)
+                .map_err(|err| DelaunayError::RemovalFailed {
+                    operation: DelaunayOperation::RemoveVertex,
+                    target: target.clone(),
+                    detail: err.to_string(),
+                })?;
+            let candidate = certified.into_triangulation();
+            Self::validate_candidate_embedding(
+                &candidate,
+                DelaunayOperation::RemoveVertex,
+                &target,
+            )?;
+            self.dt = candidate;
+            self.rebuild_interior_facet_index();
+            return Ok(DelaunayRemovalResult {
+                new_faces: Vec::new(),
+            });
+        };
+        let removed_edges = self.local_edges_for_simplices(
+            &inverse_k1.removed_simplices,
+            DelaunayOperation::FlipK1Remove,
+        )?;
         let mut mutation = self.mutation(rollback);
-        let removal = if inverse_k1.is_some() {
+        let info =
             mutation
                 .dt
                 .flip_k1_remove(vertex_key)
-                .map(Some)
-                .map_err(|err| err.to_string())
-        } else {
-            DelaunayRefinementBuilder::new(mutation.dt.clone())
-                .build()
-                .map_err(|err| err.to_string())
-                .and_then(|mut certified| {
-                    certified
-                        .delete_vertex(vertex_key)
-                        .map_err(|err| err.to_string())?;
-                    mutation.dt = certified.into_triangulation();
-                    Ok(None)
-                })
-        };
-        let info = removal.map_err(|err| DelaunayError::RemovalFailed {
-            operation: if inverse_k1.is_some() {
-                DelaunayOperation::FlipK1Remove
-            } else {
-                DelaunayOperation::RemoveVertex
-            },
-            target: format!("vertex {:?}", vertex.key),
-            detail: err,
-        })?;
-        let new_faces = if let (Some(removed_edges), Some(info)) = (removed_edges, info) {
-            mutation.update_interior_facet_index(
-                &removed_edges,
-                &info.new_simplices,
-                DelaunayOperation::FlipK1Remove,
-            )?;
-            info.new_simplices
-                .iter()
-                .copied()
-                .map(|key| mutation.face_handle(key))
-                .collect()
-        } else {
-            mutation.rebuild_interior_facet_index();
-            Vec::new()
-        };
-        if inverse_k1.is_none() {
-            mutation.validate_embedding_after_mutation(
-                DelaunayOperation::RemoveVertex,
-                format!("vertex {:?}", vertex.key),
-            )?;
-        }
+                .map_err(|err| DelaunayError::RemovalFailed {
+                    operation: DelaunayOperation::FlipK1Remove,
+                    target: format!("vertex {:?}", vertex.key),
+                    detail: err.to_string(),
+                })?;
+        mutation.update_interior_facet_index(
+            &removed_edges,
+            &info.new_simplices,
+            DelaunayOperation::FlipK1Remove,
+        )?;
+        let new_faces = info
+            .new_simplices
+            .iter()
+            .copied()
+            .map(|key| mutation.face_handle(key))
+            .collect();
         mutation.commit();
         Ok(DelaunayRemovalResult { new_faces })
     }
@@ -2536,12 +2537,10 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
         coords: &[Self::Coordinate],
     ) -> Result<Self::VertexHandle, Self::Error> {
         let vertex = Self::build_vertex(coords, None, DelaunayOperation::InsertVertex)?;
-        let mut mutation = DelaunayMutation::new(self);
-        let mut certified = DelaunayRefinementBuilder::new(mutation.dt.clone())
+        let mut certified = DelaunayRefinementBuilder::new(self.dt.clone())
             .build()
-            .map_err(|err| DelaunayError::InsertionFailed {
-                operation: DelaunayOperation::InsertVertex,
-                coordinates: coords.to_vec(),
+            .map_err(|err| DelaunayError::ValidationFailed {
+                level: DelaunayValidationLevel::Five,
                 detail: err.to_string(),
             })?;
         let key =
@@ -2552,15 +2551,15 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
                     coordinates: coords.to_vec(),
                     detail: err.to_string(),
                 })?;
-        mutation.dt = certified.into_triangulation();
-        mutation.rebuild_interior_facet_index();
-        mutation.validate_embedding_after_mutation(
+        let candidate = certified.into_triangulation();
+        Self::validate_candidate_embedding(
+            &candidate,
             DelaunayOperation::InsertVertex,
             format!("{coords:?}"),
         )?;
-        let handle = mutation.vertex_handle(key);
-        mutation.commit();
-        Ok(handle)
+        self.dt = candidate;
+        self.rebuild_interior_facet_index();
+        Ok(self.vertex_handle(key))
     }
 
     fn remove_vertex(&mut self, vertex: Self::VertexHandle) -> Result<(), Self::Error> {
@@ -4084,6 +4083,30 @@ mod tests {
                 operation: DelaunayOperation::RemoveVertex,
                 ..
             }
+        );
+        assert_eq!(
+            to_value(&backend).expect("restored backend should serialize"),
+            serialized_before
+        );
+        assert_eq!(backend.interior_facets_by_edge, facets_before);
+    }
+
+    #[test]
+    fn non_delaunay_state_rejects_vertex_insertion_without_mutation() {
+        let mut backend = embedded_non_delaunay_backend();
+        let serialized_before = to_value(&backend).expect("backend should serialize");
+        let facets_before = backend.interior_facets_by_edge.clone();
+
+        let error = backend
+            .insert_vertex(&[0.5, 0.25])
+            .expect_err("a non-Delaunay state cannot enter the certified insertion path");
+
+        assert_matches!(
+            error,
+            DelaunayError::ValidationFailed {
+                level: DelaunayValidationLevel::Five,
+                ref detail,
+            } if !detail.is_empty()
         );
         assert_eq!(
             to_value(&backend).expect("restored backend should serialize"),

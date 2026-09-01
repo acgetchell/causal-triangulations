@@ -21,6 +21,7 @@ pub use delaunay::topology::traits::{GlobalTopology, ToroidalConstructionMode, T
 use delaunay::{
     ConstructionOptions, DelaunayTriangulation, DelaunayTriangulationBuilder, Triangulation,
 };
+use std::fmt::Display;
 
 /// Type alias for the 2D Delaunay triangulation returned by this crate's generators.
 ///
@@ -30,6 +31,13 @@ pub type DelaunayTriangulation2D = DelaunayTriangulation<AdaptiveKernel<f64>, u3
 
 /// Mutable Levels 1-4 owner used internally for exact layered CDT connectivity.
 pub(crate) type RealizedTriangulation2D = Triangulation<AdaptiveKernel<f64>, u32, i32, 2>;
+
+/// Validated explicit vertices and the context retained for upstream diagnostics.
+struct PreparedVertices {
+    vertices: Vec<Vertex<u32, 2>>,
+    vertex_count: u32,
+    coordinate_range: (f64, f64),
+}
 
 /// Keeps `generate_delaunay2` vertex-build failures tied to the public constructor name.
 fn generate_delaunay2_vertex_build_error(
@@ -83,6 +91,50 @@ fn validate_explicit_coordinates(coords_with_data: &[([f64; 2], u32)]) -> CdtRes
         }
     }
     Ok(())
+}
+
+/// Validates and converts explicit coordinate-data pairs once for all builder paths.
+fn prepare_explicit_vertices(coords_with_data: &[([f64; 2], u32)]) -> CdtResult<PreparedVertices> {
+    validate_explicit_coordinates(coords_with_data)?;
+
+    let vertices = coords_with_data
+        .iter()
+        .enumerate()
+        .map(|(i, (coord, data))| {
+            Vertex::<u32, 2>::try_new_with_data(*coord, *data).map_err(|error| {
+                CdtError::VertexBuildFailed {
+                    context: format!("vertex {i}"),
+                    underlying_error: error.to_string(),
+                }
+            })
+        })
+        .collect::<CdtResult<Vec<_>>>()?;
+    let vertex_count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
+    let coordinate_range = coords_with_data
+        .iter()
+        .flat_map(|(coordinates, _)| coordinates.iter().copied())
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), value| {
+            (lo.min(value), hi.max(value))
+        });
+
+    Ok(PreparedVertices {
+        vertices,
+        vertex_count,
+        coordinate_range,
+    })
+}
+
+/// Preserves explicit-construction context for an upstream builder failure.
+fn upstream_construction_error(prepared: &PreparedVertices, error: impl Display) -> CdtError {
+    CdtError::DelaunayGenerationFailed {
+        vertex_count: prepared.vertex_count,
+        coordinate_range: prepared.coordinate_range,
+        attempt: 1,
+        failure: DelaunayGenerationFailure::Upstream {
+            stage: DelaunayGenerationStage::TriangulationConstruction,
+            detail: error.to_string(),
+        },
+    }
 }
 
 /// Rejects toroidal periods that cannot define a finite positive quotient domain.
@@ -214,40 +266,12 @@ pub fn generate_delaunay2(
 pub fn build_delaunay2_with_data(
     coords_with_data: &[([f64; 2], u32)],
 ) -> CdtResult<DelaunayTriangulation2D> {
-    validate_explicit_coordinates(coords_with_data)?;
+    let prepared = prepare_explicit_vertices(coords_with_data)?;
 
-    let vertices: Vec<_> = coords_with_data
-        .iter()
-        .enumerate()
-        .map(|(i, (coord, data))| {
-            Vertex::<u32, 2>::try_new_with_data(*coord, *data).map_err(|e| {
-                CdtError::VertexBuildFailed {
-                    context: format!("vertex {i}"),
-                    underlying_error: e.to_string(),
-                }
-            })
-        })
-        .collect::<CdtResult<Vec<_>>>()?;
-
-    let vertex_count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
-    let coordinate_range = coords_with_data
-        .iter()
-        .flat_map(|(c, _)| c.iter().copied())
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
-            (lo.min(v), hi.max(v))
-        });
-    DelaunayTriangulationBuilder::new(&vertices)
+    DelaunayTriangulationBuilder::new(&prepared.vertices)
         .simplex_data_type::<i32>()
         .build()
-        .map_err(|e| CdtError::DelaunayGenerationFailed {
-            vertex_count,
-            coordinate_range,
-            attempt: 1,
-            failure: DelaunayGenerationFailure::Upstream {
-                stage: DelaunayGenerationStage::TriangulationConstruction,
-                detail: e.to_string(),
-            },
-        })
+        .map_err(|error| upstream_construction_error(&prepared, error))
 }
 
 /// Builds an exact layered 2D triangulation from explicit CDT connectivity.
@@ -259,52 +283,16 @@ pub(crate) fn build_layered_delaunay2_from_simplices(
     coords_with_data: &[([f64; 2], u32)],
     simplices: &[Vec<usize>],
 ) -> CdtResult<RealizedTriangulation2D> {
-    validate_explicit_coordinates(coords_with_data)?;
+    let prepared = prepare_explicit_vertices(coords_with_data)?;
 
-    let vertices: Vec<_> = coords_with_data
-        .iter()
-        .enumerate()
-        .map(|(i, (coord, data))| {
-            Vertex::<u32, 2>::try_new_with_data(*coord, *data).map_err(|e| {
-                CdtError::VertexBuildFailed {
-                    context: format!("vertex {i}"),
-                    underlying_error: e.to_string(),
-                }
-            })
-        })
-        .collect::<CdtResult<Vec<_>>>()?;
-    let vertex_count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
-    let coordinate_range = coords_with_data
-        .iter()
-        .flat_map(|(coordinates, _)| coordinates.iter().copied())
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), value| {
-            (lo.min(value), hi.max(value))
-        });
-
-    DelaunayTriangulationBuilder::try_from_vertices_and_simplices(&vertices, simplices)
-        .map_err(|error| CdtError::DelaunayGenerationFailed {
-            vertex_count,
-            coordinate_range,
-            attempt: 1,
-            failure: DelaunayGenerationFailure::Upstream {
-                stage: DelaunayGenerationStage::TriangulationConstruction,
-                detail: error.to_string(),
-            },
-        })?
+    DelaunayTriangulationBuilder::try_from_vertices_and_simplices(&prepared.vertices, simplices)
+        .map_err(|error| upstream_construction_error(&prepared, error))?
         .simplex_data_type::<i32>()
         .topology_guarantee(TopologyGuarantee::DEFAULT)
         .global_topology(GlobalTopology::Euclidean)
         .construction_options(ConstructionOptions::default().without_final_delaunay_enforcement())
         .build_triangulation()
-        .map_err(|error| CdtError::DelaunayGenerationFailed {
-            vertex_count,
-            coordinate_range,
-            attempt: 1,
-            failure: DelaunayGenerationFailure::Upstream {
-                stage: DelaunayGenerationStage::TriangulationConstruction,
-                detail: error.to_string(),
-            },
-        })
+        .map_err(|error| upstream_construction_error(&prepared, error))
 }
 
 /// Builds a 2D triangulation from explicit vertex coordinates, data, and simplex connectivity.
@@ -426,52 +414,16 @@ fn build_delaunay2_with_topology_options(
     global_topology: GlobalTopology<2>,
     construction_options: ConstructionOptions,
 ) -> CdtResult<DelaunayTriangulation2D> {
-    validate_explicit_coordinates(coords_with_data)?;
+    let prepared = prepare_explicit_vertices(coords_with_data)?;
 
-    let vertices: Vec<_> = coords_with_data
-        .iter()
-        .enumerate()
-        .map(|(i, (coord, data))| {
-            Vertex::<u32, 2>::try_new_with_data(*coord, *data).map_err(|e| {
-                CdtError::VertexBuildFailed {
-                    context: format!("vertex {i}"),
-                    underlying_error: e.to_string(),
-                }
-            })
-        })
-        .collect::<CdtResult<Vec<_>>>()?;
-
-    let vertex_count = u32::try_from(vertices.len()).unwrap_or(u32::MAX);
-    let coordinate_range = coords_with_data
-        .iter()
-        .flat_map(|(c, _)| c.iter().copied())
-        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| {
-            (lo.min(v), hi.max(v))
-        });
-    DelaunayTriangulationBuilder::try_from_vertices_and_simplices(&vertices, simplices)
-        .map_err(|e| CdtError::DelaunayGenerationFailed {
-            vertex_count,
-            coordinate_range,
-            attempt: 1,
-            failure: DelaunayGenerationFailure::Upstream {
-                stage: DelaunayGenerationStage::TriangulationConstruction,
-                detail: e.to_string(),
-            },
-        })?
+    DelaunayTriangulationBuilder::try_from_vertices_and_simplices(&prepared.vertices, simplices)
+        .map_err(|error| upstream_construction_error(&prepared, error))?
         .simplex_data_type::<i32>()
         .topology_guarantee(topology_guarantee)
         .global_topology(global_topology)
         .construction_options(construction_options)
         .build()
-        .map_err(|e| CdtError::DelaunayGenerationFailed {
-            vertex_count,
-            coordinate_range,
-            attempt: 1,
-            failure: DelaunayGenerationFailure::Upstream {
-                stage: DelaunayGenerationStage::TriangulationConstruction,
-                detail: e.to_string(),
-            },
-        })
+        .map_err(|error| upstream_construction_error(&prepared, error))
 }
 
 /// Attempts to build a 2D toroidal explicit triangulation.
@@ -867,6 +819,28 @@ mod tests {
     }
 
     #[test]
+    fn layered_builder_preserves_embedding_failure_context() {
+        let vertices = [([0.0, 0.0], 0_u32), ([1.0, 0.0], 0), ([2.0, 0.0], 1)];
+        let simplices = vec![vec![0, 1, 2]];
+
+        let error = build_layered_delaunay2_from_simplices(&vertices, &simplices)
+            .expect_err("collinear layered connectivity must fail realization validation");
+
+        assert_matches!(
+            error,
+            CdtError::DelaunayGenerationFailed {
+                vertex_count: 3,
+                coordinate_range: (0.0, 2.0),
+                attempt: 1,
+                failure: DelaunayGenerationFailure::Upstream {
+                    stage: DelaunayGenerationStage::TriangulationConstruction,
+                    ref detail,
+                },
+            } if detail.to_ascii_lowercase().contains("degenerate")
+        );
+    }
+
+    #[test]
     fn test_build_delaunay2_from_simplices_rejects_bad_index() {
         // Simplex references vertex 3 which doesn't exist (only indices 0..3 are valid).
         let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
@@ -877,6 +851,28 @@ mod tests {
             result,
             Err(CdtError::DelaunayGenerationFailed { .. }),
             "explicit builder must reject out-of-bounds vertex indices"
+        );
+    }
+
+    #[test]
+    fn layered_builder_preserves_invalid_index_context() {
+        let vertices = [([0.0, 0.0], 0_u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
+        let simplices = vec![vec![0, 1, 3]];
+
+        let error = build_layered_delaunay2_from_simplices(&vertices, &simplices)
+            .expect_err("layered connectivity must reject an out-of-bounds vertex index");
+
+        assert_matches!(
+            error,
+            CdtError::DelaunayGenerationFailed {
+                vertex_count: 3,
+                coordinate_range: (0.0, 1.0),
+                attempt: 1,
+                failure: DelaunayGenerationFailure::Upstream {
+                    stage: DelaunayGenerationStage::TriangulationConstruction,
+                    ref detail,
+                },
+            } if !detail.is_empty()
         );
     }
 
