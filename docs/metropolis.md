@@ -2,7 +2,7 @@
 
 > **MCMC backend boundary:** this page describes the current CDT production Metropolis runner. Its proposal-before-mutation contract should be preserved, but
 > generic Metropolis-Hastings mechanics should live behind `markov-chain-monte-carlo` adapters rather than CDT-local sampler logic. Chunked continuation now
-> uses upstream proposal planning, weighted discrete proposal ratios, and checkpoint-compatible continuation from `markov-chain-monte-carlo` v0.4.1.
+> uses upstream proposal planning, weighted discrete proposal ratios, and checkpoint-compatible continuation from `markov-chain-monte-carlo` v0.4.2.
 > Repository-owned Semgrep rules enforce the production boundary by rejecting CDT-local generic acceptance draws and manual accepted/rejected sampler
 > counters. Any future upstream API gap must be documented and issue-linked before temporary CDT-local sampler logic is added.
 

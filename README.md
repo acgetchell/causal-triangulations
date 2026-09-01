@@ -72,7 +72,7 @@ parameters, outputs, and small first experiments.
 
 ### Requirements
 
-- Rust 1.97.1 or newer (pinned by `Cargo.toml` and `rust-toolchain.toml`)
+- Rust 1.98.0 or newer (pinned by `Cargo.toml` and `rust-toolchain.toml`)
 - `uv` for the notebook environment and repository-managed Python tooling
 
 Rust keeps the simulation engine memory-safe and fast while preserving validation tooling for tests, documentation, benchmarks, and CI parity.

@@ -16,7 +16,7 @@ keywords = [
 license = "BSD-3-Clause"
 readme = "README.md"
 repository = "https://github.com/acgetchell/causal-triangulations"
-rust-version = "1.97.1"
+rust-version = "1.98.0"
 description = "Validated 1+1 Causal Dynamical Triangulations for quantum gravity"
 
 # Features removed - backend system is now internal implementation detail
@@ -53,17 +53,17 @@ debug = "line-tables-only"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "4.6.5", features = [ "derive" ] }
-delaunay = "0.8.0"
-markov-chain-monte-carlo = { version = "0.4.1", features = [ "serde" ] }
+clap = { version = "4.6.6", features = [ "derive" ] }
+delaunay = "0.8.1"
+markov-chain-monte-carlo = { version = "0.4.2", features = [ "serde" ] }
 dirs = "6.0.0"
 env_logger = "0.11.11"
-log = "0.4.33"
+log = "0.4.34"
 num-traits = "0.2.19"
 rand = { version = "0.10.2", features = [ "serde" ] }
 serde = { version = "1.0.229", features = [ "derive" ] }
 serde_json = "1.0.151"
-thiserror = "2.0.19"
+thiserror = "2.0.20"
 
 [dev-dependencies]
 approx = "0.5.1"

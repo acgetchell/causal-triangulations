@@ -41,6 +41,8 @@ notebook-check = "notebook_check:main"
 performance-analysis = "performance_analysis:main"
 postprocess-changelog = "postprocess_changelog:main"
 tag-release = "tag_release:main"
+update-python-dev-pins = "update_python_dev_pins:main"
+update-tool-pins = "update_cargo_tool_pins:main"
 # Backwards-compatible alias
 coverage_report = "coverage_report:main"
 
@@ -59,6 +61,8 @@ py-modules = [
     "postprocess_changelog",
     "subprocess_utils",
     "tag_release",
+    "update_cargo_tool_pins",
+    "update_python_dev_pins",
 ]
 
 [tool.ruff]
@@ -151,6 +155,8 @@ known-first-party = [
     "postprocess_changelog",
     "subprocess_utils",
     "tag_release",
+    "update_cargo_tool_pins",
+    "update_python_dev_pins",
 ]
 force-single-line = false
 split-on-trailing-comma = true
@@ -187,11 +193,11 @@ override-dependencies = [ "mcp==1.28.1" ]
 dev = [
     "actionlint-py==1.7.12.24",
     "pytest==9.1.1",
-    "ruff==0.16.2",
-    "semgrep==1.172.0",
+    "ruff==0.16.5",
+    "semgrep==1.175.0",
     "shellcheck-py==0.11.0.1",
-    "shfmt-py==4.0.0",
-    "ty==0.0.71",
+    "shfmt-py==4.1.0",
+    "ty==0.0.77",
     "yamllint==1.38.0",
 ]
 notebooks = [

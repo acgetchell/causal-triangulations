@@ -36,6 +36,17 @@ match the generated current-version changelog heading when present and verifies 
 
 Shared subprocess wrappers apply a five-minute default timeout. Benchmark paths that may run longer pass their own explicit benchmark-specific timeout.
 
+### Dependency and tool updates
+
+```bash
+just update
+```
+
+`update-python-dev-pins` resolves exact entries in `dependency-groups.dev` as one compatible set, leaves ranged requirements unchanged, applies all exact
+pin changes in one uv transaction, and restores `pyproject.toml` and `uv.lock` if the mutation fails or changes unrelated manifest content.
+`update-tool-pins` reconciles the root justfile with the Cargo-installed tools managed by `just setup` and the active uv version. The aggregate recipe also
+updates Cargo requirements and lockfiles, upgrades those managed Cargo tools, refreshes the uv lock, and syncs the development environment.
+
 ### Benchmark utilities
 
 `benchmark-utils` is a shared baseline/compare tool (ported from `delaunay`). It’s safe to use in CDT, but some subcommands assume baseline formats and

@@ -35,7 +35,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up just
-        uses: ./.github/actions/setup-just
+        uses: $/.github/actions/setup-just
 
       - name: Resolve uv version
         id: uv_version

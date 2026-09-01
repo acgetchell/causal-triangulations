@@ -7,19 +7,21 @@
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 cargo_audit_version := "0.22.2"
-cargo_llvm_cov_version := "0.8.7"
+cargo_edit_version := "0.13.13"
+cargo_llvm_cov_version := "0.9.0"
 cargo_machete_version := "0.9.2"
 cargo_nextest_version := "0.9.143"
+cargo_update_version := "22.1.1"
 clippy_sarif_version := "0.8.0"
-dprint_version := "0.55.2"
+dprint_version := "0.57.0"
 git_cliff_version := "2.13.1"
 just_version := "1.58.0"
-rumdl_version := "0.2.55"
+rumdl_version := "0.2.62"
 sarif_fmt_version := "0.8.0"
 taplo_version := "0.10.0"
-typos_version := "1.49.0"
-uv_version := "0.12.3"
-zizmor_version := "1.29.0"
+typos_version := "1.50.0"
+uv_version := "0.12.7"
+zizmor_version := "1.30.0"
 
 # Common cargo-llvm-cov arguments for all coverage runs.
 # Excludes benches/examples from reports while allowing integration tests to
@@ -33,6 +35,32 @@ _ensure-actionlint: _ensure-uv
     #!/usr/bin/env bash
     set -euo pipefail
     uv run actionlint -version >/dev/null
+
+_ensure-cargo-edit:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    installed_version=""
+    if cargo upgrade --version >/dev/null 2>&1; then
+        installed_version="$(cargo upgrade --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+    fi
+    if [[ "$installed_version" != "{{ cargo_edit_version }}" ]]; then
+        echo "❌ 'cargo-edit' {{ cargo_edit_version }} not found. See 'just setup-tools' or install:"
+        echo "   cargo install --locked cargo-edit --version {{ cargo_edit_version }}"
+        exit 1
+    fi
+
+_ensure-cargo-install-update:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    installed_version=""
+    if command -v cargo-install-update >/dev/null; then
+        installed_version="$(cargo-install-update --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+    fi
+    if [[ "$installed_version" != "{{ cargo_update_version }}" ]]; then
+        echo "❌ 'cargo-update' {{ cargo_update_version }} not found. See 'just setup-tools' or install:"
+        echo "   cargo install --locked cargo-update --version {{ cargo_update_version }}"
+        exit 1
+    fi
 
 _ensure-cargo-llvm-cov:
     #!/usr/bin/env bash
@@ -171,6 +199,15 @@ _ensure-uv:
         exit 1
     fi
 
+_ensure-uv-available:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    command -v uv >/dev/null || {
+        echo "❌ 'uv' not found. Install it from https://github.com/astral-sh/uv" >&2
+        exit 1
+    }
+    uv --version >/dev/null
+
 _ensure-yamllint:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -199,7 +236,10 @@ action-lint: _ensure-actionlint
         files+=("$file")
     done < <(git ls-files -z '.github/workflows/*.yml' '.github/workflows/*.yaml')
     if [ "${#files[@]}" -gt 0 ]; then
-        printf '%s\0' "${files[@]}" | xargs -0 uv run actionlint
+        # actionlint 1.7.12 predates $/ syntax; ignore only this valid self-repository reference.
+        # Remove when https://github.com/rhysd/actionlint/issues/711 is released.
+        printf '%s\0' "${files[@]}" | xargs -0 uv run actionlint \
+            -ignore '^specifying action "\$/\.github/actions/setup-just" in invalid format because ref is missing\.'
     else
         echo "No workflow files found to lint."
     fi
@@ -806,6 +846,30 @@ setup-tools:
     echo ""
 
     echo "Ensuring cargo tools..."
+    cargo_update_version="{{ cargo_update_version }}"
+    if ! have cargo-install-update || [[ "$(cargo-install-update --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$cargo_update_version" ]]; then
+        echo "  ⏳ Installing cargo-update ${cargo_update_version} (cargo)..."
+        cargo install --locked cargo-update --version "${cargo_update_version}"
+    else
+        echo "  ✓ cargo-update ${cargo_update_version}"
+    fi
+
+    cargo_edit_version="{{ cargo_edit_version }}"
+    if ! cargo upgrade --version >/dev/null 2>&1 || [[ "$(cargo upgrade --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$cargo_edit_version" ]]; then
+        echo "  ⏳ Installing cargo-edit ${cargo_edit_version} (cargo)..."
+        cargo install --locked cargo-edit --version "${cargo_edit_version}"
+    else
+        echo "  ✓ cargo-edit ${cargo_edit_version}"
+    fi
+
+    cargo_audit_version="{{ cargo_audit_version }}"
+    if ! cargo audit --version >/dev/null 2>&1 || [[ "$(cargo audit --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$cargo_audit_version" ]]; then
+        echo "  ⏳ Installing cargo-audit ${cargo_audit_version} (cargo)..."
+        cargo install --locked cargo-audit --version "${cargo_audit_version}"
+    else
+        echo "  ✓ cargo-audit ${cargo_audit_version}"
+    fi
+
     just_version="{{ just_version }}"
     if ! have just || [[ "$(just --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)" != "$just_version" ]]; then
         echo "  ⏳ Installing just ${just_version} (cargo)..."
@@ -894,7 +958,7 @@ setup-tools:
     echo "Verifying required commands are available..."
     missing=0
 
-    cmds=(uv jq just taplo dprint rumdl git-cliff typos cargo-llvm-cov zizmor)
+    cmds=(uv jq cargo-install-update cargo-upgrade cargo-audit just taplo dprint rumdl git-cliff typos cargo-llvm-cov zizmor)
     for cmd in "${cmds[@]}"; do
         if have "$cmd"; then
             echo "  ✓ $cmd"
@@ -1097,6 +1161,47 @@ toml-lint: _ensure-taplo
 
 unused-deps: _ensure-cargo-machete
     cargo machete
+
+# Update dependency requirements, locks, managed Cargo tools, and the active uv pin.
+update: _ensure-cargo-install-update update-dependencies update-cargo-tools
+    @echo "✅ Repository dependencies and tools updated."
+
+# Advance Cargo dependency declarations and lockfile entries.
+update-cargo-dependencies: _ensure-cargo-edit
+    cargo upgrade --incompatible allow
+    cargo update
+
+# Update locally installed Cargo CLI tools and reconcile their pins plus the active uv version.
+update-cargo-tools: _ensure-cargo-install-update _ensure-uv-available
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    packages=(
+        cargo-audit
+        cargo-edit
+        cargo-llvm-cov
+        cargo-machete
+        cargo-nextest
+        cargo-update
+        dprint
+        git-cliff
+        just
+        rumdl
+        taplo-cli
+        typos-cli
+        zizmor
+    )
+    cargo install-update --locked "${packages[@]}"
+    uv run --locked update-tool-pins
+
+# Advance Cargo and exact Python development requirements plus their lockfiles.
+update-dependencies: _ensure-cargo-edit _ensure-uv-available update-cargo-dependencies update-python-dependencies
+
+# Resolve latest exact Python development tools, retain ranged requirements, and sync.
+update-python-dependencies: _ensure-uv-available
+    uv run --locked update-python-dev-pins
+    uv lock --upgrade
+    uv sync --locked --group dev
 
 # File validation
 validate-json: _ensure-jq

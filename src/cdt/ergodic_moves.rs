@@ -3236,7 +3236,6 @@ mod tests {
             triangulation
                 .geometry()
                 .triangulation()
-                .as_triangulation()
                 .is_valid_structure()
                 .is_ok()
         );
@@ -3299,7 +3298,6 @@ mod tests {
             triangulation
                 .geometry()
                 .triangulation()
-                .as_triangulation()
                 .is_valid_structure()
                 .is_ok()
         );
@@ -4045,7 +4043,6 @@ mod tests {
             triangulation
                 .geometry()
                 .triangulation()
-                .as_triangulation()
                 .is_valid_structure()
                 .is_ok()
         );

@@ -13,8 +13,8 @@ use crate::errors::{
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::DelaunayVertexHandle;
 use crate::geometry::generators::{
-    DelaunayTriangulation2D, build_delaunay2_with_data, build_layered_delaunay2_from_simplices,
-    build_periodic_toroidal_delaunay2, generate_delaunay2,
+    DelaunayTriangulation2D, RealizedTriangulation2D, build_delaunay2_with_data,
+    build_layered_delaunay2_from_simplices, build_periodic_toroidal_delaunay2, generate_delaunay2,
 };
 use crate::geometry::traits::TriangulationQuery;
 use std::num::NonZeroU32;
@@ -78,7 +78,7 @@ fn validated_backend(dt: DelaunayTriangulation2D) -> CdtResult<DelaunayBackend2D
 }
 
 /// Validates exact layered connectivity through upstream realization Level 4.
-fn realized_backend(dt: DelaunayTriangulation2D) -> CdtResult<DelaunayBackend2D> {
+fn realized_backend(dt: RealizedTriangulation2D) -> CdtResult<DelaunayBackend2D> {
     DelaunayBackend2D::from_realized_triangulation(dt).map_err(|err| {
         CdtError::DelaunayValidationFailed {
             level: DelaunayValidationLevel::Four,

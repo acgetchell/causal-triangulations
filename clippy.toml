@@ -2,7 +2,7 @@
 # This ensures consistent configuration across all developers and IDEs
 
 # Minimum Supported Rust Version
-msrv = "1.97.1"
+msrv = "1.98.0"
 
 # Permit Clippy suggestions that change exported APIs when they improve
 # correctness, performance, or orthogonality.
