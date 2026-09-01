@@ -116,6 +116,7 @@ When using the `gh` CLI to view issues, PRs, or other GitHub objects:
 
 - **NEVER** use `f64::algebraic_add`, `f64::algebraic_sub`, `f64::algebraic_mul`, `f64::algebraic_div`, or `f64::algebraic_rem` in repository-owned Rust,
   including production code, tests, examples, benchmarks, and doctest mirrors
+- The sole exception is `tests/semgrep/src/project_rules/algebraic_float.rs`, which intentionally contains prohibited operations as positive Semgrep fixtures
 - Ordinary IEEE operators and deliberate `f64::mul_add` remain allowed; FMA's defined single-rounding behavior may be part of a numerical contract
 - Any other relaxed or fast-math facility requires a separate tracked scientific review with explicit special-value, reproducibility, correctness, and
   benchmark evidence

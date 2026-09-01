@@ -46,7 +46,7 @@ Release performance is a separate evidence transaction:
 just bench-latest
 just bench-latest-vs-last
 just performance-local
-just performance-release vX.Y.Z vW.Y.Z
+just performance-release vX.Y.Z vA.B.C
 just performance-doc
 just performance-readme
 ```
@@ -383,6 +383,10 @@ GitHub Actions security analysis runs with `zizmor` locally and in `.github/work
 ```bash
 just zizmor
 ```
+
+The local recipe runs zizmor's online audits when `ZIZMOR_GITHUB_TOKEN` or `GH_TOKEN` is set, or when `gh auth token` can provide an authenticated token. It
+falls back to an explicit offline scan when no token is available. The SARIF workflow pins the same zizmor tool version as the `justfile` so GitHub Advanced
+Security and authenticated local runs apply the same audit implementation.
 
 ---
 

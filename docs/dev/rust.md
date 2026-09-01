@@ -36,7 +36,8 @@ single-rounding fused operation and must not be replaced mechanically. Any other
 with an explicit numerical contract, adversarial special-value and reproducibility tests, and representative benchmark evidence.
 
 The `causal-triangulations.rust.no-algebraic-f64-operations` Semgrep rule enforces receiver, associated-function, qualified, function-item, alias, and callback
-forms across source, tests, examples, benchmarks, and rule fixtures.
+forms across source, tests, examples, and benchmarks. Its sole policy exception is `tests/semgrep/src/project_rules/algebraic_float.rs`, which intentionally
+contains prohibited operations as positive rule fixtures.
 
 ---
 

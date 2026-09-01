@@ -244,7 +244,16 @@ def _remove_version_identifiers(text: str, path: Path) -> str:
     end = start + 1
     while end < len(lines):
         body = lines[end].rstrip("\r\n")
-        if body and not body[0].isspace() and not body.startswith("#"):
+        if not body.strip() or body.lstrip().startswith("#"):
+            lookahead = end + 1
+            while lookahead < len(lines):
+                candidate = lines[lookahead].rstrip("\r\n")
+                if candidate.strip() and not candidate.lstrip().startswith("#"):
+                    break
+                lookahead += 1
+            if lookahead == len(lines) or not lines[lookahead][0].isspace():
+                break
+        elif not body[0].isspace():
             break
         end += 1
     block = "".join(lines[start:end])

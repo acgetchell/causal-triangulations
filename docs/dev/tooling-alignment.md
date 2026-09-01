@@ -417,4 +417,16 @@ Issues #264 and #265 compare the repository against `la-stack` while preserving 
   `bench-compare`, `bench-save-*`, and `performance-*` commands form the independent durable release-evidence surface; neither is an alias for the other.
 - Semgrep categorically rejects `f64::algebraic_add`, `algebraic_sub`, `algebraic_mul`, `algebraic_div`, and `algebraic_rem` across production Rust, tests,
   examples, and benchmarks, including receiver, associated, qualified, and function-item forms. Ordinary IEEE operators and deliberate `mul_add` calls
-  remain allowed. Any future relaxed or fast-math facility requires a separate tracked scientific review.
+  remain allowed. The positive rule fixture in `tests/semgrep/src/project_rules/algebraic_float.rs` is the sole policy exception. Any future relaxed or
+  fast-math facility requires a separate tracked scientific review.
+- The release-asset workflow explicitly disables setup-uv caching because its benchmark job produces an artifact consumed by a separate write-privileged
+  publisher. This remains explicit even though current setup-uv `auto` behavior excludes release events, keeping older GitHub Advanced Security zizmor audits
+  and the checked-in workflow contract aligned.
+- The zizmor SARIF workflow pins zizmor-action and the underlying zizmor tool instead of floating to the action's latest default. Authenticated local
+  `just zizmor` runs use online audits through an environment or GitHub CLI token, while unauthenticated runs state that they are using the offline subset.
+  Repository-owned Semgrep rules enforce the static release-cache and scanner-version preconditions; zizmor's online audit remains the authority for resolving
+  whether an action SHA matches its human-readable version tag.
+- The release workflow comparison covered `delaunay`, `markov-chain-monte-carlo`, and `la-stack`. All three use tag-keyed, non-canceling concurrency and bounded
+  release jobs, so CDT adopts those controls; MCMC and la-stack also confirm the separate read-only producer and write-privileged publisher shape. Delaunay
+  provides the directly applicable explicit setup-uv cache disablement. The siblings' zizmor workflows still float the scanner version and their local
+  recipes remain offline, so CDT deliberately does not copy those two gaps.

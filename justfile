@@ -1346,4 +1346,18 @@ yaml-lint: _ensure-yamllint
     fi
 
 zizmor: _ensure-zizmor
-    zizmor .github
+    #!/usr/bin/env bash
+    set -euo pipefail
+    zizmor_token="${ZIZMOR_GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    resolved_zizmor_token=""
+    if [[ -z "$zizmor_token" ]] && command -v gh >/dev/null; then
+        if resolved_zizmor_token="$(gh auth token 2>/dev/null)"; then
+            zizmor_token="$resolved_zizmor_token"
+        fi
+    fi
+    if [[ -n "$zizmor_token" ]]; then
+        ZIZMOR_GITHUB_TOKEN="$zizmor_token" zizmor .github
+    else
+        echo "⚠️  No GitHub token available; zizmor online audits are disabled."
+        zizmor --offline .github
+    fi

@@ -2,9 +2,7 @@
 
 import json
 import subprocess
-
-# Keep runtime annotation resolution available during test collection.
-from pathlib import Path  # noqa: TC003
+from pathlib import Path
 
 import pytest
 
@@ -218,6 +216,51 @@ def test_unrecognized_identifiers_block_fails_before_writing(tmp_path: Path) -> 
         )
 
     assert _snapshots(tmp_path) == originals
+
+
+@pytest.mark.parametrize("separator", ["", "\n", "  "])
+def test_remove_version_identifiers_preserves_following_top_level_comment(separator: str) -> None:
+    prefix = f"cff-version: 1.2.0\nversion: 0.1.0\ndoi: {_CONCEPT_DOI}\n"
+    identifiers = "identifiers:\n  - type: doi\n    value: 10.5281/zenodo.20513229\n    description: Zenodo DOI for version 0.1.0\n"
+    suffix = f"{separator}# Zenodo notes\ndate-released: 2026-06-02\n"
+
+    updated = update_release_version._remove_version_identifiers(
+        f"{prefix}{identifiers}{suffix}",
+        Path("CITATION.cff"),
+    )
+
+    assert updated == f"{prefix}{suffix}"
+
+
+def test_remove_version_identifiers_preserves_comment_before_whitespace_blank() -> None:
+    prefix = f"cff-version: 1.2.0\nversion: 0.1.0\ndoi: {_CONCEPT_DOI}\n"
+    identifiers = "identifiers:\n  - type: doi\n    value: 10.5281/zenodo.20513229\n    description: Zenodo DOI for version 0.1.0\n"
+    suffix = "# Zenodo notes\n  \ndate-released: 2026-06-02\n"
+
+    updated = update_release_version._remove_version_identifiers(
+        f"{prefix}{identifiers}{suffix}",
+        Path("CITATION.cff"),
+    )
+
+    assert updated == f"{prefix}{suffix}"
+
+
+@pytest.mark.parametrize("separator", ["\n", "# Zenodo notes\n", "  # Zenodo notes\n", "# Zenodo notes\n  \n"])
+def test_remove_version_identifiers_rejects_indented_content_after_separator(separator: str) -> None:
+    citation = (
+        f"cff-version: 1.2.0\nversion: 0.1.0\ndoi: {_CONCEPT_DOI}\n"
+        "identifiers:\n"
+        "  - type: doi\n"
+        "    value: 10.5281/zenodo.20513229\n"
+        "    description: Zenodo DOI for version 0.1.0\n"
+        f"{separator}"
+        "  - type: other\n"
+        "    value: retained\n"
+        "date-released: 2026-06-02\n"
+    )
+
+    with pytest.raises(ValueError, match="refusing to remove an unrecognized identifiers block"):
+        update_release_version._remove_version_identifiers(citation, Path("CITATION.cff"))
 
 
 def test_planned_validation_failure_precedes_repository_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
