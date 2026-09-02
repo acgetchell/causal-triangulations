@@ -32,14 +32,26 @@ Completed foundation work:
 
 ## v0.1.1 Maturity And API Polish
 
-The post-v0.1.0 patch track can improve the current 1+1 surface without making physics-validation claims that belong to v0.2.0:
+The v0.1.1 patch release completes the internally validated 1+1 CDT foundation on Delaunay 0.8.1 and Rust 1.98. Its release evidence covers open and toroidal
+construction, nonuniform and minimum legal slice profiles, topology and foliation invariants, periodic seams, reversible local moves, failure-atomic rollback,
+full action-delta reconstruction, independent Metropolis-Hastings family/site accounting, deterministic checkpoint continuation, finite diagnostics, and
+release-performance provenance.
 
-- Evaluate move-family weighting by available application sites while preserving the exact Hastings correction.
-- Broaden per-kernel tests around spatial and temporal wrap-around simplices.
-- Accept fixed triangle simplices directly in explicit-simplex generator APIs to remove per-triangle `Vec` adaptation.
-- Add manual foliation assignment APIs with the same validation and synchronization guarantees as constructor-assigned labels.
-- Add tutorial-style examples for open-time strips, periodic-time runs, observables, and interpreting Metropolis acceptance behavior.
-- Retain dependency-gated geometry cleanup and typed-error redesign as API maturity work rather than evidence about the sampled CDT ensemble.
+This establishes that the implemented discrete states and transition bookkeeping satisfy their documented contracts. It does not establish chain mixing,
+continuum behavior, fixed-volume physics, finite-size scaling, or agreement with the exact transfer-matrix ensemble. The quantitative analytic ensemble gate
+remains [#238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.0.
+
+Completed maturity work includes:
+
+- [x] Delaunay 0.8.1 topology-aware Level 1–4 reconstruction for evolved and restored non-Delaunay states, while fresh initializers retain Level 1–5
+  evidence.
+- [x] Exact proposal-family and offered-site Hastings accounting for uniform, unequal fixed, and state-dependent policies, including zero reverse support and
+  distinct `Move22`/`EdgeFlip` mixture components.
+- [x] Per-kernel spatial- and temporal-seam tests, exact `(1,3)`/`(3,1)` inverse evidence, minimum-slice guards, and seeded mixed-move invariant checks.
+- [x] Full action recomputation across every successful move family, ordinary and extreme finite couplings, and the documented edge-to-triangle cosmological
+  convention boundary.
+- [x] Exact checkpoint restoration and deterministic continuation of triangulation state, RNG streams, counters, proposal telemetry, measurements, and traces.
+- [x] Fixed-triangle generator inputs, manual foliation assignment, typed release tooling, tutorial examples, and retained benchmark provenance.
 
 ## v0.2.0 Validated 1+1 CDT Baseline
 

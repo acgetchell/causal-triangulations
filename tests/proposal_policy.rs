@@ -387,6 +387,89 @@ fn uniform_policy_volume_pair_satisfies_independent_detailed_balance() -> CdtRes
 }
 
 #[test]
+fn distinct_flip_mixture_components_satisfy_independent_detailed_balance() -> CdtResult<()> {
+    let triangulation = CdtTriangulation::from_toroidal_cdt(8, 8)?;
+    let policy = CdtMoveFamilyDistribution::from_weights([1.0, 0.0, 0.0, 3.0])
+        .expect("fixed flip-family weights should be valid");
+    let mut proposal = CdtProposal::new(ActionConfig::default())
+        .with_seed(0x254)
+        .with_policy(policy);
+    let mut rng = StdRng::seed_from_u64(0x2254);
+    let mut observed_move_22 = false;
+    let mut observed_edge_flip = false;
+
+    for _ in 0..256 {
+        let Some(plan) = proposal.propose_plan(&triangulation, &mut rng)? else {
+            continue;
+        };
+        assert!(matches!(
+            plan.move_type(),
+            MoveType::Move22 | MoveType::EdgeFlip
+        ));
+        let mut proposed = triangulation.clone();
+        proposal.commit(&mut proposed, plan.clone(), &mut rng)?;
+
+        let mut inspection = ErgodicsSystem::new();
+        let forward_sites = inspection
+            .proposal_policy_view(&triangulation, plan.move_type())
+            .offered_site_count();
+        let reverse_sites = inspection
+            .proposal_policy_view(&proposed, plan.reverse_move_type())
+            .offered_site_count();
+        let forward_sites_f64 = f64::from(
+            u32::try_from(forward_sites).expect("test fixture forward count should fit u32"),
+        );
+        let reverse_sites_f64 = f64::from(
+            u32::try_from(reverse_sites).expect("test fixture reverse count should fit u32"),
+        );
+        let family_probability = policy.probability(plan.move_type());
+        let forward_q = family_probability / forward_sites_f64;
+        let reverse_q = family_probability / reverse_sites_f64;
+        let expected_ratio = reverse_q.ln() - forward_q.ln();
+
+        assert_eq!(plan.forward_site_count(), forward_sites);
+        assert_eq!(plan.reverse_site_count(), reverse_sites);
+        assert_relative_eq!(
+            plan.forward_family_probability(),
+            family_probability,
+            epsilon = f64::EPSILON
+        );
+        assert_relative_eq!(
+            plan.reverse_family_probability(),
+            family_probability,
+            epsilon = f64::EPSILON
+        );
+        assert_relative_eq!(plan.log_proposal_ratio(), expected_ratio, epsilon = 1e-12);
+
+        let log_target_forward = plan.action_before() - plan.action_after();
+        let log_accept_forward = (log_target_forward + expected_ratio).min(0.0);
+        let log_accept_reverse = (-log_target_forward - expected_ratio).min(0.0);
+        let log_forward_flux = -plan.action_before() + forward_q.ln() + log_accept_forward;
+        let log_reverse_flux = -plan.action_after() + reverse_q.ln() + log_accept_reverse;
+        assert_relative_eq!(log_forward_flux, log_reverse_flux, epsilon = 1e-12);
+
+        match plan.move_type() {
+            MoveType::Move22 => observed_move_22 = true,
+            MoveType::EdgeFlip => observed_edge_flip = true,
+            MoveType::Move13Add | MoveType::Move31Remove => unreachable!(),
+        }
+        if observed_move_22 && observed_edge_flip {
+            break;
+        }
+    }
+
+    assert!(
+        observed_move_22,
+        "fixed mixture should realize Move22 plans"
+    );
+    assert!(
+        observed_edge_flip,
+        "fixed mixture should realize distinct EdgeFlip plans"
+    );
+    Ok(())
+}
+
+#[test]
 fn fixed_policy_checkpoint_resume_matches_uninterrupted_rng_stream() -> CdtResult<()> {
     let policy = CdtMoveFamilyDistribution::from_weights([1.0, 3.0, 1.0, 1.0])
         .expect("fixed checkpoint policy should be valid");
@@ -583,6 +666,25 @@ fn reverse_policy_probability_is_evaluated_on_planned_post_state() -> CdtResult<
     let expected_forward = f64::from(vertices_before) / f64::from(vertices_before + 1);
     let expected_reverse = 1.0 / f64::from(vertices_before + 2);
     let incorrect_pre_state_reverse = 1.0 / f64::from(vertices_before + 1);
+    let mut proposed = triangulation.clone();
+    proposal.commit(&mut proposed, plan.clone(), &mut rng)?;
+    let independently_counted_forward = inspection
+        .proposal_policy_view(&triangulation, plan.move_type())
+        .offered_site_count();
+    let independently_counted_reverse = inspection
+        .proposal_policy_view(&proposed, plan.reverse_move_type())
+        .offered_site_count();
+    let forward_sites = f64::from(
+        u32::try_from(independently_counted_forward)
+            .expect("test fixture forward count should fit u32"),
+    );
+    let reverse_sites = f64::from(
+        u32::try_from(independently_counted_reverse)
+            .expect("test fixture reverse count should fit u32"),
+    );
+    let forward_q = expected_forward / forward_sites;
+    let reverse_q = expected_reverse / reverse_sites;
+    let expected_ratio = reverse_q.ln() - forward_q.ln();
 
     assert_relative_eq!(
         plan.forward_family_probability(),
@@ -595,12 +697,22 @@ fn reverse_policy_probability_is_evaluated_on_planned_post_state() -> CdtResult<
         epsilon = 1e-12
     );
     assert_eq!(plan.forward_site_count(), pre_forward_site_count);
+    assert_eq!(plan.forward_site_count(), independently_counted_forward);
+    assert_eq!(plan.reverse_site_count(), independently_counted_reverse);
     assert_ne!(
         plan.reverse_site_count(),
         pre_reverse_site_count,
         "reverse-site count must come from the volume-increased planned state"
     );
     assert!((plan.reverse_family_probability() - incorrect_pre_state_reverse).abs() > 1e-12);
+    assert_relative_eq!(plan.log_proposal_ratio(), expected_ratio, epsilon = 1e-12);
+
+    let log_target_forward = plan.action_before() - plan.action_after();
+    let log_accept_forward = (log_target_forward + expected_ratio).min(0.0);
+    let log_accept_reverse = (-log_target_forward - expected_ratio).min(0.0);
+    let log_forward_flux = -plan.action_before() + forward_q.ln() + log_accept_forward;
+    let log_reverse_flux = -plan.action_after() + reverse_q.ln() + log_accept_reverse;
+    assert_relative_eq!(log_forward_flux, log_reverse_flux, epsilon = 1e-12);
     Ok(())
 }
 

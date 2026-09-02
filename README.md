@@ -151,7 +151,16 @@ contract and `just perf-check` for a local regression check. Release comparisons
 matching provenance before updating the tracked report and summary.
 
 <!-- performance-summary:start -->
-No release-to-release comparison has been published with the retained artifact workflow yet. Run `just performance-release` during release preparation.
+Latest retained comparison: `v0.1.1` against `v0.1.0`.
+
+| Comparable benchmarks | Current only | Baseline only |
+| ---: | ---: | ---: |
+| 29 | 9 | 5 |
+
+![Release benchmark comparison](docs/assets/performance-comparison.svg)
+
+[Tag-pinned full report](https://github.com/acgetchell/causal-triangulations/blob/v0.1.1/docs/PERFORMANCE.md) ·  
+[Native Criterion baseline](https://github.com/acgetchell/causal-triangulations/releases/download/v0.1.1/causal-triangulations-v0.1.1-criterion-baseline.tar.gz)
 <!-- performance-summary:end -->
 
 See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/performance-testing.md`](docs/performance-testing.md) for comprehensive

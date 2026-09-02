@@ -3,6 +3,53 @@
 This is the canonical release flow for a stable `vX.Y.Z` release. Release preparation is content-idempotent: rerunning the deterministic commands on the
 same UTC day produces the same tracked files. Performance measurements are deliberately separate because measurement output is not idempotent.
 
+## v0.1.1 scientific claim checklist
+
+The v0.1.1 release establishes the internal scientific correctness of the implemented 1+1 CDT foundation: validated open-time strips and periodic
+S¹(time) × S¹(space) triangulations, topology and foliation preservation, strict causal-simplex classification, reversible local-move bookkeeping,
+failure-atomic mutation, Regge-action deltas, complete family/site Hastings factors, exact compatible-build checkpoint continuation, and the documented
+finite combinatorial diagnostics.
+
+The release evidence includes:
+
+- Delaunay 0.8.1 Level 1–5 validation for fresh toroidal initializers and topology-aware Level 1–4 reconstruction for evolved or checkpoint-restored states;
+- independent counts, incidence, connectivity, boundary, Euler-characteristic, periodic-seam, and strict Up/Down classification checks on open and toroidal
+  fixtures, including nonuniform profiles and minimum legal slices;
+- spatial- and temporal-seam applications for both k=2 identifiers, exact `(1,3)`/`(3,1)` seam-local inverses, unchanged self-loops, and canonical-state,
+  derived-profile, simplex-count, and action restoration after simulated hard failure;
+- full action recomputation for every successful move family under ordinary and extreme finite couplings, plus finite target scoring at a matching extreme
+  temperature;
+- independent forward/reverse flux reconstruction for uniform, unequal fixed, and state-dependent family policies, including distinct `Move22` and
+  `EdgeFlip` mixture components and zero reverse support;
+- deterministic chunked continuation of both RNG streams, counters, proposal telemetry, measurements, traces, policy binding, and exact triangulation state;
+  and
+- retained performance reports whose provenance identifies the Rust toolchain, Delaunay release, benchmark harness, source state, and host.
+
+This is a structural and transition-kernel claim, not an analytic ensemble-validation claim. v0.1.1 does **not** establish ergodicity, mixing,
+thermalization, continuum-limit behavior, finite-size scaling, fixed-volume production sampling, or agreement with the exact 1+1 transfer-matrix
+distribution. That stronger quantitative gate remains [issue #238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.0. Level 5
+Delaunay validation is likewise not required after valid CDT evolution because Delaunayhood is not part of the sampled ensemble.
+
+Before tagging v0.1.1, verify the release candidate from committed tracked source with:
+
+```bash
+just ci
+just ci-slow
+just publish-check
+just performance-release v0.1.1 v0.1.0
+```
+
+The retained performance comparison must contain no unexplained regression. Run `just performance-release` after the complete candidate changes are present
+in tracked repository paths. Its isolation contract copies current tracked changes byte-for-byte into the measurement worktree while intentionally excluding
+untracked files.
+
+For v0.1.1, the retained comparison records the intended cost of the stronger correctness contract. Constructor timings include stricter topology and
+foliation checks; validation now runs topology-aware Delaunay Levels 1–4 plus CDT embedding, foliation, causality, and simplex-classification checks; and one
+planned Metropolis proposal now includes exact offered-site enumeration, speculative mutation, reverse-state family/site accounting, and final validation.
+Those semantic workload changes explain the higher generation, validation, and single-proposal timings relative to v0.1.0. Direct local-move and complete
+small Metropolis timings improved, and no Rust 1.98 standard-library candidate was adopted, so the comparison contains no regression attributable to
+ceremonial MSRV API churn.
+
 ## Prerequisites
 
 Install these external tools before running `just setup`:

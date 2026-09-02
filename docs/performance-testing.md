@@ -79,7 +79,7 @@ that release. The asset name is `causal-triangulations-vX.Y.Z-criterion-baseline
 Run the complete release transaction before committing a release PR:
 
 ```bash
-just performance-release v0.2.0 v0.1.0
+just performance-release v0.1.1 v0.1.0
 ```
 
 Both tags are optional. The current tag defaults to the Cargo package version and the baseline defaults to the newest published stable release older than
@@ -117,7 +117,7 @@ copied retained pair while preserving the same strict validation and repository-
 For audit or reconstruction after both native release assets exist:
 
 ```bash
-just performance-github-assets v0.2.0 v0.1.0
+just performance-github-assets v0.1.1 v0.1.0
 ```
 
 This downloads both tag-pinned archives, rejects traversal paths, links, devices, and non-regular members, verifies the embedded source provenance, and

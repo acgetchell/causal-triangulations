@@ -66,10 +66,10 @@ just bench-latest
 just bench-save-last
 just bench-latest-vs-last
 just performance-local
-just performance-release v0.2.0 v0.1.0
+just performance-release v0.1.1 v0.1.0
 just performance-doc
 just performance-readme
-just performance-github-assets v0.2.0 v0.1.0
+just performance-github-assets v0.1.1 v0.1.0
 ```
 
 `performance_artifacts.py` defines the fixed CSV schema, provenance binding, strict reload checks, and rollback-safe multi-file replacement.

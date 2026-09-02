@@ -3650,6 +3650,20 @@ mod tests {
     }
 
     #[test]
+    fn cdt_target_accepts_extreme_finite_couplings_with_safe_temperature() {
+        let action_config = ActionConfig::new(1.0e280, -2.0e280, 3.0e280)
+            .expect("extreme finite couplings should retain finite action bounds");
+        let target = CdtTarget::new(action_config, 1.0e300)
+            .expect("a matching finite temperature should keep target scores finite");
+        let triangulation =
+            CdtTriangulation::from_toroidal_cdt(3, 3).expect("build toroidal target fixture");
+
+        let log_probability = Target::log_prob(&target, &triangulation);
+
+        assert!(log_probability.is_finite());
+    }
+
+    #[test]
     fn cdt_target_rejects_invalid_action_config() {
         let err = ActionConfig::new(f64::NAN, 1.0, 0.0)
             .expect_err("invalid action config should be rejected");

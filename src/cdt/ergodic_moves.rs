@@ -2584,6 +2584,9 @@ mod tests {
     use super::*;
     use crate::cdt::action::ActionConfig;
     use crate::cdt::foliation::FoliationError;
+    use crate::cdt::metropolis::helpers::{
+        SimplexCounts, action_delta_matches, proposed_delta_action,
+    };
     use crate::errors::{CdtValidationCheck, CdtValidationFailure, DelaunayValidationLevel};
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::backends::delaunay::DelaunayError;
@@ -2673,6 +2676,79 @@ mod tests {
                 .slab_triangle_profile()
                 .expect("test slab profile should be valid"),
         }
+    }
+
+    /// Identifies an edge whose canonical endpoints straddle the periodic spatial boundary.
+    fn edge_crosses_spatial_seam(
+        triangulation: &CdtTriangulation2D,
+        edge: &DelaunayEdgeHandle,
+    ) -> bool {
+        let Some([spatial_period, _]) = triangulation.geometry().periodic_domain() else {
+            return false;
+        };
+        let Ok(Some(adjacent)) = triangulation.geometry().edge_adjacent_faces(edge) else {
+            return false;
+        };
+        let Ok(first) = triangulation
+            .geometry()
+            .vertex_coordinates(&adjacent.endpoints.0)
+        else {
+            return false;
+        };
+        let Ok(second) = triangulation
+            .geometry()
+            .vertex_coordinates(&adjacent.endpoints.1)
+        else {
+            return false;
+        };
+        (first[0] - second[0]).abs() > spatial_period / 2.0
+    }
+
+    /// Identifies an edge whose endpoint labels straddle the periodic temporal boundary.
+    fn edge_crosses_temporal_seam(
+        triangulation: &CdtTriangulation2D,
+        edge: &DelaunayEdgeHandle,
+    ) -> bool {
+        let Ok(Some(adjacent)) = triangulation.geometry().edge_adjacent_faces(edge) else {
+            return false;
+        };
+        let Some(first) = triangulation
+            .geometry()
+            .vertex_data_by_key(adjacent.endpoints.0.vertex_key())
+        else {
+            return false;
+        };
+        let Some(second) = triangulation
+            .geometry()
+            .vertex_data_by_key(adjacent.endpoints.1.vertex_key())
+        else {
+            return false;
+        };
+        first.abs_diff(second) == triangulation.time_slices().get() - 1
+    }
+
+    /// Identifies a slice-zero link split whose adjacent faces wrap through the final slice.
+    fn insertion_touches_temporal_seam(
+        triangulation: &CdtTriangulation2D,
+        candidate: &FoliatedInsertionCandidate,
+    ) -> bool {
+        if candidate.label != 0 {
+            return false;
+        }
+        let Ok(Some(adjacent)) = triangulation
+            .geometry()
+            .edge_adjacent_faces(&candidate.edge)
+        else {
+            return false;
+        };
+        [&adjacent.opposite_vertices.0, &adjacent.opposite_vertices.1]
+            .into_iter()
+            .any(|vertex| {
+                triangulation
+                    .geometry()
+                    .vertex_data_by_key(vertex.vertex_key())
+                    == Some(triangulation.time_slices().get() - 1)
+            })
     }
 
     /// Counts spacelike-link insertion sites without using the production visitor or cache.
@@ -3323,6 +3399,18 @@ mod tests {
     fn rollback_restores_snapshot_on_hard_failure() {
         let mut triangulation = single_triangle();
         let snapshot = triangulation.clone();
+        let serialized_before =
+            serde_json::to_value(&triangulation).expect("fixture should serialize");
+        let signature_before = canonical_signature(&triangulation);
+        let slab_profile_before = triangulation
+            .slab_triangle_profile()
+            .expect("fixture slab profile should be valid");
+        let action_config = ActionConfig::default();
+        let action_before = action_config.calculate_action(
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+        );
         let counts_before = (
             triangulation.vertex_count(),
             triangulation.edge_count(),
@@ -3365,7 +3453,99 @@ mod tests {
             ),
             counts_before
         );
+        assert_eq!(
+            serde_json::to_value(&triangulation).expect("rolled-back state should serialize"),
+            serialized_before
+        );
+        assert_eq!(canonical_signature(&triangulation), signature_before);
+        assert_eq!(
+            triangulation
+                .slab_triangle_profile()
+                .expect("rolled-back slab profile should remain valid"),
+            slab_profile_before
+        );
+        assert_relative_eq!(
+            action_config.calculate_action(
+                triangulation.vertex_count(),
+                triangulation.edge_count(),
+                triangulation.face_count(),
+            ),
+            action_before,
+            epsilon = f64::EPSILON
+        );
         assert!(triangulation.validate().is_ok());
+    }
+
+    #[test]
+    fn successful_move_deltas_match_full_action_recomputation() {
+        let original = CdtTriangulation2D::from_toroidal_cdt(8, 8).expect("build toroidal CDT");
+        let action_configs = [
+            ActionConfig::default(),
+            ActionConfig::new(1.0e280, -2.0e280, 3.0e280)
+                .expect("extreme finite couplings should retain finite action bounds"),
+        ];
+
+        for move_type in MoveType::REVERSIBLE_1P1 {
+            let family = MoveSiteCache::collect_family(
+                &original,
+                move_type,
+                original.instance_id(),
+                original.metadata().modification_count(),
+            );
+            assert!(
+                !family.sites.is_empty(),
+                "representative torus should expose {move_type:?} sites"
+            );
+
+            let before = SimplexCounts {
+                vertices: original.vertex_count(),
+                edges: original.edge_count(),
+                triangles: original.face_count(),
+            };
+            let mut successful_state = None;
+            for site in family.sites {
+                let mut trial = original.clone();
+                let site = site
+                    .remap_for_clone(&original, &trial)
+                    .expect("offered site should remap to its test clone");
+                let mut system = ErgodicsSystem::with_seed(0x254);
+                match system.apply_proposal_site(&mut trial, move_type, site) {
+                    MoveResult::Success => {
+                        successful_state = Some(trial);
+                        break;
+                    }
+                    MoveResult::Rejected(_)
+                    | MoveResult::GeometricViolation
+                    | MoveResult::CausalityViolation => {
+                        assert_eq!(canonical_signature(&trial), canonical_signature(&original));
+                    }
+                    MoveResult::HardFailure(error) => {
+                        panic!("offered {move_type:?} site failed hard: {error}")
+                    }
+                }
+            }
+            let successful_state = successful_state
+                .unwrap_or_else(|| panic!("representative torus should realize {move_type:?}"));
+            successful_state
+                .validate()
+                .expect("successful move should preserve evolved CDT invariants");
+
+            for action_config in &action_configs {
+                let delta = proposed_delta_action(action_config, before, move_type)
+                    .expect("representative move delta should remain finite");
+                let action_before =
+                    action_config.calculate_action(before.vertices, before.edges, before.triangles);
+                let action_after = action_config.calculate_action(
+                    successful_state.vertex_count(),
+                    successful_state.edge_count(),
+                    successful_state.face_count(),
+                );
+                assert!(
+                    action_delta_matches(action_before, delta, action_after),
+                    "{move_type:?} delta {delta:e} did not match full action recomputation for {action_config:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -3999,6 +4179,58 @@ mod tests {
     }
 
     #[test]
+    fn both_k2_kernel_identifiers_apply_across_each_toroidal_seam() {
+        let original = CdtTriangulation2D::from_toroidal_cdt(8, 8).expect("build toroidal CDT");
+
+        for move_type in [MoveType::Move22, MoveType::EdgeFlip] {
+            let family = MoveSiteCache::collect_family(
+                &original,
+                move_type,
+                original.instance_id(),
+                original.metadata().modification_count(),
+            );
+            for (seam_name, crosses_seam) in [
+                (
+                    "spatial",
+                    edge_crosses_spatial_seam
+                        as fn(&CdtTriangulation2D, &DelaunayEdgeHandle) -> bool,
+                ),
+                (
+                    "temporal",
+                    edge_crosses_temporal_seam
+                        as fn(&CdtTriangulation2D, &DelaunayEdgeHandle) -> bool,
+                ),
+            ] {
+                let site = family
+                    .sites
+                    .iter()
+                    .find(|site| {
+                        matches!(site, ProposalSite::EdgeFlip(edge) if crosses_seam(&original, edge))
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("{move_type:?} should expose a {seam_name}-seam site")
+                    });
+                let mut trial = original.clone();
+                let site = site
+                    .remap_for_clone(&original, &trial)
+                    .expect("seam site should remap to its test clone");
+                let mut system = ErgodicsSystem::with_seed(0x22);
+
+                let result = system.apply_proposal_site(&mut trial, move_type, site);
+
+                assert_eq!(
+                    result,
+                    MoveResult::Success,
+                    "{move_type:?} should succeed across the {seam_name} seam"
+                );
+                trial
+                    .validate()
+                    .unwrap_or_else(|error| panic!("{seam_name}-seam flip must validate: {error}"));
+            }
+        }
+    }
+
+    #[test]
     fn removal_sampleable_guard_rejects_existing_replacement_face() {
         let triangulation = single_triangle();
         let face = triangulation
@@ -4187,6 +4419,8 @@ mod tests {
         reason = "the exhaustive round-trip test keeps proposal application, rejection atomicity, stable-identity lookup, and canonical-state evidence together"
     )]
     fn every_small_fixture_insertion_has_an_exact_canonical_inverse() {
+        let mut spatial_seam_round_trip = false;
+        let mut temporal_seam_round_trip = false;
         for original in [
             CdtTriangulation2D::from_cdt_strip(4, 3).expect("open-boundary strip should build"),
             CdtTriangulation2D::from_toroidal_cdt(3, 3).expect("toroidal CDT should build"),
@@ -4209,6 +4443,11 @@ mod tests {
 
             for insertion_site in insertion_family.sites {
                 assert_matches!(insertion_site, ProposalSite::FoliatedInsertion(_));
+                let ProposalSite::FoliatedInsertion(candidate) = &insertion_site else {
+                    unreachable!()
+                };
+                let crosses_spatial_seam = edge_crosses_spatial_seam(&original, &candidate.edge);
+                let touches_temporal_seam = insertion_touches_temporal_seam(&original, candidate);
                 let mut triangulation = original.clone();
                 let original_vertices = triangulation
                     .geometry()
@@ -4315,6 +4554,8 @@ mod tests {
                 let triangulation = exact_inverse
                     .expect("one concrete inverse support edge should restore the original CDT");
                 successful_round_trips += 1;
+                spatial_seam_round_trip |= crosses_spatial_seam;
+                temporal_seam_round_trip |= touches_temporal_seam;
                 triangulation
                     .validate()
                     .expect("round-tripped CDT should remain valid");
@@ -4334,6 +4575,14 @@ mod tests {
                 "representative fixture should contain a round-trippable insertion"
             );
         }
+        assert!(
+            spatial_seam_round_trip,
+            "a toroidal spatial-seam Move13Add should have an exact Move31Remove inverse"
+        );
+        assert!(
+            temporal_seam_round_trip,
+            "a toroidal temporal-seam Move13Add should have an exact Move31Remove inverse"
+        );
     }
 
     #[test]
