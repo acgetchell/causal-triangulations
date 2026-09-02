@@ -739,7 +739,7 @@ def _readme_block(bundle: ArtifactBundle) -> str:
             "",
             "![Release benchmark comparison](docs/assets/performance-comparison.svg)",
             "",
-            f"[Tag-pinned full report]({report_url}) ·",
+            f"[Tag-pinned full report]({report_url}) ·  ",
             f"[Native Criterion baseline]({asset_url})",
             README_END,
         )

@@ -159,7 +159,7 @@ Latest retained comparison: `v0.1.1` against `v0.1.0`.
 
 ![Release benchmark comparison](docs/assets/performance-comparison.svg)
 
-[Tag-pinned full report](https://github.com/acgetchell/causal-triangulations/blob/v0.1.1/docs/PERFORMANCE.md) ·
+[Tag-pinned full report](https://github.com/acgetchell/causal-triangulations/blob/v0.1.1/docs/PERFORMANCE.md) ·  
 [Native Criterion baseline](https://github.com/acgetchell/causal-triangulations/releases/download/v0.1.1/causal-triangulations-v0.1.1-criterion-baseline.tar.gz)
 <!-- performance-summary:end -->
 

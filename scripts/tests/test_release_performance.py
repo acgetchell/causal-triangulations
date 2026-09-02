@@ -277,7 +277,11 @@ def test_documentation_is_rendered_only_from_bundle(tmp_path: Path) -> None:
     assert "<br>" not in report
     assert "| 1 | 1 | 0 |" in readme
     assert "blob/v0.2.0/docs/PERFORMANCE.md" in readme
-    assert ") ·\n[Native Criterion baseline]" in readme
+    assert (
+        "[Tag-pinned full report](https://github.com/acgetchell/causal-triangulations/blob/v0.2.0/docs/PERFORMANCE.md) ·  \n"
+        "[Native Criterion baseline](https://github.com/acgetchell/causal-triangulations/releases/download/v0.2.0/"
+        "causal-triangulations-v0.2.0-criterion-baseline.tar.gz)"
+    ) in readme
     assert (tmp_path / "docs/archive/performance/v0.2.0-vs-v0.1.0.md").read_text(encoding="utf-8") == report
     assert (tmp_path / "docs/assets/performance-comparison.svg").is_file()
 
