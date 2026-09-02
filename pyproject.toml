@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "causal-triangulations-scripts"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python utility scripts for the causal-triangulations Rust library"
 readme = "scripts/README.md"
 requires-python = ">=3.14"
@@ -204,7 +204,7 @@ dev = [
     "actionlint-py==1.7.12.24",
     "pytest==9.1.1",
     "ruff==0.16.5",
-    "semgrep==1.175.0",
+    "semgrep==1.176.0",
     "shellcheck-py==0.11.0.1",
     "shfmt-py==4.1.0",
     "ty==0.0.77",

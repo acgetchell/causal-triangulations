@@ -45,7 +45,7 @@ def _bundle() -> ArtifactBundle:
         "benchmark_harness_sha256": "c" * 64,
         "benchmark_contract_sha256": "d" * 64,
         "cargo_lock_sha256": "e" * 64,
-        "rustc": "rustc 1.98.0",
+        "rustc": "rustc 1.98.0\nbinary: rustc\nhost: fixture",
         "criterion": "0.8.2",
         "benchmark_host": host,
     }
@@ -271,8 +271,13 @@ def test_documentation_is_rendered_only_from_bundle(tmp_path: Path) -> None:
     readme = (tmp_path / "README.md").read_text(encoding="utf-8")
     assert "80 ns" in report
     assert "-20.00%" in report
+    assert "rustc 1.98.0\nbinary: rustc\nhost: fixture" in report
+    assert "### Baseline" in report
+    assert "### Current" in report
+    assert "<br>" not in report
     assert "| 1 | 1 | 0 |" in readme
     assert "blob/v0.2.0/docs/PERFORMANCE.md" in readme
+    assert ") ·\n[Native Criterion baseline]" in readme
     assert (tmp_path / "docs/archive/performance/v0.2.0-vs-v0.1.0.md").read_text(encoding="utf-8") == report
     assert (tmp_path / "docs/assets/performance-comparison.svg").is_file()
 

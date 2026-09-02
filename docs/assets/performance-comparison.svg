@@ -1,7 +1,57 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="900" height="110" viewBox="0 0 900 110" role="img" aria-labelledby="title desc">
-  <title id="title">Release performance comparison pending</title>
-  <desc id="desc">No release comparison has been published with the retained artifact workflow yet.</desc>
-  <rect width="900" height="110" fill="#fff"/>
-  <text x="20" y="42" font-family="system-ui, sans-serif" font-size="18" font-weight="600" fill="#24292f">Release performance comparison</text>
-  <text x="20" y="72" font-family="system-ui, sans-serif" font-size="14" fill="#57606a">No retained release comparison has been published yet.</text>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="520" viewBox="0 0 900 520" role="img" aria-labelledby="title desc">
+<title id="title">Performance change for v0.1.1 versus v0.1.0</title>
+<desc id="desc">Bars left of center are faster and bars right of center are slower. Values come from the retained performance CSV.</desc>
+<rect width="900" height="100%" fill="#fff"/>
+<style>text{font:13px system-ui,sans-serif;fill:#24292f}.label{font-size:12px}.good{fill:#2da44e}.bad{fill:#cf222e}.axis{stroke:#57606a;stroke-width:1}</style>
+<text x="20" y="28" font-size="18" font-weight="600">v0.1.1 vs v0.1.0</text>
+<text x="20" y="50">Median timing change (lower is better)</text>
+<line class="axis" x1="650" y1="62" x2="650" y2="510"/>
+<text class="label" x="20" y="85">cdt_generation_2d/open_strip_large/336</text>
+<rect class="bad" x="650.00" y="72" width="7.71" height="16" rx="2"/>
+<text x="665" y="85" text-anchor="start">+3.58%</text>
+<text class="label" x="20" y="113">cdt_generation_2d/open_strip_medium/200</text>
+<rect class="bad" x="650.00" y="100" width="50.24" height="16" rx="2"/>
+<text x="665" y="113" text-anchor="start">+23.34%</text>
+<text class="label" x="20" y="141">cdt_generation_2d/open_strip_small/96</text>
+<rect class="bad" x="650.00" y="128" width="145.26" height="16" rx="2"/>
+<text x="665" y="141" text-anchor="start">+67.48%</text>
+<text class="label" x="20" y="169">cdt_generation_2d/toroidal_medium/120</text>
+<rect class="bad" x="650.00" y="156" width="89.93" height="16" rx="2"/>
+<text x="665" y="169" text-anchor="start">+41.77%</text>
+<text class="label" x="20" y="197">cdt_generation_2d/toroidal_small/64</text>
+<rect class="bad" x="650.00" y="184" width="87.46" height="16" rx="2"/>
+<text x="665" y="197" text-anchor="start">+40.63%</text>
+<text class="label" x="20" y="225">cdt_metropolis_2d/open_strip_small/30</text>
+<rect class="good" x="535.06" y="212" width="114.94" height="16" rx="2"/>
+<text x="640" y="225" text-anchor="end">-53.39%</text>
+<text class="label" x="20" y="253">cdt_metropolis_2d/open_strip_tiny/12</text>
+<rect class="good" x="547.40" y="240" width="102.60" height="16" rx="2"/>
+<text x="640" y="253" text-anchor="end">-47.66%</text>
+<text class="label" x="20" y="281">cdt_move_attempts_2d/EdgeFlip/342</text>
+<rect class="good" x="614.28" y="268" width="35.72" height="16" rx="2"/>
+<text x="640" y="281" text-anchor="end">-16.59%</text>
+<text class="label" x="20" y="309">cdt_move_attempts_2d/Move22/342</text>
+<rect class="good" x="613.62" y="296" width="36.38" height="16" rx="2"/>
+<text x="640" y="309" text-anchor="end">-16.90%</text>
+<text class="label" x="20" y="337">cdt_proposal_site_move_attempts_2d/open_strip_medium_EdgeFlip/342</text>
+<rect class="good" x="613.22" y="324" width="36.78" height="16" rx="2"/>
+<text x="640" y="337" text-anchor="end">-17.08%</text>
+<text class="label" x="20" y="365">cdt_proposal_site_move_attempts_2d/open_strip_medium_Move13Add/342</text>
+<rect class="good" x="580.70" y="352" width="69.30" height="16" rx="2"/>
+<text x="640" y="365" text-anchor="end">-32.19%</text>
+<text class="label" x="20" y="393">cdt_proposal_site_move_attempts_2d/open_strip_medium_Move22/342</text>
+<rect class="good" x="614.99" y="380" width="35.01" height="16" rx="2"/>
+<text x="640" y="393" text-anchor="end">-16.26%</text>
+<text class="label" x="20" y="421">cdt_proposal_site_move_attempts_2d/open_strip_medium_Move31Remove/342</text>
+<rect class="good" x="440.00" y="408" width="210.00" height="16" rx="2"/>
+<text x="640" y="421" text-anchor="end">-97.55%</text>
+<text class="label" x="20" y="449">cdt_proposal_site_move_attempts_2d/toroidal_medium_EdgeFlip/240</text>
+<rect class="good" x="606.72" y="436" width="43.28" height="16" rx="2"/>
+<text x="640" y="449" text-anchor="end">-20.11%</text>
+<text class="label" x="20" y="477">cdt_proposal_site_move_attempts_2d/toroidal_medium_Move13Add/240</text>
+<rect class="good" x="548.19" y="464" width="101.81" height="16" rx="2"/>
+<text x="640" y="477" text-anchor="end">-47.29%</text>
+<text class="label" x="20" y="505">cdt_proposal_site_move_attempts_2d/toroidal_medium_Move22/240</text>
+<rect class="good" x="607.25" y="492" width="42.75" height="16" rx="2"/>
+<text x="640" y="505" text-anchor="end">-19.86%</text>
 </svg>

@@ -439,3 +439,38 @@ Issues #264 and #265 compare the repository against `la-stack` while preserving 
   release jobs, so CDT adopts those controls; MCMC and la-stack also confirm the separate read-only producer and write-privileged publisher shape. Delaunay
   provides the directly applicable explicit setup-uv cache disablement. The siblings' zizmor workflows still float the scanner version and their local
   recipes remain offline, so CDT deliberately does not copy those two gaps.
+
+## 1 September 2026 Rust 1.98 Final Release Audit
+
+Issue #254 completes the post-publication audit against the final
+[Rust 1.98.0 release notes](https://doc.rust-lang.org/stable/releases.html#version-1980-2026-08-20), the
+[Rust 1.98 announcement](https://blog.rust-lang.org/2026/08/20/Rust-1.98.0/), and the
+[Cargo 1.98 changelog](https://doc.rust-lang.org/cargo/CHANGELOG.html#cargo-198-2026-08-20). Rust 1.98.0 shipped on 20 August 2026, so the crate MSRV,
+`rust-toolchain.toml`, contributor commands, CI matrix, and user-facing requirements now target a released stable toolchain rather than a beta candidate.
+Cargo 1.98 contains fixes but no new feature surface that changes this repository's packaging contract.
+
+The final standard-library audit records these decisions:
+
+- `Path::is_empty`, `Option::map_or_default`, `Result::map_or_default`, `bool::ok_or`, and `bool::ok_or_else` did not appear in the final Rust 1.98 stabilized
+  API list. Existing explicit path, fallback, and typed-error code therefore remains unchanged and stable-compatible.
+- `NumBuffer` and integer `format_into` shipped, but no measured allocation-sensitive integer-formatting path exists in CDT. Diagnostics and artifact
+  formatting keep their clearer owned-string implementation until benchmark evidence supports reusable-buffer complexity.
+- The algebraic floating-point operations shipped, but their permitted reassociation and nondeterministic results conflict with reproducible scientific
+  computation. The repository-wide Semgrep ban and its sole positive fixture remain the explicit policy; ordinary IEEE operators and deliberate `mul_add`
+  calls remain allowed.
+- `str::substr_range` and slice `subslice_range` have no manual pointer-range implementation to replace; `NonZero*::from_str_radix` has no invariant-bearing
+  nonzero radix boundary; the UTF-16LE/BE string constructors have no matching input format; `strip_circumfix` has no clearer repository call site; and the
+  new atomic slice-mutation helpers would add no value because CDT has no safe-global atomic storage boundary.
+- `CommandArgs: Send + Sync` has no cross-thread command-builder use, and the legacy range module exists for macro migration rather than ordinary CDT
+  ranges. No contrived adoption is warranted.
+
+The compatibility notes were also checked against repository-owned Rust. CDT has no affected edition-2024 trait-object lifetime fallback, ambiguous macro or
+glob import, transparent representation with multiple nontrivial fields, unsafe attribute, exported-symbol collision, unsupported target, or relied-upon
+const-evaluation diagnostic. The MSRV change therefore requires no compatibility shim or source workaround beyond the already-completed dependency adapter
+updates and explicit rejection of nondeterministic float APIs.
+
+The capstone release render also exposed that multiline Rust provenance was encoded with HTML line breaks inside a generated Markdown table, while complete
+hashes and toolchain details made the table exceed the repository line-length limit. The report renderer now gives the baseline and current provenance
+separate sections, uses compact metadata lists, and preserves multiline toolchain output in fenced text blocks. Its fixture asserts that regenerated reports
+contain both sections and the complete provenance without inline HTML. This keeps `performance-release`, render-only recovery, and the repository Markdown
+gate consistent from one retained bundle.

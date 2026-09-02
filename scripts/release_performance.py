@@ -588,26 +588,46 @@ def _provenance_object(value: JsonValue, field: str) -> dict[str, JsonValue]:
     return value
 
 
-def _markdown_value(value: JsonValue) -> str:
+def _provenance_string(value: JsonValue) -> str:
     if not isinstance(value, str):
         raise ArtifactValidationError("validated provenance contains a non-string report field")
-    return value.replace("|", "\\|").replace("\n", "<br>")
+    return value
 
 
-def _provenance_row(
-    label: str,
-    key: str,
-    baseline: Mapping[str, JsonValue],
-    current: Mapping[str, JsonValue],
-    *,
-    code: bool = False,
-) -> str:
-    baseline_value = _markdown_value(baseline.get(key))
-    current_value = _markdown_value(current.get(key))
-    if code:
-        baseline_value = f"`{baseline_value}`"
-        current_value = f"`{current_value}`"
-    return f"| {label} | {baseline_value} | {current_value} |"
+def _provenance_section(
+    heading: str,
+    source: Mapping[str, JsonValue],
+    host: Mapping[str, JsonValue],
+) -> list[str]:
+    fields = (
+        ("Tag", "tag", True),
+        ("Commit", "commit", True),
+        ("Revision timestamp", "revision_timestamp", False),
+        ("Source state SHA-256", "source_state_sha256", True),
+        ("Harness SHA-256", "benchmark_harness_sha256", True),
+        ("Contract SHA-256", "benchmark_contract_sha256", True),
+        ("Cargo.lock SHA-256", "cargo_lock_sha256", True),
+        ("Criterion", "criterion", False),
+    )
+    lines = [f"### {heading}", ""]
+    for label, key, code in fields:
+        value = _provenance_string(source.get(key)).replace("|", "\\|")
+        rendered = f"`{value}`" if code else value
+        lines.append(f"- {label}: {rendered}")
+    for label, key in (
+        ("Operating system", "OS"),
+        ("CPU", "CPU"),
+        ("CPU cores", "CPU_CORES"),
+        ("CPU threads", "CPU_THREADS"),
+        ("Memory", "MEMORY"),
+        ("Target", "TARGET"),
+    ):
+        value = _provenance_string(host.get(key)).replace("|", "\\|")
+        lines.append(f"- {label}: {value}")
+    lines.extend(["", "Rust toolchain:", "", "```text"])
+    lines.extend(_provenance_string(source.get("rustc")).splitlines())
+    lines.extend(["```", ""])
+    return lines
 
 
 def render_report(bundle: ArtifactBundle) -> str:
@@ -651,24 +671,8 @@ def render_report(bundle: ArtifactBundle) -> str:
             "",
             "## Provenance",
             "",
-            "| Source evidence | Baseline | Current |",
-            "| --- | --- | --- |",
-            _provenance_row("Tag", "tag", baseline_source, current_source, code=True),
-            _provenance_row("Commit", "commit", baseline_source, current_source, code=True),
-            _provenance_row("Revision timestamp", "revision_timestamp", baseline_source, current_source),
-            _provenance_row("Source state SHA-256", "source_state_sha256", baseline_source, current_source, code=True),
-            _provenance_row("Harness SHA-256", "benchmark_harness_sha256", baseline_source, current_source, code=True),
-            _provenance_row("Contract SHA-256", "benchmark_contract_sha256", baseline_source, current_source, code=True),
-            _provenance_row("Cargo.lock SHA-256", "cargo_lock_sha256", baseline_source, current_source, code=True),
-            _provenance_row("Rust", "rustc", baseline_source, current_source),
-            _provenance_row("Criterion", "criterion", baseline_source, current_source),
-            _provenance_row("Operating system", "OS", baseline_host, current_host),
-            _provenance_row("CPU", "CPU", baseline_host, current_host),
-            _provenance_row("CPU cores", "CPU_CORES", baseline_host, current_host),
-            _provenance_row("CPU threads", "CPU_THREADS", baseline_host, current_host),
-            _provenance_row("Memory", "MEMORY", baseline_host, current_host),
-            _provenance_row("Target", "TARGET", baseline_host, current_host),
-            "",
+            *_provenance_section("Baseline", baseline_source, baseline_host),
+            *_provenance_section("Current", current_source, current_host),
             "## Evidence contract",
             "",
             "The CSV stores every timing, calculated change, and coverage classification shown above. The provenance file binds that CSV by SHA-256 and",
@@ -735,7 +739,8 @@ def _readme_block(bundle: ArtifactBundle) -> str:
             "",
             "![Release benchmark comparison](docs/assets/performance-comparison.svg)",
             "",
-            f"[Tag-pinned full report]({report_url}) · [Native Criterion baseline]({asset_url})",
+            f"[Tag-pinned full report]({report_url}) ·",
+            f"[Native Criterion baseline]({asset_url})",
             README_END,
         )
     )

@@ -48,7 +48,8 @@ causal-triangulations/
 │   │   ├── changelog/
 │   │   │   └── 0.0.md
 │   │   └── performance/
-│   │       └── README.md
+│   │       ├── README.md
+│   │       └── v0.1.1-vs-v0.1.0.md
 │   ├── assets/
 │   │   ├── cdt_spacetime.png
 │   │   ├── cdt_spacetime.svg
