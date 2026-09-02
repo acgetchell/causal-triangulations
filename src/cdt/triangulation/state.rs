@@ -8,8 +8,11 @@
 
 use crate::cdt::foliation::{Foliation, FoliationError};
 use crate::config::CdtTopology;
-use crate::errors::{CdtError, CdtResult, SimplexCountField, TriangulationMetadataField};
+use crate::errors::{
+    CdtError, CdtResult, CheckpointOperation, SimplexCountField, TriangulationMetadataField,
+};
 use crate::geometry::DelaunayBackend2D;
+use crate::geometry::backends::delaunay::DelaunayCheckpointWireV1;
 use crate::geometry::traits::TriangulationQuery;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use std::fmt;
@@ -465,6 +468,31 @@ struct DeserializedCdtMetadata {
     initial_vertex_count: usize,
 }
 
+/// CDT-owned triangulation record embedded in MCMC checkpoint format version 1.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct CdtTriangulationCheckpointWireV1 {
+    geometry: DelaunayCheckpointWireV1<u32, i32>,
+    metadata: CdtCheckpointMetadataWireV1,
+    foliation: Option<CdtCheckpointFoliationWireV1>,
+}
+
+/// Durable CDT metadata embedded in MCMC checkpoint format version 1.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CdtCheckpointMetadataWireV1 {
+    time_slices: u32,
+    dimension: u8,
+    topology: CdtTopology,
+    modification_count: u64,
+    initial_vertex_count: u64,
+}
+
+/// Platform-neutral foliation bookkeeping embedded in checkpoint format version 1.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CdtCheckpointFoliationWireV1 {
+    slice_sizes: Vec<u64>,
+    num_slices: u32,
+}
+
 impl Serialize for CdtTriangulation<DelaunayBackend2D> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -524,6 +552,134 @@ impl<'de> Deserialize<'de> for CdtTriangulation<DelaunayBackend2D> {
 }
 
 impl CdtTriangulation<DelaunayBackend2D> {
+    /// Projects the live triangulation into the dependency-neutral v1 checkpoint record.
+    pub(crate) fn checkpoint_wire_v1(&self) -> CdtResult<CdtTriangulationCheckpointWireV1> {
+        let initial_vertex_count =
+            u64::try_from(self.metadata.initial_vertex_count).map_err(|_| {
+                triangulation_checkpoint_failure(
+                    CheckpointOperation::Serialize,
+                    "initial vertex count cannot be represented as u64".to_string(),
+                )
+            })?;
+        let foliation = self
+            .foliation
+            .as_ref()
+            .map(|foliation| -> CdtResult<CdtCheckpointFoliationWireV1> {
+                let slice_sizes = foliation
+                    .slice_sizes()
+                    .iter()
+                    .copied()
+                    .map(|size| {
+                        u64::try_from(size).map_err(|_| {
+                            triangulation_checkpoint_failure(
+                                CheckpointOperation::Serialize,
+                                "foliation slice size cannot be represented as u64".to_string(),
+                            )
+                        })
+                    })
+                    .collect::<CdtResult<Vec<_>>>()?;
+                Ok(CdtCheckpointFoliationWireV1 {
+                    slice_sizes,
+                    num_slices: foliation.num_slices().get(),
+                })
+            })
+            .transpose()?;
+        Ok(CdtTriangulationCheckpointWireV1 {
+            geometry: self.geometry.checkpoint_wire_v1().map_err(|error| {
+                triangulation_checkpoint_failure(CheckpointOperation::Serialize, error.to_string())
+            })?,
+            metadata: CdtCheckpointMetadataWireV1 {
+                time_slices: self.metadata.time_slices.get(),
+                dimension: self.metadata.dimension,
+                topology: self.metadata.topology,
+                modification_count: self.metadata.modification_count,
+                initial_vertex_count,
+            },
+            foliation,
+        })
+    }
+
+    /// Reconstructs and validates a live triangulation from checkpoint format version 1.
+    pub(crate) fn from_checkpoint_wire_v1(
+        wire: CdtTriangulationCheckpointWireV1,
+    ) -> CdtResult<Self> {
+        let CdtTriangulationCheckpointWireV1 {
+            geometry,
+            metadata,
+            foliation,
+        } = wire;
+        let geometry = DelaunayBackend2D::from_checkpoint_wire_v1(geometry).map_err(|error| {
+            triangulation_checkpoint_failure(CheckpointOperation::Deserialize, error.to_string())
+        })?;
+        let initial_vertex_count =
+            usize::try_from(metadata.initial_vertex_count).map_err(|_| {
+                triangulation_checkpoint_failure(
+                    CheckpointOperation::Deserialize,
+                    format!(
+                        "initial vertex count {} cannot be represented on this platform",
+                        metadata.initial_vertex_count
+                    ),
+                )
+            })?;
+        let foliation = foliation
+            .map(|foliation| {
+                let slice_sizes = foliation
+                    .slice_sizes
+                    .into_iter()
+                    .map(|size| {
+                        usize::try_from(size).map_err(|_| {
+                            triangulation_checkpoint_failure(
+                                CheckpointOperation::Deserialize,
+                                format!(
+                                    "foliation slice size {size} cannot be represented on this platform"
+                                ),
+                            )
+                        })
+                    })
+                    .collect::<CdtResult<Vec<_>>>()?;
+                let num_slices = NonZeroU32::new(foliation.num_slices).ok_or_else(|| {
+                    triangulation_checkpoint_failure(
+                        CheckpointOperation::Deserialize,
+                        "foliation `num_slices` must be nonzero".to_string(),
+                    )
+                })?;
+                if num_slices.get() != metadata.time_slices {
+                    return Err(triangulation_checkpoint_failure(
+                        CheckpointOperation::Deserialize,
+                        format!(
+                            "foliation `num_slices` {} does not match metadata `time_slices` {}",
+                            num_slices.get(),
+                            metadata.time_slices
+                        ),
+                    ));
+                }
+                Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)
+            })
+            .transpose()?;
+        let now = Instant::now();
+        let foliation_synced_at_modification =
+            foliation.as_ref().map(|_| metadata.modification_count);
+        let triangulation = Self {
+            instance_id: next_triangulation_instance_id(),
+            geometry,
+            metadata: CdtMetadata {
+                time_slices: Self::parse_time_slices(metadata.topology, metadata.time_slices)?,
+                dimension: metadata.dimension,
+                topology: metadata.topology,
+                creation_time: now,
+                last_modified: now,
+                modification_count: metadata.modification_count,
+                initial_vertex_count,
+            },
+            cache: GeometryCache::default(),
+            foliation,
+            foliation_synced_at_modification,
+        };
+
+        triangulation.validate_checkpoint_invariants()?;
+        Ok(triangulation)
+    }
+
     /// Validates a deserialized checkpoint before exposing restored CDT state.
     ///
     /// This keeps serde deserialization aligned with the public constructor and
@@ -537,6 +693,15 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// geometry/topology contract.
     fn validate_checkpoint_invariants(&self) -> CdtResult<()> {
         self.validate_supported_state()
+    }
+}
+
+/// Wraps one stable triangulation projection or hydration diagnostic.
+fn triangulation_checkpoint_failure(operation: CheckpointOperation, detail: String) -> CdtError {
+    CdtError::CheckpointSerializationFailed {
+        operation,
+        target: "MCMC triangulation".to_string(),
+        detail,
     }
 }
 

@@ -34,33 +34,26 @@
 //!
 //! # Checkpointing
 //!
-//! CDT triangulations backed by [`geometry::DelaunayBackend2D`] serialize their
-//! stable geometry, metadata, foliation, and simulation history while rebuilding
-//! transient caches and timestamps on load.
+//! Durable simulation continuation uses the versioned, CDT-owned
+//! [`CdtMcmcCheckpoint`] JSON format. Version 1 stores dependency-neutral geometry,
+//! chain accounting, telemetry, elapsed time, and both RNG streams; restoration
+//! rebuilds transient caches and validates geometry and CDT invariants before use.
+//! Direct Serde serialization of a standalone [`CdtTriangulation2D`] remains an
+//! implementation-shaped same-build facility rather than this compatibility contract.
 //!
 //! ```
-//! use causal_triangulations::{CheckpointOperation, CdtError};
-//! use causal_triangulations::prelude::triangulation::*;
-//! use serde_json::{from_str, to_string};
+//! use causal_triangulations::prelude::simulation::*;
 //!
 //! fn main() -> CdtResult<()> {
-//!     let tri = CdtTriangulation::from_cdt_strip(4, 3)?;
-//!     let json = to_string(&tri).map_err(|err| CdtError::CheckpointSerializationFailed {
-//!         operation: CheckpointOperation::Serialize,
-//!         target: "triangulation".to_string(),
-//!         detail: err.to_string(),
-//!     })?;
-//!     let restored: CdtTriangulation2D =
-//!         from_str(&json).map_err(|err| CdtError::CheckpointSerializationFailed {
-//!             operation: CheckpointOperation::Deserialize,
-//!             target: "triangulation".to_string(),
-//!             detail: err.to_string(),
-//!         })?;
-//!     restored.validate_topology()?;
-//!     restored.validate_foliation()?;
-//!     restored.validate_causality()?;
-//!     restored.validate_simplex_classification()?;
-//!     assert_eq!(restored.slice_sizes(), &[4, 4, 4]);
+//!     let checkpoint = MetropolisAlgorithm::new(
+//!         MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(13),
+//!         ActionConfig::default(),
+//!     )
+//!     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+//!     let json = checkpoint.to_json()?;
+//!     let restored = CdtMcmcCheckpoint::from_json(&json)?;
+//!     assert_eq!(CdtMcmcCheckpoint::FORMAT_VERSION, 1);
+//!     assert_eq!(restored.current_step().get(), 1);
 //!     Ok(())
 //! }
 //! ```

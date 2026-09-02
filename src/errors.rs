@@ -1668,6 +1668,7 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             | CdtError::OutputPathBusy { .. }
             | CdtError::OutputReadFailed { .. }
             | CdtError::CheckpointSerializationFailed { .. }
+            | CdtError::UnsupportedCheckpointVersion { .. }
             | CdtError::CheckpointResumeFailed { .. }) => Self::Unexpected {
                 source: Box::new(unexpected),
             },
@@ -2064,6 +2065,16 @@ pub enum CdtError {
         target: String,
         /// Lower-level serialization error.
         detail: String,
+    },
+    /// A checkpoint envelope declares a wire-format version this release cannot read.
+    #[error(
+        "Unsupported MCMC checkpoint format version {encountered}; this release supports version {supported}"
+    )]
+    UnsupportedCheckpointVersion {
+        /// Version declared by the checkpoint envelope.
+        encountered: u64,
+        /// Latest wire-format version supported by this release.
+        supported: u32,
     },
     /// Restoring or continuing an MCMC checkpoint failed before sampling resumed.
     ///

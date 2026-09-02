@@ -617,15 +617,17 @@ where
 
     /// Run the simulation and return a resumable checkpoint.
     ///
-    /// The checkpoint embeds the current triangulation in the MCMC crate's
-    /// [`ChainCheckpoint`] and stores CDT-specific
-    /// proposal state, telemetry, and RNG streams beside it.
+    /// In memory, the checkpoint uses the MCMC crate's [`ChainCheckpoint`] for
+    /// sampler interoperation and stores CDT-specific proposal state, telemetry,
+    /// and RNG streams beside it. [`CdtMcmcCheckpoint::to_json`] projects that
+    /// state into the versioned CDT-owned wire format without embedding the
+    /// upstream checkpoint or Delaunay TDS representation.
     ///
     /// Direct in-memory resume through [`Self::resume_from_checkpoint`] or
     /// [`Self::resume_to_checkpoint`] does not reserialize the triangulation.
-    /// Serialized restore uses checked backend reconstruction, so snapshots
-    /// whose evolved geometry is no longer Delaunay-valid may fail to
-    /// deserialize even though the in-memory checkpoint can still be resumed.
+    /// Serialized restore preserves exact evolved connectivity and validates it
+    /// through Delaunay Levels 1–4 plus CDT topology, foliation, and causality.
+    /// It does not require or claim Level 5 Delaunay certification.
     /// The configured policy is used for the complete run but is not serialized
     /// into the checkpoint; callers remain responsible for persisting external
     /// model state needed by a later process.
@@ -1368,7 +1370,7 @@ mod tests {
         DelayedProposal, DiscreteProposalEndpoint, DiscreteProposalRatio, McmcError, Target,
     };
     use rand::{Rng, RngExt, rngs::StdRng};
-    use serde_json::{from_str, to_string, to_value};
+    use serde_json::{from_str, to_value};
     use std::assert_matches;
     use std::error::Error;
     use std::num::NonZeroUsize;
@@ -2012,11 +2014,11 @@ mod tests {
     fn serialized_checkpoint_resumes_from_stored_rng_state() {
         let action_config = ActionConfig::default();
         let checkpoint = serializable_rejected_checkpoint(action_config.clone());
-        let checkpoint_json = to_string(&checkpoint).expect("checkpoint should serialize");
-        let checkpoint: CdtMcmcCheckpoint =
-            from_str(&checkpoint_json).expect("checkpoint should deserialize");
-        let alternate_checkpoint: CdtMcmcCheckpoint =
-            from_str(&checkpoint_json).expect("checkpoint should deserialize again");
+        let checkpoint_json = checkpoint.to_json().expect("checkpoint should serialize");
+        let checkpoint =
+            CdtMcmcCheckpoint::from_json(&checkpoint_json).expect("checkpoint should deserialize");
+        let alternate_checkpoint = CdtMcmcCheckpoint::from_json(&checkpoint_json)
+            .expect("checkpoint should deserialize again");
         let first_resume_algorithm = MetropolisAlgorithm::new(
             seeded_metropolis_config(1.0, 6, 0, 1, 999),
             action_config.clone(),
@@ -2060,6 +2062,18 @@ mod tests {
         assert_eq!(
             to_value(first_resumed.move_stats()).expect("stats should serialize"),
             to_value(second_resumed.move_stats()).expect("stats should serialize")
+        );
+        assert_eq!(
+            to_value(first_resumed.proposal_stats()).expect("proposal stats should serialize"),
+            to_value(second_resumed.proposal_stats()).expect("proposal stats should serialize")
+        );
+        assert_eq!(
+            first_resumed
+                .scalar_trace()
+                .expect("first scalar trace should build"),
+            second_resumed
+                .scalar_trace()
+                .expect("second scalar trace should build")
         );
         assert_eq!(
             first_resumed.triangulation().vertex_count(),

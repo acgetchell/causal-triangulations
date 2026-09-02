@@ -63,12 +63,13 @@ pub(crate) type DelaunayMeshExport<const D: usize> = VisualizationData<D>;
 /// cumulative Level 1-4 realization validator; Level 5 is deliberately optional
 /// because exact layered and evolved CDT states need not remain Delaunay.
 ///
-/// This representation is version-bound because it embeds Delaunay's internal
-/// triangulation structure. Serialized backends and enclosing CDT checkpoints
-/// are supported only when read by the same build that wrote them or by a release
-/// that explicitly documents checkpoint compatibility. Toroidal topology
-/// checkpoints must contain finite, strictly positive periods; invalid domains
-/// are rejected during deserialization before a backend can observe them.
+/// This standalone backend Serde representation is version-bound because it
+/// embeds Delaunay's internal triangulation structure. The durable
+/// [`CdtMcmcCheckpoint`](crate::cdt::metropolis::CdtMcmcCheckpoint) v1 format
+/// bypasses it on disk through the CDT-owned index-based projector below, using
+/// this adapter only for checked hydration. Toroidal topology snapshots must
+/// contain finite, strictly positive periods; invalid domains are rejected
+/// during deserialization before a backend can observe them.
 #[derive(Debug)]
 pub struct DelaunayBackend<VertexData, SimplexData, const D: usize> {
     /// The underlying proof-bearing Levels 1-4 triangulation from the delaunay crate.
@@ -218,6 +219,139 @@ struct SerializedDelaunayBackend<VertexData, SimplexData, const D: usize> {
     global_topology: SerializableGlobalTopology,
     topology_guarantee: SerializableTopologyGuarantee,
     #[serde(default)]
+    delaunay_check_policy: SerializableDelaunayCheckPolicy,
+}
+
+/// CDT-owned, dependency-neutral geometry record for checkpoint format version 1.
+///
+/// Runtime slotmap keys and Delaunay UUIDs are deliberately absent. Relations
+/// use positions in the `vertices` and `simplices` arrays so the persistent
+/// shape remains owned by this crate even when the upstream TDS changes.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct DelaunayCheckpointWireV1<VertexData, SimplexData> {
+    vertices: Vec<DelaunayCheckpointVertexV1<VertexData>>,
+    simplices: Vec<DelaunayCheckpointSimplexV1<SimplexData>>,
+    global_topology: DelaunayCheckpointGlobalTopologyV1,
+    topology_guarantee: DelaunayCheckpointTopologyGuaranteeV1,
+    delaunay_check_policy: DelaunayCheckpointPolicyV1,
+}
+
+/// One vertex in the CDT-owned checkpoint geometry record.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DelaunayCheckpointVertexV1<VertexData> {
+    coordinates: Vec<f64>,
+    data: Option<VertexData>,
+}
+
+/// One maximal simplex and its exact local relationships in checkpoint format v1.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DelaunayCheckpointSimplexV1<SimplexData> {
+    vertex_indices: Vec<u64>,
+    neighbor_indices: Vec<Option<u64>>,
+    periodic_vertex_offsets: Option<Vec<Vec<i8>>>,
+    data: Option<SimplexData>,
+}
+
+/// Global topology metadata frozen into checkpoint format v1.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+enum DelaunayCheckpointGlobalTopologyV1 {
+    Euclidean,
+    Toroidal {
+        domain: Vec<f64>,
+        mode: DelaunayCheckpointToroidalModeV1,
+    },
+    Spherical,
+    Hyperbolic,
+}
+
+/// Toroidal construction semantics frozen into checkpoint format v1.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+enum DelaunayCheckpointToroidalModeV1 {
+    PeriodicImagePoint,
+    Explicit,
+}
+
+/// Structural topology guarantee frozen into checkpoint format v1.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+enum DelaunayCheckpointTopologyGuaranteeV1 {
+    Pseudomanifold,
+    PLManifold,
+}
+
+/// Optional Level 5 validation cadence frozen into checkpoint format v1.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+enum DelaunayCheckpointPolicyV1 {
+    EndOnly,
+    EveryN(u64),
+}
+
+/// Failures while translating the stable CDT record to or from the live backend.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum DelaunayCheckpointWireError {
+    #[error("checkpoint {entity} index {index} cannot be represented as u64")]
+    IndexEncodingOverflow { entity: &'static str, index: usize },
+    #[error(
+        "checkpoint simplex {simplex_index} references {entity} index {referenced_index}, but only {entity_count} records exist"
+    )]
+    IndexOutOfBounds {
+        simplex_index: usize,
+        entity: &'static str,
+        referenced_index: u64,
+        entity_count: usize,
+    },
+    #[error("live simplex {simplex_index} references a missing {entity}")]
+    MissingLiveReference {
+        simplex_index: usize,
+        entity: &'static str,
+    },
+    #[error("live simplex {simplex_index} has no assigned neighbor slots")]
+    MissingLiveNeighborSlots { simplex_index: usize },
+    #[error("live simplex {simplex_index} has an unassigned neighbor slot {slot}")]
+    UnassignedLiveNeighborSlot { simplex_index: usize, slot: usize },
+    #[error("checkpoint Delaunay interval {interval} cannot be represented on this platform")]
+    PolicyIntervalOverflow { interval: u64 },
+    #[error("Delaunay interval {interval} cannot be encoded as u64 for checkpoint storage")]
+    PolicyIntervalEncodingOverflow { interval: usize },
+    #[error(
+        "checkpoint vertex {vertex_index} has coordinate dimension {actual}; expected {expected}"
+    )]
+    CoordinateDimensionMismatch {
+        vertex_index: usize,
+        actual: usize,
+        expected: usize,
+    },
+    #[error("failed to hydrate CDT checkpoint geometry through the Delaunay adapter: {detail}")]
+    HydrationFailed { detail: String },
+}
+
+/// Current upstream-shaped TDS input used only inside the geometry adapter.
+///
+/// This is never exposed as the persistent checkpoint representation. It lets
+/// the stable CDT record continue to use the upstream checked snapshot
+/// hydration boundary until delaunay exposes that boundary as a public API.
+#[derive(Serialize)]
+struct DelaunayHydrationSnapshot<VertexData, SimplexData, const D: usize> {
+    vertices: Vec<Vertex<VertexData, D>>,
+    simplices: Vec<DelaunayHydrationSimplex<SimplexData>>,
+    simplex_vertices: HashMap<Uuid, Vec<Uuid>>,
+    simplex_neighbors: HashMap<Uuid, Vec<Option<Uuid>>>,
+    simplex_vertex_offsets: HashMap<Uuid, Vec<Vec<i8>>>,
+}
+
+/// Current upstream-shaped simplex identity and payload used during hydration.
+#[derive(Serialize)]
+struct DelaunayHydrationSimplex<SimplexData> {
+    uuid: Uuid,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<SimplexData>,
+}
+
+/// Complete current adapter payload used to invoke checked backend hydration.
+#[derive(Serialize)]
+struct DelaunayHydrationBackend<VertexData, SimplexData, const D: usize> {
+    tds: DelaunayHydrationSnapshot<VertexData, SimplexData, D>,
+    global_topology: SerializableGlobalTopology,
+    topology_guarantee: SerializableTopologyGuarantee,
     delaunay_check_policy: SerializableDelaunayCheckPolicy,
 }
 
@@ -461,6 +595,324 @@ impl<'de, VertexData: DataType, SimplexData: DataType, const D: usize> Deseriali
             .delaunay_check_policy
             .into_delaunay_check_policy()?;
         Ok(backend)
+    }
+}
+
+impl<VertexData: DataType, SimplexData: DataType, const D: usize>
+    DelaunayBackend<VertexData, SimplexData, D>
+{
+    /// Projects the live backend into CDT checkpoint format version 1.
+    pub(crate) fn checkpoint_wire_v1(
+        &self,
+    ) -> Result<DelaunayCheckpointWireV1<VertexData, SimplexData>, DelaunayCheckpointWireError>
+    where
+        VertexData: Clone,
+        SimplexData: Clone,
+    {
+        let vertices: Vec<_> = self.dt.vertices().collect();
+        let mut vertex_indices = HashMap::with_capacity(vertices.len());
+        for (index, (key, _)) in vertices.iter().enumerate() {
+            vertex_indices.insert(
+                *key,
+                u64::try_from(index).map_err(|_| {
+                    DelaunayCheckpointWireError::IndexEncodingOverflow {
+                        entity: "vertex",
+                        index,
+                    }
+                })?,
+            );
+        }
+
+        let simplices: Vec<_> = self.dt.simplices().collect();
+        let mut simplex_indices = HashMap::with_capacity(simplices.len());
+        for (index, (key, _)) in simplices.iter().enumerate() {
+            simplex_indices.insert(
+                *key,
+                u64::try_from(index).map_err(|_| {
+                    DelaunayCheckpointWireError::IndexEncodingOverflow {
+                        entity: "simplex",
+                        index,
+                    }
+                })?,
+            );
+        }
+
+        let vertices = vertices
+            .into_iter()
+            .map(|(_, vertex)| DelaunayCheckpointVertexV1 {
+                coordinates: vertex.point().coords().to_vec(),
+                data: vertex.data().copied(),
+            })
+            .collect();
+        let mut checkpoint_simplices = Vec::with_capacity(simplices.len());
+        for (simplex_index, (_, simplex)) in simplices.into_iter().enumerate() {
+            let mapped_vertex_indices = simplex
+                .vertices()
+                .iter()
+                .map(|key| {
+                    vertex_indices.get(key).copied().ok_or(
+                        DelaunayCheckpointWireError::MissingLiveReference {
+                            simplex_index,
+                            entity: "vertex",
+                        },
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let slots = simplex
+                .neighbor_slots()
+                .ok_or(DelaunayCheckpointWireError::MissingLiveNeighborSlots { simplex_index })?;
+            let neighbor_indices = slots
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(slot, neighbor)| match neighbor {
+                    NeighborSlot::Boundary => Ok(None),
+                    NeighborSlot::Neighbor(key) => {
+                        simplex_indices.get(&key).copied().map(Some).ok_or(
+                            DelaunayCheckpointWireError::MissingLiveReference {
+                                simplex_index,
+                                entity: "neighbor simplex",
+                            },
+                        )
+                    }
+                    NeighborSlot::Unassigned => {
+                        Err(DelaunayCheckpointWireError::UnassignedLiveNeighborSlot {
+                            simplex_index,
+                            slot,
+                        })
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            checkpoint_simplices.push(DelaunayCheckpointSimplexV1 {
+                vertex_indices: mapped_vertex_indices,
+                neighbor_indices,
+                periodic_vertex_offsets: simplex
+                    .periodic_vertex_offsets()
+                    .map(|offsets| offsets.iter().map(|offset| offset.to_vec()).collect()),
+                data: simplex.data().copied(),
+            });
+        }
+
+        Ok(DelaunayCheckpointWireV1 {
+            vertices,
+            simplices: checkpoint_simplices,
+            global_topology: DelaunayCheckpointGlobalTopologyV1::from(self.dt.global_topology()),
+            topology_guarantee: self.dt.topology_guarantee().into(),
+            delaunay_check_policy: DelaunayCheckpointPolicyV1::try_from(
+                self.delaunay_check_policy,
+            )?,
+        })
+    }
+
+    /// Rebuilds a live backend from CDT checkpoint format version 1.
+    ///
+    /// The stable record is translated inside this adapter and then passed
+    /// through Delaunay's topology-aware Levels 1–4 snapshot hydration and
+    /// `TriangulationBuilder` validation path.
+    pub(crate) fn from_checkpoint_wire_v1(
+        wire: DelaunayCheckpointWireV1<VertexData, SimplexData>,
+    ) -> Result<Self, DelaunayCheckpointWireError> {
+        let DelaunayCheckpointWireV1 {
+            vertices: checkpoint_vertices,
+            simplices: checkpoint_simplices,
+            global_topology,
+            topology_guarantee,
+            delaunay_check_policy,
+        } = wire;
+
+        let mut vertices = Vec::with_capacity(checkpoint_vertices.len());
+        for (vertex_index, vertex) in checkpoint_vertices.into_iter().enumerate() {
+            let actual = vertex.coordinates.len();
+            let coordinates: [f64; D] = vertex.coordinates.try_into().map_err(|_| {
+                DelaunayCheckpointWireError::CoordinateDimensionMismatch {
+                    vertex_index,
+                    actual,
+                    expected: D,
+                }
+            })?;
+            let built = vertex.data.map_or_else(
+                || Vertex::try_new(coordinates),
+                |data| Vertex::try_new_with_data(coordinates, data),
+            );
+            vertices.push(
+                built.map_err(|error| DelaunayCheckpointWireError::HydrationFailed {
+                    detail: error.to_string(),
+                })?,
+            );
+        }
+        let vertex_uuids: Vec<_> = vertices.iter().map(Vertex::uuid).collect();
+        let simplex_uuids: Vec<_> = checkpoint_simplices
+            .iter()
+            .map(|_| Uuid::new_v4())
+            .collect();
+
+        let mut simplices = Vec::with_capacity(checkpoint_simplices.len());
+        let mut simplex_vertices = HashMap::with_capacity(checkpoint_simplices.len());
+        let mut simplex_neighbors = HashMap::with_capacity(checkpoint_simplices.len());
+        let mut simplex_vertex_offsets = HashMap::with_capacity(checkpoint_simplices.len());
+        for (simplex_index, checkpoint_simplex) in checkpoint_simplices.into_iter().enumerate() {
+            let simplex_uuid = simplex_uuids[simplex_index];
+            let mapped_vertices = checkpoint_simplex
+                .vertex_indices
+                .into_iter()
+                .map(|index| checkpoint_relation(&vertex_uuids, simplex_index, "vertex", index))
+                .collect::<Result<Vec<_>, _>>()?;
+            let mapped_neighbors = checkpoint_simplex
+                .neighbor_indices
+                .into_iter()
+                .map(|neighbor| {
+                    neighbor
+                        .map(|index| {
+                            checkpoint_relation(
+                                &simplex_uuids,
+                                simplex_index,
+                                "neighbor simplex",
+                                index,
+                            )
+                        })
+                        .transpose()
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+
+            simplices.push(DelaunayHydrationSimplex {
+                uuid: simplex_uuid,
+                data: checkpoint_simplex.data,
+            });
+            simplex_vertices.insert(simplex_uuid, mapped_vertices);
+            simplex_neighbors.insert(simplex_uuid, mapped_neighbors);
+            if let Some(offsets) = checkpoint_simplex.periodic_vertex_offsets {
+                simplex_vertex_offsets.insert(simplex_uuid, offsets);
+            }
+        }
+
+        let interval = match delaunay_check_policy {
+            DelaunayCheckpointPolicyV1::EndOnly => SerializableDelaunayCheckPolicy::EndOnly,
+            DelaunayCheckpointPolicyV1::EveryN(interval) => {
+                SerializableDelaunayCheckPolicy::EveryN(usize::try_from(interval).map_err(
+                    |_| DelaunayCheckpointWireError::PolicyIntervalOverflow { interval },
+                )?)
+            }
+        };
+        let hydration = DelaunayHydrationBackend {
+            tds: DelaunayHydrationSnapshot {
+                vertices,
+                simplices,
+                simplex_vertices,
+                simplex_neighbors,
+                simplex_vertex_offsets,
+            },
+            global_topology: global_topology.into(),
+            topology_guarantee: topology_guarantee.into(),
+            delaunay_check_policy: interval,
+        };
+        let value = serde_json::to_value(hydration).map_err(|error| {
+            DelaunayCheckpointWireError::HydrationFailed {
+                detail: error.to_string(),
+            }
+        })?;
+        serde_json::from_value(value).map_err(|error| {
+            DelaunayCheckpointWireError::HydrationFailed {
+                detail: error.to_string(),
+            }
+        })
+    }
+}
+
+/// Resolves one stable relationship index without trusting platform-sized input.
+fn checkpoint_relation<T: Copy>(
+    records: &[T],
+    simplex_index: usize,
+    entity: &'static str,
+    referenced_index: u64,
+) -> Result<T, DelaunayCheckpointWireError> {
+    usize::try_from(referenced_index)
+        .ok()
+        .and_then(|index| records.get(index).copied())
+        .ok_or(DelaunayCheckpointWireError::IndexOutOfBounds {
+            simplex_index,
+            entity,
+            referenced_index,
+            entity_count: records.len(),
+        })
+}
+
+impl<const D: usize> From<GlobalTopology<D>> for DelaunayCheckpointGlobalTopologyV1 {
+    fn from(topology: GlobalTopology<D>) -> Self {
+        match topology {
+            GlobalTopology::Euclidean => Self::Euclidean,
+            GlobalTopology::Toroidal { domain, mode } => Self::Toroidal {
+                domain: domain.periods().to_vec(),
+                mode: mode.into(),
+            },
+            GlobalTopology::Spherical => Self::Spherical,
+            GlobalTopology::Hyperbolic => Self::Hyperbolic,
+        }
+    }
+}
+
+impl From<DelaunayCheckpointGlobalTopologyV1> for SerializableGlobalTopology {
+    fn from(topology: DelaunayCheckpointGlobalTopologyV1) -> Self {
+        match topology {
+            DelaunayCheckpointGlobalTopologyV1::Euclidean => Self::Euclidean,
+            DelaunayCheckpointGlobalTopologyV1::Toroidal { domain, mode } => Self::Toroidal {
+                domain,
+                mode: mode.into(),
+            },
+            DelaunayCheckpointGlobalTopologyV1::Spherical => Self::Spherical,
+            DelaunayCheckpointGlobalTopologyV1::Hyperbolic => Self::Hyperbolic,
+        }
+    }
+}
+
+impl From<ToroidalConstructionMode> for DelaunayCheckpointToroidalModeV1 {
+    fn from(mode: ToroidalConstructionMode) -> Self {
+        match mode {
+            ToroidalConstructionMode::PeriodicImagePoint => Self::PeriodicImagePoint,
+            ToroidalConstructionMode::Explicit => Self::Explicit,
+        }
+    }
+}
+
+impl From<DelaunayCheckpointToroidalModeV1> for SerializableToroidalConstructionMode {
+    fn from(mode: DelaunayCheckpointToroidalModeV1) -> Self {
+        match mode {
+            DelaunayCheckpointToroidalModeV1::PeriodicImagePoint => Self::PeriodicImagePoint,
+            DelaunayCheckpointToroidalModeV1::Explicit => Self::Explicit,
+        }
+    }
+}
+
+impl From<TopologyGuarantee> for DelaunayCheckpointTopologyGuaranteeV1 {
+    fn from(guarantee: TopologyGuarantee) -> Self {
+        match guarantee {
+            TopologyGuarantee::Pseudomanifold => Self::Pseudomanifold,
+            TopologyGuarantee::PLManifold => Self::PLManifold,
+        }
+    }
+}
+
+impl From<DelaunayCheckpointTopologyGuaranteeV1> for SerializableTopologyGuarantee {
+    fn from(guarantee: DelaunayCheckpointTopologyGuaranteeV1) -> Self {
+        match guarantee {
+            DelaunayCheckpointTopologyGuaranteeV1::Pseudomanifold => Self::Pseudomanifold,
+            DelaunayCheckpointTopologyGuaranteeV1::PLManifold => Self::PLManifold,
+        }
+    }
+}
+
+impl TryFrom<DelaunayCheckPolicy> for DelaunayCheckpointPolicyV1 {
+    type Error = DelaunayCheckpointWireError;
+
+    fn try_from(policy: DelaunayCheckPolicy) -> Result<Self, Self::Error> {
+        match policy {
+            DelaunayCheckPolicy::EndOnly => Ok(Self::EndOnly),
+            DelaunayCheckPolicy::EveryN(interval) => {
+                let interval = interval.get();
+                Ok(Self::EveryN(u64::try_from(interval).map_err(|_| {
+                    DelaunayCheckpointWireError::PolicyIntervalEncodingOverflow { interval }
+                })?))
+            }
+        }
     }
 }
 
