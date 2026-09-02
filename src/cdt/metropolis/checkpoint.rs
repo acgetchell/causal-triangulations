@@ -1520,12 +1520,12 @@ mod tests {
         .expect("wire should serialize")
     }
 
-    fn assert_checkpoint_deserialization_detail(error: CdtError, expected: &str) {
+    fn assert_checkpoint_deserialization_detail(error: &CdtError, expected: &str) {
         assert_matches!(
             error,
             CdtError::CheckpointSerializationFailed {
                 operation: CheckpointOperation::Deserialize,
-                ref detail,
+                detail,
                 ..
             } if detail.contains(expected)
         );
@@ -1601,7 +1601,7 @@ mod tests {
     fn checkpoint_json_wraps_malformed_document() {
         let error = checkpoint_json_error("{", "malformed checkpoint JSON should be rejected");
 
-        assert_checkpoint_deserialization_detail(error, "EOF while parsing");
+        assert_checkpoint_deserialization_detail(&error, "EOF while parsing");
     }
 
     #[test]
@@ -1617,7 +1617,7 @@ mod tests {
             "incomplete version 1 body should be rejected",
         );
 
-        assert_checkpoint_deserialization_detail(error, "missing field `accepted`");
+        assert_checkpoint_deserialization_detail(&error, "missing field `accepted`");
     }
 
     #[test]
@@ -1644,7 +1644,7 @@ mod tests {
             &acceptance_payload.to_string(),
             "all-zero acceptance RNG should be rejected",
         );
-        assert_checkpoint_deserialization_detail(acceptance_error, "invalid all-zero state");
+        assert_checkpoint_deserialization_detail(&acceptance_error, "invalid all-zero state");
 
         let mut proposal_payload = one_step_checkpoint_payload();
         proposal_payload["ergodics"]["rng"]["state"] = json!([0, 0, 0, 0]);
@@ -1652,7 +1652,7 @@ mod tests {
             &proposal_payload.to_string(),
             "all-zero proposal RNG should be rejected",
         );
-        assert_checkpoint_deserialization_detail(proposal_error, "invalid all-zero state");
+        assert_checkpoint_deserialization_detail(&proposal_error, "invalid all-zero state");
     }
 
     #[test]
@@ -1665,7 +1665,7 @@ mod tests {
             "non-normalized duration should be rejected",
         );
 
-        assert_checkpoint_deserialization_detail(error, "must be less than 1000000000");
+        assert_checkpoint_deserialization_detail(&error, "must be less than 1000000000");
     }
 
     #[test]
@@ -1678,7 +1678,7 @@ mod tests {
             "wrong-dimensional geometry should be rejected",
         );
 
-        assert_checkpoint_deserialization_detail(error, "coordinate dimension 1; expected 2");
+        assert_checkpoint_deserialization_detail(&error, "coordinate dimension 1; expected 2");
     }
 
     #[test]
@@ -1691,7 +1691,7 @@ mod tests {
             "zero foliation slice count should be rejected",
         );
 
-        assert_checkpoint_deserialization_detail(error, "`num_slices` must be nonzero");
+        assert_checkpoint_deserialization_detail(&error, "`num_slices` must be nonzero");
     }
 
     #[test]
@@ -1705,8 +1705,24 @@ mod tests {
         );
 
         assert_checkpoint_deserialization_detail(
-            error,
+            &error,
             "foliation `num_slices` 2 does not match metadata `time_slices` 3",
+        );
+    }
+
+    #[test]
+    fn checkpoint_json_rejects_zero_delaunay_check_interval() {
+        let mut payload = one_step_checkpoint_payload();
+        payload["triangulation"]["geometry"]["delaunay_check_policy"] = json!({ "EveryN": 0 });
+
+        let error = checkpoint_json_error(
+            &payload.to_string(),
+            "zero Delaunay validation cadence should be rejected",
+        );
+
+        assert_checkpoint_deserialization_detail(
+            &error,
+            "delaunay check interval must be non-zero",
         );
     }
 
