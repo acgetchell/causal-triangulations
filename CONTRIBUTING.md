@@ -12,9 +12,9 @@ verify, reproduce, or extend.
 
 Prerequisites:
 
-- Rust 1.98.0, pinned by `rust-toolchain.toml`; `Cargo.toml` also specifies `rust-version = "1.98.0"` as the required toolchain
+- Rust 1.98.1, pinned by `rust-toolchain.toml`; `Cargo.toml` also specifies `rust-version = "1.98.1"` as the required toolchain
 - Git
-- [Just] command runner: `cargo install just`
+- [Just] command runner, installed by the shared bootstrap below
 - `uv` for Python support tooling
 - GitHub CLI (`gh`) and `jq` for release and repository automation
 
@@ -23,7 +23,7 @@ Recommended setup:
 ```bash
 git clone https://github.com/acgetchell/causal-triangulations.git
 cd causal-triangulations
-just setup
+uv run --locked --only-group tooling research-repo-tools setup
 just check
 ```
 
@@ -53,17 +53,16 @@ just ci              # CI parity
 just commit-check    # Full pre-commit validation
 just run-example     # Basic simulation example
 just bench-ci        # CI benchmark contract
-just perf-check      # Local performance regression check
-just perf-help       # Performance analysis command index
+just bench-save-last # Save a fresh local Criterion baseline
+just bench-latest-vs-last # Compare absolute timings and relative changes
 ```
 
-`just setup` preflights `uv`, `rustup`, `cargo`, `gh`, and `jq` before changing the environment. It installs or verifies Cargo-hosted tools such as
-`cargo-audit`, `cargo-edit`, `cargo-update`, `dprint`, `rumdl`, `taplo-cli`, `typos-cli`, `cargo-nextest`, `cargo-llvm-cov`, and `zizmor`, then synchronizes
-uv-managed tools such as `actionlint`, `shfmt`, and `shellcheck`.
+After bootstrap, `just setup` repeats the shared setup. It installs Just, synchronizes the declared Rust/Cargo tools in a managed cache, and syncs the locked
+Python development environment. Open a new shell if setup reports a PATH change. `just tools-check` verifies installed versions without installing tools;
+`just setup-tools` repairs the managed toolchain. Rust and benchmark commands inherit that toolchain through the shared runner.
 
-`just update` advances Cargo dependency requirements and lockfile entries, resolves the latest compatible versions for exact Python development-tool pins,
-upgrades the Cargo-installed CLI tools managed by `just setup`, and reconciles their root justfile pins together with the active uv version. Review the
-resulting manifest, lockfile, and tool-pin changes before committing them.
+`just update` updates uv and managed tools first, then Cargo and Python dependencies and lockfiles. Tool pins live in `pyproject.toml`.
+`just update-tools` and `just update-dependencies` expose those independent scopes. Review the resulting manifest, lockfile, and pin changes before committing.
 
 Ready-to-use shell workflows live under `examples/scripts/`:
 
@@ -77,11 +76,11 @@ Release-support recipes are documented in [docs/RELEASING.md](docs/RELEASING.md)
 
 ```bash
 just changelog                       # Regenerate CHANGELOG.md
-just update-version v0.1.0           # Synchronize release versions and citation metadata
-just changelog-unreleased v0.1.0     # Generate a release changelog before the final tag exists
-just performance-release v0.1.0      # Retain and publish the release comparison
+just update-version "$TAG" --date "$RELEASE_DATE" --previous-release "$PREVIOUS_TAG"
+just changelog-unreleased "$TAG" "$RELEASE_DATE"
+just performance-release "$TAG" "$PREVIOUS_TAG" # Retain and publish the release comparison
 just release-version-check           # Validate the final release metadata and changelog
-just tag v0.1.0                      # Create an annotated git tag from changelog content
+just tag "$TAG"                     # Create an annotated git tag from changelog content
 ```
 
 Prefer small focused branches. Branch names should follow `{type}/{issue}-descriptor-or-two`, for example:
@@ -105,7 +104,7 @@ Before opening a PR:
 Rust code uses:
 
 - Rust 2024 edition
-- MSRV 1.98.0
+- MSRV 1.98.1
 - `#![forbid(unsafe_code)]`
 - `rustfmt` and strict Clippy
 - narrow `CdtError` variants and `CdtResult<T>` for production errors
@@ -161,15 +160,26 @@ Before large algorithmic changes, save or inspect a baseline:
 
 ```bash
 just bench-ci
-just perf-baseline pre-change
-just perf-check
+just bench-save-last
+just bench-latest-vs-last
 ```
 
-The `perf-*` commands are the PR and development-regression surface. During release preparation, use `just performance-release vX.Y.Z` for the isolated,
-correctness-gated comparison and durable CSV/provenance contract. `just performance-doc` and `just performance-readme` reproduce tracked publication files
-from that retained pair without rerunning benchmarks.
+New performance evidence uses shared schemas. Historical reports and formats were retired in September 2026. Start with a fresh local baseline;
+release comparisons require two explicit new-series tags. `just performance-doc` rerenders retained shared evidence, and `performance-readme CONFIG`
+publishes absolute timings and relative changes together. See the performance guide for draft-release assets and publication configuration.
 
 ## Pull Requests
+
+Optional local review requires an installed, authenticated CodeRabbit CLI:
+
+```bash
+just review                  # Committed branch changes against origin/main, plus untracked files
+just review local/base       # Choose a locally available comparison ref
+just review-uncommitted      # Uncommitted changes and untracked files
+```
+
+These commands pass `AGENTS.md` and `.coderabbit.yml` to the reviewer and preserve its failure status. They are outside `check` and `ci`; invoking them
+explicitly sends the selected changes to CodeRabbit. Run the normal validators independently.
 
 Pull requests should be small enough to review. Include:
 

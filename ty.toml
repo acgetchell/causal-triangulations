@@ -2,13 +2,8 @@
 # Astral ty configuration for causal-triangulations
 # Python is auxiliary tooling only (scripts/), Rust is primary
 
-[src]
-# Restrict analysis strictly to Python tooling.
-include = [ "scripts" ]
-
-[environment]
-# Match the project's minimum supported Python version.
-python-version = "3.14"
+# Source inventory is supplied by research-repo-tools, including negative fixtures.
+# The Python baseline comes from pyproject.toml.
 
 [terminal]
 # Keep output concise by default.

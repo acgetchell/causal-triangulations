@@ -1,12 +1,13 @@
 [toolchain]
 # Pin to MSRV as specified in Cargo.toml
-channel = "1.98.0"
+channel = "1.98.1"
 
 # Essential components for development
 components = [
     "clippy", # Linting (you use strict pedantic mode)
     "rustfmt", # Code formatting (you use cargo fmt --all)
     "rust-src", # Source code for IDEs and local diagnostics
+    "llvm-tools-preview", # Coverage tooling
 ]
 
 # Set this toolchain as the profile default

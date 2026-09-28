@@ -167,21 +167,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Bump github/codeql-action from 4.36.0 to 4.36.1
   [`3bbf6e6`](https://github.com/acgetchell/causal-triangulations/commit/3bbf6e6697afac8a9d33961974ff92cc36bbf16a)
-
 - Bump actions/checkout from 6.0.2 to 6.0.3 [`571c69c`](https://github.com/acgetchell/causal-triangulations/commit/571c69c7dbffb30eff26bfc3e8e4a61eb103edce)
-
 - Bump starlette in the uv group across 1 directory
   [`dc3c325`](https://github.com/acgetchell/causal-triangulations/commit/dc3c325fa79985febc383b9ab884f778ceb15cb2)
-
 - Bump the github-actions group with 5 updates [#251](https://github.com/acgetchell/causal-triangulations/pull/251)
   [`d081b1e`](https://github.com/acgetchell/causal-triangulations/commit/d081b1eb85c30562a7b4c381b822ee62a4a93a67)
-
 - Bump the github-actions group with 3 updates [#262](https://github.com/acgetchell/causal-triangulations/pull/262)
   [`ef91ab3`](https://github.com/acgetchell/causal-triangulations/commit/ef91ab3a514cfdd3515a236057d08a83a81bde28)
-
 - Bump the dependencies group with 2 updates [#263](https://github.com/acgetchell/causal-triangulations/pull/263)
   [`46bfb02`](https://github.com/acgetchell/causal-triangulations/commit/46bfb02157626b6406b781d6acaf1eb767a2c305)
-
 - Bump astral-sh/setup-uv in the github-actions group [#266](https://github.com/acgetchell/causal-triangulations/pull/266)
   [`1d3b4a2`](https://github.com/acgetchell/causal-triangulations/commit/1d3b4a289dc826514f84a84342a85632263e3f77)
 
@@ -482,31 +476,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Add `Foliation` struct with `VertexSecondaryMap&lt;u32&gt;` for O(1)
     per-vertex time labels, stored in the CDT layer (not the geometry
     backend)
-
   - Add `EdgeType` enum (Spacelike / Timelike) and classification via
     `Foliation::classify_edge`
-
   - Add `from_foliated_cylinder` constructor: grid-based CDT with
     y-coordinate bucket labeling, spatial extent ≤ 1.0, concave √(t+1)
     boundary perturbation to guarantee causality
-
   - Add `assign_foliation_by_y_coordinate` for existing triangulations
-
   - Implement `validate_foliation()` (structural: label count, non-empty
     slices, sizes consistency)
-
   - Implement `validate_causality()` (edge-level: no edge spans &gt;1 time
     slice, uses y-coordinate bucketing for backend-agnostic check)
-
   - Add `CausalityViolation { time_0, time_1 }` error variant with
     structured fields for programmatic matching
-
   - Add safe numeric helpers in `util.rs`: `saturating_usize_to_i32`,
     `y_to_time_bucket`, `f64_band_to_u32`
-
   - Bump `delaunay` dependency to v0.7.3 (VertexSecondaryMap re-export,
     AdaptiveKernel as default builder kernel)
-
   - 50 new tests (7 foliation unit, 21 integration, 1 proptest, 11 util,
     1 error display, 9 pre-existing updated)
 - Store time labels as vertex data, mirroring CDT++ vertex-&gt;info()
@@ -514,22 +499,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - Change DelaunayBackend2D vertex data from () to u32 — time-slice
     labels are now stored directly on vertices via Vertex&lt;f64, u32, 2&gt;
-
   - Embed labels at construction: from_foliated_cylinder uses
     VertexBuilder::data(t) and DelaunayTriangulationBuilder::from_vertices
-
   - Simplify Foliation to bookkeeping only (slice_sizes + num_slices),
     remove VertexSecondaryMap — labels live on vertices, not a side map
-
   - Read labels from vertex data: time_label, edge_type, classify_edge,
     validate_causality_delaunay all use vertex_time_label() on the backend
-
   - Rebuild triangulation in assign_foliation_by_y_coordinate as
     workaround for missing set_vertex_data (blocked on delaunay#284)
-
   - Tighten re-export guidance in docs/dev/rust.md (stable API only,
     drop incorrect prelude terminology)
-
   - Update docs/foliation.md and docs/project.md architecture sections
 - Add CellType classification for triangulation faces
   [`9b28642`](https://github.com/acgetchell/causal-triangulations/commit/9b28642011d11561c849c99db3998dd269fde1d5)
@@ -654,12 +633,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - Add `ValidatedCdtConfig` and `ValidatedInitialVolume` so runtime construction consumes topology, volume, schedule, dimensionality, and coupling invariants
     after validation.
-
   - Move Metropolis/action runtime conversion behind validated configs and route `run_simulation` and examples through the proof-bearing API.
-
   - Report invalid Metropolis schedules and temperatures with `InvalidSimulationConfiguration` while keeping geometry, topology, and action failures on
     `InvalidConfiguration` .
-
   - Bump the Rust baseline to 1.96.0, update the MCMC backend to 0.4.0, and align docs.rs metadata, API docs, and test assertions with the new baseline.
 
 ### Changed
@@ -667,7 +643,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Consolidate and refine crate keywords [`41a8212`](https://github.com/acgetchell/causal-triangulations/commit/41a8212fc18b13a2853d4ea02d2e5462d7a87d96)
 
   Combine "quantum" and "gravity" into "quantum-gravity" and remove the redundant "physics" tag to improve package discoverability and metadata accuracy.
-
 - Use TDS key checks for handle validation and log stubs
   [`aa0ca36`](https://github.com/acgetchell/causal-triangulations/commit/aa0ca365a213b5373c78d110206092bf09b00192)
 
@@ -675,7 +650,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data structure directly for vertex and cell keys. Remove the unused
   OperationFailed error variant and add warning logs to the unimplemented
   clear and reserve_capacity methods.
-
 - Document mutation support and update changelog for backend keys
   [`974ba38`](https://github.com/acgetchell/causal-triangulations/commit/974ba3872b2bcb25e32f9be495f4e56a99cdeadf)
 
@@ -683,7 +657,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   methods are currently unimplemented and return errors. Synchronize the
   changelog to reflect the migration from UUID-based handles to upstream
   key-based handles.
-
 - Make performance regression check non-blocking in CI
   [`75eb4d2`](https://github.com/acgetchell/causal-triangulations/commit/75eb4d266f2266021b8544741661f6d181261d2f)
 
@@ -692,34 +665,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   noisy benchmark results with significant variance, leading to false
   positives. This change ensures that statistical noise does not block
   pull request merges while maintaining visibility via PR comments.
-
 - Improve foliation API correctness, error handling, and test coverage
   [`28c28da`](https://github.com/acgetchell/causal-triangulations/commit/28c28dabbaa41d3da8834625a99728e5fe5bf2b7)
 
   - Replace .unwrap() with Result propagation in from_foliated_cylinder and
     generate_delaunay2_with_context for VertexBuilder::build() errors
-
   - Add CdtError::VertexBuildFailed variant for vertex construction failures
     instead of misusing DelaunayGenerationFailed
-
   - Make validate_topology, validate_causality, validate_foliation public with
     doctests so crate users can run targeted validation checks
-
   - Simplify DelaunayBackend trait bounds: import DataType directly, remove
     redundant where clauses leveraging edition 2024 struct-level bounds
-
   - Add debug_assert in Foliation::new for out-of-range time labels
-
   - Fix docs/foliation.md heading levels (h4→h3) and add code block language
-
   - Add integration property tests (tests/proptest_foliation.rs) for cylinder
     invariants, edge classification completeness, and seed determinism
-
   - Add unit tests for acausal edge classification, new vertex labeling,
     single-slice foliation, and larger grid scaling
-
   - Update docs/dev/rust.md with doctest and re-export guidance
-
 - Improve foliation robustness and add acausal edge classification
   [`1385793`](https://github.com/acgetchell/causal-triangulations/commit/1385793a88b72493b344f450d2ab6cc511644905)
 
@@ -728,37 +691,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   assertions in Foliation construction with a formal Result-based API and
   improve error propagation during foliation assignment and causality
   validation in CdtTriangulation.
-
 - Isolate delaunay crate behind geometry boundary, add prelude
   [`1c152b3`](https://github.com/acgetchell/causal-triangulations/commit/1c152b38178de0e8b09cbfda7e55493fb8b9d06e)
 
   - Move Delaunay generators from util.rs to new geometry/generators.rs
     module, establishing src/geometry/ as the sole delaunay crate boundary
-
   - Strip util.rs to pure numeric helpers (no delaunay imports)
-
   - Remove raw delaunay crate imports from cdt/triangulation.rs; use
     DelaunayBackend2D type alias and backend trait methods instead
-
   - Add prelude module with prelude::*, prelude::triangulation::*, and
     prelude::simulation::* sub-preludes; update all doctests, examples,
     integration tests, proptests, and benchmarks to use them
-
   - Shorten generator function names (generate_delaunay2_with_context →
     delaunay2_with_context, etc.) and assign_foliation_by_y_coordinate →
     assign_foliation_by_y
-
   - Expand FoliationError with LabelCountMismatch, EmptySlice, and
     SliceSizeSumMismatch variants; add From&lt;FoliationError&gt; for CdtError
-
   - Fix dropped backend error in assign_foliation_by_y (was map_err(|_|))
-
   - Add 9 new tests: causality violation detection, FoliationError Display
     and conversion, build_delaunay2_with_data edge cases
-
   - Document Geometry Backend Isolation rule in docs/dev/rust.md, AGENTS.md,
     and project.md
-
 - Improve foliation consistency and specialize validation API
   [`c947e12`](https://github.com/acgetchell/causal-triangulations/commit/c947e12a333d26be5c1fa2661280c7257ac84832)
 
@@ -767,7 +720,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   validation methods for the 2D Delaunay backend to facilitate direct
   vertex data access and restrict test-only triangulation generators to
   internal crate usage.
-
 - Update triangulation metadata when assigning foliation
   [`fb12663`](https://github.com/acgetchell/causal-triangulations/commit/fb126634bbd2915a49ba501517039a93239b8168)
 
@@ -775,7 +727,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to ensure the triangulation metadata accurately reflects the state
   change. Additionally, remove a redundant validation check for slice size
   sums that is already handled during foliation construction.
-
 - Validate vertex time labels and improve causality test stability
   [`47f474a`](https://github.com/acgetchell/causal-triangulations/commit/47f474a2df1f2fa961d1ca735bd2a8ffd5c36922)
 
@@ -783,22 +734,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   construction to ensure data consistency, returning an error if labels
   exceed the slice count. Refactor the causality violation test to use
   deterministic triangulation data for more reliable validation.
-
 - Enhance causality validation in tests by using a foliated cylinder setup
   [`e61932f`](https://github.com/acgetchell/causal-triangulations/commit/e61932f4ffbc8fdf27d43e4b0bc84fb2d8f085ff)
-
 - Reformat vertex time label access in triangulation tests
   [`37ed0e9`](https://github.com/acgetchell/causal-triangulations/commit/37ed0e9903907e2605eb3d2f8b6fd6af7abd3d48)
 
   Internal formatting update to improve code readability within the test
   suite.
-
 - Invalidate cache when assigning foliation by y-coordinate
   [`090b5be`](https://github.com/acgetchell/causal-triangulations/commit/090b5be58e34b38f8e6de15b995d999f849aa4a6)
 
   Ensure cached properties are cleared when updating vertex time labels
   to prevent stale data from persisting after a foliation change.
-
 - Refactor triangulation tests for deterministic causality validation
   [`20ff771`](https://github.com/acgetchell/causal-triangulations/commit/20ff7715d64c27eb2a7c8a4988097a8dc0c4d4c5)
 
@@ -806,7 +753,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deterministic triangulation generators. This avoids issues with Delaunay
   tie-breaking in larger meshes, ensuring that causality violation
   detection is tested against a stable and predictable state.
-
 - Implement structured error handling for configuration and generation
   [`1df0a5d`](https://github.com/acgetchell/causal-triangulations/commit/1df0a5d66faaa38676a16ad95142e2243934f162)
 
@@ -815,7 +761,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   triangulation failures. This update centralizes simulation parameter
   validation and introduces stricter checks for measurement schedules to
   ensure at least one post-thermalization data point is recorded.
-
 - [**breaking**] Harden foliation validation and unify backend payload APIs
   [`934f38c`](https://github.com/acgetchell/causal-triangulations/commit/934f38cce8064e61f7ed9e490f05bb2a35577cdc)
 
@@ -823,7 +768,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - replace legacy payload mutation/read paths with key-based backend helpers across triangulation logic
   - centralize metadata mutation and cache invalidation bookkeeping behind dedicated update helpers
   - make the provisional point-set strip constructor internal and align strip property tests with the explicit-strip placeholder path
-
 - Track foliation synchronization and harden time-slice assignment
   [`e1c3b8a`](https://github.com/acgetchell/causal-triangulations/commit/e1c3b8aa6b7afb10b1f177b7a4a6e2977b44092e)
 
@@ -831,7 +775,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   synchronized with geometry changes. This update also enforces non-empty
   time slices and ensures that foliation assignment is atomic, preventing
   partial backend mutations if validation fails.
-
 - Defer geometry cache invalidation until backend mutation occurs
   [`d912f8a`](https://github.com/acgetchell/causal-triangulations/commit/d912f8aa60de1dfd5c843ada0b2bde940e69e912)
 
@@ -843,7 +786,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Additionally, specialize foliation validation for the Delaunay backend to
   eliminate dynamic downcasting and ensure cell type lookups correctly
   identify and handle stale states following geometry changes.
-
 - Simplify geometry abstraction and remove redundant mesh module
   [`44bc7b8`](https://github.com/acgetchell/causal-triangulations/commit/44bc7b8ac6ea553312410e941c455e1962d37f94)
 
@@ -853,16 +795,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   structures. Additionally, the update improves test determinism by using
   seeded point generation and adds verification for vertex-time labels and
   foliation re-assignment consistency.
-
 - Import `rand::RngExt` trait for random number utilities
   [`ea094f2`](https://github.com/acgetchell/causal-triangulations/commit/ea094f239f7e4cbb06c0bf3777eea465ad9dfd28)
-
 - Refactor!(cdt): remove mutable triangulation escape hatches
   [`a289361`](https://github.com/acgetchell/causal-triangulations/commit/a289361abff0b4c70606c207f07542279e614c60)
-
 - Refactor!(cdt): split triangulation modules and harden invariants
   [`aa08007`](https://github.com/acgetchell/causal-triangulations/commit/aa08007cdb662d9e8863c4954a9294501f7dee0b)
-
 - Refine Semgrep unwrap fixture exclusion patterns
   [`0f4fb0f`](https://github.com/acgetchell/causal-triangulations/commit/0f4fb0fc89bd62c0786b25482f6b58dd8e0e4fc2)
 
@@ -871,7 +809,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   matching and prevents unintended false negatives for doctests and internal
   utility functions.
   Refs: #151
-
 - Update tooling documentation on Semgrep unwrap/expect rules
   [`8ac8398`](https://github.com/acgetchell/causal-triangulations/commit/8ac839845bbaeb8deaa35c59d5ef9530147a5902)
 
@@ -879,7 +816,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   This clarifies how rules distinguish code from prose mentions and
   anchor fixture exclusions, preventing false positives in doctests
   and ensuring accurate public-surface checks.
-
 - [**breaking**] Split Metropolis into module tree
   [`3d602c5`](https://github.com/acgetchell/causal-triangulations/commit/3d602c5139fbfae35d7eec1ceb3d7f07697ae314)
 
@@ -887,7 +823,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Keep `adapter.rs` as the single boundary to `markov-chain-monte-carlo` while preserving existing public simulation re-exports.
   - Calibrate the default 1+1 CDT action constants to `kappa_0 = 0`, `kappa_2 = 0`, and `lambda_edge = (2 / 3) ln 2`.
   - Document the Metropolis module layout, Delaunay initialization role, and 1+1 CDT coupling calibration.
-
 - [**breaking**] Validate runtime invariants at parse boundaries
   [`8a03da7`](https://github.com/acgetchell/causal-triangulations/commit/8a03da753747d6374ddf1da94f30ccb5b0194de3)
 
@@ -895,21 +830,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Validate result, checkpoint, move, and proposal telemetry before storage or deserialization so impossible counters and incoherent step records cannot be
     represented.
   - Move CDT triangulation state into the triangulation module tree and expose metadata, statistics, and constants through focused accessors and preludes.
-
 - [**breaking**] Enforce simulation state invariants [#174](https://github.com/acgetchell/causal-triangulations/pull/174)
   [`583e5d4`](https://github.com/acgetchell/causal-triangulations/commit/583e5d485f35d9124cb85afd1bca4754d0537497)
 
   - Reject checkpoints and completed results whose proposal telemetry does not match recorded sampler steps, accepted transitions, or rejected transitions
   - Record Metropolis measurements only on the configured post-thermalization cadence and validate deserialized measurement streams against the same schedule
   - Resolve configured output paths before triangulation or sampling begins, and prevent CDT modification counters from wrapping into stale cache versions
-
 - [**breaking**] Encode nonzero CDT invariants [`938d712`](https://github.com/acgetchell/causal-triangulations/commit/938d712175c35fe85aa893042f159afe0593f6ce)
 
   - Store Metropolis step counts, measurement cadence, foliation slice counts, and CDT time-slice metadata as NonZeroU32.
   - Preserve validated Metropolis configuration inside ValidatedCdtConfig instead of rebuilding from raw fields.
   - Move time-slice parsing into construction and deserialization boundaries so downstream accessors can stay infallible.
   - Widen measurement-count arithmetic before including the current step to avoid overflow.
-
 - [**breaking**] Run continuation through planned proposals [#153](https://github.com/acgetchell/causal-triangulations/pull/153)
   [`262518f`](https://github.com/acgetchell/causal-triangulations/commit/262518fee46949251b4f77003270e6eff990a4df)
 
@@ -917,7 +849,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     history.
   - Carry validated config, volume, and foliation counts as NonZeroU32 so downstream construction can rely on nonzero invariants.
   - Add Semgrep guardrails around planned-step telemetry and sampler-state synchronization.
-
 - [**breaking**] Encode trace and count invariants [#164](https://github.com/acgetchell/causal-triangulations/pull/164)
   [`d843d16`](https://github.com/acgetchell/causal-triangulations/commit/d843d165d0392ad1e179e3d43a7984491faa5a18)
 
@@ -926,7 +857,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Export simulation diagnostics through upstream scalar trace CSV rows instead of legacy measurement CSV rows.
   - Remove saturating telemetry downcasts in favor of checked conversions and structured count/trace error variants.
   - Update docs, examples, preludes, and tooling guidance for the new trace and count contracts.
-
 - [**breaking**] Enforce trace profile invariants [#164](https://github.com/acgetchell/causal-triangulations/pull/164)
   [`f481bc2`](https://github.com/acgetchell/causal-triangulations/commit/f481bc2bdf9d1ad727a90b12e4c35f67a7c8bf9c)
 
@@ -937,72 +867,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Dependencies
 
 - Bump actions/cache from 5.0.1 to 5.0.4 [`063c3fc`](https://github.com/acgetchell/causal-triangulations/commit/063c3fc7601935b9399be2105e5359e1a39fade9)
-
 - Bump the dependencies group with 2 updates [`e19510f`](https://github.com/acgetchell/causal-triangulations/commit/e19510f251915ecb2eb02d44619cd6f0c56853bc)
-
 - Bump taiki-e/install-action from 2.68.35 to 2.69.8
   [`3cc7c55`](https://github.com/acgetchell/causal-triangulations/commit/3cc7c556f6aaac7f959dd9df2e6130a118b49387)
-
 - Bump codecov/codecov-action from 5.5.2 to 5.5.3
   [`69e2fca`](https://github.com/acgetchell/causal-triangulations/commit/69e2fca31bc9b6298a8dad8b9f48c84eba1c89ff)
-
 - Bump codecov/codecov-action from 5.5.3 to 6.0.0
   [`57464a4`](https://github.com/acgetchell/causal-triangulations/commit/57464a4352252aea462850b5eab94ee7e9820386)
-
 - Bump astral-sh/setup-uv from 7.6.0 to 8.0.0 [`c7e4472`](https://github.com/acgetchell/causal-triangulations/commit/c7e4472c72f73c7717b7639aae6f820a0c5cc266)
-
 - Bump pygments from 2.19.2 to 2.20.0 [`5cc07e9`](https://github.com/acgetchell/causal-triangulations/commit/5cc07e9306ba51f990c01e4e5db4f5192b0379af)
-
 - Bump taiki-e/install-action from 2.69.8 to 2.70.3
   [`387e96d`](https://github.com/acgetchell/causal-triangulations/commit/387e96dcbba58cac8bfdaaefcbb9d8367c965a90)
-
 - Bump taiki-e/install-action from 2.70.3 to 2.75.0
   [`e3f4018`](https://github.com/acgetchell/causal-triangulations/commit/e3f40183c6778f252d46523234fcc1da58d932c4)
-
 - Bump the dependencies group across 1 directory with 2 updates
   [`d843b90`](https://github.com/acgetchell/causal-triangulations/commit/d843b900b0940d4f79d101279164ab42d2549463)
-
 - Bump astral-sh/setup-uv from 8.0.0 to 8.1.0 [`ba66738`](https://github.com/acgetchell/causal-triangulations/commit/ba66738ba2537cc3b1bb10bb9a0e93b4174d023b)
-
 - Bump actions-rust-lang/setup-rust-toolchain [`e618486`](https://github.com/acgetchell/causal-triangulations/commit/e6184861c9b56396961a53846e5a26ac2f54f995)
-
 - Bump taiki-e/install-action from 2.75.0 to 2.75.24
   [`b7e2413`](https://github.com/acgetchell/causal-triangulations/commit/b7e241317a2e9c1d0741bf80f3285503924daf28)
-
 - Bump actions/github-script from 8.0.0 to 9.0.0
   [`2923849`](https://github.com/acgetchell/causal-triangulations/commit/292384985e8d336807b1c65a8a5a7d72306f3810)
-
 - Bump actions/upload-artifact from 7.0.0 to 7.0.1
   [`c0ec7f6`](https://github.com/acgetchell/causal-triangulations/commit/c0ec7f66bebffed177731f16a1362980a98e15f0)
-
 - Bump actions/cache from 5.0.4 to 5.0.5 [`74ff03a`](https://github.com/acgetchell/causal-triangulations/commit/74ff03a02a5d8d10a68846c92d1a2936512b8796)
-
 - Bump taiki-e/install-action from 2.75.24 to 2.77.1
   [`8c5b755`](https://github.com/acgetchell/causal-triangulations/commit/8c5b7556dc41a49c5278abfb6fc5060d8da5a5b2)
-
 - Bump taiki-e/install-action from 2.77.1 to 2.77.6
   [`718681b`](https://github.com/acgetchell/causal-triangulations/commit/718681b74f8da79895e8bad94cb0f5cad7707d50)
-
 - Bump actions-rust-lang/setup-rust-toolchain [`effbbd4`](https://github.com/acgetchell/causal-triangulations/commit/effbbd42c174396063c3ec5f72a8565d22f7cf62)
-
 - Bump assert_cmd in the dependencies group [`035bfcc`](https://github.com/acgetchell/causal-triangulations/commit/035bfcc63d3375ee09ed33185ec285e7f0f0dae5)
-
 - Bump urllib3 in the uv group across 1 directory
   [`6d436aa`](https://github.com/acgetchell/causal-triangulations/commit/6d436aa50d86d7fe74caa0898765204aea45570f)
-
 - Bump idna in the uv group across 1 directory [`df3480f`](https://github.com/acgetchell/causal-triangulations/commit/df3480f961e06c566dade7a3850e88b8d26c73bd)
-
 - Bump taiki-e/install-action from 2.77.6 to 2.79.2
   [`6f611ff`](https://github.com/acgetchell/causal-triangulations/commit/6f611ff1fd8fcc00ffe9a8bf1835da777893aa28)
-
 - Bump codecov/codecov-action from 6.0.0 to 6.0.1
   [`3847062`](https://github.com/acgetchell/causal-triangulations/commit/38470624f992c3fca087228d663fd6dcf8af864d)
-
 - Bump serde_json [`1780261`](https://github.com/acgetchell/causal-triangulations/commit/1780261e6f13fc4f222f02ae220145cb0ca8c6a4)
-
 - Bump log from 0.4.29 to 0.4.30 in the dependencies group
   [`ac3237f`](https://github.com/acgetchell/causal-triangulations/commit/ac3237fff81a4d1c0233cfc9125a87d7cbca56ed)
-
 - Bump taiki-e/install-action from 2.79.2 to 2.79.9
   [`788eea8`](https://github.com/acgetchell/causal-triangulations/commit/788eea8b1cc1b9b91773c53d5c6a1cc172d1c369)
 
@@ -1037,12 +941,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - Validate measurement_frequency &gt; 0 and temperature finite/positive
     at start of MetropolisAlgorithm::run() to prevent panics and NaN
-
   - Generate and record a random seed when none is provided, ensuring
     every simulation run is reproducible after the fact
-
   - Add #![forbid(unsafe_code)] to proptest integration test crate
-
   - Add tests for config validation and seed provenance recording
 - Harden foliation causality checks and backend data mutation [#57](https://github.com/acgetchell/causal-triangulations/pull/57)
   [`58d4483`](https://github.com/acgetchell/causal-triangulations/commit/58d448323e89005614afe532ae5c410b902aac58)
@@ -1066,22 +967,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Tighten time_step_distance: out-of-range labels (t &gt;= T) bypass
     toroidal wrap-around so causality violations are reported with the
     raw step distance rather than being silently folded to 0 via min(T, 0).
-
   - Add FoliationError::MissingTemporalWrapAround variant (with Display
     and test) and validate_toroidal_temporal_wraparound() to distinguish
     a torus from a cylinder. chi = 0 alone is ambiguous; we now also
     require every slice to have timelike adjacency to (t-1) mod T and
     (t+1) mod T. Wired into validate_foliation alongside the existing
     spatial-S^1 check.
-
   - Refresh CdtTopology doc comments: remove stale 'blocked on delaunay#313'
     notes from OpenBoundary and Toroidal; document Toroidal as supported
     via CdtTriangulation::from_toroidal_cdt.
-
   - CdtConfig::validate: for Toroidal, require timeslices &gt;= 3, vertices
     divisible by timeslices, and vertices &gt;= 3 * timeslices. Tests cover
     each branch and confirm OpenBoundary is unaffected.
-
   - run_simulation: treat config.vertices as the TOTAL vertex count for
     both topologies. Toroidal branch now divides by timeslices to recover
     vertices_per_slice. Lib test asserts vertices=12, timeslices=3 yields
@@ -1169,10 +1066,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - Reject toroidal candidate edits that would break chi = 0 or the closed-S1
     foliation contract before recording move success.
-
   - Document the toroidal Metropolis invariant contract and refresh stale testing,
     move, foliation, and crate-level documentation.
-
   - Replace the retired TODO document with a high-level roadmap for release
     direction and follow-up work.
 - [**breaking**] Enforce CDT and backend invariants
@@ -1196,7 +1091,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - Emit `ergodic_move_candidate_geometry` consistently with the other
     `CdtValidationCheck` display identifiers.
-
   - Keep validation regression coverage deterministic for structural Delaunay
     rollback and checkpointed Metropolis runs.
 - Harden move failures and result deserialization
@@ -1275,16 +1169,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - [Release notes](https://github.com/pytest-dev/pytest/releases)
   - [Changelog](https://github.com/pytest-dev/pytest/blob/main/CHANGELOG.rst)
   - [Commits](https://github.com/pytest-dev/pytest/compare/9.0.2...9.0.3)
-
----
-
-  updated-dependencies:
-
-- dependency-name: pytest
-  dependency-version: 9.0.3
-  dependency-type: direct:development
-  dependency-group: uv
-  ...
 - [**breaking**] Align tooling and CDT error APIs
   [`bc3630b`](https://github.com/acgetchell/causal-triangulations/commit/bc3630b212ea55d0c6a52073cf6cfc3e85a61527)
 
@@ -1402,7 +1286,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Older releases are archived by minor series:
 
-- [0.0.x](docs/archive/changelog/0.0.md)
+- [0.0.x](docs/archives/changelog/0.0.md)
 
 [0.1.1]: https://github.com/acgetchell/causal-triangulations/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/acgetchell/causal-triangulations/compare/v0.0.1...v0.1.0

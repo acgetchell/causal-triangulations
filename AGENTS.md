@@ -187,7 +187,7 @@ just ci
 
 Refer to `docs/dev/commands.md` for full details.
 
-When adding or renaming Cargo examples, update `just examples-validate` markers as needed so CI keeps validating the user-facing example contracts.
+When adding or renaming Cargo examples, update `tooling/examples.toml` markers so `just examples-validate` keeps validating user-facing contracts.
 
 For tooling-alignment work, update `docs/dev/tooling-alignment.md` with the comparison and rationale before adding or changing config, workflow, or
 repository-rule files.
@@ -214,7 +214,7 @@ Key principle:
 
 - **Language**: Rust
 - **Project**: {2,3,4}D Causal Dynamical Triangulations library
-- **MSRV**: 1.98.0
+- **MSRV**: 1.98.1
 - **Edition**: 2024
 - **Unsafe code**: forbidden (`#![forbid(unsafe_code)]`)
 - **Architecture**: `src/geometry/` is the backend interface layer for the `delaunay` crate; `src/cdt/` is the CDT domain layer. Direct `use delaunay::` imports
@@ -229,7 +229,8 @@ Key principle:
   Design documented in `docs/foliation.md`
 - **Ergodic moves**: `attempt_22_move`, `attempt_13_move`, `attempt_31_move`, `attempt_edge_flip` are Delaunay-backed, foliation-aware move kernels. They mutate
   through narrow CDT-owned edit operations, roll back failed finalized mutations, and preserve topology/foliation invariants
-- **Python scripts**: `scripts/` contains benchmark, changelog, and hardware utilities; tests in `scripts/tests/` run via pytest
+- **Python tooling**: maintenance and performance evidence use the pinned `research-repo-tools` package. Consumer contracts in `scripts/tests/` run via
+  pytest; scientific benchmark, example, and notebook workloads remain repository-owned
 - **When adding/removing files**: Update `docs/code-organization.md`
 
 Architecture details are documented in:

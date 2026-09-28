@@ -1,231 +1,85 @@
-# Performance Testing Guide
+# Performance Testing
 
-This document explains the regression and reporting workflow around CDT performance benchmarks. For the benchmark inventory and instructions for adding new
-Criterion benchmarks, see [benches/README.md](../benches/README.md).
+CDT keeps its scientific workloads in `benches/` and delegates measurement orchestration, evidence, comparisons, and report publication to
+`research-repo-tools`. The September 2026 tooling migration deliberately retires historical reports and legacy formats. New measurements form a fresh series;
+old GitHub Release assets remain remote historical records and are not selected by the new recipes.
 
-## Overview
+## Local baseline and comparison
 
-The repository has two complementary performance tracks. Pull requests and main-branch development use Criterion output plus
-`scripts/performance_analysis.py` to:
-
-- compare current results with saved baselines;
-- report regressions and improvements;
-- generate Markdown reports for PR or release review;
-- keep local and CI checks using the same benchmark contract.
-
-Release preparation uses `scripts/release_performance.py` to compare isolated source states, retain a canonical CSV/provenance pair, and generate tracked
-publication files. The release path never treats timestamped analyzer JSON or Criterion HTML as durable evidence.
-
-The default CI contract combines `benches/ci_performance_suite.rs` with the deterministic assertions in `benches/allocation_profile.rs`. The Criterion suite is
-intentionally smaller than the full exploratory benchmark suite so it can provide a stable regression signal across platforms; the allocation check is a
-blocking correctness gate rather than a timing baseline.
-
-## Local Commands
+Run on the same quiet host, with the same toolchain and workload:
 
 ```bash
-just allocation-check  # Run the deterministic allocation contract
-just bench-ci          # Run the allocation contract and CI Criterion suite
-just perf-check        # Compare current results against the latest baseline
-just perf-check 5.0    # Use a stricter 5% regression threshold
-just perf-baseline     # Save current results as a timestamped baseline
-just perf-baseline tag # Save current results with a descriptive tag
-just perf-report       # Generate a Markdown performance report
-just perf-trends 7     # Summarize recent baseline trends
+just bench-save-last
+# Make the intended change.
+just bench-latest-vs-last
 ```
 
-The correctness-gated release-signal commands are:
+The first command runs integration and physics checks before saving the native Criterion baseline. The second reruns those gates and measurements,
+then uses the shared comparison CLI to display absolute baseline/current median times in nanoseconds, recorded intervals, and relative changes.
+A missing baseline fails instead of implying success. Local Criterion output lives under `target/criterion/` and is disposable.
+
+`just bench-smoke` checks that harnesses run with small sample counts; it does not produce publishable timing evidence.
+`just allocation-check` enforces the deterministic cached-observable allocation contract.
+The broader `just bench` and `just bench-ci` recipes retain their CDT workloads.
+
+## Fresh release evidence
+
+The next tagged release establishes the first new shared baseline. Create a draft GitHub Release for that tag, then dispatch
+`.github/workflows/release-benchmarks.yml` with its `release_tag`.
+The workflow validates the draft, measures the exact tag with read-only permissions and caches disabled, then attaches inert verified bytes in a separate
+writer job. It leaves the release as a draft for review. The new asset name is `causal-triangulations-TAG-cdt-baseline-v2.tar.gz`.
+
+To package an exact clean local tag with the same shared format:
 
 ```bash
-just benchmark-input-check       # Validate the release benchmark inputs
-just bench-latest                # Validate inputs, then measure the current release signal
-just bench-save-last             # Refresh the conventional local Criterion baseline
-just bench-latest-vs-last        # Measure current and compare it with `last`
-just bench-compare last          # Compare existing `new` output with a named sample
-just bench-save-baseline v0.2.0  # Measure and save a version-named native sample
+just performance-baseline "$TAG"
 ```
 
-Useful direct analyzer commands:
+After two fresh releases exist, compare their assets without running benchmarks:
 
 ```bash
-uv run performance-analysis --no-run
-uv run performance-analysis --no-run --threshold 5.0
-uv run performance-analysis --compare performance_baselines/baseline_pre-change.json
-uv run performance-analysis --report performance-report.md
+just performance-github-assets "$TAG" "$PREVIOUS_TAG"
 ```
 
-`just perf-check` returns exit code `1` when regressions exceed the threshold. Local callers may treat that as blocking. In CI, benchmark noise is reported
-but does not by itself fail the PR workflow.
-
-## CI Behavior
-
-The performance workflow:
-
-- blocks on the deterministic allocation contract;
-- runs the CI benchmark suite on pull requests;
-- compares PR results with the main-branch baseline;
-- comments with regressions, improvements, stable benchmarks, and new benchmarks;
-- uploads report artifacts;
-- saves updated baselines on main after successful merges.
-
-Regression comments should be reviewed carefully, especially for changes touching geometry construction, move proposal enumeration, action calculation,
-Metropolis simulation, output generation, or validation.
-
-The separate `.github/workflows/release-benchmarks.yml` workflow runs when a GitHub Release is published. It checks out the exact tag, runs the benchmark
-correctness gate, saves the tag-named native Criterion sample, packages only regular files under a `criterion/` archive root, and attaches the archive to
-that release. The asset name is `causal-triangulations-vX.Y.Z-criterion-baseline.tar.gz`.
-
-## Release Comparisons And Retained Evidence
-
-Run the complete release transaction before committing a release PR:
+For a prospective release, the explicit comparison recipe creates temporary Git worktrees and runs the trusted benchmark command from
+`tooling/benchmark.toml`:
 
 ```bash
-just performance-release v0.1.1 v0.1.0
+just performance-release "$TAG" "$PREVIOUS_TAG"
 ```
 
-Both tags are optional. The current tag defaults to the Cargo package version and the baseline defaults to the newest published stable release older than
-the current version. Explicit tags must use stable `vX.Y.Z` form; release publication rejects equal or reverse-ordered pairs. If the current tag already
-exists, its commit and tracked source state must match `HEAD`, preventing unreleased changes from being published under an existing release label.
+Agents following this repository's Git restrictions must leave that mutating worktree command to the user. It is outside normal validation.
+Measurements capture source/harness fingerprints, host identity, Rust, Criterion, Delaunay, la-stack, and MCMC versions.
+Matching known host OS, architecture, and CPU are required for local pairs. Review dependency and workload changes before interpreting any ratio.
 
-The command performs these operations in order:
+The recipe saves shared JSON comparison/evidence files under `target/bench-reports/`, then promotes the report and retained evidence into
+`docs/performance/v2/`. Missing or mismatched evidence fails before publication.
+Use `just performance-doc --payload PATH --manifest PATH` to promote an already reviewed pair, or `just performance-doc --check` to check retained output.
+No current report is tracked until the first compatible new comparison exists.
 
-1. Creates detached temporary worktrees for the baseline tag and current `HEAD`. Tracked current changes are copied byte-for-byte; untracked files do not
-   enter the measured source state.
-2. Runs `benchmark-input-check`'s release tests and `ci_performance_suite` independently in each source state with separate Cargo target directories.
-3. Parses Criterion median point estimates and confidence intervals, including current-only and baseline-only benchmark coverage.
-4. Writes `target/bench-reports/performance.csv` and `target/bench-reports/performance.provenance.json` before removing temporary measurements.
-5. Reloads the retained pair, verifies the CSV digest, release pair, schema, row count, source states, commands, toolchain, Criterion version, benchmark
-   contract, and host metadata, then atomically updates tracked publication files.
+## README publication
 
-The CSV is the sole quantitative source for report timings, percentages, confidence-interval classifications, and coverage notes. The matching provenance
-binds the exact CSV bytes by SHA-256. A missing pair member tells the operator to rerun `just performance-release`; an existing but mismatched pair is
-reported separately as an integrity failure.
-
-The tracked publication set is deliberately narrow: `README.md`, `docs/PERFORMANCE.md`, `docs/assets/performance-comparison.svg`,
-`docs/archive/performance/README.md`, and one release-pair archive report. Every destination is checked for repository containment and disjointness from the
-retained pair. Promotion is transactional, so a later replacement failure restores earlier files.
-
-After a successful measurement, these commands reuse the retained evidence without invoking Cargo or creating worktrees:
+Copy `tooling/performance-readme.example.toml` to `tooling/performance-readme.toml` when a fresh retained pair is available.
+Set its evidence paths, independently verified source commit/tag pins, and representative benchmark rows. Keep the references to the package version
+and both report tags. Preview before publishing:
 
 ```bash
-just performance-doc       # Rebuild the current report, archive entry, and visual
-just performance-readme    # Rebuild only the owned README block and visual
+just performance-readme tooling/performance-readme.toml --preview
+just performance-readme tooling/performance-readme.toml
+just performance-readme tooling/performance-readme.toml --check
 ```
 
-Both recipes accept an optional bundle directory containing files named `performance.csv` and `performance.provenance.json`. This supports rendering a
-copied retained pair while preserving the same strict validation and repository-contained publication destinations.
+The table includes **absolute baseline and current times with units**, recorded confidence bounds, the baseline/current point ratio, and percent reduction.
+This makes the cost of each operation visible rather than presenting relative speed alone. It also reports added/missing workload coverage.
+The full report retains provenance and all comparable workloads. The template intentionally omits a ratio-only SVG.
 
-For audit or reconstruction after both native release assets exist:
+Marginal timing intervals do not establish an interval for a speed ratio or statistical significance.
+These measurements do not establish ergodicity, mixing, thermalization, or continuum behavior.
 
-```bash
-just performance-github-assets v0.1.1 v0.1.0
-```
+## CI evidence
 
-This downloads both tag-pinned archives, rejects traversal paths, links, devices, and non-regular members, verifies the embedded source provenance, and
-reconstructs the retained CSV/provenance pair without running benchmarks.
+The performance workflow runs the deterministic allocation check and correctness-gated Criterion suite, then uploads raw measurements for 30 days.
+It does not restore legacy benchmark caches or claim a regression comparison against an unknown host.
+Normal `just ci` compiles benchmarks and enforces the allocation contract; it does not run timing comparisons.
 
-## Benchmark Categories
-
-The CI suite focuses on release-relevant CDT paths:
-
-- open-boundary and toroidal triangulation construction;
-- topology, foliation, causality, and simplex-classification validation;
-- individual ergodic move attempts;
-- proposal-site iteration and single-step Metropolis proposal planning;
-- fixed random-move attempt budgets sized as ten initial sweeps;
-- short Metropolis simulations.
-
-The broader Criterion suite includes exploratory groups for geometry queries, cache behavior, action calculations, simulation analysis, and validation. Those
-are documented in [benches/README.md](../benches/README.md).
-
-## Performance Workflow
-
-Before a performance-sensitive change:
-
-```bash
-just bench-ci
-just perf-baseline pre-change
-```
-
-During development:
-
-```bash
-just perf-check 15.0
-```
-
-Before review:
-
-```bash
-just perf-check
-just perf-report
-```
-
-For optimization PRs, include a short performance summary:
-
-```markdown
-## Performance Impact
-
-- proposal-site enumeration: 18% faster on the CI suite
-- short Metropolis runs: stable within threshold
-- memory allocation: no new persistent allocations in the hot path
-```
-
-## Baselines
-
-- Main-branch baselines are saved by CI.
-- Feature baselines can be saved locally with descriptive tags.
-- Release baselines should use version tags.
-- The analyzer keeps recent baselines and report artifacts for comparison.
-- GitHub Releases retain version-named native Criterion baselines for release reconstruction.
-- `target/bench-reports/` retains the most recently generated canonical CSV/provenance pair locally; do not hand-edit either member.
-
-`just clean` runs `cargo clean`, so it removes the retained local pair together with the rest of `target/`. Tracked reports remain, but subsequent
-`performance-doc` or `performance-readme` runs require a copied bundle directory or a fresh `performance-release` transaction.
-
-Keep baseline names descriptive enough to recover the comparison later:
-
-```bash
-just perf-baseline pre-proposal-cache
-just perf-baseline v0.1.1
-```
-
-## Troubleshooting
-
-`No benchmark results found`
-
-: Run `just bench-ci` first, or run `uv run performance-analysis --no-run` only after Criterion JSON output exists.
-
-`No baseline found for comparison`
-
-: Save one with `just perf-baseline initial`, or compare directly against a known baseline file.
-
-`retained performance artifact pair is incomplete`
-
-: Run `just performance-release` to regenerate both members before running `performance-doc` or `performance-readme`. Do not copy a CSV or provenance file
-  from a different comparison.
-
-`retained CSV/provenance pair mismatch`
-
-: Both files exist but fail their digest, row-count, schema, or release-pair contract. Preserve them for diagnosis, then rerun `just performance-release`.
-
-High variance
-
-: Close other CPU-heavy work, rerun the benchmark, and compare trends rather than one noisy sample. Treat large PR comments as investigation prompts, not
-  automatic proof of a regression.
-
-Need deeper timing data
-
-: Run a focused Criterion group from [benches/README.md](../benches/README.md), inspect the HTML report under `target/criterion/`, or use platform-specific
-  profilers. Memory profiling is not exposed as a Cargo feature in this crate; use external profilers or targeted benchmark instrumentation.
-
-## Components
-
-- `benches/ci_performance_suite.rs`: stable CI regression contract
-- `benches/cdt_benchmarks.rs`: broader Criterion benchmark groups
-- `benches/allocation_profile.rs`: deterministic cached-observable allocation counts
-- `scripts/performance_analysis.py`: baseline comparison and report generation
-- `scripts/performance_artifacts.py`: strict retained CSV/provenance schema and atomic multi-file replacement
-- `scripts/release_performance.py`: tag resolution, isolated measurement, asset reconstruction, and tracked rendering
-- `.github/workflows/performance.yml`: CI performance workflow
-- `.github/workflows/release-benchmarks.yml`: release-native Criterion asset publication
-- `performance_baselines/`: saved local and CI baselines
-- `target/bench-reports/`: ignored retained release-comparison evidence used by deterministic render commands
+See [the benchmark inventory](../benches/README.md) for workload design and [development commands](dev/commands.md) for the slow debugging probes.

@@ -1,0 +1,26 @@
+schema = 1
+prerequisites = [ "sh" ]
+
+[[checks]]
+name = "basic_cdt"
+command = [ "sh", "-c", "exec ./target/release/examples/basic_cdt 2>&1" ]
+expect = [ "Simulation completed!", "Example completed successfully!" ]
+timeout = 600
+
+[[checks]]
+name = "find_good_seeds"
+command = [ "target/release/examples/find_good_seeds" ]
+expect = [ "SEED VALIDATION", "ADDITIONAL SEED TESTING" ]
+timeout = 600
+
+[[checks]]
+name = "observables"
+command = [ "target/release/examples/observables" ]
+expect = [ "Initial slab-triangle profile", "Final all-scale effective Hausdorff slope", "Final short-time effective spectral dimension" ]
+timeout = 600
+
+[[checks]]
+name = "output_and_checkpoint"
+command = [ "target/release/examples/output_and_checkpoint" ]
+expect = [ "Trace CSV rows", "JSON summary measurements", "Resumed MCMC checkpoint steps", "Output and checkpoint example completed successfully" ]
+timeout = 600

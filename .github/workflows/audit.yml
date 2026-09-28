@@ -4,16 +4,22 @@ on:
     paths:
       # Run if workflow changes
       - .github/workflows/audit.yml
-      - .github/actions/setup-just/action.yml
+      - .github/actions/setup-toolchain/action.yml
       - justfile
+      - pyproject.toml
+      - uv.lock
+      - rust-toolchain.toml
       # Run on changed dependencies
       - "**/Cargo.toml"
       - "**/Cargo.lock"
   pull_request:
     paths:
       - .github/workflows/audit.yml
-      - .github/actions/setup-just/action.yml
+      - .github/actions/setup-toolchain/action.yml
       - justfile
+      - pyproject.toml
+      - uv.lock
+      - rust-toolchain.toml
       - "**/Cargo.toml"
       - "**/Cargo.lock"
   # Rerun periodically to pick up new advisories (weekly instead of daily)
@@ -34,29 +40,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f # v2.0.0
-        with:
-          cache: true
-          cache-bin: false
-          # toolchain, components, etc. are specified in rust-toolchain.toml
-
-      - name: Set up just
-        uses: $/.github/actions/setup-just
-
-      - name: Resolve cargo-audit version
-        id: cargo_audit_version
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          version="$(just --evaluate cargo_audit_version)"
-          if [[ -z "$version" ]]; then
-            echo "::error::Could not resolve cargo_audit_version from justfile"
-            exit 1
-          fi
-
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Set up declared toolchain
+        uses: $/.github/actions/setup-toolchain
 
       - name: Compute week key
         id: date
@@ -68,11 +53,6 @@ jobs:
           path: ~/.cargo/advisory-db
           key: advisory-db-${{ runner.os }}-v1-${{ steps.date.outputs.week }}
           restore-keys: advisory-db-${{ runner.os }}-v1-
-
-      - name: Install cargo-audit
-        uses: taiki-e/cache-cargo-install-action@9ee83daaa7b96a6fab930949ecf1122bba04a389 # v3.0.8
-        with:
-          tool: cargo-audit@${{ steps.cargo_audit_version.outputs.version }}
 
       - name: Run cargo audit
         run: cargo audit

@@ -21,7 +21,7 @@ causal-triangulations/
 │   └── nextest.toml
 ├── .github/
 │   ├── actions/
-│   │   └── setup-just/
+│   │   └── setup-toolchain/
 │   │       └── action.yml
 │   ├── workflows/
 │   │   ├── audit.yml
@@ -39,29 +39,23 @@ causal-triangulations/
 ├── benches/
 │   ├── support/
 │   │   └── or_abort.rs
-│   ├── README.md
 │   ├── allocation_profile.rs
 │   ├── cdt_benchmarks.rs
-│   └── ci_performance_suite.rs
+│   ├── ci_performance_suite.rs
+│   └── README.md
 ├── docs/
-│   ├── archive/
-│   │   ├── changelog/
-│   │   │   └── 0.0.md
-│   │   └── performance/
-│   │       ├── README.md
-│   │       └── v0.1.1-vs-v0.1.0.md
+│   ├── archives/
+│   │   └── changelog/
+│   │       └── 0.0.md
 │   ├── assets/
 │   │   ├── cdt_spacetime.png
-│   │   ├── cdt_spacetime.svg
-│   │   └── performance-comparison.svg
+│   │   └── cdt_spacetime.svg
 │   ├── dev/
 │   │   ├── commands.md
 │   │   ├── python.md
 │   │   ├── rust.md
 │   │   ├── testing.md
 │   │   └── tooling-alignment.md
-│   ├── PERFORMANCE.md
-│   ├── RELEASING.md
 │   ├── cli-examples.md
 │   ├── code-organization.md
 │   ├── foliation.md
@@ -69,15 +63,16 @@ causal-triangulations/
 │   ├── metropolis.md
 │   ├── moves.md
 │   ├── performance-testing.md
+│   ├── RELEASING.md
 │   ├── roadmap.md
 │   ├── scientific-basis.md
 │   └── testing.md
 ├── examples/
 │   ├── scripts/
-│   │   ├── README.md
 │   │   ├── basic_simulation.sh
 │   │   ├── parameter_sweep.sh
-│   │   └── performance_test.sh
+│   │   ├── performance_test.sh
+│   │   └── README.md
 │   ├── basic_cdt.rs
 │   ├── find_good_seeds.rs
 │   ├── observables.rs
@@ -92,62 +87,28 @@ causal-triangulations/
 ├── scripts/
 │   ├── tests/
 │   │   ├── __init__.py
-│   │   ├── conftest.py
-│   │   ├── test_archive_changelog.py
-│   │   ├── test_benchmark_models.py
-│   │   ├── test_benchmark_utils.py
-│   │   ├── test_check_release_metadata.py
-│   │   ├── test_check_semgrep_fixtures.py
-│   │   ├── test_coverage_report.py
-│   │   ├── test_hardware_utils.py
-│   │   ├── test_notebook_check.py
-│   │   ├── test_performance_artifacts.py
-│   │   ├── test_release_performance.py
-│   │   ├── test_postprocess_changelog.py
-│   │   ├── test_subprocess_utils.py
-│   │   ├── test_tag_release.py
-│   │   ├── test_update_cargo_tool_pins.py
-│   │   ├── test_update_python_dev_pins.py
-│   │   └── test_update_release_version.py
-│   ├── README.md
-│   ├── archive_changelog.py
-│   ├── benchmark_models.py
-│   ├── benchmark_utils.py
-│   ├── check_release_metadata.py
-│   ├── check_semgrep_fixtures.py
-│   ├── coverage_report.py
-│   ├── hardware_utils.py
-│   ├── notebook_check.py
-│   ├── performance_analysis.py
-│   ├── performance_artifacts.py
-│   ├── postprocess_changelog.py
-│   ├── release_performance.py
-│   ├── run_all_examples.sh
-│   ├── subprocess_utils.py
-│   ├── tag_release.py
-│   ├── update_cargo_tool_pins.py
-│   ├── update_python_dev_pins.py
-│   └── update_release_version.py
+│   │   └── test_shared_tooling.py
+│   └── README.md
 ├── src/
 │   ├── cdt/
-│   │   ├── action.rs
-│   │   ├── ergodic_moves.rs
-│   │   ├── foliation.rs
 │   │   ├── metropolis/
 │   │   │   ├── adapter.rs
 │   │   │   ├── checkpoint.rs
 │   │   │   ├── helpers.rs
 │   │   │   ├── runner.rs
 │   │   │   └── telemetry.rs
+│   │   ├── triangulation/
+│   │   │   ├── builders.rs
+│   │   │   ├── foliation.rs
+│   │   │   ├── moves.rs
+│   │   │   ├── state.rs
+│   │   │   └── validation.rs
+│   │   ├── action.rs
+│   │   ├── ergodic_moves.rs
+│   │   ├── foliation.rs
 │   │   ├── observables.rs
 │   │   ├── proposal_policy.rs
-│   │   ├── results.rs
-│   │   └── triangulation/
-│   │       ├── builders.rs
-│   │       ├── foliation.rs
-│   │       ├── moves.rs
-│   │       ├── state.rs
-│   │       └── validation.rs
+│   │   └── results.rs
 │   ├── geometry/
 │   │   ├── backends/
 │   │   │   ├── delaunay.rs
@@ -171,8 +132,10 @@ causal-triangulations/
 │   │   │   └── workflows/
 │   │   │       └── action_policy.yml
 │   │   ├── docs/
+│   │   │   ├── cli_vertices.sh
 │   │   │   └── command_order.sh
 │   │   ├── doctests/
+│   │   │   ├── assert_matches.txt
 │   │   │   └── unwrap_expect.txt
 │   │   ├── notebooks/
 │   │   │   ├── clean.ipynb
@@ -189,12 +152,18 @@ causal-triangulations/
 │   ├── integration_tests.rs
 │   ├── large_scale_debug.rs
 │   ├── physics_integration.rs
-│   ├── proptest_config.rs
 │   ├── proposal_policy.rs
+│   ├── proptest_config.rs
 │   ├── proptest_foliation.rs
 │   ├── proptest_metropolis.rs
 │   ├── regressions.rs
 │   └── trait_bound_ergonomics.rs
+├── tooling/
+│   ├── benchmark.toml
+│   ├── examples.toml
+│   ├── performance-interpretation.md
+│   ├── performance-readme.example.toml
+│   └── performance-report.toml
 ├── .bencher.toml
 ├── .codecov.yml
 ├── .coderabbit.yml
@@ -203,24 +172,23 @@ causal-triangulations/
 ├── .taplo.toml
 ├── .yamllint
 ├── AGENTS.md
-├── CHANGELOG.md
-├── CODE_OF_CONDUCT.md
-├── CONTRIBUTING.md
-├── CITATION.cff
 ├── Cargo.lock
 ├── Cargo.toml
-├── LICENSE
-├── README.md
-├── REFERENCES.md
-├── SECURITY.md
-├── cliff.toml
+├── CHANGELOG.md
+├── CITATION.cff
 ├── clippy.toml
+├── CODE_OF_CONDUCT.md
+├── CONTRIBUTING.md
 ├── dprint.json
 ├── justfile
+├── LICENSE
 ├── pyproject.toml
+├── README.md
+├── REFERENCES.md
 ├── rumdl.toml
 ├── rust-toolchain.toml
 ├── rustfmt.toml
+├── SECURITY.md
 ├── semgrep.yaml
 ├── ty.toml
 ├── typos.toml
@@ -255,7 +223,8 @@ enforce this boundary against new CDT-local generic acceptance draws or manual a
   configuration under `tests/common/` and committed compatibility artifacts under `tests/fixtures/`.
 - `benches/` — Criterion benchmark harnesses and CI performance suites, with shared fail-fast fixture setup support under `benches/support/`.
 - `docs/` — user guides, architecture notes, development rules, and release/testing/performance documentation.
-- `scripts/` — Python and shell support tooling for benchmarks, coverage, changelog/release work, examples, and validation.
+- `scripts/` — focused integration tests for the installed shared tooling and CDT configuration.
+- `tooling/` — benchmark measurement, example validation, report, and README publication contracts. Generic infrastructure uses `research-repo-tools`.
 
 ## Key Modules
 
@@ -449,7 +418,7 @@ Notebook files live in `notebooks/` and should wrap the CLI or consume generated
 
 ## Key Dependencies
 
-- `delaunay` (v0.8.1) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
+- `delaunay` (v0.8.2) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
   `set_vertex_data_by_key` for O(1) label mutation)
-- `markov-chain-monte-carlo` (v0.4.2) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, invariant-bearing `Step<Info>` telemetry, `Target`)
+- `markov-chain-monte-carlo` (v0.5.0) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, invariant-bearing `Step<Info>` telemetry, `Target`)
 - `num-traits` — `ToPrimitive` and `NumCast` for checked or saturating numeric conversions

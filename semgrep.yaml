@@ -1111,7 +1111,7 @@ rules:
         - "/tests/semgrep/.github/workflows/**/*.yml"
         - "/tests/semgrep/.github/workflows/**/*.yaml"
     patterns:
-      - pattern-regex: '(?m)^\s*uses:\s*(?!\./)(?!docker://)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?@(?![a-fA-F0-9]{40}(?:\s+#|$))[^\s#]+' # yamllint disable-line rule:line-length
+      - pattern-regex: '(?m)^[ \t]*(?:-[ \t]*)?uses:[ \t]*(?!\./)(?!docker://)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@(?![a-fA-F0-9]{40}(?:\s+#|$))[^\s#]+' # yamllint disable-line rule:line-length
 
   - id: causal-triangulations.github-actions.external-action-approved-allowlist
     languages:
@@ -1129,7 +1129,7 @@ rules:
         - "/tests/semgrep/.github/workflows/**/*.yml"
         - "/tests/semgrep/.github/workflows/**/*.yaml"
     patterns:
-      - pattern-regex: '(?m)^\s*uses:\s*(?!\./)(?!docker://)(?!(?:actions/checkout|actions/cache|actions/upload-artifact|actions/download-artifact|actions/github-script|actions/setup-python|actions-rust-lang/setup-rust-toolchain|astral-sh/setup-uv|taiki-e/cache-cargo-install-action|github/codeql-action/(?:upload-sarif|init|analyze)|codecov/codecov-action|zizmorcore/zizmor-action)@)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?@' # yamllint disable-line rule:line-length
+      - pattern-regex: '(?m)^[ \t]*(?:-[ \t]*)?uses:[ \t]*(?!\./)(?!docker://)(?!(?:actions/checkout|actions/cache|actions/upload-artifact|actions/download-artifact|actions/github-script|actions/setup-python|actions-rust-lang/setup-rust-toolchain|astral-sh/setup-uv|taiki-e/cache-cargo-install-action|github/codeql-action/(?:upload-sarif|init|analyze)|codecov/codecov-action|zizmorcore/zizmor-action|acgetchell/research-repo-tools/\.github/workflows/dependabot-approve\.yml)@)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@' # yamllint disable-line rule:line-length
 
   - id: causal-triangulations.github-actions.external-action-version-comment
     languages:
@@ -1147,7 +1147,7 @@ rules:
         - "/tests/semgrep/.github/workflows/**/*.yml"
         - "/tests/semgrep/.github/workflows/**/*.yaml"
     patterns:
-      - pattern-regex: '(?m)^\s*uses:\s*(?!\./)(?!docker://)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)?@[a-fA-F0-9]{40}\s*$' # yamllint disable-line rule:line-length
+      - pattern-regex: '(?m)^[ \t]*(?:-[ \t]*)?uses:[ \t]*(?!\./)(?!docker://)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@[a-fA-F0-9]{40}\s*$' # yamllint disable-line rule:line-length
 
   - id: causal-triangulations.github-actions.checkout-persist-credentials-false
     languages:
@@ -1181,14 +1181,15 @@ rules:
         - "/.github/workflows/release-*.yml"
         - "/.github/workflows/release-*.yaml"
         - "/tests/semgrep/.github/workflows/action_policy.yml"
-    patterns:
+    pattern-either:
       - pattern-regex: '(?m)^[ \t]*(?:-[ \t]*)?uses:[ \t]*astral-sh/setup-uv@[a-fA-F0-9]{40}[^\n]*\n(?!(?:[ \t]*with:\n)?(?:[ \t]{10,}\S[^\n]*\n){0,8}[ \t]{10,}enable-cache:[ \t]*false\b)' # yamllint disable-line rule:line-length
+      - pattern-regex: '(?m)^[ \t]*(?:-[ \t]*)?uses:[ \t]*(?:\$|\.)/\.github/actions/setup-toolchain[^\n]*\n(?!(?:[ \t]*with:\n)?(?:[ \t]{10,}\S[^\n]*\n){0,8}[ \t]{10,}cache:[ \t]*"false"[ \t]*(?:#.*)?$)' # yamllint disable-line rule:line-length
 
   - id: causal-triangulations.github-actions.zizmor-tool-version-pinned
     languages:
       - regex
     severity: WARNING
-    message: "Pin the zizmor tool version used by zizmor-action to the repository's local version."
+    message: "Run just zizmor through the declared toolchain instead of installing a separate scanner action."
     metadata:
       category: security
       rationale: >-
@@ -1201,7 +1202,7 @@ rules:
         - "/tests/semgrep/.github/workflows/**/*.yml"
         - "/tests/semgrep/.github/workflows/**/*.yaml"
     patterns:
-      - pattern-regex: '(?m)^[ \t]*(?:-[ \t]*)?uses:[ \t]*zizmorcore/zizmor-action@[a-fA-F0-9]{40}[^\n]*\n(?!(?:[ \t]*with:\n)?(?:[ \t]{10,}\S[^\n]*\n){0,8}[ \t]{10,}version:[ \t]*(?:"1\.30\.0"|1\.30\.0)[ \t]*(?:#.*)?$)' # yamllint disable-line rule:line-length
+      - pattern-regex: '(?m)^[ \t]*(?:-[ \t]*)?uses:[ \t]*zizmorcore/zizmor-action@'
 
   - id: causal-triangulations.github-actions.no-pull-request-target
     languages:
@@ -1217,6 +1218,9 @@ rules:
         - "/.github/workflows/**/*.yaml"
         - "/tests/semgrep/.github/workflows/**/*.yml"
         - "/tests/semgrep/.github/workflows/**/*.yaml"
+      exclude:
+        # Reviewed shared-only caller; its structure is enforced by the consumer test.
+        - "/.github/workflows/dependabot-auto-merge.yml"
     pattern-regex: '(?m)^\s*pull_request_target\s*:'
 
   - id: causal-triangulations.github-actions.github-script-no-expression-interpolation
@@ -1420,12 +1424,7 @@ rules:
       rationale: "Typed script helpers are easier for ty and reviewers to reason about."
     paths:
       include:
-        - "/scripts/archive_changelog.py"
-        - "/scripts/benchmark_models.py"
-        - "/scripts/coverage_report.py"
-        - "/scripts/postprocess_changelog.py"
-        - "/scripts/subprocess_utils.py"
-        - "/scripts/tag_release.py"
+        - "/scripts/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
     # Regex catches obvious unannotated definitions while avoiding a custom
     # Python parser rule that would duplicate ty.

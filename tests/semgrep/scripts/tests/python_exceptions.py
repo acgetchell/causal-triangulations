@@ -1,8 +1,11 @@
 import subprocess
 import unittest.mock
-from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest import mock
 from unittest.mock import MagicMock, Mock
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def catches_broad_exception() -> None:
@@ -55,9 +58,9 @@ def explicit_path_text_encoding(path: Path) -> None:
     # ok: causal-triangulations.python.explicit-path-text-encoding-in-tests
     path.write_text("Time: [1.0, 1.0, 1.0] µs\n", encoding="utf-8")
     # ok: causal-triangulations.python.explicit-path-text-encoding-in-tests
-    path.read_text(encoding='utf-8')
+    path.read_text(encoding='utf-8')  # fmt: skip
     # ok: causal-triangulations.python.explicit-path-text-encoding-in-tests
-    path.write_text("Time: [1.0, 1.0, 1.0] µs\n", encoding='utf-8')
+    path.write_text("Time: [1.0, 1.0, 1.0] µs\n", encoding='utf-8')  # fmt: skip
 
 
 def adhoc_mock_stdout() -> None:

@@ -1,0 +1,38 @@
+name: Set up declared toolchain
+description: Install locked shared tooling and export verified Rust and Cargo tools.
+
+inputs:
+  cache:
+    description: Cache tools for ordinary validation; disable for release producers.
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Install declared uv
+      uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      with:
+        version-file: pyproject.toml
+        enable-cache: ${{ inputs.cache == 'true' }}
+        cache-python: ${{ runner.os != 'Windows' }}
+
+    - name: Cache declared tools
+      if: inputs.cache == 'true'
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/rrt
+        key: rrt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'pyproject.toml', 'uv.lock', '.python-version') }}
+        restore-keys: rrt-${{ runner.os }}-${{ runner.arch }}-
+
+    - name: Install and verify declared tools
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+        RESEARCH_REPO_TOOLS_HOME: ${{ runner.temp }}/rrt
+      run: uv run --locked --managed-python --only-group tooling research-repo-tools setup
+
+    - name: Export verified tool paths
+      shell: bash
+      env:
+        RESEARCH_REPO_TOOLS_HOME: ${{ runner.temp }}/rrt
+      run: uv run --locked --group dev research-repo-tools toolchain export
