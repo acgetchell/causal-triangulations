@@ -1,0 +1,23 @@
+schema = 1
+command = [ "just", "bench-latest" ]
+sources = [ "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "pyproject.toml", "uv.lock", "justfile", "src/**/*.rs", "benches/**/*.rs", "tests/**/*.rs", "tooling/benchmark.toml" ]
+harness = [ "benches/ci_performance_suite.rs", "benches/support/or_abort.rs", "tooling/benchmark.toml" ]
+criterion-dir = "target/criterion"
+sample = "new"
+statistic = "median"
+unit = "ns"
+timeout = 7200
+compatible = [ "context.os", "context.architecture", "context.cpu" ]
+
+[probes]
+rustc = [ "rustc", "--version", "--verbose" ]
+
+[dependencies]
+criterion = "Cargo.lock"
+delaunay = "Cargo.lock"
+markov-chain-monte-carlo = "Cargo.lock"
+la-stack = "Cargo.lock"
+
+[context]
+suite = "cdt-release-signal-v2"
+scope = "correctness-gated-ci-performance-suite"

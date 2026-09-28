@@ -1,317 +1,69 @@
-# Performance regression testing workflow
-# Runs performance benchmarks and compares against baselines
-
-name: "Performance Testing"
+name: Performance Testing
 
 on:
-  # Run on pull requests to detect regressions
   pull_request:
     branches: [main]
-    paths:
-      - "**"
-      - "!docs/**"
-      - "!**/*.md"
-      - "!.github/**"
-      - ".github/workflows/performance.yml"
-      - ".github/actions/setup-just/action.yml"
-
-  # Run on main branch to establish/update baselines
+    paths: [
+      "src/**",
+      "benches/**",
+      "tests/**",
+      "Cargo.*",
+      "rust-toolchain.toml",
+      "tooling/**",
+      "justfile",
+      "pyproject.toml",
+      "uv.lock",
+      ".github/workflows/performance.yml",
+      ".github/actions/setup-toolchain/action.yml",
+    ]
   push:
     branches: [main]
-    paths:
-      - "**"
-      - "!docs/**"
-      - "!**/*.md"
-      - "!.github/**"
-      - ".github/workflows/performance.yml"
-      - ".github/actions/setup-just/action.yml"
-
-  # Allow manual triggering
+    paths: [
+      "src/**",
+      "benches/**",
+      "tests/**",
+      "Cargo.*",
+      "rust-toolchain.toml",
+      "tooling/**",
+      "justfile",
+      "pyproject.toml",
+      "uv.lock",
+      ".github/workflows/performance.yml",
+      ".github/actions/setup-toolchain/action.yml",
+    ]
   workflow_dispatch:
-    inputs:
-      threshold:
-        description: "Regression threshold percentage (default: 10.0)"
-        required: false
-        default: "10.0"
-      save_baseline:
-        description: "Save current results as baseline"
-        type: boolean
-        default: false
 
-# Security: Define minimal required permissions
 permissions:
   contents: read
-  pull-requests: write # For posting performance comments
+
+concurrency:
+  group: performance-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   performance:
-    name: Performance Analysis
     runs-on: ubuntu-latest
-
+    timeout-minutes: 150
     steps:
-      - name: Checkout code
+      - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 2 # Need base commit for comparison
           persist-credentials: false
 
-      - name: Detect benchmarks
-        id: detect_bench
-        run: |
-          if grep -q '\[\[bench\]\]' Cargo.toml && ls benches/*.rs > /dev/null 2>&1; then
-            echo "bench_found=true" >> "$GITHUB_OUTPUT"
-            echo "✅ Benchmarks found"
-          else
-            echo "bench_found=false" >> "$GITHUB_OUTPUT"
-            echo "⚠️  No benchmarks found"
-          fi
-
-      - name: Install Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
-        with:
-          cache: true
-          cache-bin: false
-          # toolchain, components, etc. are specified in rust-toolchain.toml
-
-      - name: Set up just
-        uses: $/.github/actions/setup-just
-
-      - name: Resolve uv version
-        id: uv_version
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          version="$(just --evaluate uv_version)"
-          if [[ -z "$version" ]]; then
-            echo "::error::Could not resolve uv_version from justfile"
-            exit 1
-          fi
-
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Set up Python for performance analysis
-        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
-        with:
-          python-version-file: ".python-version"
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
-        with:
-          version: ${{ steps.uv_version.outputs.version }}
-          prune-cache: true
-
-      - name: Validate required tools and configuration
-        run: |
-          echo "🔍 Validating environment..."
-
-          # Check for rust-toolchain.toml
-          if [[ ! -f "rust-toolchain.toml" ]]; then
-            echo "❌ rust-toolchain.toml not found"
-            exit 1
-          fi
-
-          # Verify performance analysis script is available
-          if ! uv run --help > /dev/null 2>&1; then
-            echo "❌ uv not properly installed"
-            exit 1
-          fi
-
-          # Check if performance-analysis script exists
-          if [[ ! -f "scripts/performance_analysis.py" ]]; then
-            echo "❌ performance_analysis.py script not found"
-            exit 1
-          fi
-
-          echo "✅ Environment validation completed"
-
-      - name: Cache performance baselines and criterion data
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            performance_baselines/
-            target/criterion/*/base/
-          key: performance-data-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-${{ github.ref_name }}
-          restore-keys: |
-            performance-data-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}-
-            performance-data-${{ runner.os }}-
-            performance-baselines-main-
+      - name: Set up declared toolchain
+        uses: $/.github/actions/setup-toolchain
 
       - name: Verify deterministic allocation contract
-        if: steps.detect_bench.outputs.bench_found == 'true'
         run: just allocation-check
 
-      # For main branch: save baseline after successful benchmarks
-      - name: Run benchmarks and save baseline (main branch)
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push' && steps.detect_bench.outputs.bench_found == 'true'
-        run: |
-          echo "🔄 Running benchmarks on main branch and saving baseline..."
+      - name: Measure correctness-gated CDT workloads
+        run: just bench-latest
 
-          # Run performance analysis with error handling
-          if ! uv run performance-analysis --save-baseline --tag "main-${GITHUB_SHA}"; then
-            echo "❌ Failed to run benchmarks or save baseline"
-            echo "Check benchmark configuration and performance_analysis.py script"
-            exit 1
-          fi
-
-          echo "✅ Baseline saved successfully"
-        env:
-          RUST_BACKTRACE: 1
-
-      # For PRs: run benchmarks and check for regressions
-      - name: Run performance regression check (PR)
-        if: github.event_name == 'pull_request' && steps.detect_bench.outputs.bench_found == 'true'
-        id: perf_check
-        run: |
-          echo "🔄 Running performance regression check..."
-
-          # Set threshold from input or default
-          THRESHOLD="${PERF_THRESHOLD_INPUT:-10.0}"
-          echo "Using regression threshold: $THRESHOLD%"
-
-          # Run performance analysis with custom threshold
-          if uv run performance-analysis --threshold "$THRESHOLD" --report "performance_report.md"; then
-            echo "result=success" >> "$GITHUB_OUTPUT"
-            echo "regression=false" >> "$GITHUB_OUTPUT"
-            echo "✅ Performance check completed successfully"
-          else
-            PERF_EXIT_CODE=$?
-            if [[ $PERF_EXIT_CODE -eq 1 ]]; then
-              echo "result=regression" >> "$GITHUB_OUTPUT"
-              echo "regression=true" >> "$GITHUB_OUTPUT"
-              echo "🔴 Performance regressions detected"
-            else
-              echo "result=error" >> "$GITHUB_OUTPUT"
-              echo "regression=false" >> "$GITHUB_OUTPUT"
-              echo "❌ Performance analysis failed with exit code: $PERF_EXIT_CODE"
-            fi
-          fi
-        env:
-          RUST_BACKTRACE: 1
-          PERF_THRESHOLD_INPUT: ${{ github.event.inputs.threshold }}
-        continue-on-error: true
-
-      # For manual runs: handle custom options
-      - name: Run manual performance analysis
-        if: github.event_name == 'workflow_dispatch' && steps.detect_bench.outputs.bench_found == 'true'
-        run: |
-          THRESHOLD="${MANUAL_THRESHOLD_INPUT:-10.0}"
-          SAVE_BASELINE="${MANUAL_SAVE_BASELINE_INPUT}"
-
-          if [ "$SAVE_BASELINE" = "true" ]; then
-            echo "🔄 Saving performance baseline..."
-            if ! uv run performance-analysis --save-baseline --tag "manual-${GITHUB_SHA}"; then
-              echo "❌ Failed to save baseline"
-              exit 1
-            fi
-            echo "✅ Baseline saved successfully"
-          else
-            echo "🔄 Running performance analysis with threshold: $THRESHOLD%"
-            if ! uv run performance-analysis --threshold "$THRESHOLD" --report "performance_report.md"; then
-              echo "❌ Performance analysis failed"
-              exit 1
-            fi
-            echo "✅ Performance analysis completed"
-          fi
-        env:
-          RUST_BACKTRACE: 1
-          MANUAL_THRESHOLD_INPUT: ${{ github.event.inputs.threshold }}
-          MANUAL_SAVE_BASELINE_INPUT: ${{ github.event.inputs.save_baseline }}
-
-      # Upload performance report as artifact
-      - name: Upload performance report
-        if: (github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch') && hashFiles('performance_report.md') != ''
+      # No legacy cache or inferred historical comparison participates.
+      - name: Retain fresh Criterion measurements
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: performance-report-${{ github.sha }}
-          path: performance_report.md
+          name: cdt-criterion-v2-${{ github.sha }}
+          path: target/criterion
+          if-no-files-found: error
           retention-days: 30
-
-      # Post performance results as PR comment
-      - name: Post performance results to PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        env:
-          PERF_CHECK_RESULT: ${{ steps.perf_check.outputs.result }}
-          PERF_HAS_REGRESSION: ${{ steps.perf_check.outputs.regression }}
-        with:
-          script: |
-            const fs = require('fs');
-            const path = 'performance_report.md';
-            const checkResult = process.env.PERF_CHECK_RESULT;
-            const hasRegression = process.env.PERF_HAS_REGRESSION === 'true';
-
-            let body = '';
-
-            // Handle different scenarios
-            if (checkResult === 'no_benchmarks') {
-              body = `## ⚠️ No Performance Benchmarks Found
-
-              This PR doesn't have any performance benchmarks to run.
-
-              If you expect benchmarks to be present, please check:
-              - Benchmark configurations in \`Cargo.toml\`
-              - Benchmark files in \`benches/\` directory
-
-              ---
-              *Performance analysis powered by [Criterion.rs](https://github.com/bheisler/criterion.rs)*`;
-            } else if (checkResult === 'error') {
-              body = `## ❌ Performance Analysis Error
-
-              The performance analysis failed to complete. Please check the workflow logs for details.
-
-              This could be due to:
-              - Missing baseline for comparison
-              - Benchmark compilation errors
-              - Performance analysis script issues
-
-              ---
-              *Performance analysis powered by [Criterion.rs](https://github.com/bheisler/criterion.rs)*`;
-            } else if (fs.existsSync(path)) {
-              const report = fs.readFileSync(path, 'utf8');
-              const emoji = hasRegression ? '🔴' : '✅';
-              const status = hasRegression ? '**Performance Regression Detected**' : '**Performance Check Passed**';
-
-              body = `## ${emoji} ${status}
-
-              <details>
-              <summary>Performance Analysis Report</summary>
-
-              ${report}
-
-              </details>
-
-              ${hasRegression ? '⚠️ This PR introduces performance regressions that exceed the threshold. Please review the changes.' : ''}
-
-              ---
-              *Performance analysis powered by [Criterion.rs](https://github.com/bheisler/criterion.rs)*`;
-            } else {
-              console.log('No performance report generated and no specific error detected');
-              return;
-            }
-
-            await github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: body
-            });
-
-      # Fail the workflow on performance analysis errors
-      - name: Fail on performance analysis errors
-        if: github.event_name == 'pull_request' && steps.perf_check.outputs.result == 'error'
-        run: |
-          echo "❌ Performance analysis encountered an error."
-          echo "Review the workflow logs and performance script output."
-          echo "This could indicate issues with benchmark compilation or execution."
-          exit 1
-
-      # Warn (but don't fail) on performance regressions
-      # Shared CI runners produce noisy benchmarks; the PR comment provides
-      # visibility without blocking merges on statistical noise.
-      - name: Check for performance regressions
-        if: github.event_name == 'pull_request' && steps.perf_check.outputs.regression == 'true'
-        run: |
-          echo "⚠️ Performance regressions detected (informational — not blocking)."
-          echo "Review the PR comment for details. On shared CI runners,"
-          echo "±10% variance is expected; investigate only if regressions persist."

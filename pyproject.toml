@@ -1,74 +1,9 @@
-[build-system]
-requires = [ "setuptools>=83.0.0", "wheel" ]
-build-backend = "setuptools.build_meta"
-
 [project]
-name = "causal-triangulations-scripts"
-version = "0.1.1"
-description = "Python utility scripts for the causal-triangulations Rust library"
-readme = "scripts/README.md"
+name = "causal-triangulations-environment"
+version = "0.0.0"
+description = "Dependency-only environment for CDT notebooks and tooling checks"
 requires-python = ">=3.14"
-license = "BSD-3-Clause"
-authors = [ { name = "Adam Getchell", email = "adam@adamgetchell.org" } ]
-keywords = [ "cdt", "triangulation", "benchmarking", "utilities" ]
-classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Developers",
-    "Intended Audience :: Science/Research",
-    "Operating System :: OS Independent",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.14",
-    "Topic :: Scientific/Engineering :: Physics",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: System :: Benchmarking",
-]
-
-# Project dependencies
-dependencies = [ "packaging>=26.3" ]
-
-[project.urls]
-"Homepage" = "https://github.com/acgetchell/causal-triangulations"
-"Repository" = "https://github.com/acgetchell/causal-triangulations"
-
-# Configure scripts as entry points for command-line usage
-[project.scripts]
-archive-changelog = "archive_changelog:main"
-benchmark-utils = "benchmark_utils:main"
-check-release-metadata = "check_release_metadata:main"
-coverage-report = "coverage_report:main"
-hardware-utils = "hardware_utils:main"
-notebook-check = "notebook_check:main"
-performance-analysis = "performance_analysis:main"
-postprocess-changelog = "postprocess_changelog:main"
-release-performance = "release_performance:main"
-tag-release = "tag_release:main"
-update-python-dev-pins = "update_python_dev_pins:main"
-update-release-version = "update_release_version:main"
-update-tool-pins = "update_cargo_tool_pins:main"
-# Backwards-compatible alias
-coverage_report = "coverage_report:main"
-
-# Configure setuptools to find modules in scripts/ directory
-[tool.setuptools]
-package-dir = { "" = "scripts" }
-py-modules = [
-    "archive_changelog",
-    "benchmark_models",
-    "benchmark_utils",
-    "check_release_metadata",
-    "coverage_report",
-    "hardware_utils",
-    "notebook_check",
-    "performance_analysis",
-    "performance_artifacts",
-    "postprocess_changelog",
-    "release_performance",
-    "subprocess_utils",
-    "tag_release",
-    "update_cargo_tool_pins",
-    "update_python_dev_pins",
-    "update_release_version",
-]
+dependencies = [  ]
 
 [tool.ruff]
 line-length = 160
@@ -109,7 +44,7 @@ select = [
     "SLF",
     "SIM",
     "TID",
-    "TCH",
+    "TC",
     "ARG",
     "PTH",
     "ERA",
@@ -120,6 +55,7 @@ select = [
     "NPY",
     "RUF",
 ]
+extend-select = [ "ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN204", "ANN205", "ANN206" ]
 fixable = [ "ALL" ]
 unfixable = [  ]
 ignore = [
@@ -147,27 +83,21 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/test_*.py" = [ "S101", "SLF001" ]
-"scripts/performance_artifacts.py" = [ "EM101", "PLR0913" ]
-"scripts/release_performance.py" = [ "EM101" ]
+"tests/semgrep/scripts/tests/python_exceptions.py" = [
+    "ANN201", # Deliberately missing return annotation.
+    "EM101", # Raw exception messages in negative fixtures.
+    "INP001", # Scanner input, not an importable package.
+    "Q000", # Both quote styles exercise the encoding rule.
+    "S110", # Deliberate except/pass fixtures.
+    "S607", # Direct subprocess negative fixture.
+    "SIM105", # Preserve explicit handlers for Semgrep.
+    "TRY002", # Deliberate raw Exception.
+]
+
+[tool.ruff.lint.flake8-type-checking]
+strict = true
 
 [tool.ruff.lint.isort]
-known-first-party = [
-    "archive_changelog",
-    "benchmark_models",
-    "benchmark_utils",
-    "coverage_report",
-    "hardware_utils",
-    "notebook_check",
-    "performance_analysis",
-    "performance_artifacts",
-    "postprocess_changelog",
-    "release_performance",
-    "subprocess_utils",
-    "tag_release",
-    "update_cargo_tool_pins",
-    "update_python_dev_pins",
-    "update_release_version",
-]
 force-single-line = false
 split-on-trailing-comma = true
 combine-as-imports = true
@@ -195,26 +125,81 @@ python_classes = [ "Test*" ]
 python_functions = [ "test_*" ]
 
 [tool.uv]
-package = true
-# Remove after Semgrep publishes its pending MCP 1.28.1 security bump.
-override-dependencies = [ "mcp==1.28.1" ]
+package = false
+required-version = "==0.12.19"
+
+[tool.uv.dependency-groups]
+tooling = { requires-python = ">=3.14" }
+notebooks = { requires-python = ">=3.14" }
 
 [dependency-groups]
 dev = [
-    "actionlint-py==1.7.12.24",
+    { include-group = "tooling" },
+    "actionlint-py==1.7.12.25",
     "pytest==9.1.1",
-    "ruff==0.16.5",
-    "semgrep==1.176.0",
+    "ruff==0.16.9",
+    "semgrep==1.178.0",
     "shellcheck-py==0.11.0.1",
-    "shfmt-py==4.1.0",
-    "ty==0.0.77",
+    "shfmt-py==4.2.0",
+    "ty==0.0.84",
     "yamllint==1.38.0",
 ]
 notebooks = [
-    "ipykernel>=7.3.0",
-    "nbconvert>=7.17.1",
+    "research-repo-tools[notebooks]==0.1.7",
     "jupyterlab>=4.6.2",
     "matplotlib>=3.11.1",
     "plotly>=6.9.0",
     "polars>=1.43.2",
 ]
+tooling = [ "research-repo-tools==0.1.7" ]
+
+[tool.research-repo-tools.changelog]
+owner = "acgetchell"
+repository = "causal-triangulations"
+formatter = "rumdl.toml"
+
+[tool.research-repo-tools.toolchain]
+inherit-python = true
+
+[tool.research-repo-tools.toolchain.cargo]
+cargo-audit = "0.22.2"
+cargo-edit = "0.13.13"
+cargo-llvm-cov = "0.9.1"
+cargo-machete = "0.9.2"
+cargo-nextest = "0.9.146"
+clippy-sarif = "0.8.0"
+dprint = "0.57.4"
+git-cliff = "2.14.2"
+rumdl = "0.2.77"
+sarif-fmt = "0.8.0"
+taplo-cli = "0.10.0"
+typos-cli = "1.50.3"
+zizmor = "1.30.1"
+
+[tool.research-repo-tools.zizmor]
+persona = "regular"
+
+[tool.research-repo-tools.notebooks]
+group = "notebooks"
+cwd = "."
+output-dir = "target/notebooks"
+timeout = 600
+outputs = "clear"
+prohibit-installs = true
+
+[tool.research-repo-tools.semgrep]
+config = "semgrep.yaml"
+fixtures = "tests/semgrep"
+namespace = "causal-triangulations."
+cwd = "."
+
+[tool.research-repo-tools.release]
+date-policy = "declared"
+tag-policy = "canonical-stable"
+required-files = [ "Cargo.lock", "pyproject.toml", "uv.lock", "CITATION.cff", "CHANGELOG.md", "README.md" ]
+exclude = [ "docs/archive/**", "docs/performance/**" ]
+
+[[tool.research-repo-tools.release.rules]]
+path = "CITATION.cff"
+pattern = '\A(?![\s\S]*^identifiers:)[\s\S]*?^doi: (?P<value>[^\s]+)[ \t]*\r?$'
+value = "10.5281/zenodo.20513228"

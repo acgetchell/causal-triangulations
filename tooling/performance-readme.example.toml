@@ -1,0 +1,36 @@
+# Copy to performance-readme.toml after retaining two fresh releases.
+# Replace evidence paths and independently reviewed release/revision pins.
+schema = 1
+document = "README.md"
+payload = "docs/performance/v2/REPLACE-pair.comparison.json"
+manifest = "docs/performance/v2/REPLACE-pair.evidence.json"
+begin = "<!-- performance-summary:start -->"
+end = "<!-- performance-summary:end -->"
+unit = "ns"
+# The shared table includes baseline/current absolute times and confidence
+# intervals, point speed ratio, and percent reduction. No ratio-only figure.
+rows = [ { benchmark = "cdt_state_dependent_policy_2d/single_metropolis_proposal", label = "State-dependent Metropolis proposal" } ]
+links = [ { label = "Full timings and measurement context", path = "docs/performance/v2/performance.md" } ]
+
+[provenance.baseline]
+revision = "REPLACE_WITH_BASELINE_COMMIT"
+release = "REPLACE_WITH_BASELINE_TAG"
+
+[provenance.current]
+revision = "REPLACE_WITH_CURRENT_COMMIT"
+release = "REPLACE_WITH_CURRENT_TAG"
+
+[[references]]
+path = "Cargo.toml"
+pattern = '^version = "(?P<value>[^"]+)"\r?$'
+source = "version"
+
+[[references]]
+path = "docs/performance/v2/performance.md"
+pattern = 'Baseline: \*\*(?P<value>v[^*]+)\*\*'
+source = "previous-tag"
+
+[[references]]
+path = "docs/performance/v2/performance.md"
+pattern = 'Current: \*\*(?P<value>v[^*]+)\*\*'
+source = "tag"

@@ -72,7 +72,7 @@ parameters, outputs, and small first experiments.
 
 ### Requirements
 
-- Rust 1.98.0 or newer (pinned by `Cargo.toml` and `rust-toolchain.toml`)
+- Rust 1.98.1 or newer (pinned by `Cargo.toml` and `rust-toolchain.toml`)
 - `uv` for the notebook environment and repository-managed Python tooling
 
 Rust keeps the simulation engine memory-safe and fast while preserving validation tooling for tests, documentation, benchmarks, and CI parity.
@@ -146,21 +146,14 @@ The design separates geometry, sampling, and CDT-specific physics. Within this c
 
 ## 📈 Benchmarking
 
-Performance validation uses [Criterion] benchmark suites plus repository recipes for repeatable local and CI checks. Run `just bench-ci` for the CI benchmark
-contract and `just perf-check` for a local regression check. Release comparisons use `just performance-release`, which retains a schema-validated CSV and
-matching provenance before updating the tracked report and summary.
+Performance validation uses [Criterion] workloads with shared measurement and reporting tools. Run `just bench-ci` for the CDT benchmark contract,
+`just bench-save-last` for a fresh local baseline, and `just bench-latest-vs-last` for a comparison on the same host.
 
 <!-- performance-summary:start -->
-Latest retained comparison: `v0.1.1` against `v0.1.0`.
 
-| Comparable benchmarks | Current only | Baseline only |
-| ---: | ---: | ---: |
-| 29 | 9 | 5 |
+A fresh benchmark series starts with the September 2026 tooling update. No release comparison is published yet.
+Future tables will show absolute baseline/current median times, units, confidence bounds, and relative changes together.
 
-![Release benchmark comparison](docs/assets/performance-comparison.svg)
-
-[Tag-pinned full report](https://github.com/acgetchell/causal-triangulations/blob/v0.1.1/docs/PERFORMANCE.md) ·  
-[Native Criterion baseline](https://github.com/acgetchell/causal-triangulations/releases/download/v0.1.1/causal-triangulations-v0.1.1-criterion-baseline.tar.gz)
 <!-- performance-summary:end -->
 
 See [`benches/README.md`](benches/README.md) for benchmark details and [`docs/performance-testing.md`](docs/performance-testing.md) for comprehensive

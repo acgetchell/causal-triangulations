@@ -1,9 +1,9 @@
 # Python Development Guidelines
 
-Guidance for Python automation under `scripts/`.
+Guidance for all repository-owned Python, including scripts, tests, and negative Semgrep fixtures.
 
-The Rust library is the primary product, but the Python benchmark, changelog, hardware, coverage, and workflow utilities are part of the trusted development
-loop. Keep them typed and predictable so failures are visible in CI instead of being hidden behind loose mocks or broad exception handling.
+The Rust library is the primary product. Generic maintenance and performance evidence come from the pinned `research-repo-tools` package.
+CDT's Python files are consumer integration tests and deliberate static-analysis fixtures; keep both typed and predictable.
 
 ---
 
@@ -12,12 +12,14 @@ loop. Keep them typed and predictable so failures are visible in CI instead of b
 Run Python validators through the repository toolchain:
 
 ```bash
-uv run ruff check scripts/
-uv run ty check scripts/ --error all
-uv run pytest scripts/tests
+just python-check
+just python-typecheck
+just test-python
 ```
 
-`ty check scripts/ --error all` is the type-checking authority. Prefer reducing untyped surfaces in code and tests over adding more `ty` configuration.
+Shared file discovery covers every tracked and nonignored `.py` and `.pyi` file. Ruff check, Ruff format, and `ty check --error all` receive explicit paths
+with force-exclusion disabled. Both ordinary code and negative fixtures run the full configured Ruff policy; no recipe narrows it with `--select`.
+`python-fixtures-check` is an explicit CI prerequisite, with exact fixture/rule exceptions in `pyproject.toml` for deliberate violations.
 
 `just check` also runs Python formatting checks, Ruff, `ty`, and repository-owned Semgrep rules as part of the normal validation bundle.
 
@@ -25,7 +27,9 @@ uv run pytest scripts/tests
 
 ## Typing
 
-- Add return annotations to functions and methods.
+- Annotate arguments and returns, including test fixtures, methods, and variadic parameters. Ruff ANN rules enforce this inventory.
+- Use Python 3.14's native deferred annotations; do not add `from __future__ import annotations`.
+- Move imports used only by annotations into `if TYPE_CHECKING:` blocks. Strict Ruff TC rules enforce this separation.
 - Prefer concrete standard-library types over `Any`, `dict`, or bare `Mock` when the shape is known.
 - Keep helper signatures precise enough that `ty` can validate call sites.
 - Avoid growing type-checker configuration unless a demonstrated false positive cannot be solved cleanly in code.

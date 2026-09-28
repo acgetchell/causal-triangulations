@@ -25,36 +25,35 @@ These commands ensure:
 - tests
 - notebook execution and output hygiene
 
-`just update` is the mutating maintenance workflow. It advances Cargo dependency requirements and lockfiles, resolves exact Python development-tool pins,
-upgrades the managed Cargo CLI tools, and reconciles the justfile tool pins with those installations and the active uv version. Review every resulting
-manifest, lockfile, and pin change before committing it.
+`just update` updates uv and declared Cargo tools first, runs shared setup, then refreshes Cargo/Python dependencies and lockfiles. Pins live in
+`pyproject.toml`. Use `update-tools` or `update-dependencies` for an independent scope, and `tools-check` for non-mutating installed-version verification.
+Review every resulting manifest, lockfile, and pin change before committing it.
 
 Release metadata is a separate deterministic transaction:
 
 ```bash
 TAG=vX.Y.Z
-just update-version "$TAG"
+just update-version "$TAG" --date "$RELEASE_DATE" --previous-release "$PREVIOUS_TAG"
 ```
 
-The updater derives the previous stable version from published GitHub Releases, updates Cargo/Python/CFF versions and owned active-documentation references,
-records the current UTC date, removes legacy version-specific DOI identifiers, validates the complete candidate tree before replacement, and rolls back
-byte-for-byte on a caught publication failure. It does not update dependencies, generate the changelog, or run benchmarks.
+An explicit previous tag keeps preparation offline; omitting it discovers the latest published stable GitHub release. The updater synchronizes Cargo/Python/CFF
+versions and owned active-documentation references, uses the declared date, rejects version-specific DOI identifiers, validates the complete candidate tree
+before replacement, and rolls back byte-for-byte on a caught publication failure. It does not update dependencies, generate the changelog, or run benchmarks.
 
 Release performance is a separate evidence transaction:
 
 ```bash
 just bench-latest
 just bench-latest-vs-last
-just performance-local
 just performance-release vX.Y.Z vA.B.C
 just performance-doc
-just performance-readme
+just performance-readme tooling/performance-readme.toml
 ```
 
-`bench-latest` runs the release benchmark correctness gate before `ci_performance_suite`. `performance-local` compares current tracked source with the latest
-older stable release without changing tracked documentation. `performance-release` retains the schema-validated CSV/provenance pair before temporary
-worktree cleanup, reloads it, and transactionally publishes the owned report, archive, visual, and README destinations. The two render recipes consume only
-that retained pair; they do not invoke Cargo or create worktrees.
+`bench-latest` runs the correctness gate before `ci_performance_suite`. `performance-release` requires two explicit fresh-series tags and measures
+in temporary worktrees before retaining and promoting shared evidence. It is a user-invoked operation because agents may not mutate Git state.
+The first post-migration tag establishes a baseline; comparisons and README tables wait until a second compatible measurement exists.
+`performance-doc` and `performance-readme CONFIG` render retained evidence without measurement. See [performance testing](../performance-testing.md).
 
 ## Justfile Usage
 
@@ -139,7 +138,7 @@ This runs:
 - Rust formatting, all-target Clippy, and production documentation builds
 - one release-profile nextest pass for library unit tests and integration-test crates
 - a separate rustdoc doctest bucket
-- notebook output hygiene, extracted-code checks, and fast headless execution
+- notebook output hygiene, native notebook checks, and fast headless execution
 - benchmark harness compilation, the deterministic allocation contract, and validated example runs
 
 The `ci` recipe is a flat union of these focused validators. It does not depend on broad `check`, `lint`, or `test-all` bundles. Clippy covers every Cargo
@@ -219,8 +218,8 @@ so simulation output can evolve without making the example contract brittle.
 The example runner compiles all Cargo examples once with `cargo build --release --examples`, then executes the compiled binaries directly. This preserves
 example coverage while avoiding repeated Cargo invocations for each example.
 
-When adding or renaming a Cargo example, update `scripts/run_all_examples.sh` `validate_example_output()` with stable semantic output markers, or intentionally
-document why success-only validation is sufficient for that example.
+When adding or renaming a Cargo example, update `tooling/examples.toml` with stable semantic output markers. A consumer integration test checks
+that the declared validation inventory covers every Cargo example. Shared validation enforces a 600-second per-example timeout on all platforms.
 
 ---
 
@@ -234,12 +233,8 @@ Run:
 just spell-check
 ```
 
-The `typos` binary is provided by the Cargo crate `typos-cli`. `just setup-tools` installs the pinned version. To install it directly while still using the
-repository pin, first ensure `just` is installed because this command resolves `typos_version` with `just --evaluate`:
-
-```bash
-cargo install --locked typos-cli --version "$(just --evaluate typos_version)"
-```
+The `typos` binary is provided by the Cargo crate `typos-cli`. `just setup-tools` installs the exact version declared in `pyproject.toml`; the shared runner
+selects it for `just spell-check`.
 
 If a legitimate technical word fails, add it to `typos.toml` under:
 
@@ -328,8 +323,8 @@ just release-metadata-check
 ```
 
 It requires exactly one top-level ISO `date-released` value, matches it to the generated current-package changelog heading when present, and validates the
-Cargo/Python/CFF version set, the permanent Zenodo concept DOI, active dependency examples and non-performance tag-pinned README links, and the Python
-support package's README target. The broader citation check includes this gate:
+Cargo/CFF version set, the permanent Zenodo concept DOI, and active dependency examples. The Python environment is not a releasable package. The broader
+citation check includes this gate:
 
 ```bash
 just citation-check
@@ -372,6 +367,31 @@ comment next to each pin. Dependabot remains configured for the
 `github-actions` ecosystem; its update PRs should preserve both the SHA pin and
 the adjacent human-readable version comment.
 
+### Dependabot Approval and Auto-Merge
+
+The Dependabot caller delegates to the SHA-pinned `research-repo-tools` approval workflow, independently of the Python package version.
+It approves eligible Cargo, uv, and GitHub Actions updates and enables native squash auto-merge. GitHub still requires current checks, the CodeRabbit status,
+resolved review threads, and an approval for the current head. The caller executes no PR code and passes no personal tokens.
+
+Keep its exact file allowlists synchronized with Cargo/uv manifests and locks and all workflow/composite-action paths. The consumer test checks this inventory.
+The `pull_request_target` exception applies only to this reviewed caller, which contains one shared job and no local execution steps.
+
+Activation requires these separate live settings, in addition to merging the caller into `main`:
+
+- Allow auto-merge and squash merging.
+- Allow Actions to create and approve pull requests, retaining read-only default workflow permissions.
+- Allow `dependabot/fetch-metadata@*` and `acgetchell/research-repo-tools/.github/workflows/dependabot-approve.yml@*` in selected Actions.
+- Enable stale-review dismissal in the active main ruleset, preserving required approvals, resolved threads, strict checks, and existing required check names.
+
+All required live settings were applied and verified on 28 September 2026, preserving read-only defaults and existing required checks and bypasses.
+The shared workflow refuses approval without the required branch protections. Verify a new eligible Dependabot event after deployment; rerunning an old
+workflow run does not load the new caller. The old `CODERABBIT_REVIEW_TOKEN` is unused after migration and can be removed once the old workflow is retired.
+See the [shared approval contract][approval].
+
+[approval]: https://github.com/acgetchell/research-repo-tools/blob/cbb2ea6dee8866b3f0547bca935aef48fdd71707/docs/AUTOMATING_DEPENDABOT.md
+
+### Workflow Validators
+
 Run with:
 
 ```bash
@@ -385,7 +405,7 @@ just zizmor
 ```
 
 The local recipe runs zizmor's online audits when `ZIZMOR_GITHUB_TOKEN` or `GH_TOKEN` is set, or when `gh auth token` can provide an authenticated token. It
-falls back to an explicit offline scan when no token is available. The SARIF workflow pins the same zizmor tool version as the `justfile` so GitHub Advanced
+falls back to an explicit offline scan when no token is available. The SARIF workflow uses the same scanner pin in `pyproject.toml`, so GitHub Advanced
 Security and authenticated local runs apply the same audit implementation.
 
 ---
@@ -395,7 +415,7 @@ Security and authenticated local runs apply the same audit implementation.
 Python scripts are linted and type-checked:
 
 ```bash
-just python-lint       # ruff format + ruff check
+just python-check      # Full Ruff/format/Ty policy, including negative fixtures
 just python-fix        # ruff check --fix + ruff format
 just python-typecheck  # strict ty check (blocking)
 just test-python       # pytest
@@ -403,12 +423,12 @@ just test-python       # pytest
 
 ## Notebook Validation
 
-Notebook source files should not commit generated outputs or execution counts. Notebook code is also extracted and checked with Ruff and ty so `.ipynb` cells
-follow the same Python standards as repository scripts. Use:
+Notebook source files must have unique stable cell IDs and no generated outputs or execution counts. The shared CLI runs native Ruff and ty against the
+notebooks, preserving cell-aware diagnostics and supported IPython syntax. Package-install cells are prohibited. Use:
 
 ```bash
 just notebook-output-check  # Non-mutating output and execution-count hygiene check
-just notebook-check         # Output hygiene, extracted-code checks, and fast headless notebook execution
+just notebook-check         # Output hygiene, native notebook checks, and fast headless notebook execution
 just notebook-check-slow    # Also execute heavier run-debugging notebooks
 ```
 
@@ -559,17 +579,17 @@ Regenerate with:
 just changelog
 ```
 
-This runs `git-cliff`, applies the Python postprocessor, archives completed minor release series under `docs/archive/changelog/`, and
-formats generated changelog files with `rumdl`.
+The shared CLI uses its bundled `git-cliff` template, applies Markdown hygiene, archives completed minor release series under `docs/archives/changelog/`,
+and formats generated changelog files with `rumdl`. `just changelog-preview` validates a preview without changing history.
 
 For release PRs, generate the changelog for a version before the final tag exists with:
 
 ```bash
-just changelog-unreleased v0.1.0
+just changelog-unreleased "$TAG" "$RELEASE_DATE"
 ```
 
 Create annotated release tags from the generated changelog after the release PR is merged with:
 
 ```bash
-just tag v0.1.0
+just tag "$TAG"
 ```

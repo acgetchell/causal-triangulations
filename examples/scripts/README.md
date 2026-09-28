@@ -38,8 +38,8 @@ Runs CLI timing checks across several system sizes and writes `performance_resul
 ./examples/scripts/performance_test.sh
 ```
 
-Use this for quick command-level scaling checks. For regression-quality benchmarking, use `just bench-ci`, `just perf-check`, and the Criterion suites described
-in [`benches/README.md`](../../benches/README.md) and [`docs/performance-testing.md`](../../docs/performance-testing.md).
+Use this for quick command-level scaling checks. For regression-quality benchmarking, use `just bench-ci`, `just bench-latest-vs-last`, and the Criterion suites
+described in [`benches/README.md`](../../benches/README.md) and [`docs/performance-testing.md`](../../docs/performance-testing.md).
 
 ## Requirements
 

@@ -191,8 +191,8 @@ Run all tests:
 just test-all
 ```
 
-`test-all` uses `test-rust` for broad Rust correctness and then runs the Python support-script suite. Broad runnable Rust tests use one release-profile nextest
-pass for library unit tests plus integration-test crates; rustdoc doctests remain separate:
+`test-all` uses `test-rust` for broad Rust correctness and then runs the Python consumer integration suite. Broad runnable Rust tests use one release-profile
+nextest pass for library unit tests plus integration-test crates; rustdoc doctests remain separate:
 
 ```bash
 just test-rust-ci
@@ -248,7 +248,7 @@ The `ci` recipe directly composes the GitHub-equivalent leaf validators instead 
 - **repository and configuration checks**: GitHub Actions, Markdown, spelling, JSON, TOML, YAML/CFF, Python, shell, and repository-owned Semgrep rules
 - **core Rust checks**: formatting, all-target Clippy matching the GitHub SARIF workflow, and production documentation builds
 - **Rust correctness**: library unit tests and integration-test crates in one release-profile `test-rust-ci` nextest pass, plus separate rustdoc doctests
-- **Python correctness**: pytest over support scripts, including the reusable notebook checker
+- **Python correctness**: pytest over the installed shared-tooling consumer contracts
 - **notebooks**: source notebooks are output-clean, extracted code passes Ruff and ty, and the fast notebook set executes headlessly through the uv-managed
   environment
 - **benchmarks and examples**: benchmark harnesses compile without warnings, the deterministic allocation contract executes, and Cargo examples build once

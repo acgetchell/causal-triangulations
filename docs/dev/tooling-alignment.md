@@ -1,5 +1,63 @@
 # Tooling Alignment
 
+## September 2026 Shared Tooling Adoption
+
+Issues #277, #281, and #285 consolidate maintenance on the published `research-repo-tools` 0.1.7 package, following the MCMC consumer migration.
+The shared package owns tool installation and selection, dependency updates, changelog rotation, release metadata, coverage summaries, notebook
+infrastructure, performance evidence, Semgrep fixture validation, and opt-in CodeRabbit review. CDT retains its scientific benchmark cases,
+allocation checks, example output contracts, notebook workloads, and repository-owned static-analysis rules.
+
+Tool declarations move from Just variables into `pyproject.toml`; uv is pinned in `[tool.uv]`, Rust in `rust-toolchain.toml`, and Just follows the shared
+package's `rust-just` dependency. Managed setup verifies exact tools. Tool upgrades precede dependency updates, while dependency-only commands preserve
+tool pins. CI uses the same managed commands as local development and retains its native Linux, macOS, and Windows matrix.
+
+Rust moves from 1.98.0 to 1.98.1 to match the current upstream minimum. Delaunay 0.8.2 brings la-stack 0.4.6 through the geometry backend; MCMC moves to
+0.5.0. The adapter boundaries remain authoritative: CDT does not add a direct la-stack dependency or duplicate upstream geometry or sampler mechanics.
+
+Python validation discovers every tracked and nonignored Python file, including negative Semgrep fixtures, and applies the full configured Ruff and Ty
+policy. Missing annotations and annotation-only runtime imports are blocking; intentional fixture violations have exact file/rule exceptions.
+CodeRabbit excludes those deliberate fixtures and its duplicate docstring-percentage gate. Shared review recipes remain opt-in and outside `check`/`ci`.
+
+Dependabot approval adopts the same reusable workflow commit as MCMC, `cbb2ea6dee8866b3f0547bca935aef48fdd71707`, independently of the PyPI package pin.
+The trusted base-branch caller allows only CDT's Cargo/uv manifests and locks plus its enumerated Actions files. It passes no personal tokens and executes
+no PR code. The shared implementation verifies signed Dependabot commits, the exact current head, and effective branch protections before approving and
+enabling native squash auto-merge. Required checks, CodeRabbit status, and resolved threads remain merge gates.
+The `pull_request_target` Semgrep exception is restricted to this caller path; a consumer test enforces its single pinned reusable job and file policy.
+External-action rules now cover nested reusable-workflow paths and approve only this shared workflow path. GitHub settings activation is separate from
+merging the caller; see the Dependabot section in [development commands](commands.md#dependabot-approval-and-auto-merge).
+
+This migration updates the setup, command, release, and file-inventory documentation needed to use the resulting tooling. The wider documentation
+ownership, navigation, filename, and recipe-discovery cleanup remains in #279 and #290.
+
+The owner explicitly chose to discard historical benchmark reports/assets and start fresh instead of maintaining legacy format adapters. All legacy
+performance Python modules and their exclusive tests are removed. New comparisons use shared evidence and require explicit baseline/current tags;
+old release assets are not selected implicitly. New release assets use a distinct `cdt-baseline-v2` name and a draft-only publisher. Ordinary CI retains
+raw benchmark artifacts without claiming a regression comparison before a compatible new baseline exists.
+
+The example shell runner is replaced by shared validation with the existing semantic output markers in `tooling/examples.toml`. A consumer test checks
+that every Cargo example has a declared validation entry. Python is now a dependency-only environment, with no build backend or local console scripts.
+The `basic_cdt` check uses a fixed POSIX-shell redirection to include its existing stderr log markers in the shared validator's stdout contract;
+the other examples run directly. Setup already verifies the shell required by Just on every platform.
+
+Consumer tests cover CDT configuration and command wiring only. Shared CodeRabbit subprocess behavior, notebook parsing, changelog archive parsing,
+and standalone table rendering are tested in `research-repo-tools`; their duplicate synthetic tests are removed here. The configured report-to-README
+integration retains absolute timing, confidence-bound, and relative-change assertions. The shared notebooks extra owns the kernel and execution dependencies;
+CDT declares only its interactive frontend and scientific analysis dependencies alongside that extra.
+
+Release documentation now uses explicit tag/date variables so checks stay offline and examples do not drift. There are no active non-performance
+README source links requiring release rewriting; measured report links remain untouched. The configured CFF assertion rejects version-record identifiers
+and fixes the concept DOI. Changelog archives move to the package convention, `docs/archives/changelog/`, without changing their contents.
+
+The release-producer cache rule covers the shared setup action as well as direct setup-uv use. Zizmor runs through the declared toolchain in both local
+checks and SARIF jobs; the obsolete action-specific scanner-version rule is replaced by a prohibition on bypassing that managed scanner.
+Semgrep 1.178.0 declares MCP 1.29.0, so the temporary 1.28.1 override is removed.
+
+Semgrep uses shared portable file selection and fixture validation, with one native batched scan for findings/SARIF. The shared per-file scan rejects
+selected configuration files that have no applicable CDT rule, so it does not fit this mixed rule inventory. Native strict/error status remains blocking;
+negative fixtures are excluded from the production scan and checked separately. No repository-local scanner implementation is retained.
+
+The sections below are historical decision records superseded where noted by the September 2026 adoption above.
+
 This note records the issue #112 comparison between `causal-triangulations` and the sibling `markov-chain-monte-carlo` repository. Keep it current when changing
 repository tooling so future updates can be deliberate rather than copied wholesale.
 

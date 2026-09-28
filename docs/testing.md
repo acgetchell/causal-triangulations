@@ -9,7 +9,8 @@ in `docs/dev/testing.md` and `docs/dev/commands.md`.
 - **Integration tests**: `tests/integration_tests.rs`, `tests/cli.rs`, `tests/proposal_policy.rs`, `tests/proptest_foliation.rs`,
   `tests/proptest_metropolis.rs`, and `tests/proptest_config.rs` cover public workflows, CLI validation, independent proposal-flux reconstruction, foliation
   invariants, Metropolis scoring, and property-test configuration precedence.
-- **Python support-script tests**: `scripts/tests/` covers benchmark, changelog, coverage, hardware, tag, and subprocess utilities.
+- **Python support-script tests**: `scripts/tests/` covers the installed shared tooling and CDT configuration, including benchmark, example, notebook, and
+  release contracts.
 - **Documentation tests**: public doctests run through `just test-doc` and as part of the broader CI path.
 - **Examples and benchmark compilation**: `just ci` compiles benchmarks and runs all example programs.
 

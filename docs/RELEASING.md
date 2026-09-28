@@ -1,7 +1,7 @@
 # Releasing causal-triangulations
 
-This is the canonical release flow for a stable `vX.Y.Z` release. Release preparation is content-idempotent: rerunning the deterministic commands on the
-same UTC day produces the same tracked files. Performance measurements are deliberately separate because measurement output is not idempotent.
+Release preparation uses the pinned shared CLI. Choose one stable tag, predecessor, and UTC date; reruns with those same inputs are deterministic.
+Benchmark measurements are separate and are not idempotent.
 
 ## v0.1.1 scientific claim checklist
 
@@ -23,194 +23,113 @@ The release evidence includes:
   `EdgeFlip` mixture components and zero reverse support;
 - deterministic chunked continuation of both RNG streams, counters, proposal telemetry, measurements, traces, policy binding, and exact triangulation state;
   and
-- retained performance reports whose provenance identifies the Rust toolchain, Delaunay release, benchmark harness, source state, and host.
+- benchmark correctness gates that identify the workload being measured.
 
 This is a structural and transition-kernel claim, not an analytic ensemble-validation claim. v0.1.1 does **not** establish ergodicity, mixing,
 thermalization, continuum-limit behavior, finite-size scaling, fixed-volume production sampling, or agreement with the exact 1+1 transfer-matrix
 distribution. That stronger quantitative gate remains [issue #238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.0. Level 5
 Delaunay validation is likewise not required after valid CDT evolution because Delaunayhood is not part of the sampled ensemble.
 
-Before tagging v0.1.1, verify the release candidate from committed tracked source with:
-
-```bash
-just ci
-just ci-slow
-just publish-check
-just performance-release v0.1.1 v0.1.0
-```
-
-The retained performance comparison must contain no unexplained regression. Run `just performance-release` after the complete candidate changes are present
-in tracked repository paths. Its isolation contract copies current tracked changes byte-for-byte into the measurement worktree while intentionally excluding
-untracked files.
-
-For v0.1.1, the retained comparison records the intended cost of the stronger correctness contract. Constructor timings include stricter topology and
-foliation checks; validation now runs topology-aware Delaunay Levels 1–4 plus CDT embedding, foliation, causality, and simplex-classification checks; and one
-planned Metropolis proposal now includes exact offered-site enumeration, speculative mutation, reverse-state family/site accounting, and final validation.
-Those semantic workload changes explain the higher generation, validation, and single-proposal timings relative to v0.1.0. Direct local-move and complete
-small Metropolis timings improved, and no Rust 1.98 standard-library candidate was adopted, so the comparison contains no regression attributable to
-ceremonial MSRV API churn.
+Historical benchmark reports were deliberately retired in September 2026. New evidence uses the shared v2 workflow described below.
 
 ## Prerequisites
 
-Install these external tools before running `just setup`:
-
-- Rustup and Cargo, with the repository toolchain available
-- [uv](https://docs.astral.sh/uv/)
-- [GitHub CLI](https://cli.github.com/) authenticated for this repository
-- `jq`
-- `just`
-
-`just setup-tools` checks `uv`, `rustup`, `cargo`, `gh`, and `jq` before installing or changing any managed tool.
-
-Start from an up-to-date `main` and choose the exact stable tag:
+Install Git, Rustup, the declared uv version, authenticated GitHub CLI, and jq. Bootstrap the managed tools:
 
 ```bash
-git switch main
-git pull --ff-only
-git remote -v
-gh auth status
-
-TAG=vX.Y.Z
+uv run --locked --only-group tooling research-repo-tools setup
+just tools-check
 ```
 
-Do not set a second version variable. The release commands parse and validate `TAG` themselves.
+Prepare a focused release branch manually from reviewed `main`. Choose:
 
-## 1. Refresh dependencies separately
+```bash
+TAG=vX.Y.Z
+PREVIOUS_TAG=vA.B.C
+RELEASE_DATE=YYYY-MM-DD
+```
 
-Run the canonical repository refresh before opening the release branch:
+## Prepare metadata and validate
+
+Land dependency/tool refreshes separately before release preparation:
 
 ```bash
 just update
 ```
 
-`just update` updates Rust dependencies and lockfiles, resolves exact Python development pins in one transaction, upgrades managed Cargo tools, synchronizes
-the root tool pins, refreshes `uv.lock`, and syncs the development environment. Review and land these changes separately from the release PR.
-
-Do not continue until `main` contains the reviewed dependency/tool refresh.
-
-## 2. Prepare the release PR
-
-Create a focused release branch:
+Update metadata with explicit inputs, then generate the prospective dated changelog without creating a tag:
 
 ```bash
-git switch -c "release/$TAG"
-```
-
-Apply the deterministic version and metadata transaction:
-
-```bash
-just update-version "$TAG"
-```
-
-The updater:
-
-- accepts only a stable `vX.Y.Z` tag;
-- discovers the latest published stable GitHub release while excluding drafts, prereleases, and malformed tags;
-- synchronizes `Cargo.toml`, the root package in `Cargo.lock`, `pyproject.toml`, the editable project in `uv.lock`, and `CITATION.cff`;
-- uses the current UTC date for `date-released`;
-- preserves the permanent Zenodo concept DOI and removes the recognized legacy version-record DOI block;
-- updates active dependency snippets and non-artifact release links while preserving historical benchmark artifact links;
-- validates the complete candidate tree before writing and restores every changed file byte-for-byte if a later write fails.
-
-The command fails without writing when release history is missing or malformed, the target is older than the latest stable release, an unexpected version
-reference is present, or citation metadata has an unrecognized DOI structure.
-
-Generate the release changelog:
-
-```bash
-just changelog-unreleased "$TAG"
-```
-
-This runs `git-cliff` without creating a temporary tag, applies Markdown hygiene, synchronizes the generated heading to the same UTC release date, and
-archives completed minor release series.
-
-Generate the retained performance evidence and tracked publication files:
-
-```bash
-just performance-release "$TAG"
-```
-
-The baseline defaults to the newest published stable release older than `$TAG`; pass it as the second argument when the comparison must be explicit. The
-command measures the baseline tag and current tracked source in isolated worktrees, writes the CSV/provenance pair under `target/bench-reports/`, reloads
-and validates it after measurement, then atomically updates `docs/PERFORMANCE.md`, its archived release-pair report and index, the performance SVG, and the
-owned README summary. Inspect the retained pair and tracked outputs before continuing. Untracked files are intentionally excluded from the measured source
-state.
-
-Run the release gates:
-
-```bash
+just update-version "$TAG" --previous-release "$PREVIOUS_TAG" --date "$RELEASE_DATE"
+just changelog-unreleased "$TAG" "$RELEASE_DATE"
 just ci
+just ci-slow
 just release-version-check
-cargo publish --locked --allow-dirty --dry-run
+just publish-check
 ```
 
-`release-version-check` requires all package versions, the CFF version/date, the active changelog heading, dependency snippets, and non-artifact release links
-to agree. It also requires the permanent concept DOI and rejects version-specific top-level citation identifiers.
+The shared release transaction validates candidate files before writing. It synchronizes Cargo metadata, the CFF version/date, and active dependency examples.
+Python is a dependency-only environment, so its placeholder version is not another release version.
+The permanent Zenodo concept DOI is fixed by policy; top-level version-record identifiers are rejected.
+Changelog archives use `docs/archives/changelog/`. Caught write failures trigger rollback; interruption is not a crash-atomic transaction.
 
-`performance-doc` and `performance-readme` are deterministic render-only recovery commands. They require both retained pair members, validate their digest
-and release identity, and never invoke Cargo or create worktrees. If either member is missing, rerun `performance-release`; do not combine files from
-different comparisons.
+Explicit `--previous-release` keeps preparation offline. Omitting it discovers the latest published stable GitHub release.
+Use `--dry-run` to preview metadata edits, or `just changelog-preview --tag "$TAG" --date "$RELEASE_DATE"` to preview notes.
+Reruns preserve the chosen date; advancing it requires changing the explicit input.
 
-Review the complete diff, then stage the actual release artifacts and commit them manually:
+## Fresh performance evidence
+
+The first post-migration tagged release establishes the new baseline. Do not compare it with the retired legacy asset format.
+After that baseline exists, a prospective release may run:
 
 ```bash
-git status --short
-git diff --check
-git diff
-
-git add Cargo.toml Cargo.lock pyproject.toml uv.lock CITATION.cff CHANGELOG.md README.md docs/
-git commit -m "chore(release): release $TAG"
-git push -u origin "release/$TAG"
+just performance-release "$TAG" "$PREVIOUS_TAG"
 ```
 
-Open a PR titled `chore(release): release $TAG`. Keep feature work and ordinary dependency updates out of this PR.
+This user-invoked command creates temporary Git worktrees, runs the configured correctness gate and measurements, and promotes shared evidence and reports.
+Agents must respect this repository's prohibition on Git mutations. Review host, source, dependency, and harness provenance before accepting a comparison.
 
-If a release-critical fix lands on the branch, rerun `just update-version "$TAG"` and `just changelog-unreleased "$TAG"`, then repeat every release gate.
-
-## 3. Publish after merge
-
-Synchronize to the exact merged `main`:
+For README publication, prepare the independently pinned configuration from `tooling/performance-readme.example.toml` and run:
 
 ```bash
-git switch main
-git pull --ff-only
+just performance-readme tooling/performance-readme.toml --preview
+just performance-readme tooling/performance-readme.toml
+```
+
+The table includes absolute baseline/current times, units and intervals alongside relative changes.
+See [performance testing](performance-testing.md) for evidence paths and render-only recovery.
+Keep the README's explicit pending state until a real new comparison exists.
+
+Review and commit the candidate manually, open the release PR, and merge it only after the required hosted checks pass.
+
+## Tag, attach baseline, and publish
+
+After merging, synchronize to the exact reviewed commit and verify metadata:
+
+```bash
 just release-version-check
-```
-
-Create and inspect the annotated tag:
-
-```bash
 just tag "$TAG"
 git tag -l --format='%(contents)' "$TAG"
 git push origin "$TAG"
+gh release create "$TAG" --draft --title "$TAG" --notes-from-tag
 ```
 
-Publish the locked crate and create the GitHub release:
+Dispatch the release-baseline workflow against the new tag:
+
+```bash
+gh workflow run release-benchmarks.yml -f release_tag="$TAG"
+```
+
+The workflow first validates a mutable draft, measures the exact tag with read-only permissions and caches disabled, then attaches
+`causal-triangulations-TAG-cdt-baseline-v2.tar.gz` from a separate writer job. Writer jobs install the exact published tooling package and never check out
+benchmark source. An identical attachment retry succeeds; different bytes fail rather than overwriting evidence. The release remains a draft.
+
+Verify the baseline attachment and all release gates before publishing:
 
 ```bash
 cargo publish --locked
-gh release create "$TAG" --title "$TAG" --notes-from-tag
+gh release edit "$TAG" --draft=false
 ```
 
-Publishing the GitHub release triggers `.github/workflows/release-benchmarks.yml`. Wait for that workflow to pass and verify that
-`causal-triangulations-$TAG-criterion-baseline.tar.gz` is attached to the release. The workflow checks out the exact tag, reruns the correctness-gated
-release signal, embeds source and host provenance, and publishes the native Criterion archive through a separate least-privilege job. To reconstruct a
-comparison from two published assets without Cargo or worktrees, run `just performance-github-assets "$TAG" "$PREVIOUS_TAG"`.
-
-Verify the Zenodo record through the permanent concept DOI in `CITATION.cff`. The citation file must continue to contain the concept DOI rather than a
-release-record DOI; Zenodo resolves the concept record to the latest release while retaining the version history.
-
-Only after the tag, crates.io package, GitHub release, benchmark assets, and Zenodo record are verified should the release branch be removed:
-
-```bash
-git push origin --delete "release/$TAG"
-git branch -d "release/$TAG"
-```
-
-## Reruns and failure recovery
-
-- A same-day rerun of `just update-version "$TAG"` is content-idempotent.
-- A rerun on a later UTC day intentionally advances `date-released` and the matching changelog heading.
-- Version preparation writes nothing unless every planned file passes validation.
-- An interrupted multi-file write restores the original bytes, including original newline style.
-- Dependency updates and performance measurements are separate operations and have their own rollback or evidence rules.
+Verify the crates.io package, GitHub release, asset, and Zenodo record through the permanent concept DOI before removing the release branch.
+These Git and publication commands are manual maintainer operations.
