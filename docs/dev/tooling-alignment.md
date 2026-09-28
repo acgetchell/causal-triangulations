@@ -56,6 +56,10 @@ Semgrep uses shared portable file selection and fixture validation, with one nat
 selected configuration files that have no applicable CDT rule, so it does not fit this mixed rule inventory. Native strict/error status remains blocking;
 negative fixtures are excluded from the production scan and checked separately. No repository-local scanner implementation is retained.
 
+PR #291's first Linux SARIF job exhausted its 20-minute budget during shared Cargo-tool setup before Semgrep started. This Python-only job now installs
+the declared uv version and runs `uv run --locked --managed-python --group dev just semgrep`; the locked shared package supplies Just and file selection.
+It does not need the full Rust/Cargo toolchain. The scan, strict failure status, and SARIF upload contract remain unchanged.
+
 The sections below are historical decision records superseded where noted by the September 2026 adoption above.
 
 This note records the issue #112 comparison between `causal-triangulations` and the sibling `markov-chain-monte-carlo` repository. Keep it current when changing
