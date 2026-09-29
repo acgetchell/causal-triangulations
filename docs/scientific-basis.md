@@ -4,7 +4,22 @@ This page records the scientific contract for `causal-triangulations`: what the 
 analysis, and where the current 1+1-dimensional foundation release deliberately stops.
 
 For a notebook-first run, start with [`notebooks/00_quickstart.ipynb`](../notebooks/00_quickstart.ipynb). For command-line examples, see
-[`docs/cli-examples.md`](cli-examples.md).
+[`docs/RUNNING.md`](RUNNING.md).
+
+## Contents
+
+- [CDT Model](#cdt-model)
+- [API Selection](#api-selection)
+- [Geometry Backend Role](#geometry-backend-role)
+- [Action Calibration](#action-calibration)
+- [Ensemble And Volume Behavior](#ensemble-and-volume-behavior)
+- [Profile Conventions](#profile-conventions)
+- [What The Crate Validates](#what-the-crate-validates)
+- [CDT++ Construction Lesson](#cdt-construction-lesson)
+- [Effective Dimensional Observables](#effective-dimensional-observables)
+- [Move And Sampler Contract](#move-and-sampler-contract)
+- [Volume Fixing](#volume-fixing)
+- [User Responsibilities](#user-responsibilities)
 
 ## CDT Model
 
@@ -12,31 +27,75 @@ Causal Dynamical Triangulations defines a gravitational path integral by summing
 encoded by a discrete proper-time foliation: vertices carry time labels, edges are classified as spacelike or timelike, and simplices must respect the
 allowed causal pattern.
 
+The original 1+1 model is due to [Ambjørn and Loll (1998)](../REFERENCES.md#metropolis-hastings-algorithm-in-cdt); the
+[CDT reviews](../REFERENCES.md#comprehensive-reviews) supply broader context. References to higher-dimensional studies do not extend the implemented scope.
+
 This crate currently implements a validated 1+1-dimensional CDT foundation. It supports:
 
+- local `(2,2)`, `(1,3)`, and `(3,1)` CDT move proposals;
+- Metropolis-Hastings sampling through the `markov-chain-monte-carlo` backend;
 - open-boundary strip initial data;
 - periodic S¹×S¹ toroidal initial data;
-- local `(2,2)`, `(1,3)`, and `(3,1)` CDT move proposals;
 - Regge-style action evaluation with configurable couplings;
-- Metropolis-Hastings sampling through the `markov-chain-monte-carlo` backend;
 - trace CSV and summary JSON exports for downstream analysis.
 
-Higher-dimensional CDT, production volume fixing, automated λ scans, visualization/export workflows, and full ensemble-analysis tooling are outside the
-current release scope. The roadmap tracks likely directions in [`docs/roadmap.md`](roadmap.md).
+The simulation dimension is `2` (1+1 spacetime). Open strips have open space and time boundaries, χ = 1, at least four vertices per initial slice, and at
+least two slices. Toroidal initial data are periodic in both directions, χ = 0, with at least three vertices per slice and three slices. The input size is
+an initial count, not a fixed-volume constraint.
 
-## What The Crate Validates
+Higher-dimensional CDT, production volume fixing, automated λ scans, and full ensemble-analysis tooling are outside the current scope. Mesh export and
+example notebook visualization already exist; further visualization workflows remain on the [roadmap](roadmap.md).
 
-The validation contract is discrete and implementation-level. Constructors and simulation paths check:
+## API Selection
 
-- topology metadata and Euler-characteristic consistency for supported initial data;
-- foliation labels and slice-size constraints;
-- adjacent-slice causality, including periodic time distance for toroidal runs;
-- strict Up/Down simplex classification in 1+1 dimensions;
-- rollback or rejection of local move candidates that would break CDT invariants;
-- proposal-before-mutation Metropolis ordering, with proposal asymmetry handled by the Hastings correction.
+Use the [published API reference](https://docs.rs/causal-triangulations/latest/causal_triangulations/) for callable contracts:
 
-These checks make the implemented CDT state space and transition kernel explicit. They do not prove that a Markov chain has mixed, that a finite run is in an
-asymptotic scaling regime, or that a chosen observable analysis supports a particular physical interpretation.
+- `prelude::config` parses raw settings into `ValidatedCdtConfig`.
+- `prelude::triangulation` constructs and inspects foliated CDT states.
+- `prelude::simulation` runs and resumes chains, exposing checkpoints and telemetry.
+- `prelude::observables` measures profiles and finite-graph estimators.
+
+The [CLI guide](RUNNING.md) and [quickstart notebook](../notebooks/00_quickstart.ipynb) are runnable entry points. Detailed domain contracts stay in
+[foliation](foliation.md), [moves](moves.md), and [Metropolis sampling](metropolis.md).
+
+## Geometry Backend Role
+
+The Delaunay backend is an implementation substrate, not the sampled physics ensemble. It gives the crate a robust way to construct or import an initial
+piecewise-linear manifold, validate its geometric realization, and perform checked local edit primitives. Exact layered strips preserve integer proper-time
+coordinates and require upstream validation Levels 1-4; constructors that explicitly promise a Delaunay mesh additionally require the Level 5
+empty-circumsphere predicate.
+
+After initialization, the simulation does not enforce the Delaunay condition as part of the Markov-chain state. The sampled ensemble is defined by CDT moves,
+foliation/topology/causality constraints, the configured action, and Metropolis-Hastings acceptance.
+
+[`delaunay`](https://docs.rs/delaunay/latest/delaunay/) owns structural geometry algorithms; its
+[bibliography](https://github.com/acgetchell/delaunay/blob/main/REFERENCES.md) owns generic geometry attribution.
+[`markov-chain-monte-carlo`](https://docs.rs/markov-chain-monte-carlo/latest/markov_chain_monte_carlo/) owns acceptance decisions, chain counters, and
+delayed commits; its [scientific basis](https://github.com/acgetchell/markov-chain-monte-carlo/blob/main/docs/scientific_basis.md) owns generic sampling theory.
+CDT owns action-to-log-weight conversion, concrete proposal probabilities, foliation, and ensemble conventions.
+
+## Action Calibration
+
+The default 1+1 action constants use:
+
+```text
+kappa_0 = 0
+kappa_2 = 0
+lambda_edge = (2 / 3) ln 2 ~= 0.46209812037329684
+```
+
+In pure 1+1 gravity, the curvature/Newton term is topological at fixed topology, so the default vertex and triangle couplings are zero. The exactly solved 2D
+CDT model has critical cosmological coupling `lambda_c = ln 2` in the triangle-volume convention where configurations are weighted by `exp(-lambda N2)`.
+See the [exact-model sources](../REFERENCES.md#exact-11-cdt-benchmarks-and-coupling-calibration) and
+[Regge-action foundations](../REFERENCES.md#regge-calculus-and-discrete-action); the complete action and move deltas belong to [the move guide](moves.md).
+
+This crate's historical action writes the cosmological term as `lambda_edge N1`. For closed toroidal 1+1 triangulations, `N1 = 3 N2 / 2`, so
+`lambda_edge = (2 / 3) ln 2` maps the edge-count convention to the standard critical triangle-volume coupling. Open-boundary strips have boundary-count
+corrections, so the same default should be treated as a practical baseline rather than an exact open-boundary critical value.
+
+The sampler targets `exp(-S / T)`. Temperature is therefore an overall action-scaling parameter, not merely an algorithmic acceptance knob: changing `T`
+changes every effective coupling to its configured value divided by `T`. The quoted critical-coupling calibration assumes `T = 1`; other temperatures require
+deliberate retuning if the same target ensemble is intended.
 
 ## Ensemble And Volume Behavior
 
@@ -63,45 +122,29 @@ These are different combinatorial observables and are deliberately named differe
 Assigning normalized edge lengths makes each simplex of a given causal type carry a fixed geometric volume factor; it does not make a vertex count equal to a
 triangle count. Convert counts to physical volumes only after choosing lattice spacings and the relevant simplex-volume normalization.
 
-## Action Calibration
+## What The Crate Validates
 
-The default 1+1 action constants use:
+The validation contract is discrete and implementation-level. Constructors and simulation paths check:
 
-```text
-kappa_0 = 0
-kappa_2 = 0
-lambda_edge = (2 / 3) ln 2 ~= 0.46209812037329684
-```
+- topology metadata and Euler-characteristic consistency for supported initial data;
+- foliation labels and slice-size constraints;
+- adjacent-slice causality, including periodic time distance for toroidal runs;
+- strict Up/Down simplex classification in 1+1 dimensions;
+- rollback or rejection of local move candidates that would break CDT invariants;
+- proposal-before-mutation Metropolis ordering, with proposal asymmetry handled by the Hastings correction.
 
-In pure 1+1 gravity, the curvature/Newton term is topological at fixed topology, so the default vertex and triangle couplings are zero. The exactly solved 2D
-CDT model has critical cosmological coupling `lambda_c = ln 2` in the triangle-volume convention where configurations are weighted by `exp(-lambda N2)`.
+These checks make the implemented CDT state space and transition kernel explicit. They do not prove that a Markov chain has mixed, that a finite run is in an
+asymptotic scaling regime, or that a chosen observable analysis supports a particular physical interpretation.
 
-This crate's historical action writes the cosmological term as `lambda_edge N1`. For closed toroidal 1+1 triangulations, `N1 = 3 N2 / 2`, so
-`lambda_edge = (2 / 3) ln 2` maps the edge-count convention to the standard critical triangle-volume coupling. Open-boundary strips have boundary-count
-corrections, so the same default should be treated as a practical baseline rather than an exact open-boundary critical value.
+| Evidence level | Current boundary |
+| --- | --- |
+| Structural and transition-kernel checks | Implemented; see [test coverage](testing.md) and the [v0.1.1 checklist][claims] |
+| Analytic ensemble validation | Planned [v0.2.0 quantitative gate](roadmap.md#primary-exact-benchmark); invariant checks do not establish the distribution |
+| Reference implementation comparison | A separate [follow-up][reference-validation], not existing Rust validation evidence |
+| Continuum interpretation | Requires downstream mixing, scaling, fit-window, and uncertainty analyses |
 
-The sampler targets `exp(-S / T)`. Temperature is therefore an overall action-scaling parameter, not merely an algorithmic acceptance knob: changing `T`
-changes every effective coupling to its configured value divided by `T`. The quoted critical-coupling calibration assumes `T = 1`; other temperatures require
-deliberate retuning if the same target ensemble is intended.
-
-## Effective Dimensional Observables
-
-The public scalar dimensional routines are intentionally named
-`estimate_all_scale_effective_hausdorff_slope` and `estimate_short_time_effective_spectral_dimension`. The first fits all usable radii of the finite dual graph;
-the second fits a bounded early-diffusion window. Neither scalar alone demonstrates a scale-independent continuum dimension or a plateau.
-
-Use `average_dual_ball_volume_curve` and `average_dual_return_probability_curve` to inspect the underlying curves, select scientifically justified windows,
-and attach uncertainty estimates across independent samples. The crate does not claim those choices or uncertainties on behalf of downstream analyses.
-
-## Geometry Backend Role
-
-The Delaunay backend is an implementation substrate, not the sampled physics ensemble. It gives the crate a robust way to construct or import an initial
-piecewise-linear manifold, validate its geometric realization, and perform checked local edit primitives. Exact layered strips preserve integer proper-time
-coordinates and require upstream validation Levels 1-4; constructors that explicitly promise a Delaunay mesh additionally require the Level 5
-empty-circumsphere predicate.
-
-After initialization, the simulation does not enforce the Delaunay condition as part of the Markov-chain state. The sampled ensemble is defined by CDT moves,
-foliation/topology/causality constraints, the configured action, and Metropolis-Hastings acceptance.
+[claims]: RELEASING.md#v011-scientific-claim-checklist
+[reference-validation]: roadmap.md#v02x-11-follow-up-and-brunekreef-reference-validation
 
 ## CDT++ Construction Lesson
 
@@ -112,16 +155,32 @@ through the geometry backend, and let the backend retriangulate the affected cav
 many passes; the Rust implementation treats convergence to zero strict causal simplex violations as the acceptance condition rather than assuming one cleanup
 pass is enough.
 
+Its [software citation](../REFERENCES.md#cdt-simulation-implementation-and-ensembles) records implementation lineage separately from the original CDT papers.
+
 That approach is not treated as current validation evidence for this Rust crate. `CDT-plusplus` is referenced as implementation lineage and a source of design
 experience; it may become a useful independent regression oracle if modernized enough to build and run representative fixtures. The Rust follow-up tracked as
 [`causal-triangulations#192`](https://github.com/acgetchell/causal-triangulations/issues/192) implements a causality-filtering Delaunay construction path
 without moving generic PL-manifold editing into the CDT layer. The invariant itself is documented in [`docs/foliation.md`](foliation.md): every current foliated
 top-dimensional simplex must be strictly causal, with `strict_causal_simplex_violation_count() == 0`.
 
+## Effective Dimensional Observables
+
+The public scalar dimensional routines are intentionally named
+`estimate_all_scale_effective_hausdorff_slope` and `estimate_short_time_effective_spectral_dimension`. The first fits all usable radii of the finite dual graph;
+the second fits a bounded early-diffusion window. Neither scalar alone demonstrates a scale-independent continuum dimension or a plateau.
+
+Use `average_dual_ball_volume_curve` and `average_dual_return_probability_curve` to inspect the underlying curves, select scientifically justified windows,
+and attach uncertainty estimates across independent samples. The crate does not claim those choices or uncertainties on behalf of downstream analyses.
+See the [dimensional-observable literature](../REFERENCES.md#volume-profiles-topology-and-dimensional-observables) for the scientific context, not a
+validation claim for these finite-graph scalar fits.
+
 ## Move And Sampler Contract
 
 The CDT move layer owns domain-specific proposal sites and invariant checks. The generic Metropolis-Hastings mechanics are delegated to
 `markov-chain-monte-carlo` through thin CDT adapters.
+
+[Alexander/Pachner moves](../REFERENCES.md#ergodic-moves-and-alexander-moves) provide combinatorial background; they do not by themselves prove ergodicity of
+this causality-constrained move set. [Hastings](../REFERENCES.md#metropolis-hastings-algorithm-in-cdt) supplies the generic proposal-asymmetry correction.
 
 For details, see:
 

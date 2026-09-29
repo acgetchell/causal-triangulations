@@ -1,5 +1,77 @@
 # Tooling Alignment
 
+## September 2026 Documentation, Discovery, And Security Alignment
+
+Issues #279 and #290 apply the documentation roles used in la-stack, Delaunay, and MCMC: README for choosing and running the project, references for
+bibliographic provenance, scientific basis for model contracts and evidence limits, and CONTRIBUTING for validation and PR preparation. CDT retains its
+hyphenated scientific-basis path, notebook and binary workflows, open-strip and toroidal 1+1 scope, and separate detailed foliation/move/sampler guides.
+La-stack and MCMC are libraries with runnable examples; their entry points do not replace CDT's existing `run` recipe. Delaunay's broader geometry and
+dimension support does not imply equivalent CDT support.
+
+MCMC's generated Just help and security wrappers are the command reference. Recipe definitions are sorted, the private explicit default delegates to
+`just --list`, and every public recipe has a description. The unused `help-workflows`, `changelog-tag`, `changelog-update`, `markdown-lint`, `python-lint`,
+`shell-lint`, and `test-lib` wrappers are removed after checking active callers; distinct checks, fixes, workloads, and shared release/update aliases remain.
+Just formatting joins configuration validation. [The command guide](DEVELOPING.md) owns the ongoing documentation and command-placement policy.
+
+The active Markdown filename audit found four procedural guides to rename:
+
+| Previous path | New path | Primary purpose |
+| --- | --- | --- |
+| `docs/cli-examples.md` | `docs/RUNNING.md` | Run the CLI and consume its outputs |
+| `docs/hpc.md` | `docs/RUNNING-ON-HPC.md` | Run notebooks and simulations on clusters |
+| `docs/performance-testing.md` | `docs/BENCHMARKING.md` | Measure, compare, and publish benchmark evidence |
+| `docs/dev/commands.md` | `docs/dev/DEVELOPING.md` | Execute development and validation workflows |
+
+`docs/RELEASING.md` already follows the task-guide convention. Architecture, foliation, moves, sampler contracts, roadmap, scientific basis, test-coverage
+analysis, and the Rust/Python/testing policies retain descriptive lowercase names. Directory indexes retain `README.md`. Historical changelog paths are
+unchanged; future generated performance reports retain `docs/performance/v2/performance.md` and their immutable evidence links. No measurements change.
+
+Security adds MCMC's `audit`, `security-secrets`, and `security` recipes through the published shared CLI. Exact Gitleaks 8.30.1 and OSV Scanner 2.6.0 binary
+pins use shared setup and verification. CDT scans its two maintained lockfiles (`Cargo.lock` and `uv.lock`); MCMC's separate diagnostic-benchmark lockfile
+has no CDT counterpart. These network/full-history scans remain outside `check` and `ci`; the existing hosted cargo-audit, CodeQL, Semgrep, and zizmor
+workflows keep their current ownership. Scanner failures and findings remain blocking when the security recipes are invoked.
+
+The shared release-template work in [research-repo-tools#60](https://github.com/acgetchell/research-repo-tools/issues/60) remains open for v0.1.8.
+CDT keeps the supported v0.1.7 metadata/changelog interfaces until that release is published; reviewed crates.io publication remains tracked in
+[#289](https://github.com/acgetchell/causal-triangulations/issues/289). This cleanup does not invent future shared commands or change publication policy.
+
+### Adoption Acceptance Review
+
+The implementation of #281 and #285 landed in [PR #291](https://github.com/acgetchell/causal-triangulations/pull/291), whose head
+`6f874425522881a3f0d118936f3d075e46ee891d` passed the hosted Linux, macOS, and Windows CI matrix. The follow-up local macOS validation installs the locked
+PyPI package into a fresh environment, verifies managed executable paths and versions, and runs the consumer tests and full `just ci` gate.
+
+For #285, actual `just review HEAD` and `just review-uncommitted` invocations use a local reviewer stub to verify instruction discovery, argument forwarding,
+and success/failure propagation through the installed package. Generic freshness and subprocess policy stays upstream; live CodeRabbit invocation is separate.
+
+Issue #281's follow-up adopts the shared changelog format explicitly. The old archive classified the historical commit beginning "Bump the dependencies
+group" as Dependencies; the shared template classifies it as Changed. That content difference caused `conflicting retained release 0.0.1` during generation.
+The maintainer approved regenerating history in the new format, so the one-time migration regenerates root and archive through the pinned shared generator.
+Subsequent generation must be idempotent, preserve declared release dates, and support prospective minor-series rotation and archived-note lookup.
+
+The issue's original generated `bootstrap.sh` / `bootstrap.ps1` requirement is superseded by the published v0.1.7 setup contract: one
+`uv run --locked --managed-python --only-group tooling research-repo-tools setup` command works on all supported platforms. The package explicitly requires
+no generated installers and exposes no `toolchain bootstrap` subcommand. CDT uses that supported command in contributor instructions and the shared CI
+setup action; duplicating an installer locally would undermine the migration.
+
+Update acceptance covers the actual merged Just recipes and installed PyPI package. Consumer tests execute all update recipes through a local uv stub,
+checking scope, order, and failure short-circuiting at every step. Separate live macOS checks use a disposable consumer copy, an official standalone uv
+installation, and an isolated Just tool environment:
+
+- `update`, `update-tools`, `update-dependencies`, `update-cargo-dependencies`, `update-python-dependencies`, and `update-python-deps` all pass.
+- Tool-only updates advance the isolated uv from 0.12.19 to 0.12.20, reconcile only its manifest pin, and preserve dependency requirements and both locks.
+  Managed Cargo/scanner versions are already current and are verified at their managed paths, including cargo-edit 0.13.13.
+- Deliberately older disposable requirements advance from clap 4.6.6 to 4.6.7 and pytest 9.0.2 to 9.1.1 through `update-dependencies`.
+  Both locks refresh, the shared package stays at 0.1.7, and uv/Cargo/scanner pins remain unchanged. Explicit dev sync installs pytest even with
+  `default-groups = []`; managed Rust is present on the synchronization path.
+- The real checkout's dependency requirements, locks, uv installation, and managed declarations are unchanged by these update experiments.
+
+CDT has one Cargo resolution root and no consumer exclusions; Git and native compiler/linker prerequisites remain system-owned.
+Local `just ci` passes with 30 consumer tests, 742 Rust tests, and 333 doctests, plus notebook, example, and configuration checks. Logs are retained locally
+under `target/issue-281-*.log`. Hosted Linux/macOS/Windows results from PR #291 establish the original setup baseline;
+new checks require the next hosted CI run.
+The CI checkout now includes full history and tags so the consumer changelog regression exercises the actual release boundaries on every matrix platform.
+
 ## September 2026 Shared Tooling Adoption
 
 Issues #277, #281, and #285 consolidate maintenance on the published `research-repo-tools` 0.1.7 package, following the MCMC consumer migration.
@@ -24,10 +96,10 @@ no PR code. The shared implementation verifies signed Dependabot commits, the ex
 enabling native squash auto-merge. Required checks, CodeRabbit status, and resolved threads remain merge gates.
 The `pull_request_target` Semgrep exception is restricted to this caller path; a consumer test enforces its single pinned reusable job and file policy.
 External-action rules now cover nested reusable-workflow paths and approve only this shared workflow path. GitHub settings activation is separate from
-merging the caller; see the Dependabot section in [development commands](commands.md#dependabot-approval-and-auto-merge).
+merging the caller; see the Dependabot section in [development commands](DEVELOPING.md#dependabot-approval-and-auto-merge).
 
 This migration updates the setup, command, release, and file-inventory documentation needed to use the resulting tooling. The wider documentation
-ownership, navigation, filename, and recipe-discovery cleanup remains in #279 and #290.
+ownership, navigation, filename, and recipe-discovery cleanup is recorded in the #279/#290 follow-up above.
 
 The owner explicitly chose to discard historical benchmark reports/assets and start fresh instead of maintaining legacy format adapters. All legacy
 performance Python modules and their exclusive tests are removed. New comparisons use shared evidence and require explicit baseline/current tags;

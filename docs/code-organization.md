@@ -51,20 +51,21 @@ causal-triangulations/
 │   │   ├── cdt_spacetime.png
 │   │   └── cdt_spacetime.svg
 │   ├── dev/
-│   │   ├── commands.md
+│   │   ├── DEVELOPING.md
 │   │   ├── python.md
 │   │   ├── rust.md
 │   │   ├── testing.md
 │   │   └── tooling-alignment.md
-│   ├── cli-examples.md
+│   ├── BENCHMARKING.md
 │   ├── code-organization.md
 │   ├── foliation.md
-│   ├── hpc.md
 │   ├── metropolis.md
 │   ├── moves.md
-│   ├── performance-testing.md
+│   ├── README.md
 │   ├── RELEASING.md
 │   ├── roadmap.md
+│   ├── RUNNING-ON-HPC.md
+│   ├── RUNNING.md
 │   ├── scientific-basis.md
 │   └── testing.md
 ├── examples/
@@ -223,6 +224,7 @@ enforce this boundary against new CDT-local generic acceptance draws or manual a
   configuration under `tests/common/` and committed compatibility artifacts under `tests/fixtures/`.
 - `benches/` — Criterion benchmark harnesses and CI performance suites, with shared fail-fast fixture setup support under `benches/support/`.
 - `docs/` — user guides, architecture notes, development rules, and release/testing/performance documentation.
+  [The documentation index](README.md) maps their owners; [documentation policy](dev/DEVELOPING.md#documentation-and-command-policy) defines guide naming.
 - `scripts/` — focused integration tests for the installed shared tooling and CDT configuration.
 - `tooling/` — benchmark measurement, example validation, report, and README publication contracts. Generic infrastructure uses `research-repo-tools`.
 

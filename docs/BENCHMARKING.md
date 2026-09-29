@@ -82,4 +82,4 @@ The performance workflow runs the deterministic allocation check and correctness
 It does not restore legacy benchmark caches or claim a regression comparison against an unknown host.
 Normal `just ci` compiles benchmarks and enforces the allocation contract; it does not run timing comparisons.
 
-See [the benchmark inventory](../benches/README.md) for workload design and [development commands](dev/commands.md) for the slow debugging probes.
+See [the benchmark inventory](../benches/README.md) for workload design and [development commands](dev/DEVELOPING.md) for the slow debugging probes.

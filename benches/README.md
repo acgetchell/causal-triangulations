@@ -1,7 +1,7 @@
 # CDT Benchmarks
 
 This document describes the Criterion benchmark suites. For regression workflows, baselines, CI behavior, and report generation, see
-[`docs/performance-testing.md`](../docs/performance-testing.md).
+[`docs/BENCHMARKING.md`](../docs/BENCHMARKING.md).
 
 ## Running Benchmarks
 
@@ -158,7 +158,7 @@ Guidelines:
 ## Interpreting Results
 
 Criterion reports means, confidence intervals, outliers, and change estimates when baselines are available. Small changes can be noise. Use
-[`docs/performance-testing.md`](../docs/performance-testing.md) for thresholded regression checks and report generation.
+[`docs/BENCHMARKING.md`](../docs/BENCHMARKING.md) for thresholded regression checks and report generation.
 
 Hardware, operating system, CPU load, and thermal behavior can change benchmark results. Prefer same-machine comparisons for local optimization work and CI
 baselines for PR-level regression signals.

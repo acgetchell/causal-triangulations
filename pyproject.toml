@@ -161,6 +161,10 @@ formatter = "rumdl.toml"
 [tool.research-repo-tools.toolchain]
 inherit-python = true
 
+[tool.research-repo-tools.toolchain.binaries]
+gitleaks = "8.30.1"
+osv-scanner = "2.6.0"
+
 [tool.research-repo-tools.toolchain.cargo]
 cargo-audit = "0.22.2"
 cargo-edit = "0.13.13"

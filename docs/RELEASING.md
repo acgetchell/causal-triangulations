@@ -3,6 +3,11 @@
 Release preparation uses the pinned shared CLI. Choose one stable tag, predecessor, and UTC date; reruns with those same inputs are deterministic.
 Benchmark measurements are separate and are not idempotent.
 
+This guide uses the published v0.1.7 command contract. The common release procedure is planned in
+[research-repo-tools#60](https://github.com/acgetchell/research-repo-tools/issues/60) for v0.1.8; reviewed crates.io publication is tracked in
+[#289](https://github.com/acgetchell/causal-triangulations/issues/289). Adopt those published capabilities together before replacing the manual publication
+steps below. Active documentation links stay on `main` and API links on `latest`; release preparation must preserve immutable evidence and citation pins.
+
 ## v0.1.1 scientific claim checklist
 
 The v0.1.1 release establishes the internal scientific correctness of the implemented 1+1 CDT foundation: validated open-time strips and periodic
@@ -37,7 +42,7 @@ Historical benchmark reports were deliberately retired in September 2026. New ev
 Install Git, Rustup, the declared uv version, authenticated GitHub CLI, and jq. Bootstrap the managed tools:
 
 ```bash
-uv run --locked --only-group tooling research-repo-tools setup
+uv run --locked --managed-python --only-group tooling research-repo-tools setup
 just tools-check
 ```
 
@@ -62,7 +67,6 @@ Update metadata with explicit inputs, then generate the prospective dated change
 ```bash
 just update-version "$TAG" --previous-release "$PREVIOUS_TAG" --date "$RELEASE_DATE"
 just changelog-unreleased "$TAG" "$RELEASE_DATE"
-just ci
 just ci-slow
 just release-version-check
 just publish-check
@@ -97,7 +101,7 @@ just performance-readme tooling/performance-readme.toml
 ```
 
 The table includes absolute baseline/current times, units and intervals alongside relative changes.
-See [performance testing](performance-testing.md) for evidence paths and render-only recovery.
+See [performance testing](BENCHMARKING.md) for evidence paths and render-only recovery.
 Keep the README's explicit pending state until a real new comparison exists.
 
 Review and commit the candidate manually, open the release PR, and merge it only after the required hosted checks pass.

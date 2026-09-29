@@ -28,3 +28,6 @@ For numerical correctness issues that are not security-sensitive, open a normal 
 
 This project uses GitHub CodeQL, Dependabot security updates, secret scanning with push protection, `cargo audit`, zizmor, Clippy SARIF analysis, and
 repository-owned Semgrep rules.
+
+Local dependency and secret scanning uses the managed OSV Scanner and Gitleaks through `just security`. Contributor prerequisites, scope, and report locations
+are documented in [CONTRIBUTING](CONTRIBUTING.md#security).

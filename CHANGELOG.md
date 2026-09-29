@@ -5,27 +5,83 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### ⚠️ Breaking Changes
+
+- The minimum Rust version is now 1.98.1. Local Python maintenance entry points and legacy performance commands are removed;
+  use the shared Just recipes. Release comparisons require explicit tags and fresh benchmark evidence in the new format.
+
+### Merged Pull Requests
+
+- Prevent Semgrep SARIF setup timeouts [#291](https://github.com/acgetchell/causal-triangulations/pull/291)
+- Bump the github-actions group with 6 updates [#282](https://github.com/acgetchell/causal-triangulations/pull/282)
+- Bump the github-actions group with 3 updates [#278](https://github.com/acgetchell/causal-triangulations/pull/278)
+
+### Changed
+
+- Merge remote-tracking branch 'origin/main' into build/281-shared-tooling
+  [`96ed580`](https://github.com/acgetchell/causal-triangulations/commit/96ed58040bf060ab1209b3fcd1c65ad41b7870c4)
+
+### Dependencies
+
+- Bump the github-actions group with 3 updates [#278](https://github.com/acgetchell/causal-triangulations/pull/278)
+  [`c1fe01f`](https://github.com/acgetchell/causal-triangulations/commit/c1fe01f31176f2467bf568e66ba0689cc60e5250)
+- Bump the github-actions group with 6 updates [#282](https://github.com/acgetchell/causal-triangulations/pull/282)
+  [`70499f2`](https://github.com/acgetchell/causal-triangulations/commit/70499f2a353f61e24b6b6b36a974609e5d5e327c)
+
+### Maintenance
+
+- [**breaking**] Adopt Rust 1.98.1 and shared research tooling
+  [`4c7994b`](https://github.com/acgetchell/causal-triangulations/commit/4c7994b9b1c3179d8d7ac02c2dc30a6c30097f42)
+
+  - Update Delaunay to 0.8.2, MCMC to 0.5.0, and transitive la-stack to 0.4.6; refresh dependency locks and development tools.
+  - Replace local maintenance scripts and Python packaging with pinned research-repo-tools 0.1.7 commands and consumer configuration.
+  - Unify local and CI toolchain management, release preparation, changelog generation, notebook execution, and example validation.
+  - Enforce complete Python typing guards, including negative fixtures, and add opt-in shared CodeRabbit review commands.
+  - Retire historical benchmark reports and start a fresh evidence series with absolute timings, confidence bounds, and relative comparisons.
+  - Replace CodeRabbit approval polling with the shared Dependabot approval and native squash auto-merge workflow.
+- Prevent Semgrep SARIF setup timeouts [#291](https://github.com/acgetchell/causal-triangulations/pull/291)
+  [`6f87442`](https://github.com/acgetchell/causal-triangulations/commit/6f874425522881a3f0d118936f3d075e46ee891d)
+
+  - Run Semgrep through the locked uv development environment and shared Just tooling.
+  - Skip unnecessary Rust and Cargo-tool installation that exhausted the job's time limit.
+
 ## [0.1.1] - 2026-09-02
 
 ### ⚠️ Breaking Changes
 
-- Adopt stable Delaunay mesh interchange
-- Add lifecycle validation profiles [#196](https://github.com/acgetchell/causal-triangulations/pull/196)
-- Add versioned checkpoint wire format [#218](https://github.com/acgetchell/causal-triangulations/pull/218)
-- Enforce fallible observable and trace invariants
-- Stop returning faces from vertex removal
-- Tighten typed API workflows [#222](https://github.com/acgetchell/causal-triangulations/pull/222)
-- Propagate checkpoint result invariant failures
-- Enforce exact move feasibility and Python 3.14 tooling
-- Harden proposal accounting and restored state
-- Enforce simulation invariants end to end [#222](https://github.com/acgetchell/causal-triangulations/pull/222)
-- Preserve exact layered CDT states
-- Align dependencies and repository automation [#216](https://github.com/acgetchell/causal-triangulations/pull/216)
-- Refresh Rust, backends, and update tooling
-- Replace owned snapshots with borrowed views [#222](https://github.com/acgetchell/causal-triangulations/pull/222)
+- `estimate_hausdorff_dimension`, `estimate_spectral_dimension`, `CdtTriangulation::volume_profile`, and final-dimension accessors on `SimulationResultsBackend`
+  now return `CdtResult`; `CdtProposalPlan::action_after` and `delta_action` now return concrete `f64` values.
+- CdtMcmcCheckpoint::into_results now returns CdtResult&lt;SimulationResultsBackend&gt;, and CheckpointResumeFailure::ScalarTraceAcceptedMismatch carries
+  CdtScalarTraceOutcome values instead of accepted booleans.
+- Raise the minimum supported Rust version from 1.96.0 to 1.97.1. Checkpoints serialized with Delaunay 0.7 cannot be read after upgrading to Delaunay 0.8.
+- TriangulationMut::remove_vertex now returns Result&lt;(), Self::Error&gt; instead of Result&lt;Vec<Self::FaceHandle>, Self::Error&gt;.
+- `final_triangulation.mesh` replaces compact vertex indices and triangle arrays with Delaunay schema v1 UUID entities, simplices, and adjacency; foliation
+  times move to `final_triangulation.vertex_time_labels`.
+- CdtTriangulation::validate() now rejects unfoliated triangulations with CdtError::Foliation(FoliationError::MissingBookkeeping). Assign foliation before
+  validating a CDT profile; raw geometry workflows should validate the backend embedding directly.
+- Repository-managed Python tooling now requires Python 3.14.
+- CdtTriangulation2D moves from geometry to cdt::triangulation and the crate root. DefaultBackend, the public util module, CdtScalarTraceOutcome,
+  CoordinateScalar, and GeometryHandle are removed. TestConfig moves from the crate root and config prelude to prelude::testing; CdtMetadata and
+  CdtSimplexCounts leave the default prelude; policy-taking runner methods now use impl Trait arguments; and ScalarTraceAcceptedMismatch is replaced by
+  ScalarTraceOutcomeMismatch with StepOutcome values.
+- Bind policies with MetropolisAlgorithm::with_policy before using the standard terminals; CdtProposal::with_seed and with_policy are now consuming stages,
+  while with_seed_and_policy, policy-suffixed runner methods, and MetropolisConfig::new_with_seed are removed. Several CdtError variants now expose structured
+  failure and stage fields instead of string-only diagnostics.
+- Geometry queries now return borrowed slices or iterators, edge and CDT classification queries return Result, and raw Delaunay key APIs are crate-private.
+  Handles must be reacquired or explicitly remapped after cloning, deserialization, or topology mutation. Simulation history is reconstructed from results or
+  checkpoints instead of stored in triangulation metadata, changing serialized metadata.
+- Renames volume-profile configuration, CLI, serialization, constructor, measurement, result, and trace APIs to spatial-vertex or slab-triangle terminology;
+  renames dimensional estimators to their effective finite-window contracts; and makes compute_regge_action return CdtResult&lt;f64&gt;.
+- from_cdt_strip and from_cdt_strip_spatial_vertex_profile now guarantee Level 1–4 realization plus CDT invariants, not Level 5 Delaunay validity. Use a strict
+  Delaunay constructor when Level 5 is required.
+- The MSRV is now Rust 1.98.0, and `DelaunayBackend::triangulation` now returns the Level 1–4 `Triangulation` owner.
+- Unversioned CdtMcmcCheckpoint payloads, including the former dependency-shaped Delaunay representation, are no longer accepted.
 
 ### Merged Pull Requests
 
+- Separate generated performance links [#275](https://github.com/acgetchell/causal-triangulations/pull/275)
 - Bump astral-sh/setup-uv in the github-actions group [#266](https://github.com/acgetchell/causal-triangulations/pull/266)
 - Bump the dependencies group with 2 updates [#263](https://github.com/acgetchell/causal-triangulations/pull/263)
 - Bump the github-actions group with 3 updates [#262](https://github.com/acgetchell/causal-triangulations/pull/262)
@@ -339,6 +395,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - Reject version 1 checkpoints when foliation and triangulation slice counts disagree.
   - Preserve operation-specific diagnostics across CDT and Delaunay checkpoint translation.
+- Separate generated performance links [#275](https://github.com/acgetchell/causal-triangulations/pull/275)
+  [`ab4ca26`](https://github.com/acgetchell/causal-triangulations/commit/ab4ca26be1a9dbcb6c2f9e036527f1e5d6c9a2f5)
+
+  - Render the retained report and Criterion baseline links with an explicit Markdown hard break.
+  - Keep the tracked README synchronized with release-performance output.
 
 ### Maintenance
 
@@ -382,27 +443,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ⚠️ Breaking Changes
 
-- Implement 2D CDT ergodic moves [#55](https://github.com/acgetchell/causal-triangulations/pull/55)
-- Adopt delayed CDT proposals
-- Adopt checked Delaunay v0.7.7 APIs
-- Resolve periodic toroidal moves with Simplex APIs
-- Complete 1+1 toroidal CDT sampling
-- Add proposal-site accounting and profiled CDT starts
-- Require validated CDT runtime configs [#163](https://github.com/acgetchell/causal-triangulations/pull/163)
-- Harden foliation validation and unify backend payload APIs
-- Split Metropolis into module tree
-- Validate runtime invariants at parse boundaries
-- Enforce simulation state invariants [#174](https://github.com/acgetchell/causal-triangulations/pull/174)
-- Encode nonzero CDT invariants
-- Run continuation through planned proposals [#153](https://github.com/acgetchell/causal-triangulations/pull/153)
-- Encode trace and count invariants [#164](https://github.com/acgetchell/causal-triangulations/pull/164)
-- Enforce trace profile invariants [#164](https://github.com/acgetchell/causal-triangulations/pull/164)
-- Enforce CDT and backend invariants
-- Harden CDT telemetry and profiled initialization
-- Reject volume-profile override overflows
-- Make Metropolis step telemetry nonzero [#153](https://github.com/acgetchell/causal-triangulations/pull/153)
-- Align tooling and CDT error APIs
-- Align repository tooling with MCMC
+- the provisional strip constructor is now crate-internal, direct metadata field access is no longer public, and legacy specialized payload helper methods were
+  replaced by key-based APIs.
+- Public geometry generator helpers and TriangulationMut result types were renamed/simplified.
+- Ergodic move methods now take CdtTriangulation2D instead of dummy Vec&lt;Vec&lt;usize&gt;&gt; fixtures.
+- `CdtProposal` now implements `DelayedProposal` instead of `ProposalMut`, and its constructors no longer accept a temperature parameter.
+- Repository-managed Python support tooling now requires Python 3.12 or newer.
+- Open-boundary CdtConfig now requires regular slice counts, run_simulation constructs foliated CDT strips instead of seeded or random raw Delaunay inputs,
+  TriangulationMut::clear and reserve_capacity now return Result, and CdtTriangulation::with_topology validates topology before returning.
+- DelaunayBackend::from_triangulation now returns Result, SimulationResultsBackend exposes accessors instead of public fields,
+  TriangulationQuery::euler_characteristic returns i128, mock backend fixtures move from prelude::geometry to prelude::testing, and checked backend
+  reconstruction may reject checkpoints or explicit toroidal connectivity accepted previously.
+- Public Cell terminology is renamed to Simplex, including CellType to SimplexType, classify_cell to classify_simplex, validate_cell_classification to
+  validate_simplex_classification, build_delaunay2_from_cells to build_delaunay2_from_simplices, and backend cell data/key accessors to simplex data/key
+  accessors.
+- CdtError::ValidationFailed now carries CdtValidationFailure instead of a detail string, CdtError::MetropolisMoveApplicationFailed now carries
+  MetropolisMoveApplicationFailure instead of last_failure, and CdtConfig command-line parsing now derives through the binary-facing parser rather than Parser
+  on CdtConfig itself.
+- `CdtConfig`, `CdtError`, triangulation history events, and serialized result/checkpoint shapes now use typed fields and proposal telemetry rather than the
+  previous stringly/public field layout.
+- SimulationResultsBackend::new now requires a ProposalStatistics argument between MoveStatistics and step telemetry.
+- CdtConfig::merge_with_override now returns CdtResult&lt;CdtConfig&gt; instead of CdtConfig so callers must handle invalid override profiles.
+- `ActionConfig::default()` and default CLI/config action settings now use the calibrated 1+1 CDT constants instead of `kappa_0 = 1`, `kappa_2 = 1`, and
+  `lambda = 0.1`.
+- `CdtConfig::validate`, `CdtConfig::to_metropolis_config`, and `CdtConfig::to_action_config` are removed from the raw DTO API. Call
+  `CdtConfig::into_validated()` or `ValidatedCdtConfig::new(...)` before deriving runtime configs.
+- ActionConfig::new and MetropolisConfig::new now return CdtResult, runtime config/statistics/metadata fields are private, run_simulation requires
+  ValidatedCdtConfig, and CDT triangulation state moved from src/cdt/triangulation.rs to src/cdt/triangulation/state.rs.
+- checkpoint/result deserialization and Metropolis measurement output are stricter. Nonempty checkpoints missing coherent `proposal_stats`, under-classified
+  proposal telemetry, and pre-thermalization measurement streams are rejected; runs with thermalization no longer emit a step-0 measurement.
+- MetropolisConfig::steps, MetropolisConfig::measurement_frequency, Foliation::num_slices, CdtMetadata::time_slices, and CdtTriangulation::time_slices now
+  return NonZeroU32 instead of u32.
+- ValidatedCdtConfig count accessors and ValidatedInitialVolume now return NonZeroU32 values, and foliation construction APIs accept NonZeroU32 slice counts.
+  CDT proposal errors now use planned-proposal variants for missing telemetry and failed upstream planned steps.
+- MonteCarloStep.step and CdtMcmcCheckpoint::current_step now expose std::num::NonZeroU32 instead of u32; callers that need raw step numbers must call .get().
+- Measurement, MonteCarloStep, action count, checkpoint, and CSV output APIs now use typed/nonzero count and trace representations instead of the previous
+  public fields and measurement CSV schema.
+- Measurement::with_volume_profile was replaced by fallible Measurement::try_with_volume_profile, and invalid measurement or scalar trace counts/profiles now
+  fail construction or deserialization instead of being stored.
 
 ### Merged Pull Requests
 
@@ -473,7 +551,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Implement foliation for 1+1 CDT [#57](https://github.com/acgetchell/causal-triangulations/pull/57)
   [`7e1a751`](https://github.com/acgetchell/causal-triangulations/commit/7e1a7511ff2211b2a1b830f73a771482945c6431)
 
-  - Add `Foliation` struct with `VertexSecondaryMap&lt;u32&gt;` for O(1)
+  - Add `Foliation` struct with `VertexSecondaryMap<u32>` for O(1)
     per-vertex time labels, stored in the CDT layer (not the geometry
     backend)
   - Add `EdgeType` enum (Spacelike / Timelike) and classification via
@@ -635,7 +713,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     after validation.
   - Move Metropolis/action runtime conversion behind validated configs and route `run_simulation` and examples through the proof-bearing API.
   - Report invalid Metropolis schedules and temperatures with `InvalidSimulationConfiguration` while keeping geometry, topology, and action failures on
-    `InvalidConfiguration` .
+    `InvalidConfiguration`.
   - Bump the Rust baseline to 1.96.0, update the MCMC backend to 0.4.0, and align docs.rs metadata, API docs, and test assertions with the new baseline.
 
 ### Changed
@@ -880,6 +958,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [`387e96d`](https://github.com/acgetchell/causal-triangulations/commit/387e96dcbba58cac8bfdaaefcbb9d8367c965a90)
 - Bump taiki-e/install-action from 2.70.3 to 2.75.0
   [`e3f4018`](https://github.com/acgetchell/causal-triangulations/commit/e3f40183c6778f252d46523234fcc1da58d932c4)
+- Bump pytest in the uv group across 1 directory
+  [`eb26876`](https://github.com/acgetchell/causal-triangulations/commit/eb2687684c35811f39ba93843fb429011b4ddb8a)
 - Bump the dependencies group across 1 directory with 2 updates
   [`d843b90`](https://github.com/acgetchell/causal-triangulations/commit/d843b900b0940d4f79d101279164ab42d2549463)
 - Bump astral-sh/setup-uv from 8.0.0 to 8.1.0 [`ba66738`](https://github.com/acgetchell/causal-triangulations/commit/ba66738ba2537cc3b1bb10bb9a0e93b4174d023b)
@@ -1159,16 +1239,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Maintenance
 
-- Bump pytest in the uv group across 1 directory
-  [`eb26876`](https://github.com/acgetchell/causal-triangulations/commit/eb2687684c35811f39ba93843fb429011b4ddb8a)
-
-  Bumps the uv group with 1 update in the / directory: [pytest](https://github.com/pytest-dev/pytest).
-
-  Updates `pytest` from 9.0.2 to 9.0.3
-
-  - [Release notes](https://github.com/pytest-dev/pytest/releases)
-  - [Changelog](https://github.com/pytest-dev/pytest/blob/main/CHANGELOG.rst)
-  - [Commits](https://github.com/pytest-dev/pytest/compare/9.0.2...9.0.3)
 - [**breaking**] Align tooling and CDT error APIs
   [`bc3630b`](https://github.com/acgetchell/causal-triangulations/commit/bc3630b212ea55d0c6a52073cf6cfc3e85a61527)
 
@@ -1288,5 +1358,6 @@ Older releases are archived by minor series:
 
 - [0.0.x](docs/archives/changelog/0.0.md)
 
+[Unreleased]: https://github.com/acgetchell/causal-triangulations/compare/v0.1.1...HEAD
 [0.1.1]: https://github.com/acgetchell/causal-triangulations/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/acgetchell/causal-triangulations/compare/v0.0.1...v0.1.0

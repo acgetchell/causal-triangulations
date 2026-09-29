@@ -2,7 +2,7 @@
 
 This directory contains maintained shell scripts for common `cdt` command-line workflows. For a first manual run, see
 [`notebooks/00_quickstart.ipynb`](../../notebooks/00_quickstart.ipynb). For individual CLI patterns, see
-[`docs/cli-examples.md`](../../docs/cli-examples.md).
+[`docs/RUNNING.md`](../../docs/RUNNING.md).
 
 Commands that pass `--simulate` run the 2D CDT Metropolis-Hastings loop. Remove `--simulate` when you only want triangulation construction and the initial
 measurement.
@@ -39,7 +39,7 @@ Runs CLI timing checks across several system sizes and writes `performance_resul
 ```
 
 Use this for quick command-level scaling checks. For regression-quality benchmarking, use `just bench-ci`, `just bench-latest-vs-last`, and the Criterion suites
-described in [`benches/README.md`](../../benches/README.md) and [`docs/performance-testing.md`](../../docs/performance-testing.md).
+described in [`benches/README.md`](../../benches/README.md) and [`docs/BENCHMARKING.md`](../../docs/BENCHMARKING.md).
 
 ## Requirements
 

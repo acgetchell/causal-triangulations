@@ -1,7 +1,7 @@
 # Testing Overview
 
 This document summarizes the repository's current test coverage and the main gaps to keep in mind when adding features. Command details and CI expectations live
-in `docs/dev/testing.md` and `docs/dev/commands.md`.
+in `docs/dev/testing.md` and `docs/dev/DEVELOPING.md`.
 
 ## Current Coverage
 
