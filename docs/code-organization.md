@@ -29,6 +29,8 @@ causal-triangulations/
 │   │   ├── codecov.yml
 │   │   ├── codeql.yml
 │   │   ├── dependabot-auto-merge.yml
+│   │   ├── gitleaks.yml
+│   │   ├── osv.yml
 │   │   ├── performance.yml
 │   │   ├── release-benchmarks.yml
 │   │   ├── rust-clippy.yml

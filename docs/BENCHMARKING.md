@@ -54,7 +54,8 @@ Matching known host OS, architecture, and CPU are required for local pairs. Revi
 
 The recipe saves shared JSON comparison/evidence files under `target/bench-reports/`, then promotes the report and retained evidence into
 `docs/performance/v2/`. Missing or mismatched evidence fails before publication.
-Use `just performance-doc --payload PATH --manifest PATH` to promote an already reviewed pair, or `just performance-doc --check` to check retained output.
+Use `just performance-doc --payload PATH --manifest PATH` to promote an already reviewed pair. `just performance-check` validates retained output, accepts
+the empty inventory before the first comparison, and rejects evidence without its current report. It runs in `check` and `ci` without taking measurements.
 No current report is tracked until the first compatible new comparison exists.
 
 ## README publication

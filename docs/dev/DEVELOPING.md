@@ -34,6 +34,10 @@ just update
 `pyproject.toml`. Use `update-tools` or `update-dependencies` for an independent scope, and `tools-check` for non-mutating installed-version verification.
 Review every resulting manifest, lockfile, and pin change before committing it.
 
+To adopt a newer published shared package and its Python baseline, preview `just shared-python-plan VERSION`, then apply the reviewed plan with
+`just shared-python-update VERSION`. Supply the package version, not a Python version. These commands run outside the old environment.
+`just tools-clean` previews unused managed-cache entries; `just tools-clean --apply` removes them.
+
 Release metadata is a separate deterministic transaction:
 
 ```bash
@@ -115,7 +119,9 @@ executable silently satisfying a managed pin. OSV scans explicit lockfiles witho
 requires full history and includes local edits and untracked nonignored files; shallow repositories fail instead of presenting partial history as clean.
 
 Reports live under `target/security/`; secret values are redacted. Findings, execution errors, and absent or malformed reports fail the invoked command.
-These explicit scans remain outside ordinary `check`/`ci`. The existing hosted cargo-audit, CodeQL, Semgrep, Clippy, and zizmor workflows remain separate.
+These explicit scans remain outside ordinary `check`/`ci`. Dedicated OSV and Gitleaks workflows invoke the same recipes on main-branch pushes and pull
+requests, weekly, and by manual dispatch. They retain reports for seven days, including on scan failure. Gitleaks uses a full-history checkout.
+The hosted cargo-audit, CodeQL, Semgrep, Clippy, and zizmor workflows remain separate.
 
 ## Local CodeRabbit Review
 
@@ -256,7 +262,6 @@ examples/scripts/
 Validate with:
 
 ```bash
-just examples
 just examples-validate
 ```
 
@@ -266,7 +271,7 @@ Examples must:
 - run successfully
 - demonstrate correct API usage
 
-`just examples-validate` additionally checks stable output markers for user-facing Cargo examples. Keep those markers semantic rather than exact numeric values
+`just examples-validate` checks stable output markers for user-facing Cargo examples. Keep those markers semantic rather than exact numeric values
 so simulation output can evolve without making the example contract brittle.
 
 The example runner compiles all Cargo examples once with `cargo build --release --examples`, then executes the compiled binaries directly. This preserves
@@ -309,8 +314,7 @@ just toml-check       # Non-mutating formatting and lint checks
 just toml-fix         # Apply formatting fixes
 ```
 
-Compatibility aliases remain available as granular recipes:
-`just toml-lint`, `just toml-fmt-check`, and `just toml-fmt`.
+Use `just toml-lint` or `just toml-fmt-check` for a single check.
 
 ---
 
@@ -344,8 +348,6 @@ Commands:
 just shell-check       # Lint (non-mutating)
 just shell-fix         # Format (mutating)
 ```
-
-`just shell-fmt` remains as a compatibility alias for the formatter.
 
 ---
 
@@ -583,7 +585,6 @@ just publish-check
 | Run slow tests        | `just test-slow`         |
 | Run all tests         | `just test-all`          |
 | Run Python tests      | `just test-python`       |
-| Run examples          | `just examples`          |
 | Validate examples     | `just examples-validate` |
 | Validate notebooks    | `just notebook-check`    |
 | Run full CI           | `just ci`                |

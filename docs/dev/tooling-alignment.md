@@ -1,5 +1,23 @@
 # Tooling Alignment
 
+## September 2026 MCMC Tooling Parity Follow-Up
+
+The local MCMC comparison found matching shared-package, Rust, Cargo-tool, Python-tool, OSV Scanner, and Gitleaks pins. CDT already has its additional
+shell/YAML validators and unused-dependency check. No version changes or extra cross-compilation targets are needed for this alignment.
+
+Adopt MCMC's OSV and Gitleaks workflows with CDT's existing shared setup action, pinned external actions, read-only repository access, and seven-day report
+retention. Both run for main-branch pushes and pull requests, weekly, and on manual dispatch; Gitleaks checks out full history. Add their paths to the existing
+Dependabot workflow allowlist. README badges follow MCMC's exact order, including CodeQL and zizmor, whose workflows already exist here.
+
+Add the applicable shared maintenance entry points: `tools-clean`, `shared-python-plan`, `shared-python-update`, `tag-preview`, and `release-verify`.
+`performance-check` validates retained v2 reports while accepting the intentionally empty initial inventory; orphaned evidence still fails. It joins local
+documentation checks and CI. Keep CDT's explicit two-tag performance commands and draft-only release publisher: MCMC's implicit latest-release measurement
+could select retired CDT evidence. Existing setup and dependency-update recipes already cover MCMC's equivalent commands.
+
+Consolidate redundant recipe pairs under `check`, `examples-validate`, `shell-fix`, and `toml-fix`; remove `lint`, `examples`, `shell-fmt`, and `toml-fmt`
+after updating active callers. Retain `changelog-release` and `update-python-deps`, which are tested shared compatibility aliases. Delegate `bench-save-last`
+to the parameterized baseline recipe and remove the redundant direct fixture-check dependency from `ci`; the fixture check remains part of `python-check`.
+
 ## September 2026 Documentation, Discovery, And Security Alignment
 
 Issues #279 and #290 apply the documentation roles used in la-stack, Delaunay, and MCMC: README for choosing and running the project, references for

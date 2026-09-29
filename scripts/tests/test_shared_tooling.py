@@ -230,6 +230,28 @@ def test_benchmark_configuration_uses_current_correctness_gates() -> None:
     assert dict(config.dependencies).keys() == {"criterion", "delaunay", "la-stack", "markov-chain-monte-carlo"}
 
 
+@pytest.mark.parametrize(
+    "orphan",
+    [None, "docs/performance/v2/pair.comparison.json", "docs/performance/v2/pair.evidence.json", "tooling/performance-readme.toml"],
+)
+def test_performance_check_accepts_only_empty_initial_inventory(orphan: str | None, tmp_path: Path) -> None:
+    """Missing reports are valid before measurement, never after evidence is retained."""
+    if orphan is not None:
+        path = tmp_path / orphan
+        path.parent.mkdir(parents=True)
+        path.write_text("orphaned evidence", encoding="utf-8")
+    result = run_safe_command(
+        "just",
+        ["--justfile", str(ROOT / "justfile"), "--working-directory", str(tmp_path), "performance-check"],
+        cwd=tmp_path,
+        check=False,
+    )
+    assert result.returncode == (0 if orphan is None else 1), result.stderr
+    assert ("No release comparison yet" in result.stdout) == (orphan is None)
+    if orphan is not None:
+        assert "Release evidence exists without its current report" in result.stderr
+
+
 def test_shared_report_and_readme_publication_use_consumer_configuration(tmp_path: Path) -> None:
     """New evidence survives promotion and publishes the configured absolute table."""
     tooling = tmp_path / "tooling"
@@ -268,6 +290,22 @@ def test_shared_report_and_readme_publication_use_consumer_configuration(tmp_pat
         )
         == 0
     )
+    report_check = [
+        "--justfile",
+        str(ROOT / "justfile"),
+        "--working-directory",
+        str(tmp_path),
+        "--set",
+        "_tools",
+        "research-repo-tools --root .",
+        "performance-check",
+    ]
+    assert run_safe_command("just", report_check, cwd=tmp_path).returncode == 0
+    report = tmp_path / "docs/performance/v2/performance.md"
+    original_report = report.read_bytes()
+    report.write_text("stale report\n", encoding="utf-8")
+    assert run_safe_command("just", report_check, cwd=tmp_path, check=False).returncode != 0
+    report.write_bytes(original_report)
     publication = template.replace("REPLACE-pair", "v0.1.1-vs-v0.1.0")
     for placeholder, value in (
         ("REPLACE_WITH_BASELINE_COMMIT", "a" * 40),

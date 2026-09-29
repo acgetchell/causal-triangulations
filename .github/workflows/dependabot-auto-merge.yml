@@ -38,6 +38,8 @@ jobs:
             ".github/workflows/codecov.yml",
             ".github/workflows/codeql.yml",
             ".github/workflows/dependabot-auto-merge.yml",
+            ".github/workflows/gitleaks.yml",
+            ".github/workflows/osv.yml",
             ".github/workflows/performance.yml",
             ".github/workflows/release-benchmarks.yml",
             ".github/workflows/rust-clippy.yml",

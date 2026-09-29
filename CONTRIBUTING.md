@@ -12,6 +12,7 @@ Thank you for your interest in contributing to [**causal-triangulations**][cdt-l
 - [Testing](#testing)
 - [Security](#security)
 - [Documentation](#documentation)
+- [AI-Assisted Development](#ai-assisted-development)
 - [Performance](#performance)
 - [Pull Requests](#pull-requests)
 - [Getting Help](#getting-help)
@@ -145,7 +146,8 @@ Testing expectations live in [docs/dev/testing.md](docs/dev/testing.md). Benchma
 Run `just audit` to scan `Cargo.lock` and `uv.lock` through OSV, `just security-secrets` for the Gitleaks full-history and working-tree scan, or `just security`
 for both. Shared setup installs and verifies the exact scanner versions declared in `pyproject.toml`. OSV needs network access; secrets scanning requires a
 complete Git checkout. Findings, scanner failures, and incomplete reports fail the invoked recipe. JSON/SARIF reports are retained under `target/security/`
-with secret values redacted. These scans are separate from `check` and `ci`; see [the scanner contract](docs/dev/DEVELOPING.md#dependency-and-secret-scanning).
+with secret values redacted. Dedicated GitHub workflows run both scans on main-branch pushes and pull requests, weekly, and on manual dispatch.
+These scans are separate from local `check` and `ci`; see [the scanner contract](docs/dev/DEVELOPING.md#dependency-and-secret-scanning).
 
 ## Documentation
 
@@ -162,6 +164,22 @@ When editing docs:
 - keep [docs/RUNNING-ON-HPC.md](docs/RUNNING-ON-HPC.md) focused on Slurm, Open OnDemand, and cluster execution;
 - keep technical move/sampler details in [docs/moves.md](docs/moves.md) and [docs/metropolis.md](docs/metropolis.md);
 - add or update citations in [REFERENCES.md](REFERENCES.md) when scientific claims depend on literature.
+
+## AI-Assisted Development
+
+[AGENTS.md](AGENTS.md) defines the canonical rules and invariants for AI coding assistants and autonomous agents working on this codebase.
+AI tools are expected to read and follow it and its task-relevant linked guidance before proposing or applying changes.
+
+Portions of this library were developed with the assistance of these tools:
+
+- [ChatGPT](https://openai.com/chatgpt)
+- [Claude](https://www.anthropic.com/claude)
+- [CodeRabbit](https://coderabbit.ai/)
+- [Codex](https://openai.com/codex/)
+
+All AI-assisted work must be reviewed and validated by a human maintainer before it is merged.
+
+For tool citation metadata, see [AI-Assisted Development Tools](REFERENCES.md#ai-assisted-development-tools) in [REFERENCES.md](REFERENCES.md).
 
 ## Performance
 

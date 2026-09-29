@@ -71,8 +71,7 @@ bench-save-baseline tag: benchmark-input-check
     {{ _run }} cargo bench --locked --profile perf --bench ci_performance_suite -- --save-baseline "$1" --noplot
 
 # Refresh the conventional local comparison baseline.
-bench-save-last: benchmark-input-check
-    {{ _run }} cargo bench --locked --profile perf --bench ci_performance_suite -- --save-baseline cdt-v2-last --noplot
+bench-save-last: (bench-save-baseline "cdt-v2-last")
 
 # Smoke-test benchmark harnesses with minimal samples; not for performance data.
 bench-smoke:
@@ -116,7 +115,7 @@ changelog-unreleased tag date:
     {{ _run }} research-repo-tools changelog generate --tag "$1" --date "$2"
 
 # Check (non-mutating): run all linters/validators
-check: lint
+check: lint-code lint-docs lint-config
     @echo "✅ Checks complete!"
 
 # Fast compile check (no binary produced)
@@ -124,7 +123,7 @@ check-fast:
     {{ _run }} cargo check
 
 # Run all GitHub-equivalent validators, tests, examples, and benchmark compilation.
-ci: justfile-fmt-check action-lint zizmor markdown-check spell-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check python-fixtures-check test-python notebook-check shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check test-rust-ci test-doc bench-compile allocation-check examples-validate
+ci: justfile-fmt-check action-lint zizmor markdown-check spell-check performance-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check test-python notebook-check shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check test-rust-ci test-doc bench-compile allocation-check examples-validate
     @echo "🎯 CI checks complete!"
 
 # CI with performance baseline
@@ -196,10 +195,7 @@ default:
 doc-check:
     RUSTDOCFLAGS='-D warnings' {{ _run }} cargo doc --workspace --no-deps --document-private-items
 
-# Build, run, and validate all Cargo examples.
-examples: examples-validate
-
-# Run Cargo examples and check their semantic output contracts.
+# Build and run Cargo examples, checking their semantic output contracts.
 examples-validate:
     {{ _run }} cargo build --locked --release --examples --target-dir target
     {{ _run }} research-repo-tools validation run tooling/examples.toml
@@ -224,17 +220,14 @@ justfile-fmt:
 justfile-fmt-check:
     just --fmt --check --unstable
 
-# All linting: code + documentation + configuration
-lint: lint-code lint-docs lint-config
-
 # Code linting: Rust (fmt-check, clippy, docs, Semgrep) + Python (ruff, ty) + Shell scripts
 lint-code: fmt-check clippy doc-check semgrep semgrep-test python-check shell-check
 
 # Configuration validation: JSON, TOML, YAML/CFF, GitHub Actions workflows
 lint-config: justfile-fmt-check validate-json toml-check yaml-check citation-check action-lint zizmor
 
-# Documentation linting: Markdown + spell checking
-lint-docs: markdown-check spell-check
+# Check Markdown, spelling, and retained performance reports.
+lint-docs: markdown-check spell-check performance-check
 
 # Check Markdown formatting and the 160-column line limit.
 markdown-check:
@@ -310,6 +303,27 @@ performance *args:
 performance-baseline tag:
     {{ _run }} research-repo-tools performance baseline tooling/benchmark.toml "$1" "causal-triangulations-$1-cdt-baseline-v2.tar.gz"
 
+# Check retained release reports, accepting an empty inventory before the first comparison.
+performance-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s nullglob
+    artifacts=(
+        docs/performance/v2/*.comparison.json
+        docs/performance/v2/*.evidence.json
+        docs/performance/v2/*.csv
+        docs/performance/v2/*.svg
+        docs/performance/v2/v*-vs-v*.md
+    )
+    if [[ -e docs/performance/v2/performance.md || -L docs/performance/v2/performance.md ]]; then
+        {{ _tools }} performance promote tooling/performance-report.toml --check
+    elif (( ${#artifacts[@]} )) || [[ -e tooling/performance-readme.toml || -L tooling/performance-readme.toml ]]; then
+        echo "Release evidence exists without its current report; restore or promote the report." >&2
+        exit 1
+    else
+        echo "No release comparison yet; the next tagged release establishes the baseline."
+    fi
+
 # Promote supplied new evidence, or rerender the retained report offline.
 performance-doc *args:
     {{ _tools }} performance promote tooling/performance-report.toml "$@"
@@ -322,7 +336,6 @@ performance-github-assets current baseline:
 performance-readme configuration *args:
     {{ _tools }} performance publish "$1" "${@:2}"
 
-# Measure and retain a comparison; explicit tags avoid selecting discarded history.
 # Measure and publish release evidence in temporary Git worktrees (maintainer operation).
 performance-release current baseline:
     {{ _run }} research-repo-tools performance measure tooling/benchmark.toml "$1" "$2" --allow-git-mutations --payload target/bench-reports/release.comparison.json --manifest target/bench-reports/release.evidence.json --report target/bench-reports/release.md
@@ -369,6 +382,11 @@ release-metadata-check:
 # Print release notes from the active changelog or archives.
 release-notes tag:
     {{ _tools }} changelog notes "$1"
+
+# Inspect a published GitHub release and its crates.io package.
+release-verify tag:
+    gh release view "$1" --repo acgetchell/causal-triangulations --json tagName,isDraft,isPrerelease,body,assets | cat
+    {{ _run }} cargo info "causal-triangulations@${1#v}" --registry crates-io
 
 # Require the generated current-version changelog heading for final release publication.
 release-version-check:
@@ -425,16 +443,21 @@ setup:
 setup-tools:
     uv run --locked --only-group tooling --inexact research-repo-tools toolchain sync
 
+# Preview adoption of a published shared package and its Python baseline.
+shared-python-plan version:
+    uvx --no-config --isolated --managed-python --from "research-repo-tools==$1" research-repo-tools toolchain adopt --dry-run
+
+# Adopt a published shared package and its Python environment and kernel.
+shared-python-update version:
+    uvx --no-config --isolated --managed-python --from "research-repo-tools==$1" research-repo-tools toolchain adopt --apply
+
 # Shell scripts: lint/check (non-mutating)
 shell-check:
     {{ _tools }} files run --include '*.sh' -- shellcheck -x
     {{ _tools }} files run --include '*.sh' -- shfmt -d
 
 # Apply shell formatting fixes.
-shell-fix: shell-fmt
-
-# Shell scripts: format (mutating)
-shell-fmt:
+shell-fix:
     {{ _tools }} files run --include '*.sh' -- shfmt -w
 
 # Spell check (typos)
@@ -448,6 +471,10 @@ tag version:
 # Replace a local Git tag from release notes (maintainer operation).
 tag-force version:
     {{ _tools }} changelog tag "$1" --force
+
+# Preview the annotated release tag without changing Git state.
+tag-preview version:
+    {{ _tools }} changelog tag "$1" --dry-run
 
 # Focused local Rust buckets: unit tests plus rustdoc doctests.
 test: test-unit test-doc
@@ -501,10 +528,7 @@ test-unit:
 toml-check: toml-fmt-check toml-lint
 
 # Apply TOML formatting fixes.
-toml-fix: toml-fmt
-
-# Format TOML files.
-toml-fmt:
+toml-fix:
     {{ _run }} research-repo-tools files run --include '*.toml' -- taplo fmt
 
 # Check TOML formatting without modifying files.
@@ -518,6 +542,10 @@ toml-lint:
 # Verify declared tools without installing or changing versions.
 tools-check:
     uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain check
+
+# Preview managed-cache cleanup; pass --apply to remove unused entries.
+tools-clean *args:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain clean "$@"
 
 # Export verified managed paths for subsequent workflow steps.
 tools-export:

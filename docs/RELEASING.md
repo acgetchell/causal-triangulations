@@ -112,6 +112,7 @@ After merging, synchronize to the exact reviewed commit and verify metadata:
 
 ```bash
 just release-version-check
+just tag-preview "$TAG"
 just tag "$TAG"
 git tag -l --format='%(contents)' "$TAG"
 git push origin "$TAG"
@@ -135,5 +136,6 @@ cargo publish --locked
 gh release edit "$TAG" --draft=false
 ```
 
-Verify the crates.io package, GitHub release, asset, and Zenodo record through the permanent concept DOI before removing the release branch.
+Inspect the published GitHub release, assets, and crates.io package with `just release-verify "$TAG"`. Verify the Zenodo record through the permanent concept
+DOI before removing the release branch.
 These Git and publication commands are manual maintainer operations.
