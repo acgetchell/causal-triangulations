@@ -268,7 +268,6 @@ fn average_dual_ball_volumes_from_adjacency(adjacency: &[Vec<usize>]) -> CdtResu
     }
 
     let mut sums = vec![0.0; adjacency.len()];
-    let mut counts = vec![0_usize; adjacency.len()];
     let mut distances = vec![None; adjacency.len()];
     let mut queue = VecDeque::new();
     let mut shell_counts = Vec::new();
@@ -298,27 +297,23 @@ fn average_dual_ball_volumes_from_adjacency(adjacency: &[Vec<usize>]) -> CdtResu
             sums[radius] += usize_to_f64(ball_volume).ok_or_else(|| {
                 observable_numeric_error(ObservableQuantity::DualBallVolume, ball_volume)
             })?;
-            counts[radius] += 1;
         }
         let saturated_volume = usize_to_f64(ball_volume).ok_or_else(|| {
             observable_numeric_error(ObservableQuantity::DualBallVolume, ball_volume)
         })?;
-        for radius in max_radius + 1..adjacency.len() {
-            sums[radius] += saturated_volume;
-            counts[radius] += 1;
+        for sum in sums.iter_mut().skip(max_radius + 1) {
+            *sum += saturated_volume;
         }
     }
 
-    sums.into_iter()
-        .zip(counts)
-        .map(|(sum, count)| {
-            usize_to_f64(count)
-                .map(|count_f64| sum / count_f64)
-                .ok_or_else(|| {
-                    observable_numeric_error(ObservableQuantity::DualBallSampleCount, count)
-                })
-        })
-        .collect()
+    // Every root contributes at every radius, including after its ball saturates.
+    let sample_count = usize_to_f64(adjacency.len()).ok_or_else(|| {
+        observable_numeric_error(ObservableQuantity::DualBallSampleCount, adjacency.len())
+    })?;
+    for sum in &mut sums {
+        *sum /= sample_count;
+    }
+    Ok(sums)
 }
 
 /// Breadth-first face distances from one dual-graph root.
@@ -683,6 +678,29 @@ mod tests {
         assert_relative_eq!(ball_volumes[0], 1.0);
         assert_relative_eq!(ball_volumes[1], 7.0 / 3.0);
         assert_relative_eq!(ball_volumes[2], 3.0);
+    }
+
+    #[test]
+    fn dual_ball_averages_include_disconnected_and_isolated_roots() {
+        // A three-node path plus one isolated node: radius-one volumes are 2, 3, 2, 1;
+        // saturated volumes are 3, 3, 3, 1. All four roots contribute at every radius.
+        let adjacency = [vec![1], vec![0, 2], vec![1], vec![]];
+        let ball_volumes = average_dual_ball_volumes_from_adjacency(&adjacency)
+            .expect("disconnected graph ball volumes should be representable");
+        assert_eq!(
+            ball_volumes
+                .into_iter()
+                .map(f64::to_bits)
+                .collect::<Vec<_>>(),
+            [1.0_f64, 2.0, 2.5, 2.5].map(f64::to_bits),
+        );
+
+        let isolated = average_dual_ball_volumes_from_adjacency(&[vec![], vec![]])
+            .expect("isolated graph ball volumes should be representable");
+        assert_eq!(
+            isolated.into_iter().map(f64::to_bits).collect::<Vec<_>>(),
+            [1.0_f64, 1.0].map(f64::to_bits),
+        );
     }
 
     #[test]

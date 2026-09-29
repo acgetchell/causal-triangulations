@@ -74,7 +74,7 @@ The [API reference][api] describes the latest published crate; `just doc-check` 
 - Regge action calculation with configurable coupling constants
 - Spatial-vertex input profiles, slab-triangle output profiles, and explicitly finite-window effective dimensional observables
 - Trace CSV simulation output for external analysis workflows; JSON summary/metadata for CLI/config export
-- Versioned, CDT-owned JSON checkpoints for exact MCMC continuation across compatible crate and dependency upgrades, with checked geometry and state restore;
+- Versioned JSON checkpoints for exact MCMC continuation, using Delaunay's Level 4 snapshot with checked geometry and CDT state restoration;
   see the [checkpoint compatibility policy][checkpoint-policy]
 
 See [CHANGELOG.md][repo-changelog-md] for release history and [`docs/roadmap.md`][repo-docs-roadmap-md] for current direction, near-term candidates, and

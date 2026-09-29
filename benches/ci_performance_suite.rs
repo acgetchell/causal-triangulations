@@ -21,11 +21,12 @@ mod benchmark_support;
 use causal_triangulations::prelude::action::ActionConfig;
 use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
 use causal_triangulations::prelude::simulation::{
-    CdtMoveFamilyPolicy, CdtMoveFamilyPolicyError, CdtProposalPolicyView, MetropolisAlgorithm,
-    MetropolisConfig,
+    CdtMoveFamilyDistribution, CdtMoveFamilyPolicy, CdtMoveFamilyPolicyError, CdtProposal,
+    CdtProposalPolicyView, DelayedProposal, MetropolisAlgorithm, MetropolisConfig,
 };
 use causal_triangulations::prelude::triangulation::CdtTriangulation2D;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use rand::{SeedableRng, rngs::StdRng};
 use std::fmt::{Display, Formatter, Result as FmtResult};
 use std::hint::black_box;
 use std::time::Duration;
@@ -567,6 +568,116 @@ fn bench_cdt_single_metropolis_proposal(c: &mut Criterion) {
     group.finish();
 }
 
+/// Separates cold materialization, warm inspection, and persistent planner transitions.
+fn bench_cdt_persistent_proposals(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cdt_persistent_proposals_2d");
+    let policy =
+        CdtMoveFamilyDistribution::from_weights([1.0, 0.0, 0.0, 0.0]).or_abort("fixed flip policy");
+    for &fixture in PROPOSAL_FIXTURES {
+        let prepared = prepare_fixture(fixture);
+        group.bench_function(BenchmarkId::new("cold_view", fixture.name), |b| {
+            b.iter_batched(
+                || {
+                    CdtProposal::new(ActionConfig::default())
+                        .with_seed(BENCH_SEED)
+                        .with_policy(policy)
+                },
+                |mut proposal| {
+                    black_box(
+                        proposal
+                            .policy_view(&prepared.triangulation, MoveType::Move22)
+                            .offered_site_count(),
+                    )
+                },
+                BatchSize::SmallInput,
+            );
+        });
+        let mut proposal = CdtProposal::new(ActionConfig::default())
+            .with_seed(BENCH_SEED)
+            .with_policy(policy);
+        black_box(
+            proposal
+                .policy_view(&prepared.triangulation, MoveType::Move22)
+                .offered_site_count(),
+        );
+        group.bench_function(BenchmarkId::new("warm_view", fixture.name), |b| {
+            b.iter(|| {
+                black_box(
+                    proposal
+                        .policy_view(&prepared.triangulation, MoveType::Move22)
+                        .offered_site_count(),
+                )
+            });
+        });
+        for (name, commit) in [("discard_32_attempts", false), ("commit_32_attempts", true)] {
+            group.bench_function(BenchmarkId::new(name, fixture.name), |b| {
+                b.iter_batched(
+                    || {
+                        let state = prepared.triangulation.clone();
+                        let mut proposal = CdtProposal::new(ActionConfig::default())
+                            .with_seed(BENCH_SEED)
+                            .with_policy(policy);
+                        black_box(
+                            proposal
+                                .policy_view(&state, MoveType::Move22)
+                                .offered_site_count(),
+                        );
+                        (state, proposal, StdRng::seed_from_u64(BENCH_SEED))
+                    },
+                    |(mut state, mut proposal, mut rng)| {
+                        for _ in 0..32 {
+                            if let Some(plan) = proposal
+                                .propose_plan(&state, &mut rng)
+                                .or_abort("persistent proposal")
+                                && commit
+                            {
+                                proposal
+                                    .commit(&mut state, plan, &mut rng)
+                                    .or_abort("commit proposal");
+                            }
+                            black_box(
+                                proposal
+                                    .policy_view(&state, MoveType::Move22)
+                                    .offered_site_count(),
+                            );
+                        }
+                    },
+                    BatchSize::LargeInput,
+                );
+            });
+        }
+    }
+    group.finish();
+}
+
+/// Separates slice-count scaling from mesh-size scaling at a fixed 256 vertices.
+fn bench_cdt_local_finalization_by_slices(c: &mut Criterion) {
+    let mut group = c.benchmark_group("cdt_local_finalization_by_slices_2d");
+    for time_slices in [8, 16, 32, 64] {
+        let prepared = prepare_successful_removal_fixture(CdtFixture {
+            name: "toroidal_256_vertices",
+            topology: TopologyFixture::Toroidal,
+            vertices_per_slice: 256 / time_slices,
+            time_slices,
+        });
+        group.bench_function(BenchmarkId::from_parameter(time_slices), |b| {
+            b.iter_batched(
+                || {
+                    (
+                        ErgodicsSystem::with_seed(prepared.move_seed),
+                        prepared.triangulation.clone(),
+                    )
+                },
+                |(mut moves, mut state)| {
+                    assert_eq!(moves.attempt_31_move(&mut state), MoveResult::Success);
+                },
+                BatchSize::LargeInput,
+            );
+        });
+    }
+    group.finish();
+}
+
 /// Benchmarks policy evaluation that materializes state-dependent family views.
 fn bench_cdt_state_dependent_policy(c: &mut Criterion) {
     let prepared = prepare_fixture(CdtFixture {
@@ -700,6 +811,8 @@ criterion_group!(
         bench_cdt_move_attempts,
         bench_cdt_proposal_site_move_attempts,
         bench_cdt_single_metropolis_proposal,
+        bench_cdt_persistent_proposals,
+        bench_cdt_local_finalization_by_slices,
         bench_cdt_state_dependent_policy,
         bench_cdt_successful_local_finalization,
         bench_cdt_random_move_attempt_budget,

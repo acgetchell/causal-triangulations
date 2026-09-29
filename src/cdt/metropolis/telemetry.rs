@@ -403,8 +403,8 @@ pub struct MonteCarloStep {
 }
 
 #[derive(Deserialize)]
-struct MonteCarloStepWire {
-    step: NonZeroU32,
+pub(crate) struct MonteCarloStepWire {
+    step: u32,
     move_type: MoveType,
     action_before: f64,
     outcome: MonteCarloStepOutcomeWire,
@@ -415,10 +415,21 @@ impl<'de> Deserialize<'de> for MonteCarloStep {
     where
         D: Deserializer<'de>,
     {
-        let wire = MonteCarloStepWire::deserialize(deserializer)?;
-        let outcome = MonteCarloStepOutcome::from_wire(wire.step, wire.action_before, wire.outcome)
-            .map_err(DeError::custom)?;
-        Self::new(wire.step, wire.move_type, wire.action_before, outcome).map_err(DeError::custom)
+        MonteCarloStepWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(DeError::custom)
+    }
+}
+
+impl TryFrom<MonteCarloStepWire> for MonteCarloStep {
+    type Error = CdtError;
+
+    fn try_from(wire: MonteCarloStepWire) -> CdtResult<Self> {
+        let step = NonZeroU32::new(wire.step).ok_or_else(|| {
+            checkpoint_resume_failed(CheckpointResumeFailure::StepTelemetryStepZero)
+        })?;
+        let outcome = MonteCarloStepOutcome::from_wire(step, wire.action_before, wire.outcome)?;
+        Self::new(step, wire.move_type, wire.action_before, outcome)
     }
 }
 
@@ -1297,8 +1308,8 @@ pub struct ProposalStatistics {
     hard_failures: u64,
 }
 
-#[derive(Deserialize)]
-struct ProposalStatisticsWire {
+#[derive(Default, Deserialize)]
+pub(crate) struct ProposalStatisticsWire {
     move_family_proposals: u64,
     observed_forward_sites: u64,
     no_site_proposals: u64,
@@ -1383,7 +1394,7 @@ impl ProposalStatistics {
     /// only when move-family proposals also saturated, because merging telemetry
     /// uses saturating arithmetic and can no longer preserve an exact
     /// terminal-outcome partition.
-    fn from_wire(wire: &ProposalStatisticsWire) -> CdtResult<Self> {
+    pub(crate) fn from_wire(wire: &ProposalStatisticsWire) -> CdtResult<Self> {
         let terminal_counters = [
             wire.no_site_proposals,
             wire.site_causality_rejections,

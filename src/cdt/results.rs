@@ -19,7 +19,7 @@ use crate::cdt::metropolis::{
 use crate::cdt::observables::{
     estimate_all_scale_effective_hausdorff_slope, estimate_short_time_effective_spectral_dimension,
 };
-use crate::cdt::triangulation::{CdtSimplexCounts, CdtTriangulation2D};
+use crate::cdt::triangulation::{CdtSimplexCounts, CdtTriangulation2D, SlabTriangleProfile};
 use crate::config::{CdtConfig, CdtTopology, ValidatedCdtConfig};
 use crate::errors::{
     CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, CheckpointMoveCounter,
@@ -66,7 +66,7 @@ pub struct Measurement {
     /// Entry `t` counts classifiable CDT triangles assigned to time slab `t`;
     /// the vector is empty when the measured triangulation has no current
     /// foliation.
-    slab_triangle_profile: Vec<u32>,
+    slab_triangle_profile: SlabTriangleProfile,
 }
 
 /// Event reconstructed from canonical CDT result or checkpoint telemetry.
@@ -344,7 +344,7 @@ pub(crate) struct CdtScalarTraceRow {
     seed: Option<u64>,
     /// Step-0 profile retained independently of the initial measurement.
     initial_slab_triangle_profile: Option<Vec<u32>>,
-    slab_triangle_profile: Vec<u32>,
+    slab_triangle_profile: SlabTriangleProfile,
 }
 
 /// Outcome-specific scalar trace action evidence.
@@ -417,7 +417,7 @@ impl CdtScalarTracePayload {
 
 /// Raw scalar trace shape used only while deserializing result and checkpoint payloads.
 #[derive(Deserialize)]
-struct CdtScalarTraceRowWire {
+pub(crate) struct CdtScalarTraceRowWire {
     step: u32,
     outcome: CdtScalarTraceOutcome,
     log_prob: f64,
@@ -471,7 +471,7 @@ impl TryFrom<CdtScalarTraceRowWire> for CdtScalarTraceRow {
             action_before: wire.action_before,
             seed: wire.seed,
             initial_slab_triangle_profile: wire.initial_slab_triangle_profile,
-            slab_triangle_profile: wire.slab_triangle_profile,
+            slab_triangle_profile: SlabTriangleProfile::try_new(wire.slab_triangle_profile)?,
         };
         validate_scalar_trace_finite_fields(&row)?;
         Ok(row)
@@ -565,7 +565,7 @@ impl CdtScalarTraceRow {
             action_before,
             seed,
             initial_slab_triangle_profile: None,
-            slab_triangle_profile: triangulation.slab_triangle_profile()?,
+            slab_triangle_profile: triangulation.slab_triangle_profile_snapshot()?,
         };
         validate_scalar_trace_finite_fields(&row)?;
         Ok(row)
@@ -657,7 +657,7 @@ impl Measurement {
             vertices,
             edges,
             triangles,
-            slab_triangle_profile: Vec::new(),
+            slab_triangle_profile: SlabTriangleProfile::default(),
         })
     }
 
@@ -829,7 +829,8 @@ impl Measurement {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidMeasurementSlabTriangleProfile`] when the profile
-    /// total exceeds this measurement's stored triangle count.
+    /// total exceeds this measurement's stored triangle count, or
+    /// [`CdtError::SlabTriangleProfileTotalOverflow`] if the sum exceeds `u64::MAX`.
     ///
     /// # Examples
     ///
@@ -842,14 +843,25 @@ impl Measurement {
     /// # Ok::<(), causal_triangulations::prelude::errors::CdtError>(())
     /// ```
     pub fn try_with_slab_triangle_profile(
-        mut self,
+        self,
         slab_triangle_profile: Vec<u32>,
     ) -> CdtResult<Self> {
-        validate_measurement_slab_triangle_profile(
-            self.step,
-            self.triangles,
-            &slab_triangle_profile,
-        )?;
+        self.try_with_profile_snapshot(SlabTriangleProfile::try_new(slab_triangle_profile)?)
+    }
+
+    /// Shares a checked profile and verifies its cached total against this measurement.
+    pub(crate) fn try_with_profile_snapshot(
+        mut self,
+        slab_triangle_profile: SlabTriangleProfile,
+    ) -> CdtResult<Self> {
+        let profile_total = slab_triangle_profile.total();
+        if profile_total > u64::from(self.triangles.get()) {
+            return Err(CdtError::InvalidMeasurementSlabTriangleProfile {
+                step: self.step,
+                profile_total,
+                triangles: self.triangles.get(),
+            });
+        }
         self.slab_triangle_profile = slab_triangle_profile;
         Ok(self)
     }
@@ -863,7 +875,7 @@ impl Measurement {
 /// actions, and impossible slab-triangle-profile totals before the public
 /// [`Measurement`] stores them.
 #[derive(Deserialize)]
-struct MeasurementWire {
+pub(crate) struct MeasurementWire {
     step: u32,
     action: f64,
     vertices: u32,
@@ -943,25 +955,6 @@ fn scalar_trace_triangle_count(triangles: NonZeroUsize) -> CdtResult<NonZeroU64>
             triangles: triangles.get(),
         })
     })
-}
-
-/// Rejects measurement profiles that cannot fit the stored triangle count.
-fn validate_measurement_slab_triangle_profile(
-    step: u32,
-    triangles: NonZeroU32,
-    slab_triangle_profile: &[u32],
-) -> CdtResult<()> {
-    let Some(profile_total) = slab_triangle_profile_total(slab_triangle_profile) else {
-        return Ok(());
-    };
-    if profile_total > u64::from(triangles.get()) {
-        return Err(CdtError::InvalidMeasurementSlabTriangleProfile {
-            step,
-            profile_total,
-            triangles: triangles.get(),
-        });
-    }
-    Ok(())
 }
 
 /// Sums non-empty slab-triangle profiles in a wider type.
@@ -1111,7 +1104,7 @@ impl TryFrom<SimulationResultsBackendWire> for SimulationResultsBackend {
     type Error = CdtError;
 
     fn try_from(wire: SimulationResultsBackendWire) -> Result<Self, Self::Error> {
-        Self::new(
+        let mut results = Self::new(
             wire.config,
             wire.action_config,
             wire.move_stats,
@@ -1121,8 +1114,48 @@ impl TryFrom<SimulationResultsBackendWire> for SimulationResultsBackend {
             wire.scalar_trace_rows,
             wire.elapsed_time,
             wire.triangulation,
-        )
+        )?;
+        share_restored_profile_snapshots(
+            &results.triangulation,
+            &mut results.scalar_trace_rows,
+            &mut results.measurements,
+        )?;
+        Ok(results)
     }
+}
+
+/// Reuses equal adjacent snapshots after wire values have passed trajectory validation.
+///
+/// The wire format stays a sequence of numeric arrays. Restore performs this
+/// cold pass so continued runs retain the same sharing as freshly sampled runs.
+pub(crate) fn share_restored_profile_snapshots(
+    triangulation: &CdtTriangulation2D,
+    rows: &mut [CdtScalarTraceRow],
+    measurements: &mut [Measurement],
+) -> CdtResult<()> {
+    let mut current = triangulation.slab_triangle_profile_snapshot()?;
+    let mut measurements = measurements.iter_mut().rev().peekable();
+    for row in rows.iter_mut().rev() {
+        if row.slab_triangle_profile == current {
+            row.slab_triangle_profile = current.clone();
+        } else {
+            current = row.slab_triangle_profile.clone();
+        }
+        if measurements
+            .peek()
+            .is_some_and(|measurement| measurement.step == row.step.get())
+            && let Some(measurement) = measurements.next()
+            && measurement.slab_triangle_profile == current
+        {
+            measurement.slab_triangle_profile = current.clone();
+        }
+    }
+    for measurement in measurements {
+        if measurement.slab_triangle_profile == current {
+            measurement.slab_triangle_profile = current.clone();
+        }
+    }
+    Ok(())
 }
 
 impl<'de> Deserialize<'de> for SimulationResultsBackend {
@@ -1349,12 +1382,12 @@ pub(crate) fn validate_trajectory_observables(
     }
 
     if let Some(final_row) = scalar_trace_rows.last()
-        && final_row.slab_triangle_profile != final_slab_triangle_profile
+        && final_row.slab_triangle_profile.as_slice() != final_slab_triangle_profile
     {
         return Err(checkpoint_resume_failed(
             CheckpointResumeFailure::ScalarTraceSlabTriangleProfileStateMismatch {
                 step: final_row.step.get(),
-                actual: final_row.slab_triangle_profile.clone(),
+                actual: final_row.slab_triangle_profile.to_vec(),
                 expected: final_slab_triangle_profile,
             },
         ));
@@ -2952,7 +2985,8 @@ mod tests {
     use super::*;
     use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult};
     use crate::cdt::foliation::FoliationError;
-    use crate::cdt::metropolis::MetropolisAlgorithm;
+    use crate::cdt::metropolis::{CdtMcmcCheckpoint, MetropolisAlgorithm};
+    use crate::cdt::proposal_policy::CdtMoveFamilyDistribution;
     use crate::cdt::triangulation::CdtTriangulation;
     use crate::errors::ConfigurationSetting;
     use crate::geometry::traits::TriangulationQuery;
@@ -2965,6 +2999,63 @@ mod tests {
     use std::path::PathBuf;
     use std::process;
     use std::thread;
+
+    #[test]
+    fn unchanged_trace_profiles_share_storage_across_results_and_restore() {
+        let triangulation = CdtTriangulation2D::from_cdt_strip(4, 8).expect("strip");
+        let config = MetropolisConfig::new(1.0, 8, 0, 2)
+            .expect("config")
+            .with_seed(7);
+        let policy =
+            CdtMoveFamilyDistribution::from_weights([0.0, 0.0, 1.0, 0.0]).expect("removal policy");
+        let checkpoint = MetropolisAlgorithm::new(config, ActionConfig::default())
+            .with_policy(policy)
+            .run_to_checkpoint(triangulation)
+            .expect("unchanged chain");
+        let encoded = to_value(&checkpoint).expect("serialize checkpoint");
+        let restored: CdtMcmcCheckpoint = from_value(encoded.clone()).expect("restore checkpoint");
+        let profile = restored
+            .triangulation()
+            .slab_triangle_profile_snapshot()
+            .expect("profile");
+        for row in &restored.scalar_trace_rows {
+            assert_eq!(row.slab_triangle_profile.as_ptr(), profile.as_ptr());
+        }
+        for measurement in restored.measurements() {
+            assert_eq!(
+                measurement.slab_triangle_profile().as_ptr(),
+                profile.as_ptr()
+            );
+        }
+        assert_eq!(
+            to_value(&restored).expect("serialize")["scalar_trace_rows"],
+            encoded["scalar_trace_rows"]
+        );
+
+        let results = restored.into_results().expect("results");
+        let encoded = to_value(&results).expect("serialize results");
+        let restored: SimulationResultsBackend =
+            from_value(encoded.clone()).expect("restore results");
+        let profile = restored
+            .triangulation
+            .slab_triangle_profile_snapshot()
+            .expect("profile");
+        assert!(
+            restored
+                .scalar_trace_rows
+                .iter()
+                .all(|row| row.slab_triangle_profile.as_ptr() == profile.as_ptr())
+        );
+        assert!(
+            restored
+                .measurements
+                .iter()
+                .all(|measurement| measurement.slab_triangle_profile.as_ptr() == profile.as_ptr())
+        );
+        let roundtrip = to_value(&restored).expect("serialize");
+        assert_eq!(roundtrip["scalar_trace_rows"], encoded["scalar_trace_rows"]);
+        assert_eq!(roundtrip["measurements"], encoded["measurements"]);
+    }
 
     fn metropolis_config(
         temperature: f64,
@@ -3988,7 +4079,8 @@ mod tests {
             None,
         )
         .expect("rejected trace row should build");
-        row.slab_triangle_profile = vec![2, 4];
+        row.slab_triangle_profile =
+            SlabTriangleProfile::try_new(vec![2, 4]).expect("valid profile");
         let mut results = results_with(
             metropolis_config(1.0, 1, 0, 1),
             Vec::new(),

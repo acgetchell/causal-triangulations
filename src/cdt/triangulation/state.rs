@@ -9,10 +9,10 @@
 use crate::cdt::foliation::{Foliation, FoliationError};
 use crate::config::CdtTopology;
 use crate::errors::{
-    CdtError, CdtResult, CheckpointOperation, SimplexCountField, TriangulationMetadataField,
+    CdtError, CdtResult, CheckpointOperation, CheckpointResumeFailure, SimplexCountField,
+    TriangulationMetadataField,
 };
 use crate::geometry::DelaunayBackend2D;
-use crate::geometry::backends::delaunay::DelaunayCheckpointWireV1;
 use crate::geometry::traits::TriangulationQuery;
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use std::fmt;
@@ -28,6 +28,7 @@ mod foliation;
 mod moves;
 mod validation;
 
+pub(crate) use foliation::SlabTriangleProfile;
 pub(crate) use foliation::{LocalMoveBaseline, LocalMoveDelta};
 pub use validation::CdtValidationProfile;
 
@@ -427,7 +428,7 @@ impl CdtMetadata {
 #[derive(Debug, Clone, Default)]
 struct GeometryCache {
     edge_count: OnceLock<CachedValue<usize>>,
-    slab_triangle_profile: OnceLock<CachedValue<Vec<u32>>>,
+    slab_triangle_profile: OnceLock<CachedValue<SlabTriangleProfile>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -468,17 +469,25 @@ struct DeserializedCdtMetadata {
     initial_vertex_count: usize,
 }
 
-/// CDT-owned triangulation record embedded in MCMC checkpoint format version 1.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct CdtTriangulationCheckpointWireV1 {
-    geometry: DelaunayCheckpointWireV1<u32, i32>,
-    metadata: CdtCheckpointMetadataWireV1,
-    foliation: Option<CdtCheckpointFoliationWireV1>,
+/// Borrowed geometry and CDT metadata emitted in checkpoint format version 2.
+#[derive(Serialize)]
+pub(crate) struct CdtTriangulationCheckpointWireV2Ref<'a> {
+    geometry: &'a DelaunayBackend2D,
+    metadata: CdtCheckpointMetadataWireV2,
+    foliation: Option<CdtCheckpointFoliationWireV2>,
 }
 
-/// Durable CDT metadata embedded in MCMC checkpoint format version 1.
+/// Exact upstream geometry and CDT metadata accepted in checkpoint format version 2.
+#[derive(Deserialize)]
+pub(crate) struct CdtTriangulationCheckpointWireV2 {
+    geometry: DelaunayBackend2D,
+    metadata: CdtCheckpointMetadataWireV2,
+    foliation: Option<CdtCheckpointFoliationWireV2>,
+}
+
+/// Durable CDT metadata embedded in MCMC checkpoint format version 2.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct CdtCheckpointMetadataWireV1 {
+struct CdtCheckpointMetadataWireV2 {
     time_slices: u32,
     dimension: u8,
     topology: CdtTopology,
@@ -486,9 +495,9 @@ struct CdtCheckpointMetadataWireV1 {
     initial_vertex_count: u64,
 }
 
-/// Platform-neutral foliation bookkeeping embedded in checkpoint format version 1.
+/// Platform-neutral foliation bookkeeping embedded in checkpoint format version 2.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct CdtCheckpointFoliationWireV1 {
+struct CdtCheckpointFoliationWireV2 {
     slice_sizes: Vec<u64>,
     num_slices: u32,
 }
@@ -552,8 +561,8 @@ impl<'de> Deserialize<'de> for CdtTriangulation<DelaunayBackend2D> {
 }
 
 impl CdtTriangulation<DelaunayBackend2D> {
-    /// Projects the live triangulation into the dependency-neutral v1 checkpoint record.
-    pub(crate) fn checkpoint_wire_v1(&self) -> CdtResult<CdtTriangulationCheckpointWireV1> {
+    /// Projects the live triangulation into the v2 checkpoint record.
+    pub(crate) fn checkpoint_wire_v2(&self) -> CdtResult<CdtTriangulationCheckpointWireV2Ref<'_>> {
         let initial_vertex_count =
             u64::try_from(self.metadata.initial_vertex_count).map_err(|_| {
                 triangulation_checkpoint_failure(
@@ -564,7 +573,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let foliation = self
             .foliation
             .as_ref()
-            .map(|foliation| -> CdtResult<CdtCheckpointFoliationWireV1> {
+            .map(|foliation| -> CdtResult<CdtCheckpointFoliationWireV2> {
                 let slice_sizes = foliation
                     .slice_sizes()
                     .iter()
@@ -578,17 +587,15 @@ impl CdtTriangulation<DelaunayBackend2D> {
                         })
                     })
                     .collect::<CdtResult<Vec<_>>>()?;
-                Ok(CdtCheckpointFoliationWireV1 {
+                Ok(CdtCheckpointFoliationWireV2 {
                     slice_sizes,
                     num_slices: foliation.num_slices().get(),
                 })
             })
             .transpose()?;
-        Ok(CdtTriangulationCheckpointWireV1 {
-            geometry: self.geometry.checkpoint_wire_v1().map_err(|error| {
-                triangulation_checkpoint_failure(CheckpointOperation::Serialize, error.to_string())
-            })?,
-            metadata: CdtCheckpointMetadataWireV1 {
+        Ok(CdtTriangulationCheckpointWireV2Ref {
+            geometry: &self.geometry,
+            metadata: CdtCheckpointMetadataWireV2 {
                 time_slices: self.metadata.time_slices.get(),
                 dimension: self.metadata.dimension,
                 topology: self.metadata.topology,
@@ -599,18 +606,15 @@ impl CdtTriangulation<DelaunayBackend2D> {
         })
     }
 
-    /// Reconstructs and validates a live triangulation from checkpoint format version 1.
-    pub(crate) fn from_checkpoint_wire_v1(
-        wire: CdtTriangulationCheckpointWireV1,
+    /// Reconstructs and validates a live triangulation from checkpoint format version 2.
+    pub(crate) fn from_checkpoint_wire_v2(
+        wire: CdtTriangulationCheckpointWireV2,
     ) -> CdtResult<Self> {
-        let CdtTriangulationCheckpointWireV1 {
+        let CdtTriangulationCheckpointWireV2 {
             geometry,
             metadata,
             foliation,
         } = wire;
-        let geometry = DelaunayBackend2D::from_checkpoint_wire_v1(geometry).map_err(|error| {
-            triangulation_checkpoint_failure(CheckpointOperation::Deserialize, error.to_string())
-        })?;
         let initial_vertex_count =
             usize::try_from(metadata.initial_vertex_count).map_err(|_| {
                 triangulation_checkpoint_failure(
@@ -637,21 +641,15 @@ impl CdtTriangulation<DelaunayBackend2D> {
                         })
                     })
                     .collect::<CdtResult<Vec<_>>>()?;
-                let num_slices = NonZeroU32::new(foliation.num_slices).ok_or_else(|| {
-                    triangulation_checkpoint_failure(
-                        CheckpointOperation::Deserialize,
-                        "foliation `num_slices` must be nonzero".to_string(),
-                    )
-                })?;
+                let num_slices = NonZeroU32::new(foliation.num_slices)
+                    .ok_or(FoliationError::EmptyFoliation)?;
                 if num_slices.get() != metadata.time_slices {
-                    return Err(triangulation_checkpoint_failure(
-                        CheckpointOperation::Deserialize,
-                        format!(
-                            "foliation `num_slices` {} does not match metadata `time_slices` {}",
-                            num_slices.get(),
-                            metadata.time_slices
-                        ),
-                    ));
+                    return Err(CdtError::CheckpointResumeFailed {
+                        failure: CheckpointResumeFailure::FoliationSliceCountMismatch {
+                            foliation_slices: num_slices.get(),
+                            metadata_slices: metadata.time_slices,
+                        },
+                    });
                 }
                 Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)
             })
@@ -852,7 +850,7 @@ impl<B> CdtTriangulation<B> {
     }
 
     /// Returns a cached slab-triangle profile for the current geometry revision.
-    fn cached_slab_triangle_profile(&self) -> Option<Vec<u32>> {
+    fn cached_slab_triangle_profile(&self) -> Option<SlabTriangleProfile> {
         self.cache
             .slab_triangle_profile
             .get()
@@ -866,7 +864,7 @@ impl<B> CdtTriangulation<B> {
     /// remain valid for this `metadata.modification_count`, and callers must not
     /// expect same-revision replacement. [`Self::bump_modification_count`] calls
     /// `invalidate_cache` before a new revision writes another value.
-    fn cache_slab_triangle_profile(&self, value: Vec<u32>) {
+    fn cache_slab_triangle_profile(&self, value: SlabTriangleProfile) {
         let _ = self.cache.slab_triangle_profile.set(CachedValue {
             value,
             modification_count: self.metadata.modification_count,
@@ -1376,9 +1374,10 @@ mod tests {
     use super::*;
     use crate::DelaunayValidationLevel;
     use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult};
+    use crate::geometry::backends::delaunay::tests::backend_state_value;
     use crate::geometry::backends::mock::MockBackend;
     use crate::geometry::generators::build_delaunay2_with_data;
-    use serde_json::{Error as JsonError, Value, error::Category, from_str, to_string, to_value};
+    use serde_json::{Error as JsonError, Value, error::Category, from_str, to_string};
     use std::assert_matches;
     use std::collections::HashMap;
     use std::time::Duration;
@@ -1618,7 +1617,7 @@ mod tests {
     fn periodic_checkpoint_signature_detects_bitwise_geometry_and_adjacency_changes() {
         let triangulation =
             CdtTriangulation::from_toroidal_cdt(4, 3).expect("periodic torus should build");
-        let geometry = to_value(triangulation.geometry()).expect("backend should serialize");
+        let geometry = backend_state_value(triangulation.geometry());
         let expected = periodic_simplex_signatures(&geometry);
 
         let mut changed_coordinate = geometry.clone();
@@ -2309,14 +2308,13 @@ mod tests {
     #[test]
     fn checkpoint_rejects_invalid_toroidal_period() {
         let valid = CdtTriangulation::from_cdt_strip(4, 3).expect("valid strip should build");
-        let json = to_string(&valid).expect("checkpoint should serialize");
-        let invalid_json = json.replace(
-            r#""global_topology":"Euclidean""#,
-            r#""global_topology":{"Toroidal":{"domain":[0.0,1.0],"mode":"Explicit"}}"#,
-        );
-        let error = from_str::<CdtTriangulation<DelaunayBackend2D>>(&invalid_json)
+        let mut encoded = serde_json::to_value(&valid).expect("checkpoint should serialize");
+        encoded["geometry"]["triangulation"]["global_topology"] = serde_json::json!({
+            "kind": "toroidal", "period_bits": [0, 1.0_f64.to_bits()], "mode": "explicit",
+        });
+        let error = from_str::<CdtTriangulation<DelaunayBackend2D>>(&encoded.to_string())
             .expect_err("backend serde should reject invalid toroidal period");
-        assert_checkpoint_data_error(&error, &["invalid toroidal period"]);
+        assert_checkpoint_data_error(&error, &["axis 0"]);
     }
 
     #[test]
@@ -2376,12 +2374,7 @@ mod tests {
         );
         let expected_slice_sizes = triangulation.slice_sizes().to_vec();
         let checkpoint = to_string(&triangulation).expect("evolved checkpoint should serialize");
-        let checkpoint_value: Value =
-            from_str(&checkpoint).expect("serialized checkpoint should remain valid JSON");
-        let expected_geometry = checkpoint_value
-            .get("geometry")
-            .cloned()
-            .expect("serialized checkpoint should contain backend geometry");
+        let expected_geometry = backend_state_value(triangulation.geometry());
         let expected_simplices = periodic_simplex_signatures(&expected_geometry);
 
         let restored = from_str::<CdtTriangulation<DelaunayBackend2D>>(&checkpoint)
@@ -2420,8 +2413,7 @@ mod tests {
         );
         assert_eq!(restored.slice_sizes(), expected_slice_sizes);
 
-        let restored_geometry =
-            to_value(restored.geometry()).expect("restored backend should serialize");
+        let restored_geometry = backend_state_value(restored.geometry());
         for field in [
             "global_topology",
             "topology_guarantee",

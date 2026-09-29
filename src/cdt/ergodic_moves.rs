@@ -16,7 +16,8 @@ use crate::errors::{
     CheckpointResumeFailure,
 };
 use crate::geometry::backends::delaunay::{
-    DelaunayEdgeHandle, DelaunayFaceHandle, DelaunayFaceStableId, DelaunayVertexHandle,
+    DelaunayEdgeHandle, DelaunayError, DelaunayFaceHandle, DelaunayFaceStableId,
+    DelaunayVertexHandle,
 };
 use crate::geometry::traits::{
     EdgeAdjacentFaces, TriangulationMut, TriangulationQuery, exactly_three,
@@ -26,6 +27,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use std::array;
 use std::collections::HashSet;
 use std::fmt::Display;
+use std::mem;
 
 /// Types of ergodic moves available in 2D CDT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -168,7 +170,7 @@ pub struct MoveStatistics {
 }
 
 #[derive(Deserialize)]
-struct MoveStatisticsWire {
+pub(crate) struct MoveStatisticsWire {
     moves_22_attempted: u64,
     moves_22_accepted: u64,
     #[serde(default)]
@@ -253,7 +255,7 @@ impl MoveStatistics {
     /// Deserialization rejects impossible counters such as accepted moves plus
     /// hard failures exceeding attempts, so public accessors can treat stored
     /// move-family counters as coherent telemetry.
-    fn from_wire(wire: &MoveStatisticsWire) -> CdtResult<Self> {
+    pub(crate) fn from_wire(wire: &MoveStatisticsWire) -> CdtResult<Self> {
         validate_move_counter(
             MoveType::Move22,
             wire.moves_22_attempted,
@@ -692,10 +694,21 @@ pub struct ErgodicsSystem {
 
 #[derive(Clone, Default)]
 struct MoveSiteCache {
-    move_22: MoveFamilySites,
-    move_13_add: MoveFamilySites,
-    move_31_remove: MoveFamilySites,
-    edge_flip: MoveFamilySites,
+    move_22: MoveFamilyCache,
+    move_13_add: MoveFamilyCache,
+    move_31_remove: MoveFamilyCache,
+    edge_flip: MoveFamilyCache,
+}
+
+/// Retains the two most recently inspected owners for one move family.
+///
+/// Reverse counting must not evict the unchanged live state's sites when a
+/// speculative plan is discarded. Both entries retain full owner/revision
+/// provenance; accepted plans can reuse their speculative entry directly.
+#[derive(Clone, Default)]
+struct MoveFamilyCache {
+    current: MoveFamilySites,
+    previous: MoveFamilySites,
 }
 
 /// Cached sampleable sites for one move family on one triangulation instance version.
@@ -717,29 +730,36 @@ impl MoveSiteCache {
     fn ensure_current(&mut self, triangulation: &CdtTriangulation2D, move_type: MoveType) {
         let instance_id = triangulation.instance_id();
         let modification_count = triangulation.metadata().modification_count();
-        let family = self.family(move_type);
-        if family.instance_id == Some(instance_id)
-            && family.modification_count == Some(modification_count)
-        {
+        let cache = self.family_mut(move_type);
+        let matches = |family: &MoveFamilySites| {
+            family.instance_id == Some(instance_id)
+                && family.modification_count == Some(modification_count)
+        };
+        if matches(&cache.current) {
             return;
         }
-
-        *self.family_mut(move_type) =
-            Self::collect_family(triangulation, move_type, instance_id, modification_count);
+        if matches(&cache.previous) {
+            mem::swap(&mut cache.current, &mut cache.previous);
+        } else {
+            cache.previous = mem::replace(
+                &mut cache.current,
+                Self::collect_family(triangulation, move_type, instance_id, modification_count),
+            );
+        }
     }
 
     /// Returns cached sites for one move family.
     const fn family(&self, move_type: MoveType) -> &MoveFamilySites {
         match move_type {
-            MoveType::Move22 => &self.move_22,
-            MoveType::Move13Add => &self.move_13_add,
-            MoveType::Move31Remove => &self.move_31_remove,
-            MoveType::EdgeFlip => &self.edge_flip,
+            MoveType::Move22 => &self.move_22.current,
+            MoveType::Move13Add => &self.move_13_add.current,
+            MoveType::Move31Remove => &self.move_31_remove.current,
+            MoveType::EdgeFlip => &self.edge_flip.current,
         }
     }
 
     /// Returns mutable cached sites for one move family.
-    const fn family_mut(&mut self, move_type: MoveType) -> &mut MoveFamilySites {
+    const fn family_mut(&mut self, move_type: MoveType) -> &mut MoveFamilyCache {
         match move_type {
             MoveType::Move22 => &mut self.move_22,
             MoveType::Move13Add => &mut self.move_13_add,
@@ -1425,11 +1445,9 @@ impl ErgodicsSystem {
                 &result.affected_faces,
                 LocalMoveDelta::Flip,
             ),
-            Err(err) => reject_backend(
-                BackendMutationOperation::FlipEdge,
-                format!("{edge:?}"),
-                &err,
-            ),
+            Err(err) => {
+                reject_backend(BackendMutationOperation::FlipEdge, format!("{edge:?}"), err)
+            }
         }
     }
 
@@ -1466,7 +1484,7 @@ impl ErgodicsSystem {
                 return reject_backend(
                     BackendMutationOperation::SubdivideFace,
                     format!("face {face_key:?}"),
-                    &err,
+                    err,
                 );
             }
         };
@@ -1477,7 +1495,7 @@ impl ErgodicsSystem {
                 return reject_backend(
                     BackendMutationOperation::SetVertexData,
                     format!("vertex {:?}", subdivision.new_vertex.vertex_key()),
-                    &err,
+                    err,
                 );
             }
         }
@@ -1529,7 +1547,7 @@ impl ErgodicsSystem {
                 return reject_backend(
                     BackendMutationOperation::SubdivideFace,
                     format!("face {face_key:?}"),
-                    &err,
+                    err,
                 );
             }
         };
@@ -1540,7 +1558,7 @@ impl ErgodicsSystem {
             return reject_backend(
                 BackendMutationOperation::SetVertexData,
                 format!("vertex {:?}", subdivision.new_vertex.vertex_key()),
-                &err,
+                err,
             );
         }
 
@@ -1590,7 +1608,7 @@ impl ErgodicsSystem {
             Err(err) => reject_backend(
                 BackendMutationOperation::FlipEdge,
                 format!("{:?}", candidate.edge),
-                &err,
+                err,
             ),
         }
     }
@@ -1614,7 +1632,7 @@ impl ErgodicsSystem {
                 return reject_backend(
                     BackendMutationOperation::RemoveVertex,
                     format!("vertex {:?}", vertex.vertex_key()),
-                    &err,
+                    err,
                 );
             }
         };
@@ -1639,7 +1657,7 @@ impl ErgodicsSystem {
             Err(err) => reject_backend(
                 BackendMutationOperation::RemoveVertex,
                 format!("vertex {:?}", vertex.vertex_key()),
-                &err,
+                err,
             ),
         }
     }
@@ -1689,7 +1707,7 @@ impl ErgodicsSystem {
                 return reject_backend(
                     BackendMutationOperation::FlipEdge,
                     format!("{:?}", candidate.flip_edge),
-                    &err,
+                    err,
                 );
             }
         };
@@ -1714,7 +1732,7 @@ impl ErgodicsSystem {
                 return reject_backend(
                     BackendMutationOperation::RemoveVertex,
                     format!("vertex {:?}", candidate.vertex.vertex_key()),
-                    &err,
+                    err,
                 );
             }
         };
@@ -1739,7 +1757,7 @@ impl ErgodicsSystem {
             Err(err) => reject_backend(
                 BackendMutationOperation::RemoveVertex,
                 format!("vertex {:?}", candidate.vertex.vertex_key()),
-                &err,
+                err,
             ),
         }
     }
@@ -1850,22 +1868,28 @@ fn local_geometry_error(context: &str, err: impl Display) -> CdtError {
     }
 }
 
-/// Converts an unexpected backend edit error into the move-level rejection shape.
+/// Keeps recognized candidate rejections separate from backend contract failures.
 ///
-/// Candidate selection should screen out ordinary geometric and causal
-/// rejections before mutation. Reaching this helper means the backend refused
-/// a selected site or returned an operation-specific error that should remain
-/// visible to callers.
+/// Both paths retain the typed adapter error and use the enclosing rollback boundary.
 fn reject_backend(
     operation: BackendMutationOperation,
     target: String,
-    err: impl Display,
+    source: DelaunayError,
 ) -> MoveResult {
-    MoveResult::Rejected(CdtError::BackendMutationFailed {
+    let recoverable = matches!(
+        source,
+        DelaunayError::CandidateRejected { .. } | DelaunayError::NonFlippableEdge { .. }
+    );
+    let error = CdtError::BackendEditFailed {
         operation,
         target,
-        detail: err.to_string(),
-    })
+        source: Box::new(source),
+    };
+    if recoverable {
+        MoveResult::Rejected(error)
+    } else {
+        MoveResult::HardFailure(error)
+    }
 }
 
 /// Computes topology-aware time distance between two slice labels.
@@ -2589,7 +2613,10 @@ mod tests {
     };
     use crate::errors::{CdtValidationCheck, CdtValidationFailure, DelaunayValidationLevel};
     use crate::geometry::DelaunayBackend2D;
-    use crate::geometry::backends::delaunay::DelaunayError;
+    use crate::geometry::backends::delaunay::{
+        DelaunayCandidateRejection, DelaunayFlipOutputFailure, DelaunayHandleKind,
+        DelaunayOperation,
+    };
     use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
     use approx::assert_relative_eq;
     use std::assert_matches;
@@ -3217,21 +3244,58 @@ mod tests {
         let result = reject_backend(
             BackendMutationOperation::FlipEdge,
             "candidate edge".to_string(),
-            DelaunayError::ValidationFailed {
-                level: DelaunayValidationLevel::Four,
+            DelaunayError::CandidateRejected {
+                operation: DelaunayOperation::FlipK2,
+                target: "candidate edge".to_string(),
+                reason: DelaunayCandidateRejection::Embedding,
                 detail: "simplices intersect outside their shared face".to_string(),
             },
         );
 
         assert_matches!(
             result,
-            MoveResult::Rejected(CdtError::BackendMutationFailed {
+            MoveResult::Rejected(CdtError::BackendEditFailed {
                 operation: BackendMutationOperation::FlipEdge,
                 target,
-                detail,
-            }) if target == "candidate edge"
-                && detail.contains("simplices intersect outside their shared face")
+                source,
+            }) if target == "candidate edge" && matches!(*source, DelaunayError::CandidateRejected { reason: DelaunayCandidateRejection::Embedding, .. })
         );
+    }
+
+    #[test]
+    fn backend_contract_failures_remain_hard_with_typed_sources_and_accounting() {
+        for source in [
+            DelaunayError::UnexpectedFlipOutput {
+                operation: DelaunayOperation::FlipK2,
+                target: "candidate edge".to_string(),
+                failure: DelaunayFlipOutputFailure::InsertedVertexCountMismatch {
+                    expected: 2,
+                    actual: 0,
+                    first_unexpected: None,
+                },
+            },
+            DelaunayError::InteriorFacetIndexUpdateFailed {
+                operation: DelaunayOperation::FlipK2,
+                detail: "missing simplex".to_string(),
+            },
+            DelaunayError::StaleHandle {
+                kind: DelaunayHandleKind::Edge,
+                handle_generation: 0,
+                current_generation: 1,
+            },
+        ] {
+            let mut system = ErgodicsSystem::new();
+            system.stats.record_attempt(MoveType::Move22);
+            let result = reject_backend(
+                BackendMutationOperation::FlipEdge,
+                "candidate edge".to_string(),
+                source.clone(),
+            );
+            let result = system.record_hard_failure_if_needed(MoveType::Move22, result);
+            assert_matches!(result, MoveResult::HardFailure(CdtError::BackendEditFailed { source: actual, .. }) if *actual == source);
+            assert_eq!(system.stats.accepted(MoveType::Move22), 0);
+            assert_eq!(system.stats.moves_22_hard_failed, 1);
+        }
     }
 
     #[test]

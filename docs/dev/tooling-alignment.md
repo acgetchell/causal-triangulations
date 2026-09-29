@@ -1,5 +1,30 @@
 # Tooling Alignment
 
+## Invariant-Preserving Performance Contracts
+
+The repository-wide Rust performance audit extends the existing `allocation_profile` harness with checked edge queries, warm family-cache reuse after
+discarded and committed concrete plans, state-dependent reverse-policy inspection, and bounded retained storage for unchanged traces.
+The same `allocation-check` recipe remains blocking in local CI and performance workflows; no tool, dependency, workflow, or manifest changes are needed.
+The existing cached-observable budget remains intact. New Criterion groups isolate persistent proposal planning and time-slice scaling while preserving
+all existing benchmark workloads and identifiers. These local checks do not replace or publish release comparisons.
+
+## Issue #268 Level 4 Adapter Cleanup
+
+Delaunay 0.8.2 supplies the owner workflows requested by upstream #591. CDT delegates visualization and exact persistence to those APIs,
+preserving the existing visualization schema and CDT producer field. Standalone backends and MCMC checkpoints share the upstream exact owner envelope
+and retain CDT's optional Level 5 cadence. Serialization still requires only serialize-capable payloads.
+
+General Euclidean insertion and cavity deletion now use upstream transactional Level 1–4 methods without strict promotion or redundant realization scans.
+Toroidal general edits return a typed unsupported-topology error; local CDT bistellar evolution retains its existing rollback boundaries.
+The filtered-Delaunay initial-state constructor explicitly requests upstream flip refinement between removal passes to preserve its Level 5 contract.
+That construction-only refinement does not run during general edits or evolved-state restoration.
+No dependency, tool, workflow, or manifest change is required: the repository already selects Delaunay 0.8.2 and Rust 1.98.1.
+
+The maintainer explicitly chose to drop older checkpoint compatibility. Checkpoint format version 2 embeds the upstream exact owner envelope and restores
+through `TriangulationSnapshot::try_into_triangulation`. The former index-based geometry records, hydration mirror, standalone compatibility reader, and
+obsolete fixture and tests are removed. CDT retains metadata, RNG, duration, telemetry, and resume validation; older versions are rejected at the envelope
+boundary. No upstream exact-restoration API work remains blocked.
+
 ## September 2026 MCMC Tooling Parity Follow-Up
 
 The local MCMC comparison found matching shared-package, Rust, Cargo-tool, Python-tool, OSV Scanner, and Gitleaks pins. CDT already has its additional

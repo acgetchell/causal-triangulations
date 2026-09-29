@@ -19,7 +19,8 @@ then uses the shared comparison CLI to display absolute baseline/current median 
 A missing baseline fails instead of implying success. Local Criterion output lives under `target/criterion/` and is disposable.
 
 `just bench-smoke` checks that harnesses run with small sample counts; it does not produce publishable timing evidence.
-`just allocation-check` enforces the deterministic cached-observable allocation contract.
+`just allocation-check` enforces deterministic budgets for cached observables, checked edge queries, proposal-cache reuse, and unchanged trace storage.
+The [benchmark inventory](../benches/README.md) describes the fixtures and persistent-planner and slice-scaling groups.
 The broader `just bench` and `just bench-ci` recipes retain their CDT workloads.
 
 ## Fresh release evidence

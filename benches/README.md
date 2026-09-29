@@ -38,16 +38,19 @@ that should stay comparable across releases:
 - attempting individual ergodic move types;
 - scaling guaranteed-success inverse volume finalization across increasing toroidal CDT meshes;
 - iterating proposal-site candidates through public move-attempt and single-step Metropolis proposal paths;
+- separating cold/warm proposal views and 32-attempt persistent planner workloads that discard or commit concrete plans;
+- varying time-slice count at a fixed 256-vertex base mesh for local inverse-move finalization;
 - evaluating state-dependent family policies that inspect the complete offered-site views;
 - executing fixed random-move attempt budgets equal to ten initial sweeps, so reported throughput exactly matches timed attempts;
 - running short Metropolis simulations sized as ten initial sweeps.
 
 Keep this suite stable and release-relevant. Exploratory or noisy benchmarks belong in `cdt_benchmarks.rs`.
 
-`allocation_profile` is a deterministic heap-allocation contract for cached
-observables. It verifies that a cached edge-count read allocates nothing and a
-borrow-to-owned slab-triangle-profile read performs exactly one vector allocation. The
-contract blocks `just ci`, `just bench-ci`, and the performance workflow.
+`allocation_profile` is a deterministic heap-allocation contract for cached observables, checked edge queries, proposal caches, and trace storage.
+It verifies that a cached edge-count read allocates nothing and an owned slab-triangle-profile read performs exactly one vector allocation.
+Checked endpoint queries and warm family views allocate nothing, including after discarded and committed concrete flips and reverse state-dependent policy
+evaluation. A 1,000-step unchanged trajectory with 64 profile entries must share measurement snapshots and retain less than 500 KB of measured allocations.
+Fixture construction remains outside allocation measurement. The contract blocks `just ci`, `just bench-ci`, and the performance workflow.
 
 ## Benchmark Groups
 
@@ -98,8 +101,14 @@ Measures CDT move proposal and application paths:
 - random move selection and attempt paths.
 
 The CI suite also includes `cdt_proposal_site_move_attempts_2d` and `cdt_single_metropolis_proposal_2d`. These exercise explicit proposal-site iteration,
-cloned proposed-state mutation, and reverse-site counting for the Hastings ratio. Check these before adding crate-internal benchmark hooks for isolated
-proposal-site enumeration.
+cloned proposed-state mutation, and reverse-site counting for the Hastings ratio.
+
+`cdt_persistent_proposals_2d` adds cold/warm family views and seeded 32-attempt batches with one planner per batch. Concrete plans are either discarded or
+committed, followed by live-state inspection. Fixture construction and initial cache warming are outside the batch measurement; ordinary local rejections
+remain part of the measured proposal workload. These cases isolate cache reuse from driver setup, trace output, and terminal validation.
+
+`cdt_local_finalization_by_slices_2d` measures successful inverse volume moves at 8, 16, 32, and 64 time slices. Each fixture starts from 256 toroidal vertices
+and performs one insertion during setup, so the measured removal sees 257 vertices at every slice count. Existing benchmark workloads remain unchanged.
 
 ### `metropolis_simulation`
 

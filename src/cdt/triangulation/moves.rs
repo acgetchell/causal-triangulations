@@ -54,6 +54,13 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(result)
     }
 
+    /// Restores Delaunay connectivity between initial point-filtering passes.
+    pub(super) fn refine_delaunay_for_construction(&mut self) -> Result<(), DelaunayError> {
+        self.geometry.refine_delaunay_for_construction()?;
+        self.bump_modification_count();
+        Ok(())
+    }
+
     /// Updates a vertex time label and marks CDT-derived state stale on success.
     pub(crate) fn set_vertex_data(
         &mut self,
