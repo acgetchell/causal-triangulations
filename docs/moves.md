@@ -125,11 +125,12 @@ site was geometrically editable but would break the periodic CDT contract.
 The Metropolis loop first selects an explicit local proposal site, clones the current triangulation, and applies that exact site on the cloned proposed state;
 see `src/cdt/metropolis/runner.rs` and `src/cdt/metropolis/adapter.rs`. The CDT proposal adapter scores the planned move with its action change and
 forward/reverse local-site ratio, then the upstream `markov-chain-monte-carlo` sampler owns the Metropolis-Hastings accept/reject draw and generic chain
-counters; see `docs/metropolis.md`. Only accepted proposals swap the cloned, mutated state into the live simulation. Ordinary causal, geometric, or backend
-edit failures on the cloned state are self-loop proposal outcomes recorded in `ProposalStatistics`; hard backend mutation or invariant-refresh failures still
-return `CdtError::MetropolisMoveApplicationFailed`. Because the cloned proposed state already provides isolation, this path uses the draft mutation entry point
-and its backend primitives use caller-owned rollback rather than taking another full-mesh snapshot. Direct public CDT move attempts use the same primitive path
-under their own outer rollback snapshot, while standalone geometry-backend mutations retain a backend-owned transaction guard.
+counters; see `docs/metropolis.md`. Only accepted proposals swap the cloned, mutated state into the live simulation. Ordinary causal, geometric, or recognized
+backend candidate failures on the cloned state are self-loop proposal outcomes recorded in `ProposalStatistics`; hard backend mutation or invariant-refresh
+failures return `CdtError::MetropolisProposalApplicationFailed` with the failing stage. Because the cloned proposed state already provides isolation, this path
+uses the draft mutation entry point and its backend primitives use caller-owned rollback rather than taking another full-mesh snapshot. Direct public CDT move
+attempts use the same primitive path under their own outer rollback snapshot, while standalone geometry-backend mutations retain a backend-owned transaction
+guard.
 
 ## Ensemble And Volume Fixing
 

@@ -208,6 +208,8 @@ pub enum FoliationError {
         /// Slice whose count could not be incremented.
         slice: usize,
     },
+    /// The total labeled-vertex count would exceed the platform's addressable count.
+    LabeledVertexCountOverflow,
     /// A local bookkeeping receipt named a slice outside this foliation.
     SliceIndexOutOfRange {
         /// Requested slice index.
@@ -437,6 +439,7 @@ impl fmt::Display for FoliationError {
             Self::SliceSizeOverflow { slice } => {
                 write!(f, "time slice {slice} vertex count overflowed")
             }
+            Self::LabeledVertexCountOverflow => write!(f, "total labeled vertex count overflowed"),
             Self::SliceIndexOutOfRange { slice, num_slices } => write!(
                 f,
                 "time slice {slice} is outside the foliation range 0..{num_slices}"
@@ -550,6 +553,9 @@ pub struct Foliation {
     slice_sizes: Vec<usize>,
     /// Nonzero total number of time slices.
     num_slices: NonZeroU32,
+    /// Checked sum maintained alongside local slice edits; rebuilt on deserialization.
+    #[serde(skip)]
+    labeled_vertices: usize,
 }
 
 #[derive(Deserialize)]
@@ -575,7 +581,7 @@ impl Foliation {
     /// # Errors
     ///
     /// Returns error if there are no slices, if `slice_sizes.len() != num_slices`,
-    /// or if any slice is empty.
+    /// if any slice is empty, or if the total vertex count overflows `usize`.
     ///
     /// # Examples
     ///
@@ -636,9 +642,15 @@ impl Foliation {
         if let Some(slice) = slice_sizes.iter().position(|&slice_size| slice_size == 0) {
             return Err(FoliationError::EmptySlice { slice });
         }
+        let labeled_vertices = slice_sizes.iter().try_fold(0_usize, |total, &count| {
+            total
+                .checked_add(count)
+                .ok_or(FoliationError::LabeledVertexCountOverflow)
+        })?;
         Ok(Self {
             slice_sizes,
             num_slices,
+            labeled_vertices,
         })
     }
 
@@ -695,7 +707,20 @@ impl Foliation {
                 .filter(|&next| next != 0)
                 .ok_or(FoliationError::EmptySlice { slice })?,
         };
+        let labeled_vertices = match delta {
+            FoliationVertexDelta::Insert => self
+                .labeled_vertices
+                .checked_add(1)
+                .ok_or(FoliationError::LabeledVertexCountOverflow)?,
+            FoliationVertexDelta::Remove => self.labeled_vertices.checked_sub(1).ok_or(
+                FoliationError::SliceSizeSumMismatch {
+                    sum: 0,
+                    labeled: self.labeled_vertices,
+                },
+            )?,
+        };
         *count = next;
+        self.labeled_vertices = labeled_vertices;
         Ok(())
     }
 
@@ -745,8 +770,8 @@ impl Foliation {
     /// }
     /// ```
     #[must_use]
-    pub fn labeled_vertex_count(&self) -> usize {
-        self.slice_sizes.iter().sum()
+    pub const fn labeled_vertex_count(&self) -> usize {
+        self.labeled_vertices
     }
 }
 
@@ -796,6 +821,50 @@ mod tests {
         assert_eq!(fol.labeled_vertex_count(), 6);
         assert_eq!(fol.slice_sizes()[0], 3);
         assert_eq!(fol.slice_sizes()[1], 3);
+    }
+
+    #[test]
+    fn local_foliation_totals_are_atomic_and_rebuilt_from_wire_counts() {
+        let mut foliation =
+            Foliation::from_slice_sizes(vec![2, 1], slice_count(2)).expect("foliation");
+        foliation
+            .apply_local_vertex_delta(0, FoliationVertexDelta::Insert)
+            .expect("insert");
+        assert_eq!(foliation.labeled_vertex_count(), 4);
+        foliation
+            .apply_local_vertex_delta(0, FoliationVertexDelta::Remove)
+            .expect("remove");
+        assert_eq!(foliation.labeled_vertex_count(), 3);
+        assert_eq!(
+            foliation.apply_local_vertex_delta(1, FoliationVertexDelta::Remove),
+            Err(FoliationError::EmptySlice { slice: 1 })
+        );
+        assert_eq!(foliation.slice_sizes(), &[2, 1]);
+        assert_eq!(foliation.labeled_vertex_count(), 3);
+        let json = serde_json::to_value(&foliation).expect("serialize");
+        assert_eq!(
+            json,
+            serde_json::json!({"slice_sizes": [2, 1], "num_slices": 2})
+        );
+        let restored: Foliation = serde_json::from_value(json).expect("restore");
+        assert_eq!(restored.labeled_vertex_count(), 3);
+    }
+
+    #[test]
+    fn foliation_total_overflow_is_rejected_before_storage_or_mutation() {
+        assert_eq!(
+            Foliation::from_slice_sizes(vec![usize::MAX, 1], slice_count(2))
+                .expect_err("total overflow"),
+            FoliationError::LabeledVertexCountOverflow,
+        );
+        let mut foliation = Foliation::from_slice_sizes(vec![usize::MAX - 1, 1], slice_count(2))
+            .expect("maximum total");
+        assert_eq!(
+            foliation.apply_local_vertex_delta(1, FoliationVertexDelta::Insert),
+            Err(FoliationError::LabeledVertexCountOverflow)
+        );
+        assert_eq!(foliation.slice_sizes(), &[usize::MAX - 1, 1]);
+        assert_eq!(foliation.labeled_vertex_count(), usize::MAX);
     }
 
     #[test]

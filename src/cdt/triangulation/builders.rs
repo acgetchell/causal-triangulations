@@ -13,8 +13,8 @@ use crate::errors::{
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::backends::delaunay::DelaunayVertexHandle;
 use crate::geometry::generators::{
-    DelaunayTriangulation2D, RealizedTriangulation2D, build_delaunay2_with_data,
-    build_layered_delaunay2_from_simplices, build_periodic_toroidal_delaunay2, generate_delaunay2,
+    DelaunayTriangulation2D, build_delaunay2_with_data, build_layered_delaunay2_from_simplices,
+    build_periodic_toroidal_delaunay2, generate_delaunay2,
 };
 use crate::geometry::traits::TriangulationQuery;
 use std::num::NonZeroU32;
@@ -74,16 +74,6 @@ fn validated_backend(dt: DelaunayTriangulation2D) -> CdtResult<DelaunayBackend2D
     DelaunayBackend2D::from_triangulation(dt).map_err(|err| CdtError::DelaunayValidationFailed {
         level: DelaunayValidationLevel::Five,
         detail: err.to_string(),
-    })
-}
-
-/// Validates exact layered connectivity through upstream realization Level 4.
-fn realized_backend(dt: RealizedTriangulation2D) -> CdtResult<DelaunayBackend2D> {
-    DelaunayBackend2D::from_realized_triangulation(dt).map_err(|err| {
-        CdtError::DelaunayValidationFailed {
-            level: DelaunayValidationLevel::Four,
-            detail: err.to_string(),
-        }
     })
 }
 
@@ -1136,6 +1126,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     target,
                     detail: err.to_string(),
                 })?;
+            self.refine_delaunay_for_construction().map_err(|err| {
+                CdtError::DelaunayValidationFailed {
+                    level: DelaunayValidationLevel::Five,
+                    detail: err.to_string(),
+                }
+            })?;
         }
 
         Ok(())
@@ -1150,7 +1146,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// [`Self::strict_causal_simplex_violation_count`], removes a vertex incident
     /// to one such simplex through
     /// [`TriangulationMut::remove_vertex`](crate::geometry::traits::TriangulationMut::remove_vertex),
-    /// lets the Delaunay backend retriangulate each cavity, and returns only
+    /// lets the backend retriangulate each cavity and explicitly refine it to
+    /// Delaunay connectivity before the next filtering pass, and returns only
     /// after the violation count reaches zero and the full initial CDT validation
     /// contract passes.
     ///
@@ -1387,7 +1384,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let dt = build_layered_delaunay2_from_simplices(&vertex_specs, &simplices)
             .map_err(|err| remap_strip_generation_error(err, total_vertices, coordinate_max))?;
 
-        let backend = realized_backend(dt)?;
+        let backend = DelaunayBackend2D::from_realized_triangulation(dt);
         validate_strip_counts(
             &backend,
             total_vertices,
@@ -1481,7 +1478,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         )?;
         let dt = build_layered_delaunay2_from_simplices(&vertex_specs, &simplices)
             .map_err(|error| remap_strip_generation_error(error, total_vertices, coordinate_max))?;
-        let backend = realized_backend(dt)?;
+        let backend = DelaunayBackend2D::from_realized_triangulation(dt);
         validate_profile_strip_counts(
             &backend,
             total_vertices,

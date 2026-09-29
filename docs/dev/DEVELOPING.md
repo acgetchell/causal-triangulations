@@ -503,7 +503,8 @@ Benchmark harnesses can be smoke-tested without producing baseline-quality perfo
 just bench-smoke
 ```
 
-The deterministic cached-observable allocation contract runs in `just ci` and can be checked independently through the `perf` Cargo profile:
+The deterministic query, proposal-cache, observable, and trace allocation contracts run in `just ci`.
+Check them independently through the `perf` profile:
 
 ```bash
 just allocation-check

@@ -6,6 +6,7 @@ use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::FoliationError;
 use crate::cdt::proposal_policy::CdtMoveFamilyPolicyError;
 use crate::config::CdtTopology;
+use crate::geometry::backends::delaunay::DelaunayError;
 use crate::geometry::{SpacetimeCoordinateComponent, SpacetimeCoordinateError};
 use markov_chain_monte_carlo::{DiscreteProposalRatioError, McmcError, StepOutcome};
 use std::fmt;
@@ -439,6 +440,43 @@ impl fmt::Display for OutputFormat {
     }
 }
 
+/// A failed operation while restoring a partially published output set.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum OutputRollbackFailure {
+    /// A newly published replacement could not be removed.
+    #[error("remove replacement {format} output {path}: {detail}")]
+    RemoveReplacement {
+        /// Destination containing the replacement.
+        path: String,
+        /// Artifact format.
+        format: OutputFormat,
+        /// Opaque filesystem diagnostic.
+        detail: String,
+    },
+    /// A preserved original could not be restored to its destination.
+    #[error("restore {format} backup {backup_path} to {path}: {detail}")]
+    RestoreBackup {
+        /// Destination that needs restoration.
+        path: String,
+        /// Retained original available for recovery.
+        backup_path: String,
+        /// Artifact format.
+        format: OutputFormat,
+        /// Opaque filesystem diagnostic.
+        detail: String,
+    },
+}
+
+/// Formats ordered restoration diagnostics while keeping their structured records available.
+fn format_output_rollback_failures(failures: &[OutputRollbackFailure]) -> String {
+    failures
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 /// Checkpoint serialization operation that failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -455,6 +493,50 @@ impl fmt::Display for CheckpointOperation {
             Self::Serialize => formatter.write_str("serialize"),
             Self::Deserialize => formatter.write_str("deserialize"),
         }
+    }
+}
+
+/// Random-number stream stored in an exact simulation checkpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum CheckpointRngStream {
+    /// Metropolis acceptance draws.
+    Acceptance,
+    /// Move-family and local-site proposal draws.
+    Proposal,
+}
+
+impl fmt::Display for CheckpointRngStream {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Acceptance => "acceptance",
+            Self::Proposal => "proposal",
+        })
+    }
+}
+
+/// Stage of a planned proposal that failed in the upstream sampler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ProposalFailureStage {
+    /// Constructing the speculative state, before an acceptance decision.
+    Planning,
+    /// Scoring the speculative state, before an acceptance decision.
+    Scoring,
+    /// Evaluating the Hastings correction, before an acceptance decision.
+    Ratio,
+    /// Publishing a proposal after acceptance.
+    Commit,
+}
+
+impl fmt::Display for ProposalFailureStage {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Planning => "planning",
+            Self::Scoring => "scoring",
+            Self::Ratio => "proposal-ratio evaluation",
+            Self::Commit => "accepted-proposal commit",
+        })
     }
 }
 
@@ -603,15 +685,17 @@ impl fmt::Display for CdtValidationCheck {
 ///
 /// assert!(format!("{failure}").contains("spacelike=3"));
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, thiserror::Error)]
 #[non_exhaustive]
 pub enum CdtValidationFailure {
     /// Generic backend geometry validation failed with an upstream diagnostic.
+    #[error("{detail}")]
     BackendGeometry {
         /// Upstream geometry validation diagnostic.
         detail: String,
     },
     /// Face vertices could not be resolved through the geometry backend.
+    #[error("failed to resolve vertices for face {face}: {detail}")]
     FaceVerticesUnavailable {
         /// Face being validated.
         face: String,
@@ -619,6 +703,7 @@ pub enum CdtValidationFailure {
         detail: String,
     },
     /// A face had the wrong number of vertices for a CDT triangle.
+    #[error("face {face} has {actual} vertices, expected {expected}")]
     FaceVertexCount {
         /// Face being validated.
         face: String,
@@ -628,11 +713,15 @@ pub enum CdtValidationFailure {
         expected: usize,
     },
     /// A vertex in a foliated triangulation was missing its time label.
+    #[error("vertex {vertex} has no time label in a foliated triangulation")]
     MissingVertexTimeLabel {
         /// Vertex missing its time label.
         vertex: String,
     },
     /// A triangle had the wrong spacelike/timelike edge pattern.
+    #[error(
+        "invalid CDT triangle at face {face}: spacelike={spacelike_edges}, timelike={timelike_edges}"
+    )]
     InvalidCdtTriangle {
         /// Face being validated.
         face: String,
@@ -642,6 +731,7 @@ pub enum CdtValidationFailure {
         timelike_edges: u8,
     },
     /// Coordinate lookup failed while assigning foliation labels.
+    #[error("failed to read coordinates for vertex {vertex}: {detail}")]
     VertexCoordinateReadFailed {
         /// Vertex whose coordinates could not be read.
         vertex: String,
@@ -649,6 +739,7 @@ pub enum CdtValidationFailure {
         detail: String,
     },
     /// A vertex coordinate did not have enough dimensions for foliation assignment.
+    #[error("vertex {vertex} has {actual} coordinates, expected ≥ {expected_minimum}")]
     VertexCoordinateDimension {
         /// Vertex whose coordinate dimensionality was invalid.
         vertex: String,
@@ -658,6 +749,7 @@ pub enum CdtValidationFailure {
         expected_minimum: usize,
     },
     /// A vertex coordinate had the wrong exact dimensionality for a parsed coordinate type.
+    #[error("vertex {vertex} has {actual} coordinates, expected exactly {expected}")]
     VertexCoordinateDimensionMismatch {
         /// Vertex whose coordinate dimensionality was invalid.
         vertex: String,
@@ -667,6 +759,7 @@ pub enum CdtValidationFailure {
         expected: usize,
     },
     /// A vertex coordinate component was NaN or infinite.
+    #[error("vertex {vertex} has non-finite {component} coordinate: {value}")]
     VertexCoordinateNonFinite {
         /// Vertex whose coordinate was invalid.
         vertex: String,
@@ -676,11 +769,76 @@ pub enum CdtValidationFailure {
         value: String,
     },
     /// A foliated face was not classifiable as a strict Up or Down CDT simplex.
+    #[error("face {face} is not a strict CDT simplex (expected Up or Down)")]
     NonStrictSimplex {
         /// Face being classified.
         face: String,
     },
+    /// A move cannot produce a positive, representable simplex count.
+    #[error("local {field} count {previous} - {removed} + {added} must be positive and fit usize")]
+    LocalCountTransition {
+        /// Simplex count being updated.
+        field: SimplexCountField,
+        /// Count before the move.
+        previous: usize,
+        /// Number to remove.
+        removed: usize,
+        /// Number to add.
+        added: usize,
+    },
+    /// Backend counts disagree with the local move receipt.
+    #[error(
+        "local move count delta mismatch: expected V={expected_vertices}, F={expected_faces}; got V={actual_vertices}, F={actual_faces}"
+    )]
+    LocalMoveCountMismatch {
+        /// Observed live vertices.
+        actual_vertices: usize,
+        /// Required live vertices.
+        expected_vertices: usize,
+        /// Observed live faces.
+        actual_faces: usize,
+        /// Required live faces.
+        expected_faces: usize,
+    },
+    /// A foliated insertion or removal omitted its time label.
+    #[error("foliated volume move did not carry a time-slice label")]
+    MissingLocalMoveTimeLabel,
+    /// A face receipt names a slab outside the profile.
+    #[error("time slab {slice} is outside slab-triangle profile length {profile_len}")]
+    SlabProfileIndexOutOfRange {
+        /// Slab named by the receipt.
+        slice: u32,
+        /// Number of stored slabs.
+        profile_len: usize,
+    },
+    /// A local receipt removes more triangles than the slab contains.
+    #[error("cannot remove {removed} triangles from slab {slice} containing {available}")]
+    SlabProfileRemovalExceedsCount {
+        /// Affected slab.
+        slice: u32,
+        /// Stored triangle count.
+        available: u32,
+        /// Requested removal count.
+        removed: u32,
+    },
+    /// The cached total cannot account for a local removal receipt.
+    #[error("cannot remove {removed} triangles from cached profile total {total}")]
+    SlabProfileRemovalExceedsTotal {
+        /// Cached profile total.
+        total: u64,
+        /// Requested removal count.
+        removed: u32,
+    },
+    /// Incremental slab counts disagree with the live face count.
+    #[error("local slab-triangle-profile total {actual} does not match {expected} faces")]
+    SlabProfileTotalMismatch {
+        /// Cached slab-triangle total.
+        actual: u64,
+        /// Required total from live faces.
+        expected: usize,
+    },
     /// Local ergodic-move candidate geometry failed a post-mutation invariant.
+    #[error("{detail}")]
     ErgodicMoveCandidateGeometry {
         /// Diagnostic for the failed local candidate.
         detail: String,
@@ -711,78 +869,6 @@ impl CdtValidationFailure {
         }
     }
 }
-
-impl fmt::Display for CdtValidationFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::BackendGeometry { detail } | Self::ErgodicMoveCandidateGeometry { detail } => {
-                formatter.write_str(detail)
-            }
-            Self::FaceVerticesUnavailable { face, detail } => {
-                write!(
-                    formatter,
-                    "failed to resolve vertices for face {face}: {detail}"
-                )
-            }
-            Self::FaceVertexCount {
-                face,
-                actual,
-                expected,
-            } => write!(
-                formatter,
-                "face {face} has {actual} vertices, expected {expected}"
-            ),
-            Self::MissingVertexTimeLabel { vertex } => write!(
-                formatter,
-                "vertex {vertex} has no time label in a foliated triangulation"
-            ),
-            Self::InvalidCdtTriangle {
-                face,
-                spacelike_edges,
-                timelike_edges,
-            } => write!(
-                formatter,
-                "invalid CDT triangle at face {face}: spacelike={spacelike_edges}, timelike={timelike_edges}"
-            ),
-            Self::VertexCoordinateReadFailed { vertex, detail } => {
-                write!(
-                    formatter,
-                    "failed to read coordinates for vertex {vertex}: {detail}"
-                )
-            }
-            Self::VertexCoordinateDimension {
-                vertex,
-                actual,
-                expected_minimum,
-            } => write!(
-                formatter,
-                "vertex {vertex} has {actual} coordinates, expected ≥ {expected_minimum}"
-            ),
-            Self::VertexCoordinateDimensionMismatch {
-                vertex,
-                actual,
-                expected,
-            } => write!(
-                formatter,
-                "vertex {vertex} has {actual} coordinates, expected exactly {expected}"
-            ),
-            Self::VertexCoordinateNonFinite {
-                vertex,
-                component,
-                value,
-            } => write!(
-                formatter,
-                "vertex {vertex} has non-finite {component} coordinate: {value}"
-            ),
-            Self::NonStrictSimplex { face } => write!(
-                formatter,
-                "face {face} is not a strict CDT simplex (expected Up or Down)"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for CdtValidationFailure {}
 
 /// Observable counter converted to floating point for numerical estimation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1004,6 +1090,25 @@ impl fmt::Display for SimplexCountField {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CheckpointResumeFailure {
+    /// The stored duration is not normalized into seconds and fractional nanoseconds.
+    #[error("elapsed-time nanoseconds {nanos} must be less than 1000000000")]
+    InvalidElapsedNanoseconds {
+        /// Invalid fractional nanoseconds.
+        nanos: u32,
+    },
+    /// Serialized foliation and triangulation metadata disagree on the slice count.
+    #[error(
+        "foliation num_slices {foliation_slices} does not match metadata time_slices {metadata_slices}"
+    )]
+    FoliationSliceCountMismatch {
+        /// Slice count declared by the foliation record.
+        foliation_slices: u32,
+        /// Slice count declared by triangulation metadata.
+        metadata_slices: u32,
+    },
+    /// A serialized step cannot denote a completed sampler transition.
+    #[error("step telemetry step must be nonzero")]
+    StepTelemetryStepZero,
     /// Resumed step count would overflow.
     #[error("resumed step count exceeds u32::MAX")]
     StepCountOverflow,
@@ -1478,13 +1583,13 @@ pub enum CheckpointResumeFailure {
     },
 }
 
-/// Lower-level source for a Metropolis-accepted move that could not be applied.
+/// Lower-level source for a CDT proposal that could not be applied.
 ///
-/// [`CdtError::MetropolisMoveApplicationFailed`] uses this enum to preserve the
-/// category and structured context of a hard failure after Metropolis has
-/// accepted a move type. It is intentionally smaller than recursively storing a
-/// full [`CdtError`] while still giving callers typed branches for backend,
-/// validation, topology, foliation, and causality failures.
+/// [`CdtError::MetropolisProposalApplicationFailed`] uses this enum to preserve
+/// the category and structured context of a hard failure during proposal
+/// planning or commitment. It gives callers typed branches for backend,
+/// validation, topology, foliation, and causality failures without storing a
+/// full [`CdtError`] inline.
 ///
 /// # Examples
 ///
@@ -1504,7 +1609,17 @@ pub enum CheckpointResumeFailure {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum MetropolisMoveApplicationFailure {
-    /// A backend payload or topology edit failed while applying the accepted move.
+    /// A local geometry edit failed with its adapter-owned error preserved.
+    #[error("backend edit failed [{operation}] on {target}: {source}")]
+    BackendEdit {
+        /// CDT operation that requested the edit.
+        operation: BackendMutationOperation,
+        /// Candidate handle or site.
+        target: String,
+        /// Typed geometry adapter failure.
+        source: Box<DelaunayError>,
+    },
+    /// A backend payload or topology edit failed while applying the proposed move.
     #[error("backend mutation failed [{operation}] on {target}: {detail}")]
     BackendMutation {
         /// Mutation operation being attempted.
@@ -1577,7 +1692,7 @@ pub enum MetropolisMoveApplicationFailure {
         step_distance: u32,
     },
     /// A hard failure reached the Metropolis boundary through an unexpected error category.
-    #[error("unexpected accepted-move failure: {source}")]
+    #[error("unexpected move-application failure: {source}")]
     Unexpected {
         /// Lower-level typed error retained for inspection and source chaining.
         #[source]
@@ -1588,6 +1703,15 @@ pub enum MetropolisMoveApplicationFailure {
 impl From<CdtError> for MetropolisMoveApplicationFailure {
     fn from(error: CdtError) -> Self {
         match error {
+            CdtError::BackendEditFailed {
+                operation,
+                target,
+                source,
+            } => Self::BackendEdit {
+                operation,
+                target,
+                source,
+            },
             CdtError::BackendMutationFailed {
                 operation,
                 target,
@@ -1638,6 +1762,7 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
                 step_distance,
             },
             CdtError::MetropolisMoveApplicationFailed { source, .. }
+            | CdtError::MetropolisProposalApplicationFailed { source, .. }
             | CdtError::ProposalApplicationFailed { source, .. } => source,
             unexpected @ (CdtError::UnsupportedDimension(_)
             | CdtError::DelaunayGenerationFailed { .. }
@@ -1649,6 +1774,8 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             | CdtError::InvalidMeasurementSlabTriangleProfile { .. }
             | CdtError::InvalidScalarTraceCount { .. }
             | CdtError::MeasurementCountOverflow { .. }
+            | CdtError::SlabTriangleProfileTotalOverflow
+            | CdtError::SlabTriangleCountOverflow { .. }
             | CdtError::InvalidSimulationConfiguration { .. }
             | CdtError::ProposalPolicyFailed { .. }
             | CdtError::MetropolisProposalPolicyFailed { .. }
@@ -1663,11 +1790,13 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             | CdtError::ObservableNumericConversionFailed { .. }
             | CdtError::OutputPreparationFailed { .. }
             | CdtError::OutputWriteFailed { .. }
+            | CdtError::OutputRollbackFailed { .. }
             | CdtError::OutputPathResolutionFailed { .. }
             | CdtError::OutputPathConflict { .. }
             | CdtError::OutputPathBusy { .. }
             | CdtError::OutputReadFailed { .. }
             | CdtError::CheckpointSerializationFailed { .. }
+            | CdtError::InvalidCheckpointRngState { .. }
             | CdtError::UnsupportedCheckpointVersion { .. }
             | CdtError::CheckpointResumeFailed { .. }) => Self::Unexpected {
                 source: Box::new(unexpected),
@@ -1680,6 +1809,16 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CdtError {
+    /// A local geometry edit failed with its adapter-owned error preserved.
+    #[error("Backend edit failed [{operation}] on {target}: {source}")]
+    BackendEditFailed {
+        /// CDT operation that requested the edit.
+        operation: BackendMutationOperation,
+        /// Candidate handle or site.
+        target: String,
+        /// Typed geometry adapter failure.
+        source: Box<DelaunayError>,
+    },
     /// Invalid dimension specified
     #[error("Unsupported dimension: {0}. Only 2D is currently supported")]
     UnsupportedDimension(u32),
@@ -1776,6 +1915,17 @@ pub enum CdtError {
         /// Stored measurement triangle count.
         triangles: u32,
     },
+    /// The sum of slab-triangle counts exceeded the supported total representation.
+    #[error("Slab-triangle profile total exceeds u64::MAX")]
+    SlabTriangleProfileTotalOverflow,
+    /// One slab or local receipt exceeded the profile's count representation.
+    #[error("slab {slice} triangle count {value} exceeds u32::MAX")]
+    SlabTriangleCountOverflow {
+        /// Slab whose count overflowed.
+        slice: u32,
+        /// Exact attempted count.
+        value: u64,
+    },
     /// Scalar trace row construction failed because a count was not strictly positive.
     #[error(
         "Invalid scalar trace count: {field} (got: {provided_value}, expected: strictly positive)"
@@ -1823,6 +1973,22 @@ pub enum CdtError {
         /// Number of application attempts made before failing.
         attempts: usize,
         /// Most specific lower-level rejection or failure observed.
+        source: MetropolisMoveApplicationFailure,
+    },
+    /// The sampler failed to construct, score, or commit a concrete proposal.
+    #[error(
+        "CDT {move_type:?} proposal failed during {stage} at step {step}, attempt {attempt}: {source}"
+    )]
+    MetropolisProposalApplicationFailed {
+        /// Sampler step that could not complete.
+        step: u32,
+        /// Stage that failed, distinguishing speculative work from accepted commitment.
+        stage: ProposalFailureStage,
+        /// Selected move family.
+        move_type: MoveType,
+        /// Local-site attempt that failed.
+        attempt: usize,
+        /// Original typed move failure.
         source: MetropolisMoveApplicationFailure,
     },
     /// Planning or committing a standalone planned CDT proposal hit a hard failure.
@@ -2022,6 +2188,14 @@ pub enum CdtError {
         /// Lower-level I/O or serialization error.
         detail: String,
     },
+    /// Output publication failed and one or more destinations could not be restored.
+    #[error("{source}; output rollback failed: {}", format_output_rollback_failures(.failures))]
+    OutputRollbackFailed {
+        /// Primary publication error, preserved independently of restoration failures.
+        source: Box<Self>,
+        /// Ordered operations that failed to restore the previous destination set.
+        failures: Vec<OutputRollbackFailure>,
+    },
     /// Resolving a configured output path failed before writing began.
     #[error("Failed to resolve output path from base {base_path}: {detail}")]
     OutputPathResolutionFailed {
@@ -2065,6 +2239,14 @@ pub enum CdtError {
         target: String,
         /// Lower-level serialization error.
         detail: String,
+    },
+    /// A checkpoint RNG stream has the forbidden all-zero state.
+    #[error("cannot {operation} checkpoint {stream} RNG: invalid all-zero state")]
+    InvalidCheckpointRngState {
+        /// Encoding or restoration operation that found the invalid stream.
+        operation: CheckpointOperation,
+        /// Stream whose state is invalid.
+        stream: CheckpointRngStream,
     },
     /// A checkpoint envelope declares a wire-format version this release cannot read.
     #[error(

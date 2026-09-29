@@ -35,11 +35,12 @@
 //! # Checkpointing
 //!
 //! Durable simulation continuation uses the versioned, CDT-owned
-//! [`CdtMcmcCheckpoint`] JSON format. Version 1 stores dependency-neutral geometry,
-//! chain accounting, telemetry, elapsed time, and both RNG streams; restoration
-//! rebuilds transient caches and validates geometry and CDT invariants before use.
-//! Direct Serde serialization of a standalone [`CdtTriangulation2D`] remains an
-//! implementation-shaped same-build facility rather than this compatibility contract.
+//! [`CdtMcmcCheckpoint`] JSON format. Version 2 embeds Delaunay's exact Level 4
+//! geometry snapshot alongside CDT chain accounting, telemetry, elapsed time, and
+//! both RNG streams. Restoration rebuilds transient caches and validates geometry
+//! and CDT invariants before use. Older checkpoint formats are unsupported.
+//! Direct Serde serialization of a standalone [`CdtTriangulation2D`] shares the
+//! geometry snapshot format but does not store the sampler state needed to resume.
 //!
 //! ```
 //! use causal_triangulations::prelude::simulation::*;
@@ -52,7 +53,7 @@
 //!     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
 //!     let json = checkpoint.to_json()?;
 //!     let restored = CdtMcmcCheckpoint::from_json(&json)?;
-//!     assert_eq!(CdtMcmcCheckpoint::FORMAT_VERSION, 1);
+//!     assert_eq!(CdtMcmcCheckpoint::FORMAT_VERSION, 2);
 //!     assert_eq!(restored.current_step().get(), 1);
 //!     Ok(())
 //! }
@@ -214,11 +215,12 @@ pub use config::{
 pub use errors::{
     BackendMutationOperation, BackendRollbackFailure, BackendRollbackFailures, CdtError, CdtResult,
     CdtValidationCheck, CdtValidationFailure, CheckpointMoveCounter, CheckpointOperation,
-    CheckpointResumeFailure, ConfigurationSetting, DelaunayGenerationFailure,
+    CheckpointResumeFailure, CheckpointRngStream, ConfigurationSetting, DelaunayGenerationFailure,
     DelaunayGenerationQuantity, DelaunayGenerationStage, DelaunayValidationLevel,
     GenerationParameterIssue, MeasurementCountField, MetropolisMoveApplicationFailure,
-    ObservableQuantity, OutputFormat, OutputPreparationStage, OutputWriteStage,
-    ProposalTelemetryCounter, ScalarTraceField, SimplexCountField, TriangulationMetadataField,
+    ObservableQuantity, OutputFormat, OutputPreparationStage, OutputRollbackFailure,
+    OutputWriteStage, ProposalFailureStage, ProposalTelemetryCounter, ScalarTraceField,
+    SimplexCountField, TriangulationMetadataField,
 };
 pub use geometry::traits::TriangulationQuery;
 pub use geometry::{SpacetimeCoordinate, SpacetimeCoordinateComponent, SpacetimeCoordinateError};
@@ -284,7 +286,7 @@ pub mod prelude {
     ///     BackendMutationOperation, CdtError, CdtValidationCheck,
     ///     CdtMoveFamilyPolicyError, CdtValidationFailure,
     ///     DiscreteProposalRatioError, FoliationError, McmcError,
-    ///     MetropolisMoveApplicationFailure,
+    ///     MetropolisMoveApplicationFailure, ProposalFailureStage,
     ///     SpacetimeCoordinateComponent,
     /// };
     /// use causal_triangulations::prelude::moves::MoveType;
@@ -335,17 +337,18 @@ pub mod prelude {
     ///     }
     /// );
     ///
-    /// let err = CdtError::MetropolisMoveApplicationFailed {
+    /// let err = CdtError::MetropolisProposalApplicationFailed {
     ///     step: 3,
+    ///     stage: ProposalFailureStage::Planning,
     ///     move_type: MoveType::Move31Remove,
-    ///     attempts: 8,
+    ///     attempt: 8,
     ///     source: MetropolisMoveApplicationFailure::BackendMutation {
     ///         operation: BackendMutationOperation::RemoveVertex,
     ///         target: "vertex VertexKey(7v1)".to_string(),
     ///         detail: "backend reported invalid vertex key".to_string(),
     ///     },
     /// };
-    /// assert!(format!("{err}").contains("Metropolis accepted Move31Remove"));
+    /// assert!(format!("{err}").contains("proposal failed during planning at step 3"));
     /// ```
     pub mod errors {
         pub use crate::cdt::foliation::FoliationError;
@@ -353,12 +356,13 @@ pub mod prelude {
         pub use crate::errors::{
             BackendMutationOperation, BackendRollbackFailure, BackendRollbackFailures, CdtError,
             CdtResult, CdtValidationCheck, CdtValidationFailure, CheckpointMoveCounter,
-            CheckpointOperation, CheckpointResumeFailure, ConfigurationSetting,
-            DelaunayGenerationFailure, DelaunayGenerationQuantity, DelaunayGenerationStage,
-            DelaunayValidationLevel, GenerationParameterIssue, MeasurementCountField,
-            MetropolisMoveApplicationFailure, ObservableQuantity, OutputFormat,
-            OutputPreparationStage, OutputWriteStage, ProposalTelemetryCounter, ScalarTraceField,
-            SimplexCountField, TriangulationMetadataField,
+            CheckpointOperation, CheckpointResumeFailure, CheckpointRngStream,
+            ConfigurationSetting, DelaunayGenerationFailure, DelaunayGenerationQuantity,
+            DelaunayGenerationStage, DelaunayValidationLevel, GenerationParameterIssue,
+            MeasurementCountField, MetropolisMoveApplicationFailure, ObservableQuantity,
+            OutputFormat, OutputPreparationStage, OutputRollbackFailure, OutputWriteStage,
+            ProposalFailureStage, ProposalTelemetryCounter, ScalarTraceField, SimplexCountField,
+            TriangulationMetadataField,
         };
         pub use crate::geometry::SpacetimeCoordinateComponent;
         pub use markov_chain_monte_carlo::{DiscreteProposalRatioError, McmcError};
@@ -564,8 +568,8 @@ pub mod prelude {
     pub mod geometry {
         pub use crate::errors::DelaunayValidationLevel;
         pub use crate::geometry::backends::delaunay::{
-            DelaunayBackend, DelaunayError, DelaunayFlipOutputFailure, DelaunayOperation,
-            NonFlippableEdgeReason,
+            DelaunayBackend, DelaunayCandidateRejection, DelaunayError, DelaunayFlipOutputFailure,
+            DelaunayOperation, NonFlippableEdgeReason,
         };
         pub use crate::geometry::generators::{
             GlobalTopology, TopologyGuarantee, ToroidalConstructionMode, ToroidalDomain,
@@ -935,13 +939,13 @@ impl<'a> StagedOutputs<'a> {
         for output in self.csv.iter_mut().chain(&mut self.json) {
             if let Err(error) = output.back_up_existing() {
                 let rollback_failures = self.rollback();
-                return Err(attach_output_rollback_failures(error, &rollback_failures));
+                return Err(attach_output_rollback_failures(error, rollback_failures));
             }
         }
         for output in self.csv.iter_mut().chain(&mut self.json) {
             if let Err(error) = output.persist() {
                 let rollback_failures = self.rollback();
-                return Err(attach_output_rollback_failures(error, &rollback_failures));
+                return Err(attach_output_rollback_failures(error, rollback_failures));
             }
         }
         for output in self.csv.iter_mut().chain(&mut self.json) {
@@ -951,7 +955,7 @@ impl<'a> StagedOutputs<'a> {
     }
 
     /// Restores every destination touched by a partial commit.
-    fn rollback(&mut self) -> Vec<String> {
+    fn rollback(&mut self) -> Vec<OutputRollbackFailure> {
         self.csv
             .iter_mut()
             .chain(&mut self.json)
@@ -1055,15 +1059,16 @@ impl<'a> StagedOutput<'a> {
     }
 
     /// Restores the previous destination or removes a newly published output.
-    fn rollback(&mut self) -> Vec<String> {
+    fn rollback(&mut self) -> Vec<OutputRollbackFailure> {
         let remove_failure = if self.published {
             match fs::remove_file(self.final_path) {
                 Ok(()) => None,
                 Err(error) if error.kind() == ErrorKind::NotFound => None,
-                Err(error) => Some(format!(
-                    "remove replacement {}: {error}",
-                    self.final_path.display()
-                )),
+                Err(error) => Some(OutputRollbackFailure::RemoveReplacement {
+                    path: self.final_path.display().to_string(),
+                    format: self.format,
+                    detail: error.to_string(),
+                }),
             }
         } else {
             None
@@ -1081,11 +1086,12 @@ impl<'a> StagedOutput<'a> {
                     if let Some(remove_failure) = remove_failure {
                         failures.push(remove_failure);
                     }
-                    failures.push(format!(
-                        "restore backup {} to {}: {error}",
-                        self.backup_path.display(),
-                        self.final_path.display()
-                    ));
+                    failures.push(OutputRollbackFailure::RestoreBackup {
+                        path: self.final_path.display().to_string(),
+                        backup_path: self.backup_path.display().to_string(),
+                        format: self.format,
+                        detail: error.to_string(),
+                    });
                     failures
                 }
             }
@@ -1172,23 +1178,16 @@ fn sibling_backup_output_path(path: &Path, format: OutputFormat) -> PathBuf {
 }
 
 /// Retains the primary commit error while reporting any failed restoration work.
-fn attach_output_rollback_failures(error: CdtError, failures: &[String]) -> CdtError {
+fn attach_output_rollback_failures(
+    error: CdtError,
+    failures: Vec<OutputRollbackFailure>,
+) -> CdtError {
     if failures.is_empty() {
         return error;
     }
-    match error {
-        CdtError::OutputWriteFailed {
-            path,
-            format,
-            stage,
-            detail,
-        } => CdtError::OutputWriteFailed {
-            path,
-            format,
-            stage,
-            detail: format!("{detail}; output rollback failed: {}", failures.join("; ")),
-        },
-        error => error,
+    CdtError::OutputRollbackFailed {
+        source: Box::new(error),
+        failures,
     }
 }
 
@@ -1687,6 +1686,57 @@ mod tests {
             "staged JSON should be cleaned when commit fails"
         );
         fs::remove_dir(&json_path).expect("blocking JSON directory should be removable");
+    }
+
+    #[test]
+    fn staged_outputs_report_failed_restoration_with_recovery_paths() {
+        let root = temp_output_path("rollback-failure");
+        fs::create_dir(&root).expect("fixture directory");
+        let csv = root.join("trace.csv");
+        let json = root.join("summary.json");
+        fs::write(&csv, "original").expect("original CSV");
+        let paths = ResolvedOutputPaths {
+            csv: Some(csv.clone()),
+            json: Some(json),
+        };
+        let mut outputs = StagedOutputs::new(&paths);
+        let csv_output = outputs.csv.as_mut().expect("CSV configured");
+        fs::write(&csv_output.temp_path, "replacement").expect("replacement CSV");
+        csv_output.back_up_existing().expect("backup original");
+        csv_output.persist().expect("publish first output");
+        let backup = csv_output.backup_path.clone();
+        // Simulate interference with the published destination before the second publish fails.
+        fs::remove_file(&csv).expect("remove replacement");
+        fs::create_dir(&csv).expect("block CSV restoration with directory");
+        let primary = outputs
+            .json
+            .as_mut()
+            .expect("JSON configured")
+            .persist()
+            .expect_err("missing staged JSON");
+        let error = attach_output_rollback_failures(primary, outputs.rollback());
+        let CdtError::OutputRollbackFailed { source, failures } = &error else {
+            panic!("expected restoration failure: {error}")
+        };
+        assert_matches!(
+            source.as_ref(),
+            CdtError::OutputWriteFailed {
+                format: OutputFormat::Json,
+                stage: OutputWriteStage::Persist,
+                ..
+            }
+        );
+        assert_matches!(failures.as_slice(), [
+            OutputRollbackFailure::RemoveReplacement { path, format: OutputFormat::Csv, .. },
+            OutputRollbackFailure::RestoreBackup { path: restored_path, backup_path, format: OutputFormat::Csv, .. },
+        ] if path == &csv.display().to_string() && restored_path == path && backup_path == &backup.display().to_string());
+        assert_eq!(
+            fs::read_to_string(&backup).expect("retained recovery file"),
+            "original"
+        );
+        assert!(error.to_string().contains(&backup.display().to_string()));
+        drop(outputs);
+        fs::remove_dir_all(root).expect("remove fixture");
     }
 
     #[test]

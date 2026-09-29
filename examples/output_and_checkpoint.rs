@@ -18,7 +18,7 @@ fn main() -> CdtResult<()> {
         env::temp_dir().join(format!("causal-triangulations-output-{}", process::id()));
     let csv_path = output_dir.join("trace.csv");
     let json_path = output_dir.join("summary.json");
-    let checkpoint_path = output_dir.join("checkpoint-v1.json");
+    let checkpoint_path = output_dir.join("checkpoint-v2.json");
 
     let config = CdtConfig {
         simulate: true,

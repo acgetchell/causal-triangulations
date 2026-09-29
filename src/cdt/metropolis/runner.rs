@@ -23,15 +23,14 @@ use super::helpers::{
 };
 use super::telemetry::{MonteCarloStep, MonteCarloStepOutcome, ProposalStatistics};
 use crate::cdt::action::ActionConfig;
-use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveStatistics, MoveType};
+use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveStatistics};
 use crate::cdt::proposal_policy::{CdtMoveFamilyPolicy, UniformCdtMoveFamilyPolicy};
 use crate::cdt::results::{
     CdtScalarTraceOutcome, CdtScalarTraceRow, Measurement, SimulationResultsBackend,
 };
 use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::errors::{
-    CdtError, CdtResult, CheckpointResumeFailure, ConfigurationSetting,
-    MetropolisMoveApplicationFailure,
+    CdtError, CdtResult, CheckpointResumeFailure, ConfigurationSetting, ProposalFailureStage,
 };
 use markov_chain_monte_carlo::{
     Chain, ChainCheckpoint, DelayedStep, DelayedStepError, Sampler, StepOutcome,
@@ -62,7 +61,7 @@ pub struct MetropolisConfig {
 }
 
 #[derive(Deserialize)]
-struct MetropolisConfigWire {
+pub(crate) struct MetropolisConfigWire {
     temperature: f64,
     steps: u32,
     thermalization_steps: u32,
@@ -75,7 +74,16 @@ impl<'de> Deserialize<'de> for MetropolisConfig {
     where
         D: serde::Deserializer<'de>,
     {
-        let wire = MetropolisConfigWire::deserialize(deserializer)?;
+        MetropolisConfigWire::deserialize(deserializer)?
+            .try_into()
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl TryFrom<MetropolisConfigWire> for MetropolisConfig {
+    type Error = CdtError;
+
+    fn try_from(wire: MetropolisConfigWire) -> CdtResult<Self> {
         Self::try_from_parts(
             wire.temperature,
             wire.steps,
@@ -83,7 +91,6 @@ impl<'de> Deserialize<'de> for MetropolisConfig {
             wire.measurement_frequency,
             wire.seed,
         )
-        .map_err(serde::de::Error::custom)
     }
 }
 
@@ -524,7 +531,7 @@ where
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
     /// configuration is invalid,
-    /// [`CdtError::MetropolisMoveApplicationFailed`] if an accepted move causes
+    /// [`CdtError::MetropolisProposalApplicationFailed`] if a proposal encounters
     /// a hard backend mutation failure,
     /// [`CdtError::PlannedProposalTelemetryMissing`] if the upstream sampler
     /// omits CDT step metadata or accepted-step action evidence,
@@ -571,7 +578,7 @@ where
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
     /// configuration is invalid,
-    /// [`CdtError::MetropolisMoveApplicationFailed`] if an accepted move causes
+    /// [`CdtError::MetropolisProposalApplicationFailed`] if a proposal encounters
     /// a hard backend mutation failure,
     /// [`CdtError::PlannedProposalTelemetryMissing`] if the upstream sampler
     /// omits CDT step metadata or accepted-step action evidence,
@@ -620,8 +627,8 @@ where
     /// In memory, the checkpoint uses the MCMC crate's [`ChainCheckpoint`] for
     /// sampler interoperation and stores CDT-specific proposal state, telemetry,
     /// and RNG streams beside it. [`CdtMcmcCheckpoint::to_json`] projects that
-    /// state into the versioned CDT-owned wire format without embedding the
-    /// upstream checkpoint or Delaunay TDS representation.
+    /// state into the versioned CDT-owned envelope, with geometry serialized
+    /// through Delaunay's exact Level 4 owner snapshot.
     ///
     /// Direct in-memory resume through [`Self::resume_from_checkpoint`] or
     /// [`Self::resume_to_checkpoint`] does not reserialize the triangulation.
@@ -636,7 +643,7 @@ where
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
     /// configuration is invalid,
-    /// [`CdtError::MetropolisMoveApplicationFailed`] if an accepted move causes
+    /// [`CdtError::MetropolisProposalApplicationFailed`] if a proposal encounters
     /// a hard backend mutation failure,
     /// [`CdtError::PlannedProposalTelemetryMissing`] if the upstream sampler
     /// omits CDT step metadata or accepted-step action evidence,
@@ -694,7 +701,7 @@ where
     /// Metropolis configuration is invalid, or
     /// [`CdtError::CheckpointResumeFailed`] if the checkpoint is incompatible
     /// with this algorithm or internally inconsistent. Returns
-    /// [`CdtError::MetropolisMoveApplicationFailed`],
+    /// [`CdtError::MetropolisProposalApplicationFailed`],
     /// [`CdtError::PlannedProposalTelemetryMissing`] if resumed sampling omits
     /// CDT step metadata or accepted-step action evidence,
     /// [`CdtError::InvalidSimplexCount`] if a resumed live triangulation has zero
@@ -759,7 +766,7 @@ where
     /// Metropolis configuration is invalid, or
     /// [`CdtError::CheckpointResumeFailed`] if the checkpoint is incompatible
     /// with this algorithm or internally inconsistent. Returns
-    /// [`CdtError::MetropolisMoveApplicationFailed`],
+    /// [`CdtError::MetropolisProposalApplicationFailed`],
     /// [`CdtError::PlannedProposalTelemetryMissing`] if resumed sampling omits
     /// CDT step metadata or accepted-step action evidence,
     /// [`CdtError::InvalidSimplexCount`] if a resumed live triangulation has zero
@@ -1251,17 +1258,25 @@ fn staged_measurement_for_step<P>(
 
 /// Maps upstream planned-proposal failures into CDT runner errors.
 ///
-/// Proposal-stage errors preserve move-family context through
-/// [`CdtError::MetropolisMoveApplicationFailed`]. Future upstream variants use
+/// Proposal-stage errors preserve the phase and move family through
+/// [`CdtError::MetropolisProposalApplicationFailed`]. Future upstream variants use
 /// [`CdtError::PlannedProposalStepFailed`] so they remain distinct from CDT's own
 /// missing-telemetry and unsupported-outcome invariants.
 fn planned_step_error(step: u32, error: DelayedStepError<CdtProposalError>) -> CdtError {
     match error {
         DelayedStepError::Mcmc(err) => CdtError::Mcmc(err),
-        DelayedStepError::Plan(err)
-        | DelayedStepError::ProposedLogProb(err)
-        | DelayedStepError::LogQRatio(err)
-        | DelayedStepError::Commit(err) => proposal_step_error(step, err),
+        DelayedStepError::Plan(err) => {
+            proposal_step_error(step, ProposalFailureStage::Planning, err)
+        }
+        DelayedStepError::ProposedLogProb(err) => {
+            proposal_step_error(step, ProposalFailureStage::Scoring, err)
+        }
+        DelayedStepError::LogQRatio(err) => {
+            proposal_step_error(step, ProposalFailureStage::Ratio, err)
+        }
+        DelayedStepError::Commit(err) => {
+            proposal_step_error(step, ProposalFailureStage::Commit, err)
+        }
         unexpected => CdtError::PlannedProposalStepFailed {
             step,
             detail: unexpected.to_string(),
@@ -1269,11 +1284,12 @@ fn planned_step_error(step: u32, error: DelayedStepError<CdtProposalError>) -> C
     }
 }
 
-/// Converts a CDT proposal error into the public accepted-move failure shape.
-///
-/// This keeps planned-proposal sampler errors compatible with the historical CDT error
-/// contract for hard move-application failures.
-fn proposal_step_error(step: u32, error: CdtProposalError) -> CdtError {
+/// Retains the sampler stage without claiming speculative moves were accepted.
+fn proposal_step_error(
+    step: u32,
+    stage: ProposalFailureStage,
+    error: CdtProposalError,
+) -> CdtError {
     match error {
         CdtProposalError::Policy { source } => {
             CdtError::MetropolisProposalPolicyFailed { step, source }
@@ -1289,7 +1305,13 @@ fn proposal_step_error(step: u32, error: CdtProposalError) -> CdtError {
             move_type,
             attempt,
             source,
-        } => accepted_move_error(step, move_type, attempt, source),
+        } => CdtError::MetropolisProposalApplicationFailed {
+            step,
+            stage,
+            move_type,
+            attempt,
+            source: source.into(),
+        },
     }
 }
 
@@ -1329,30 +1351,11 @@ fn simulation_rng(seed: Option<u64>) -> Xoshiro256PlusPlus {
     seed.map_or_else(rand::make_rng, Xoshiro256PlusPlus::seed_from_u64)
 }
 
-/// Builds the simulation-level error for an accepted move that could not be applied.
-///
-/// The move kernels keep causal, geometric, and backend failures orthogonal; this
-/// wrapper adds the Metropolis step, move type, and retry context callers need to
-/// debug a failed accepted application.
-fn accepted_move_error(
-    step: u32,
-    move_type: MoveType,
-    attempts: usize,
-    source: CdtError,
-) -> CdtError {
-    CdtError::MetropolisMoveApplicationFailed {
-        step,
-        move_type,
-        attempts,
-        source: MetropolisMoveApplicationFailure::from(source),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cdt::action::CDT_1P1_CRITICAL_TRIANGLE_COSMOLOGICAL_CONSTANT;
-    use crate::cdt::ergodic_moves::proposal_site_count;
+    use crate::cdt::ergodic_moves::{MoveType, proposal_site_count};
     use crate::cdt::foliation::FoliationError;
     use crate::cdt::metropolis::{
         adapter::{CdtProposalPlan, ConcretePlanAttempt, propose_concrete_plan},
@@ -1363,7 +1366,9 @@ mod tests {
     use crate::cdt::proposal_policy::CdtMoveFamilyPolicyError;
     use crate::cdt::results::{SimulationEvent, SimulationHistory};
     use crate::cdt::triangulation::CdtTriangulation;
-    use crate::errors::{BackendMutationOperation, CheckpointMoveCounter};
+    use crate::errors::{
+        BackendMutationOperation, CheckpointMoveCounter, MetropolisMoveApplicationFailure,
+    };
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
     use markov_chain_monte_carlo::{
@@ -2094,7 +2099,7 @@ mod tests {
     }
 
     #[test]
-    fn chunked_checkpoint_resume_matches_one_shot_seeded_run() {
+    fn serialized_chunked_checkpoint_resume_matches_one_shot_seeded_run() {
         let action_config = ActionConfig::default();
         let one_shot = MetropolisAlgorithm::new(
             seeded_metropolis_config(1.0, 10, 0, 1, 19),
@@ -2111,6 +2116,9 @@ mod tests {
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build"),
         )
         .expect("prefix run should checkpoint");
+        let json = prefix.to_json().expect("prefix should serialize");
+        let prefix = CdtMcmcCheckpoint::from_json(&json)
+            .expect("serialized prefix should restore exact continuation state");
 
         let chunked_checkpoint =
             MetropolisAlgorithm::new(seeded_metropolis_config(1.0, 6, 0, 1, 999), action_config)
@@ -3395,7 +3403,7 @@ mod tests {
     }
 
     #[test]
-    fn planned_step_error_maps_proposal_failures_to_accepted_move_error() {
+    fn planned_step_error_preserves_failure_stage_without_claiming_acceptance() {
         fn proposal_error() -> CdtProposalError {
             CdtProposalError::ApplicationFailed {
                 move_type: MoveType::Move31Remove,
@@ -3409,24 +3417,39 @@ mod tests {
         }
 
         let cases = [
-            DelayedStepError::Plan(proposal_error()),
-            DelayedStepError::ProposedLogProb(proposal_error()),
-            DelayedStepError::LogQRatio(proposal_error()),
-            DelayedStepError::Commit(proposal_error()),
+            (
+                DelayedStepError::Plan(proposal_error()),
+                ProposalFailureStage::Planning,
+            ),
+            (
+                DelayedStepError::ProposedLogProb(proposal_error()),
+                ProposalFailureStage::Scoring,
+            ),
+            (
+                DelayedStepError::LogQRatio(proposal_error()),
+                ProposalFailureStage::Ratio,
+            ),
+            (
+                DelayedStepError::Commit(proposal_error()),
+                ProposalFailureStage::Commit,
+            ),
         ];
 
-        for error in cases {
+        for (error, expected_stage) in cases {
+            let mapped = planned_step_error(23, error);
+            assert!(!mapped.to_string().contains("Metropolis accepted"));
             assert_matches!(
-                planned_step_error(23, error),
-                CdtError::MetropolisMoveApplicationFailed {
+                mapped,
+                CdtError::MetropolisProposalApplicationFailed {
                     step: 23,
+                    stage,
                     move_type: MoveType::Move31Remove,
-                    attempts: 3,
+                    attempt: 3,
                     source: MetropolisMoveApplicationFailure::BackendMutation {
                         operation: BackendMutationOperation::RemoveVertex,
                         ..
                     }
-                }
+                } if stage == expected_stage
             );
         }
     }
@@ -3978,7 +4001,7 @@ mod tests {
             } if source == ratio_source
         );
         assert_matches!(
-            proposal_step_error(23, ratio_error),
+            proposal_step_error(23, ProposalFailureStage::Ratio, ratio_error),
             CdtError::MetropolisProposalRatioFailed {
                 step: 23,
                 move_type: MoveType::Move13Add,

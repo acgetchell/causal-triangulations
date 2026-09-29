@@ -102,26 +102,11 @@ where
             continue;
         }
 
-        // Degenerate 1D simplex (edge): treat each endpoint as a "facet" (0D boundary).
-        if vertices.len() == 2 {
-            for v in &vertices {
-                let facet = vec![v.clone()];
-                facet_counts
-                    .entry(UnorderedSet(facet))
-                    .and_modify(|count| *count += 1)
-                    .or_insert(1);
-            }
-            continue;
-        }
-
-        // Simplex facets: omit each vertex once.
+        // Omitting each vertex also yields singleton boundary facets in 1D.
         for omit in 0..vertices.len() {
-            let facet: Vec<_> = vertices
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| *i != omit)
-                .map(|(_, v)| v.clone())
-                .collect();
+            let mut facet = Vec::with_capacity(vertices.len() - 1);
+            facet.extend_from_slice(&vertices[..omit]);
+            facet.extend_from_slice(&vertices[omit + 1..]);
 
             facet_counts
                 .entry(UnorderedSet(facet))
@@ -141,24 +126,21 @@ where
 /// Handle capabilities are constrained on individual operations so every
 /// [`TriangulationQuery`] implementation receives the extension trait without
 /// inheriting cloning, equality, or hashing requirements it does not use.
+///
+/// Structural validity does not establish the Delaunay property. Use
+/// [`TriangulationQuery::is_valid`] for structure and
+/// [`DelaunayBackend::is_delaunay`](super::backends::delaunay::DelaunayBackend::is_delaunay)
+/// for the backend's Level 5 check. This extension trait does not supply a
+/// Delaunay predicate for arbitrary query implementations.
+///
+/// ```compile_fail,E0599
+/// use causal_triangulations::prelude::geometry::TriangulationOps;
+///
+/// fn check_delaunay<B: TriangulationOps>(backend: &B) -> bool {
+///     backend.is_delaunay()
+/// }
+/// ```
 pub trait TriangulationOps: TriangulationQuery {
-    /// Check if the triangulation satisfies Delaunay property (if applicable)
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::testing::*;
-    ///
-    /// let backend = MockBackend::create_triangle();
-    /// assert!(backend.is_delaunay());
-    /// ```
-    fn is_delaunay(&self) -> bool {
-        // Delegate to the backend's validation method
-        // For Delaunay backends with appropriate trait bounds, this checks the
-        // circumcircle property. For other backends, it checks basic validity.
-        self.is_valid()
-    }
-
     /// Compute the convex hull of the triangulation.
     ///
     /// Returns the set of vertices that lie on the boundary (convex hull) of the triangulation.
@@ -256,7 +238,6 @@ mod tests {
     use super::*;
     use crate::geometry::backends::mock::MockBackend;
     use crate::geometry::traits::{EdgeAdjacentFacesResult, GeometryBackend};
-    use std::assert_matches;
 
     #[derive(Debug, Clone)]
     struct FixtureBackend {
@@ -421,48 +402,17 @@ mod tests {
         let backend = FixtureBackend {
             vertices: vec![0, 1, 2],
             edges: vec![(0, Some((0, 1))), (1, None)],
-            faces: vec![(0, Some(vec![0, 1])), (1, None), (2, Some(vec![2]))],
+            faces: vec![
+                (0, Some(vec![0, 1])),
+                (1, None),
+                (2, Some(vec![2])),
+                (3, Some(vec![1, 2])),
+            ],
         };
-
-        assert_eq!(backend.backend_name(), "fixture");
-        assert_eq!(backend.vertex_count(), 3);
-        assert_eq!(backend.edge_count(), 2);
-        assert_eq!(backend.face_count(), 3);
-        assert_eq!(backend.dimension(), 1);
-        assert_eq!(backend.vertices().collect::<Vec<_>>(), vec![0, 1, 2]);
-        assert_eq!(backend.vertex_coordinates(&0), Ok(&[0.0][..]));
-        assert_matches!(backend.vertex_coordinates(&99), Err(FixtureError::Vertex));
-        assert_eq!(backend.adjacent_faces(&0).map(Iterator::count), Ok(0));
-        let Err(error) = backend.adjacent_faces(&99) else {
-            panic!("unknown vertex should fail adjacency lookup");
-        };
-        assert_matches!(error, FixtureError::Vertex);
-        assert_eq!(backend.incident_edges(&0).map(Iterator::count), Ok(0));
-        let Err(error) = backend.incident_edges(&99) else {
-            panic!("unknown vertex should fail incidence lookup");
-        };
-        assert_matches!(error, FixtureError::Vertex);
-        assert_eq!(backend.face_neighbors(&0).map(Iterator::count), Ok(0));
-        let Err(error) = backend.face_neighbors(&99) else {
-            panic!("unknown face should fail neighbor lookup");
-        };
-        assert_matches!(error, FixtureError::Face);
 
         let hull: HashSet<_> = backend.convex_hull().into_iter().collect();
-        assert_eq!(hull, HashSet::from([0, 1]));
+        assert_eq!(hull, HashSet::from([0, 2]));
         assert!(backend.boundary_edges().is_empty());
-    }
-
-    #[test]
-    fn test_is_delaunay_delegates_to_is_valid() {
-        let backend = FixtureBackend {
-            vertices: vec![0],
-            edges: vec![],
-            faces: vec![],
-        };
-
-        // The default is_delaunay implementation delegates to is_valid.
-        assert!(backend.is_delaunay());
     }
 
     #[test]
@@ -505,7 +455,6 @@ mod tests {
         let backend = MockBackend::create_triangle();
 
         // Verify the blanket implementation provides all trait methods with expected types
-        assert!(backend.is_delaunay()); // Should delegate to is_valid() for mock backend
         assert_eq!(backend.convex_hull().len(), 3);
         assert_eq!(backend.boundary_edges().len(), 3);
 

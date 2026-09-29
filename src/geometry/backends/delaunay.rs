@@ -14,26 +14,22 @@ use crate::geometry::traits::{
     EdgeAdjacentFaces, EdgeAdjacentFacesResult, FlipResult, GeometryBackend, SubdivisionResult,
     TriangulationMut, TriangulationQuery,
 };
-use delaunay::flips::BistellarFlips;
-use delaunay::geometry::kernel::AdaptiveKernel;
+use delaunay::flips::{BistellarFlips, FlipContextError, FlipError};
+use delaunay::geometry::kernel::{AdaptiveKernel, ExactPredicates};
 use delaunay::prelude::collections::Uuid;
-use delaunay::prelude::export::{
-    AdjacencyRecord, SimplexRecord, VISUALIZATION_SCHEMA, VISUALIZATION_SCHEMA_VERSION,
-    VertexRecord, VisualizationData, VisualizationExportError, VisualizationMetadata,
-    VisualizationTopologyGuarantee, VisualizationTopologyKind,
-};
+use delaunay::prelude::export::{VisualizationData, VisualizationExportError};
 use delaunay::prelude::{DataSerialize, DataType};
-use delaunay::tds::{EdgeKey, FacetHandle, NeighborSlot, SimplexKey, Tds, Vertex, VertexKey};
-use delaunay::topology::traits::{GlobalTopology, TopologyKind, ToroidalConstructionMode};
+use delaunay::tds::{EdgeKey, EdgeKeyError, FacetHandle, SimplexKey, Vertex, VertexKey};
+use delaunay::topology::traits::{GlobalTopology, TopologyKind};
 use delaunay::{
-    DelaunayCheckPolicy, DelaunayRefinementBuilder, DelaunayTriangulation, SimplexBarycenterError,
-    TopologyGuarantee, Triangulation, TriangulationBuilder,
+    DelaunayCheckPolicy, DelaunayRefinementBuilder, DelaunayTriangulation, InsertionError,
+    InsertionTopologyValidationContext, SimplexBarycenterError, Triangulation,
+    TriangulationEditError, TriangulationRealizationValidationError, TriangulationSnapshot,
+    TriangulationValidationError,
 };
-use serde::{
-    Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError, ser::SerializeStruct,
-};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use std::collections::HashMap;
-use std::fmt::{self, Display};
+use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
 
@@ -52,11 +48,15 @@ pub(crate) type DelaunayMeshExport<const D: usize> = VisualizationData<D>;
 /// are backed by the upstream Delaunay edit API where possible. `move_vertex()`, `clear()`,
 /// and `reserve_capacity()` are not yet implemented and return
 /// [`DelaunayError::NotImplemented`].
+/// General insertion and cavity deletion preserve Levels 1–4 on Euclidean
+/// owners, including evolved non-Delaunay states. Toroidal owners use local
+/// bistellar edits; unsupported general edits return
+/// [`DelaunayError::UnsupportedTopology`].
 ///
 /// # Serialization
 ///
-/// Serde checkpoints store the upstream triangulation data structure plus its
-/// global topology and topology-guarantee metadata. Deserialization rebuilds
+/// Standalone Serde records store the upstream exact Level 4 owner envelope
+/// plus CDT's optional Level 5 check cadence. Deserialization rebuilds
 /// transient backend indexes, including the interior-facet lookup used for local
 /// 2D edge queries. Vertex/simplex incidence is maintained by Delaunay and is not
 /// duplicated in checkpoints or backend caches. Restored meshes must pass the
@@ -64,10 +64,11 @@ pub(crate) type DelaunayMeshExport<const D: usize> = VisualizationData<D>;
 /// because exact layered and evolved CDT states need not remain Delaunay.
 ///
 /// This standalone backend Serde representation is version-bound because it
-/// embeds Delaunay's internal triangulation structure. The durable
-/// [`CdtMcmcCheckpoint`](crate::cdt::metropolis::CdtMcmcCheckpoint) v1 format
-/// bypasses it on disk through the CDT-owned index-based projector below, using
-/// this adapter only for checked hydration. Toroidal topology snapshots must
+/// embeds Delaunay's persistence schema, as does the current
+/// [`CdtMcmcCheckpoint`](crate::cdt::metropolis::CdtMcmcCheckpoint) format.
+/// Present payloads containing null/unit values follow upstream's
+/// exact-persistence rejection policy; absent payloads remain supported.
+/// Toroidal topology snapshots must
 /// contain finite, strictly positive periods; invalid domains are rejected
 /// during deserialization before a backend can observe them.
 #[derive(Debug)]
@@ -166,218 +167,20 @@ impl<VertexData: Clone, SimplexData: Clone, const D: usize> Clone
     }
 }
 
+/// Borrows the upstream exact Level 4 persistence boundary without cloning payloads.
 #[derive(Serialize)]
 struct SerializedDelaunayBackendRef<'a, VertexData, SimplexData, const D: usize> {
-    tds: BorrowedTdsSnapshot<'a, VertexData, SimplexData, D>,
-    global_topology: SerializableGlobalTopology,
-    topology_guarantee: SerializableTopologyGuarantee,
+    triangulation: &'a RawTriangulation<VertexData, SimplexData, D>,
     delaunay_check_policy: SerializableDelaunayCheckPolicy,
 }
 
-/// Borrowed equivalent of Delaunay's durable UUID-based TDS snapshot.
-///
-/// TODO(#268, acgetchell/delaunay#591): remove this mirror together with the
-/// [`DelaunayBackend::mesh_export`] projection when upstream exposes Level 1-4
-/// persistence and visualization adapters.
-#[derive(Serialize)]
-struct BorrowedTdsSnapshot<'a, VertexData, SimplexData, const D: usize> {
-    vertices: Vec<&'a Vertex<VertexData, D>>,
-    simplices: Vec<BorrowedSnapshotSimplex<'a, SimplexData>>,
-    simplex_vertices: HashMap<Uuid, Vec<Uuid>>,
-    simplex_neighbors: HashMap<Uuid, Vec<Option<Uuid>>>,
-    simplex_vertex_offsets: HashMap<Uuid, Vec<Vec<i8>>>,
-}
-
-/// Borrowed simplex identity and payload record in a durable TDS snapshot.
-struct BorrowedSnapshotSimplex<'a, SimplexData> {
-    uuid: Uuid,
-    data: Option<&'a SimplexData>,
-}
-
-impl<SimplexData: DataSerialize> Serialize for BorrowedSnapshotSimplex<'_, SimplexData> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let field_count = if self.data.is_some() { 2 } else { 1 };
-        let mut state = serializer.serialize_struct("Simplex", field_count)?;
-        state.serialize_field("uuid", &self.uuid)?;
-        if self.data.is_some() {
-            state.serialize_field("data", &self.data)?;
-        }
-        state.end()
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-#[serde(bound(
-    serialize = "Tds<VertexData, SimplexData, D>: Serialize",
-    deserialize = "Tds<VertexData, SimplexData, D>: Deserialize<'de>"
-))]
-struct SerializedDelaunayBackend<VertexData, SimplexData, const D: usize> {
-    tds: Tds<VertexData, SimplexData, D>,
-    global_topology: SerializableGlobalTopology,
-    topology_guarantee: SerializableTopologyGuarantee,
+/// Decodes the supported exact Level 4 owner envelope.
+#[derive(Deserialize)]
+#[serde(bound(deserialize = "VertexData: DataType, SimplexData: DataType"))]
+struct SerializedDelaunayBackendInput<VertexData, SimplexData, const D: usize> {
+    triangulation: TriangulationSnapshot<VertexData, SimplexData, D>,
     #[serde(default)]
     delaunay_check_policy: SerializableDelaunayCheckPolicy,
-}
-
-/// CDT-owned, dependency-neutral geometry record for checkpoint format version 1.
-///
-/// Runtime slotmap keys and Delaunay UUIDs are deliberately absent. Relations
-/// use positions in the `vertices` and `simplices` arrays so the persistent
-/// shape remains owned by this crate even when the upstream TDS changes.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) struct DelaunayCheckpointWireV1<VertexData, SimplexData> {
-    vertices: Vec<DelaunayCheckpointVertexV1<VertexData>>,
-    simplices: Vec<DelaunayCheckpointSimplexV1<SimplexData>>,
-    global_topology: DelaunayCheckpointGlobalTopologyV1,
-    topology_guarantee: DelaunayCheckpointTopologyGuaranteeV1,
-    delaunay_check_policy: DelaunayCheckpointPolicyV1,
-}
-
-/// One vertex in the CDT-owned checkpoint geometry record.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct DelaunayCheckpointVertexV1<VertexData> {
-    coordinates: Vec<f64>,
-    data: Option<VertexData>,
-}
-
-/// One maximal simplex and its exact local relationships in checkpoint format v1.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct DelaunayCheckpointSimplexV1<SimplexData> {
-    vertex_indices: Vec<u64>,
-    neighbor_indices: Vec<Option<u64>>,
-    periodic_vertex_offsets: Option<Vec<Vec<i8>>>,
-    data: Option<SimplexData>,
-}
-
-/// Global topology metadata frozen into checkpoint format v1.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-enum DelaunayCheckpointGlobalTopologyV1 {
-    Euclidean,
-    Toroidal {
-        domain: Vec<f64>,
-        mode: DelaunayCheckpointToroidalModeV1,
-    },
-    Spherical,
-    Hyperbolic,
-}
-
-/// Toroidal construction semantics frozen into checkpoint format v1.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-enum DelaunayCheckpointToroidalModeV1 {
-    PeriodicImagePoint,
-    Explicit,
-}
-
-/// Structural topology guarantee frozen into checkpoint format v1.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-enum DelaunayCheckpointTopologyGuaranteeV1 {
-    Pseudomanifold,
-    PLManifold,
-}
-
-/// Optional Level 5 validation cadence frozen into checkpoint format v1.
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-enum DelaunayCheckpointPolicyV1 {
-    EndOnly,
-    EveryN(u64),
-}
-
-/// Failures while translating the stable CDT record to or from the live backend.
-#[derive(Debug, thiserror::Error)]
-pub(crate) enum DelaunayCheckpointWireError {
-    #[error("checkpoint {entity} index {index} cannot be represented as u64")]
-    IndexEncodingOverflow { entity: &'static str, index: usize },
-    #[error(
-        "checkpoint simplex {simplex_index} references {entity} index {referenced_index}, but only {entity_count} records exist"
-    )]
-    IndexOutOfBounds {
-        simplex_index: usize,
-        entity: &'static str,
-        referenced_index: u64,
-        entity_count: usize,
-    },
-    #[error("live simplex {simplex_index} references a missing {entity}")]
-    MissingLiveReference {
-        simplex_index: usize,
-        entity: &'static str,
-    },
-    #[error("live simplex {simplex_index} has no assigned neighbor slots")]
-    MissingLiveNeighborSlots { simplex_index: usize },
-    #[error("live simplex {simplex_index} has an unassigned neighbor slot {slot}")]
-    UnassignedLiveNeighborSlot { simplex_index: usize, slot: usize },
-    #[error("checkpoint Delaunay interval {interval} cannot be represented on this platform")]
-    PolicyIntervalOverflow { interval: u64 },
-    #[error("Delaunay interval {interval} cannot be encoded as u64 for checkpoint storage")]
-    PolicyIntervalEncodingOverflow { interval: usize },
-    #[error(
-        "checkpoint vertex {vertex_index} has coordinate dimension {actual}; expected {expected}"
-    )]
-    CoordinateDimensionMismatch {
-        vertex_index: usize,
-        actual: usize,
-        expected: usize,
-    },
-    #[error("failed to hydrate CDT checkpoint geometry through the Delaunay adapter: {detail}")]
-    HydrationFailed { detail: String },
-}
-
-/// Current upstream-shaped TDS input used only inside the geometry adapter.
-///
-/// This is never exposed as the persistent checkpoint representation. It lets
-/// the stable CDT record continue to use the upstream checked snapshot
-/// hydration boundary until delaunay exposes that boundary as a public API.
-#[derive(Serialize)]
-struct DelaunayHydrationSnapshot<VertexData, SimplexData, const D: usize> {
-    vertices: Vec<Vertex<VertexData, D>>,
-    simplices: Vec<DelaunayHydrationSimplex<SimplexData>>,
-    simplex_vertices: HashMap<Uuid, Vec<Uuid>>,
-    simplex_neighbors: HashMap<Uuid, Vec<Option<Uuid>>>,
-    simplex_vertex_offsets: HashMap<Uuid, Vec<Vec<i8>>>,
-}
-
-/// Current upstream-shaped simplex identity and payload used during hydration.
-#[derive(Serialize)]
-struct DelaunayHydrationSimplex<SimplexData> {
-    uuid: Uuid,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data: Option<SimplexData>,
-}
-
-/// Complete current adapter payload used to invoke checked backend hydration.
-#[derive(Serialize)]
-struct DelaunayHydrationBackend<VertexData, SimplexData, const D: usize> {
-    tds: DelaunayHydrationSnapshot<VertexData, SimplexData, D>,
-    global_topology: SerializableGlobalTopology,
-    topology_guarantee: SerializableTopologyGuarantee,
-    delaunay_check_policy: SerializableDelaunayCheckPolicy,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-enum SerializableGlobalTopology {
-    Euclidean,
-    Toroidal {
-        domain: Vec<f64>,
-        mode: SerializableToroidalConstructionMode,
-    },
-    Spherical,
-    Hyperbolic,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-enum SerializableToroidalConstructionMode {
-    Canonicalized,
-    PeriodicImagePoint,
-    Explicit,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
-enum SerializableTopologyGuarantee {
-    Pseudomanifold,
-    PLManifold,
-    PLManifoldStrict,
 }
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
@@ -385,89 +188,6 @@ enum SerializableDelaunayCheckPolicy {
     #[default]
     EndOnly,
     EveryN(usize),
-}
-
-impl<const D: usize> From<GlobalTopology<D>> for SerializableGlobalTopology {
-    fn from(topology: GlobalTopology<D>) -> Self {
-        match topology {
-            GlobalTopology::Euclidean => Self::Euclidean,
-            GlobalTopology::Toroidal { domain, mode } => Self::Toroidal {
-                domain: domain.periods().to_vec(),
-                mode: mode.into(),
-            },
-            GlobalTopology::Spherical => Self::Spherical,
-            GlobalTopology::Hyperbolic => Self::Hyperbolic,
-        }
-    }
-}
-
-impl SerializableGlobalTopology {
-    fn into_global_topology<const D: usize, E: DeError>(self) -> Result<GlobalTopology<D>, E> {
-        match self {
-            Self::Euclidean => Ok(GlobalTopology::Euclidean),
-            Self::Toroidal { domain, mode } => {
-                let actual = domain.len();
-                let domain: [f64; D] = domain.try_into().map_err(|_| {
-                    E::custom(format!(
-                        "toroidal domain length mismatch: got {actual}, expected {D}"
-                    ))
-                })?;
-                for (index, period) in domain.iter().copied().enumerate() {
-                    if !period.is_finite() || period <= 0.0 {
-                        return Err(E::custom(format!(
-                            "invalid toroidal period at index {index}: {period}"
-                        )));
-                    }
-                }
-                let mode = mode.into_toroidal_construction_mode()?;
-                GlobalTopology::try_toroidal(domain, mode).map_err(E::custom)
-            }
-            Self::Spherical => Ok(GlobalTopology::Spherical),
-            Self::Hyperbolic => Ok(GlobalTopology::Hyperbolic),
-        }
-    }
-}
-
-impl From<ToroidalConstructionMode> for SerializableToroidalConstructionMode {
-    fn from(mode: ToroidalConstructionMode) -> Self {
-        match mode {
-            ToroidalConstructionMode::PeriodicImagePoint => Self::PeriodicImagePoint,
-            ToroidalConstructionMode::Explicit => Self::Explicit,
-        }
-    }
-}
-
-impl SerializableToroidalConstructionMode {
-    fn into_toroidal_construction_mode<E: DeError>(self) -> Result<ToroidalConstructionMode, E> {
-        match self {
-            Self::Canonicalized => Err(E::custom(
-                "legacy toroidal construction mode `Canonicalized` is not supported because it is not semantically equivalent to `PeriodicImagePoint`",
-            )),
-            Self::PeriodicImagePoint => Ok(ToroidalConstructionMode::PeriodicImagePoint),
-            Self::Explicit => Ok(ToroidalConstructionMode::Explicit),
-        }
-    }
-}
-
-impl From<TopologyGuarantee> for SerializableTopologyGuarantee {
-    fn from(guarantee: TopologyGuarantee) -> Self {
-        match guarantee {
-            TopologyGuarantee::Pseudomanifold => Self::Pseudomanifold,
-            TopologyGuarantee::PLManifold => Self::PLManifold,
-        }
-    }
-}
-
-impl From<SerializableTopologyGuarantee> for TopologyGuarantee {
-    fn from(guarantee: SerializableTopologyGuarantee) -> Self {
-        match guarantee {
-            SerializableTopologyGuarantee::Pseudomanifold => Self::Pseudomanifold,
-            // delaunay 0.8.1 removed this combined guarantee/cadence variant.
-            // Preserve legacy checkpoint readability by retaining its topology contract.
-            SerializableTopologyGuarantee::PLManifold
-            | SerializableTopologyGuarantee::PLManifoldStrict => Self::PLManifold,
-        }
-    }
 }
 
 impl From<DelaunayCheckPolicy> for SerializableDelaunayCheckPolicy {
@@ -498,73 +218,8 @@ impl<VertexData: DataSerialize, SimplexData: DataSerialize, const D: usize> Seri
     where
         S: Serializer,
     {
-        let vertices = self.dt.vertices().map(|(_, vertex)| vertex).collect();
-        let mut simplices = Vec::with_capacity(self.dt.number_of_simplices());
-        let mut simplex_vertices = HashMap::with_capacity(self.dt.number_of_simplices());
-        let mut simplex_neighbors = HashMap::with_capacity(self.dt.number_of_simplices());
-        let mut simplex_vertex_offsets = HashMap::with_capacity(self.dt.number_of_simplices());
-        for (_, simplex) in self.dt.simplices() {
-            let simplex_uuid = simplex.uuid();
-            simplices.push(BorrowedSnapshotSimplex {
-                uuid: simplex_uuid,
-                data: simplex.data(),
-            });
-            let vertex_uuids = simplex
-                .vertices()
-                .iter()
-                .copied()
-                .map(|vertex_key| {
-                    self.dt
-                        .vertex_uuid_from_key(vertex_key)
-                        .ok_or_else(|| format!("simplex {simplex_uuid} references {vertex_key:?}"))
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(serde::ser::Error::custom)?;
-            simplex_vertices.insert(simplex_uuid, vertex_uuids);
-
-            let neighbor_uuids = simplex
-                .neighbor_slots()
-                .ok_or_else(|| format!("simplex {simplex_uuid} has no neighbor slots"))
-                .map_err(serde::ser::Error::custom)?
-                .iter()
-                .copied()
-                .map(|slot| match slot {
-                    NeighborSlot::Boundary => Ok(None),
-                    NeighborSlot::Neighbor(neighbor_key) => self
-                        .dt
-                        .simplex_uuid_from_key(neighbor_key)
-                        .map(Some)
-                        .ok_or_else(|| {
-                            format!(
-                                "simplex {simplex_uuid} references missing neighbor {neighbor_key:?}"
-                            )
-                        }),
-                    NeighborSlot::Unassigned => {
-                        Err(format!("simplex {simplex_uuid} has an unassigned neighbor slot"))
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(serde::ser::Error::custom)?;
-            simplex_neighbors.insert(simplex_uuid, neighbor_uuids);
-
-            if let Some(offsets) = simplex.periodic_vertex_offsets() {
-                simplex_vertex_offsets.insert(
-                    simplex_uuid,
-                    offsets.iter().map(|offset| offset.to_vec()).collect(),
-                );
-            }
-        }
-        let tds = BorrowedTdsSnapshot {
-            vertices,
-            simplices,
-            simplex_vertices,
-            simplex_neighbors,
-            simplex_vertex_offsets,
-        };
         SerializedDelaunayBackendRef {
-            tds,
-            global_topology: self.dt.global_topology().into(),
-            topology_guarantee: self.dt.topology_guarantee().into(),
+            triangulation: &self.dt,
             delaunay_check_policy: self.delaunay_check_policy.into(),
         }
         .serialize(serializer)
@@ -578,341 +233,16 @@ impl<'de, VertexData: DataType, SimplexData: DataType, const D: usize> Deseriali
     where
         DE: Deserializer<'de>,
     {
-        let serialized = SerializedDelaunayBackend::deserialize(deserializer)?;
-        let topology_guarantee = serialized.topology_guarantee.into();
-        let global_topology = serialized.global_topology.into_global_topology()?;
-        // `TriangulationBuilder` is the upstream topology-aware Levels 1-4
-        // restoration boundary. Its default strict mode preserves the supplied
-        // TDS representation: it neither canonicalizes connectivity nor performs
-        // the Level 5 repair/certification reserved for fresh Delaunay builders.
-        let dt = TriangulationBuilder::new(serialized.tds, AdaptiveKernel::new())
-            .topology_guarantee(topology_guarantee)
-            .global_topology(global_topology)
-            .build()
+        let serialized = SerializedDelaunayBackendInput::deserialize(deserializer)?;
+        let dt = serialized
+            .triangulation
+            .try_into_triangulation(AdaptiveKernel::new())
             .map_err(DE::Error::custom)?;
-        let mut backend = Self::from_realized_triangulation(dt).map_err(DE::Error::custom)?;
+        let mut backend = Self::from_realized_triangulation(dt);
         backend.delaunay_check_policy = serialized
             .delaunay_check_policy
             .into_delaunay_check_policy()?;
         Ok(backend)
-    }
-}
-
-impl<VertexData: DataType, SimplexData: DataType, const D: usize>
-    DelaunayBackend<VertexData, SimplexData, D>
-{
-    /// Projects the live backend into CDT checkpoint format version 1.
-    pub(crate) fn checkpoint_wire_v1(
-        &self,
-    ) -> Result<DelaunayCheckpointWireV1<VertexData, SimplexData>, DelaunayCheckpointWireError>
-    where
-        VertexData: Clone,
-        SimplexData: Clone,
-    {
-        let vertices: Vec<_> = self.dt.vertices().collect();
-        let mut vertex_indices = HashMap::with_capacity(vertices.len());
-        for (index, (key, _)) in vertices.iter().enumerate() {
-            vertex_indices.insert(
-                *key,
-                u64::try_from(index).map_err(|_| {
-                    DelaunayCheckpointWireError::IndexEncodingOverflow {
-                        entity: "vertex",
-                        index,
-                    }
-                })?,
-            );
-        }
-
-        let simplices: Vec<_> = self.dt.simplices().collect();
-        let mut simplex_indices = HashMap::with_capacity(simplices.len());
-        for (index, (key, _)) in simplices.iter().enumerate() {
-            simplex_indices.insert(
-                *key,
-                u64::try_from(index).map_err(|_| {
-                    DelaunayCheckpointWireError::IndexEncodingOverflow {
-                        entity: "simplex",
-                        index,
-                    }
-                })?,
-            );
-        }
-
-        let vertices = vertices
-            .into_iter()
-            .map(|(_, vertex)| DelaunayCheckpointVertexV1 {
-                coordinates: vertex.point().coords().to_vec(),
-                data: vertex.data().copied(),
-            })
-            .collect();
-        let mut checkpoint_simplices = Vec::with_capacity(simplices.len());
-        for (simplex_index, (_, simplex)) in simplices.into_iter().enumerate() {
-            let mapped_vertex_indices = simplex
-                .vertices()
-                .iter()
-                .map(|key| {
-                    vertex_indices.get(key).copied().ok_or(
-                        DelaunayCheckpointWireError::MissingLiveReference {
-                            simplex_index,
-                            entity: "vertex",
-                        },
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            let slots = simplex
-                .neighbor_slots()
-                .ok_or(DelaunayCheckpointWireError::MissingLiveNeighborSlots { simplex_index })?;
-            let neighbor_indices = slots
-                .iter()
-                .copied()
-                .enumerate()
-                .map(|(slot, neighbor)| match neighbor {
-                    NeighborSlot::Boundary => Ok(None),
-                    NeighborSlot::Neighbor(key) => {
-                        simplex_indices.get(&key).copied().map(Some).ok_or(
-                            DelaunayCheckpointWireError::MissingLiveReference {
-                                simplex_index,
-                                entity: "neighbor simplex",
-                            },
-                        )
-                    }
-                    NeighborSlot::Unassigned => {
-                        Err(DelaunayCheckpointWireError::UnassignedLiveNeighborSlot {
-                            simplex_index,
-                            slot,
-                        })
-                    }
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            checkpoint_simplices.push(DelaunayCheckpointSimplexV1 {
-                vertex_indices: mapped_vertex_indices,
-                neighbor_indices,
-                periodic_vertex_offsets: simplex
-                    .periodic_vertex_offsets()
-                    .map(|offsets| offsets.iter().map(|offset| offset.to_vec()).collect()),
-                data: simplex.data().copied(),
-            });
-        }
-
-        Ok(DelaunayCheckpointWireV1 {
-            vertices,
-            simplices: checkpoint_simplices,
-            global_topology: DelaunayCheckpointGlobalTopologyV1::from(self.dt.global_topology()),
-            topology_guarantee: self.dt.topology_guarantee().into(),
-            delaunay_check_policy: DelaunayCheckpointPolicyV1::try_from(
-                self.delaunay_check_policy,
-            )?,
-        })
-    }
-
-    /// Rebuilds a live backend from CDT checkpoint format version 1.
-    ///
-    /// The stable record is translated inside this adapter and then passed
-    /// through Delaunay's topology-aware Levels 1–4 snapshot hydration and
-    /// `TriangulationBuilder` validation path.
-    pub(crate) fn from_checkpoint_wire_v1(
-        wire: DelaunayCheckpointWireV1<VertexData, SimplexData>,
-    ) -> Result<Self, DelaunayCheckpointWireError> {
-        let DelaunayCheckpointWireV1 {
-            vertices: checkpoint_vertices,
-            simplices: checkpoint_simplices,
-            global_topology,
-            topology_guarantee,
-            delaunay_check_policy,
-        } = wire;
-
-        let mut vertices = Vec::with_capacity(checkpoint_vertices.len());
-        for (vertex_index, vertex) in checkpoint_vertices.into_iter().enumerate() {
-            let actual = vertex.coordinates.len();
-            let coordinates: [f64; D] = vertex.coordinates.try_into().map_err(|_| {
-                DelaunayCheckpointWireError::CoordinateDimensionMismatch {
-                    vertex_index,
-                    actual,
-                    expected: D,
-                }
-            })?;
-            let built = vertex.data.map_or_else(
-                || Vertex::try_new(coordinates),
-                |data| Vertex::try_new_with_data(coordinates, data),
-            );
-            vertices.push(
-                built.map_err(|error| DelaunayCheckpointWireError::HydrationFailed {
-                    detail: error.to_string(),
-                })?,
-            );
-        }
-        let vertex_uuids: Vec<_> = vertices.iter().map(Vertex::uuid).collect();
-        let simplex_uuids: Vec<_> = checkpoint_simplices
-            .iter()
-            .map(|_| Uuid::new_v4())
-            .collect();
-
-        let mut simplices = Vec::with_capacity(checkpoint_simplices.len());
-        let mut simplex_vertices = HashMap::with_capacity(checkpoint_simplices.len());
-        let mut simplex_neighbors = HashMap::with_capacity(checkpoint_simplices.len());
-        let mut simplex_vertex_offsets = HashMap::with_capacity(checkpoint_simplices.len());
-        for (simplex_index, checkpoint_simplex) in checkpoint_simplices.into_iter().enumerate() {
-            let simplex_uuid = simplex_uuids[simplex_index];
-            let mapped_vertices = checkpoint_simplex
-                .vertex_indices
-                .into_iter()
-                .map(|index| checkpoint_relation(&vertex_uuids, simplex_index, "vertex", index))
-                .collect::<Result<Vec<_>, _>>()?;
-            let mapped_neighbors = checkpoint_simplex
-                .neighbor_indices
-                .into_iter()
-                .map(|neighbor| {
-                    neighbor
-                        .map(|index| {
-                            checkpoint_relation(
-                                &simplex_uuids,
-                                simplex_index,
-                                "neighbor simplex",
-                                index,
-                            )
-                        })
-                        .transpose()
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-
-            simplices.push(DelaunayHydrationSimplex {
-                uuid: simplex_uuid,
-                data: checkpoint_simplex.data,
-            });
-            simplex_vertices.insert(simplex_uuid, mapped_vertices);
-            simplex_neighbors.insert(simplex_uuid, mapped_neighbors);
-            if let Some(offsets) = checkpoint_simplex.periodic_vertex_offsets {
-                simplex_vertex_offsets.insert(simplex_uuid, offsets);
-            }
-        }
-
-        let interval = match delaunay_check_policy {
-            DelaunayCheckpointPolicyV1::EndOnly => SerializableDelaunayCheckPolicy::EndOnly,
-            DelaunayCheckpointPolicyV1::EveryN(interval) => {
-                SerializableDelaunayCheckPolicy::EveryN(usize::try_from(interval).map_err(
-                    |_| DelaunayCheckpointWireError::PolicyIntervalOverflow { interval },
-                )?)
-            }
-        };
-        let hydration = DelaunayHydrationBackend {
-            tds: DelaunayHydrationSnapshot {
-                vertices,
-                simplices,
-                simplex_vertices,
-                simplex_neighbors,
-                simplex_vertex_offsets,
-            },
-            global_topology: global_topology.into(),
-            topology_guarantee: topology_guarantee.into(),
-            delaunay_check_policy: interval,
-        };
-        let value = serde_json::to_value(hydration).map_err(|error| {
-            DelaunayCheckpointWireError::HydrationFailed {
-                detail: error.to_string(),
-            }
-        })?;
-        serde_json::from_value(value).map_err(|error| {
-            DelaunayCheckpointWireError::HydrationFailed {
-                detail: error.to_string(),
-            }
-        })
-    }
-}
-
-/// Resolves one stable relationship index without trusting platform-sized input.
-fn checkpoint_relation<T: Copy>(
-    records: &[T],
-    simplex_index: usize,
-    entity: &'static str,
-    referenced_index: u64,
-) -> Result<T, DelaunayCheckpointWireError> {
-    usize::try_from(referenced_index)
-        .ok()
-        .and_then(|index| records.get(index).copied())
-        .ok_or(DelaunayCheckpointWireError::IndexOutOfBounds {
-            simplex_index,
-            entity,
-            referenced_index,
-            entity_count: records.len(),
-        })
-}
-
-impl<const D: usize> From<GlobalTopology<D>> for DelaunayCheckpointGlobalTopologyV1 {
-    fn from(topology: GlobalTopology<D>) -> Self {
-        match topology {
-            GlobalTopology::Euclidean => Self::Euclidean,
-            GlobalTopology::Toroidal { domain, mode } => Self::Toroidal {
-                domain: domain.periods().to_vec(),
-                mode: mode.into(),
-            },
-            GlobalTopology::Spherical => Self::Spherical,
-            GlobalTopology::Hyperbolic => Self::Hyperbolic,
-        }
-    }
-}
-
-impl From<DelaunayCheckpointGlobalTopologyV1> for SerializableGlobalTopology {
-    fn from(topology: DelaunayCheckpointGlobalTopologyV1) -> Self {
-        match topology {
-            DelaunayCheckpointGlobalTopologyV1::Euclidean => Self::Euclidean,
-            DelaunayCheckpointGlobalTopologyV1::Toroidal { domain, mode } => Self::Toroidal {
-                domain,
-                mode: mode.into(),
-            },
-            DelaunayCheckpointGlobalTopologyV1::Spherical => Self::Spherical,
-            DelaunayCheckpointGlobalTopologyV1::Hyperbolic => Self::Hyperbolic,
-        }
-    }
-}
-
-impl From<ToroidalConstructionMode> for DelaunayCheckpointToroidalModeV1 {
-    fn from(mode: ToroidalConstructionMode) -> Self {
-        match mode {
-            ToroidalConstructionMode::PeriodicImagePoint => Self::PeriodicImagePoint,
-            ToroidalConstructionMode::Explicit => Self::Explicit,
-        }
-    }
-}
-
-impl From<DelaunayCheckpointToroidalModeV1> for SerializableToroidalConstructionMode {
-    fn from(mode: DelaunayCheckpointToroidalModeV1) -> Self {
-        match mode {
-            DelaunayCheckpointToroidalModeV1::PeriodicImagePoint => Self::PeriodicImagePoint,
-            DelaunayCheckpointToroidalModeV1::Explicit => Self::Explicit,
-        }
-    }
-}
-
-impl From<TopologyGuarantee> for DelaunayCheckpointTopologyGuaranteeV1 {
-    fn from(guarantee: TopologyGuarantee) -> Self {
-        match guarantee {
-            TopologyGuarantee::Pseudomanifold => Self::Pseudomanifold,
-            TopologyGuarantee::PLManifold => Self::PLManifold,
-        }
-    }
-}
-
-impl From<DelaunayCheckpointTopologyGuaranteeV1> for SerializableTopologyGuarantee {
-    fn from(guarantee: DelaunayCheckpointTopologyGuaranteeV1) -> Self {
-        match guarantee {
-            DelaunayCheckpointTopologyGuaranteeV1::Pseudomanifold => Self::Pseudomanifold,
-            DelaunayCheckpointTopologyGuaranteeV1::PLManifold => Self::PLManifold,
-        }
-    }
-}
-
-impl TryFrom<DelaunayCheckPolicy> for DelaunayCheckpointPolicyV1 {
-    type Error = DelaunayCheckpointWireError;
-
-    fn try_from(policy: DelaunayCheckPolicy) -> Result<Self, Self::Error> {
-        match policy {
-            DelaunayCheckPolicy::EndOnly => Ok(Self::EndOnly),
-            DelaunayCheckPolicy::EveryN(interval) => {
-                let interval = interval.get();
-                Ok(Self::EveryN(u64::try_from(interval).map_err(|_| {
-                    DelaunayCheckpointWireError::PolicyIntervalEncodingOverflow { interval }
-                })?))
-            }
-        }
     }
 }
 
@@ -1120,10 +450,52 @@ impl fmt::Display for DelaunayFlipOutputFailure {
 
 impl std::error::Error for DelaunayFlipOutputFailure {}
 
+/// Geometric or combinatorial reason a local candidate cannot be realized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum DelaunayCandidateRejection {
+    /// The selected site lies on a boundary.
+    #[error("boundary site")]
+    Boundary,
+    /// The local star has the wrong size for the requested move.
+    #[error("incompatible site multiplicity")]
+    Multiplicity,
+    /// The replacement would have zero or negative volume.
+    #[error("degenerate or inverted replacement")]
+    DegenerateReplacement,
+    /// A replacement simplex already exists.
+    #[error("duplicate replacement simplex")]
+    DuplicateSimplex,
+    /// The replacement would violate the manifold link condition.
+    #[error("non-manifold replacement")]
+    NonManifoldReplacement,
+    /// An insertion point is outside its selected face.
+    #[error("insertion outside selected face")]
+    InsertionOutsideFace,
+    /// The proposed replacement cannot be embedded without overlap.
+    #[error("invalid replacement embedding")]
+    Embedding,
+    /// Replacement faces cannot satisfy their orientation constraints.
+    #[error("conflicting replacement orientations")]
+    OrientationConflict,
+}
+
 /// Delaunay backend errors preserving typed mutation and validation context.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum DelaunayError {
+    /// A recognized candidate failure, with the upstream transaction rolled back.
+    #[error("{operation} rejected {target}: {reason}: {detail}")]
+    CandidateRejected {
+        /// Requested local edit.
+        operation: DelaunayOperation,
+        /// Candidate site.
+        target: String,
+        /// Recoverable candidate category.
+        reason: DelaunayCandidateRejection,
+        /// Opaque upstream diagnostic.
+        detail: String,
+    },
     /// A detached handle belongs to a different backend instance.
     #[error("foreign {kind} handle: owner {handle_owner} does not match backend {backend_owner}")]
     ForeignHandle {
@@ -1155,6 +527,15 @@ pub enum DelaunayError {
         operation: DelaunayOperation,
     },
 
+    /// General vertex editing is unavailable for the selected topology.
+    #[error("{operation} is unsupported for {topology:?}; use a local bistellar edit")]
+    UnsupportedTopology {
+        /// General edit that was requested.
+        operation: DelaunayOperation,
+        /// Geometry requiring a chart-bound local operation.
+        topology: TopologyKind,
+    },
+
     /// Invalid vertex handle (key not found in triangulation)
     #[error("invalid vertex handle: key {key:?} not found in triangulation")]
     InvalidVertex {
@@ -1169,6 +550,17 @@ pub enum DelaunayError {
         v0: VertexKey,
         /// Second endpoint vertex key
         v1: VertexKey,
+    },
+
+    /// Maintained incidence could not establish a live edge star.
+    #[error("failed to validate edge {v0:?} -- {v1:?}: {detail}")]
+    EdgeIncidenceFailed {
+        /// First endpoint vertex key.
+        v0: VertexKey,
+        /// Second endpoint vertex key.
+        v1: VertexKey,
+        /// Underlying topology-query diagnostic.
+        detail: String,
     },
 
     /// The edge exists but is not a valid bistellar k=2 flip target.
@@ -1289,6 +681,75 @@ pub enum DelaunayError {
         /// Underlying validation diagnostic.
         detail: String,
     },
+}
+
+/// Classifies only known candidate failures as recoverable; unknown failures stay hard.
+fn flip_error(operation: DelaunayOperation, target: String, error: &FlipError) -> DelaunayError {
+    let reason = match error {
+        FlipError::BoundaryFacet { .. } => Some(DelaunayCandidateRejection::Boundary),
+        FlipError::InvalidVertexMultiplicity { .. }
+        | FlipError::InvalidEdgeMultiplicity { .. }
+        | FlipError::InvalidRidgeMultiplicity { .. }
+        | FlipError::InvalidTriangleMultiplicity { .. } => {
+            Some(DelaunayCandidateRejection::Multiplicity)
+        }
+        FlipError::DegenerateSimplex | FlipError::NegativeOrientation { .. } => {
+            Some(DelaunayCandidateRejection::DegenerateReplacement)
+        }
+        FlipError::DuplicateSimplex | FlipError::InsertedSimplexAlreadyExists { .. } => {
+            Some(DelaunayCandidateRejection::DuplicateSimplex)
+        }
+        FlipError::NonManifoldFacet => Some(DelaunayCandidateRejection::NonManifoldReplacement),
+        FlipError::K1InsertionOutsideSimplex { .. } => {
+            Some(DelaunayCandidateRejection::InsertionOutsideFace)
+        }
+        FlipError::InvalidFlipContext { reason }
+            if matches!(
+                reason.as_ref(),
+                FlipContextError::ConflictingReplacementOrientationBetweenSimplices { .. }
+                    | FlipContextError::ConflictingReplacementOrientationForSimplex { .. }
+            ) =>
+        {
+            Some(DelaunayCandidateRejection::OrientationConflict)
+        }
+        FlipError::PostconditionRepair { source }
+            if matches!(
+                source.as_ref(),
+                InsertionError::TopologyValidationFailed {
+                    context: InsertionTopologyValidationContext::PositiveOrientationPromotion,
+                    source: TriangulationValidationError::OrientationPromotionNonConvergence { .. },
+                }
+            ) =>
+        {
+            Some(DelaunayCandidateRejection::OrientationConflict)
+        }
+        FlipError::RealizationValidation { source }
+            if matches!(source.as_ref(),
+            TriangulationRealizationValidationError::DegenerateSimplex { .. }
+            | TriangulationRealizationValidationError::NegativeSimplexOrientation { .. }
+            | TriangulationRealizationValidationError::SingularBarycentricBasis { .. }
+            | TriangulationRealizationValidationError::SimplexIntersectionOutsideSharedFace { .. }
+            | TriangulationRealizationValidationError::PeriodicSimplexSpansDomain { .. }
+        ) =>
+        {
+            Some(DelaunayCandidateRejection::Embedding)
+        }
+        _ => None,
+    };
+    let detail = error.to_string();
+    match reason {
+        Some(reason) => DelaunayError::CandidateRejected {
+            operation,
+            target,
+            reason,
+            detail,
+        },
+        None => DelaunayError::FlipFailed {
+            operation,
+            target,
+            detail,
+        },
+    }
 }
 
 impl<VertexData: DataType, SimplexData: DataType, const D: usize>
@@ -1527,43 +988,6 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
             })
     }
 
-    /// Validates an unpublished mutation candidate before replacing canonical state.
-    fn validate_candidate_embedding(
-        candidate: &RawTriangulation<VertexData, SimplexData, D>,
-        operation: DelaunayOperation,
-        target: impl Display,
-    ) -> Result<(), DelaunayError> {
-        let validation =
-            candidate
-                .validate_realization()
-                .map_err(|err| DelaunayError::ValidationFailed {
-                    level: DelaunayValidationLevel::Four,
-                    detail: err.to_string(),
-                });
-        Self::map_embedding_validation_error(validation, operation, target)
-    }
-
-    /// Adds mutation context to an embedding validation failure.
-    fn map_embedding_validation_error(
-        validation: Result<(), DelaunayError>,
-        operation: DelaunayOperation,
-        target: impl Display,
-    ) -> Result<(), DelaunayError> {
-        let Err(error) = validation else {
-            return Ok(());
-        };
-        Err(match error {
-            DelaunayError::ValidationFailed { level, detail } => DelaunayError::ValidationFailed {
-                level,
-                detail: format!("{operation} produced invalid geometry for {target}: {detail}"),
-            },
-            other => DelaunayError::ValidationFailed {
-                level: DelaunayValidationLevel::Four,
-                detail: format!("{operation} produced invalid geometry for {target}: {other}"),
-            },
-        })
-    }
-
     /// Returns whether the keyed edge is present in the triangulation.
     fn edge_exists(&self, edge: EdgeKey) -> bool {
         let v0 = edge.v0();
@@ -1633,18 +1057,18 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// This crate-private boundary is used for exact layered CDT construction and
     /// checkpoint restoration. Both can contain embedding-valid connectivity that
     /// intentionally does not satisfy the Level 5 Delaunay predicate.
+    /// The upstream owner already proves Levels 1–4, so wrapping it only builds
+    /// the adapter's derived index and fresh handle provenance.
     pub(crate) fn from_realized_triangulation(
         dt: Triangulation<AdaptiveKernel<f64>, VertexData, SimplexData, D>,
-    ) -> Result<Self, DelaunayError> {
+    ) -> Self {
         let interior_facets_by_edge = Self::build_interior_facets_by_edge(&dt);
-        let backend = Self {
+        Self {
             dt,
             delaunay_check_policy: DelaunayCheckPolicy::EndOnly,
             interior_facets_by_edge,
             owner_id: Uuid::new_v4(),
-        };
-        backend.validate_embedding()?;
-        Ok(backend)
+        }
     }
 }
 
@@ -1722,18 +1146,21 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
 
     fn validate_edge_handle(&self, edge: &DelaunayEdgeHandle) -> Result<EdgeKey, DelaunayError> {
         self.validate_handle_provenance(DelaunayHandleKind::Edge, edge.owner_id, edge.generation)?;
-        let (v0, v1) = edge.key.endpoints();
-        let edge_exists = self.dt.contains_vertex_key(v0)
-            && self.dt.contains_vertex_key(v1)
-            && self
-                .dt
-                .incident_edges(v0)
-                .any(|candidate| candidate == edge.key);
-        edge_exists
-            .then_some(edge.key)
-            .ok_or_else(|| DelaunayError::InvalidEdge {
-                v0: edge.key.v0(),
-                v1: edge.key.v1(),
+        self.dt
+            .edge_view(edge.key)
+            .map(|view| view.key())
+            .map_err(|error| match error {
+                EdgeKeyError::DuplicateEndpoint { .. }
+                | EdgeKeyError::MissingEndpoint { .. }
+                | EdgeKeyError::EdgeNotFound { .. } => DelaunayError::InvalidEdge {
+                    v0: edge.key.v0(),
+                    v1: edge.key.v1(),
+                },
+                error => DelaunayError::EdgeIncidenceFailed {
+                    v0: edge.key.v0(),
+                    v1: edge.key.v1(),
+                    detail: error.to_string(),
+                },
             })
     }
 
@@ -2200,104 +1627,11 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
         Ok(*point.coords())
     }
 
-    /// Returns Delaunay's stable, detached mesh-interchange export.
-    ///
-    /// TODO(#268, acgetchell/delaunay#591): remove this projection together with
-    /// [`BorrowedTdsSnapshot`] when upstream exposes Level 1-4 persistence and
-    /// visualization adapters.
+    /// Returns Delaunay's stable mesh export with CDT's existing producer identity.
     pub(crate) fn mesh_export(&self) -> Result<DelaunayMeshExport<D>, VisualizationExportError> {
-        let mut vertices: Vec<_> = self
-            .dt
-            .vertices()
-            .map(|(_, vertex)| VertexRecord {
-                id: vertex.uuid(),
-                coordinates: vertex.point().coords().to_vec(),
-                attributes: None,
-            })
-            .collect();
-        vertices.sort_by_key(|record| record.id);
-
-        let mut simplices = Vec::with_capacity(self.dt.number_of_simplices());
-        let mut adjacency = Vec::with_capacity(self.dt.number_of_simplices().saturating_mul(D + 1));
-        for (_, simplex) in self.dt.simplices() {
-            let simplex_id = simplex.uuid();
-            let vertex_ids = simplex
-                .vertices()
-                .iter()
-                .copied()
-                .map(|vertex_key| {
-                    self.dt.vertex(vertex_key).map(Vertex::uuid).ok_or(
-                        VisualizationExportError::MissingVertex {
-                            simplex_id,
-                            vertex_key,
-                        },
-                    )
-                })
-                .collect::<Result<Vec<_>, _>>()?;
-            simplices.push(SimplexRecord {
-                id: simplex_id,
-                vertex_ids,
-                attributes: None,
-            });
-
-            let slots = simplex
-                .neighbor_slots()
-                .ok_or(VisualizationExportError::UnassignedNeighborBuffer { simplex_id })?;
-            if slots.len() != D + 1 {
-                return Err(VisualizationExportError::InvalidNeighborCount {
-                    simplex_id,
-                    expected: D + 1,
-                    actual: slots.len(),
-                });
-            }
-            for (facet_index, slot) in slots.iter().copied().enumerate() {
-                let neighbor_simplex_id = match slot {
-                    NeighborSlot::Boundary => None,
-                    NeighborSlot::Neighbor(neighbor_key) => {
-                        Some(self.dt.simplex_uuid_from_key(neighbor_key).ok_or(
-                            VisualizationExportError::MissingNeighbor {
-                                simplex_id,
-                                facet_index,
-                                neighbor_key,
-                            },
-                        )?)
-                    }
-                    NeighborSlot::Unassigned => {
-                        return Err(VisualizationExportError::UnassignedNeighborSlot {
-                            simplex_id,
-                            facet_index,
-                        });
-                    }
-                };
-                adjacency.push(AdjacencyRecord {
-                    simplex_id,
-                    facet_index,
-                    neighbor_simplex_id,
-                    attributes: None,
-                });
-            }
-        }
-        simplices.sort_by_key(|record| record.id);
-        adjacency.sort_by_key(|record| (record.simplex_id, record.facet_index));
-
-        Ok(VisualizationData {
-            metadata: VisualizationMetadata {
-                schema: VISUALIZATION_SCHEMA.to_owned(),
-                schema_version: VISUALIZATION_SCHEMA_VERSION,
-                producer: env!("CARGO_PKG_NAME").to_owned(),
-                dimension: D,
-                vertex_count: vertices.len(),
-                simplex_count: simplices.len(),
-                topology_kind: VisualizationTopologyKind::from(self.dt.topology_kind()),
-                topology_guarantee: VisualizationTopologyGuarantee::from(
-                    self.dt.topology_guarantee(),
-                ),
-                attributes: None,
-            },
-            vertices,
-            simplices,
-            adjacency,
-        })
+        let mut export = self.dt.to_visualization_data()?;
+        env!("CARGO_PKG_NAME").clone_into(&mut export.metadata.producer);
+        Ok(export)
     }
 
     /// Returns the stable Delaunay UUID used for a vertex in mesh exports.
@@ -2727,27 +2061,21 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
 
         let Some(inverse_k1) = self.dt.can_flip_k1_remove(vertex_key).ok() else {
             let target = format!("vertex {:?}", vertex.key);
-            let mut certified = DelaunayRefinementBuilder::new(self.dt.clone())
-                .build()
-                .map_err(|err| DelaunayError::RemovalFailed {
+            // Upstream owns the Level 4 transaction and restores keys and generation
+            // on failure. The derived index changes only after a successful edit.
+            self.dt.delete_vertex(vertex_key).map_err(|err| match err {
+                TriangulationEditError::UnsupportedTopology { topology } => {
+                    DelaunayError::UnsupportedTopology {
+                        operation: DelaunayOperation::RemoveVertex,
+                        topology,
+                    }
+                }
+                err => DelaunayError::RemovalFailed {
                     operation: DelaunayOperation::RemoveVertex,
-                    target: target.clone(),
+                    target,
                     detail: err.to_string(),
-                })?;
-            certified
-                .delete_vertex(vertex_key)
-                .map_err(|err| DelaunayError::RemovalFailed {
-                    operation: DelaunayOperation::RemoveVertex,
-                    target: target.clone(),
-                    detail: err.to_string(),
-                })?;
-            let candidate = certified.into_triangulation();
-            Self::validate_candidate_embedding(
-                &candidate,
-                DelaunayOperation::RemoveVertex,
-                &target,
-            )?;
-            self.dt = candidate;
+                },
+            })?;
             self.rebuild_interior_facet_index();
             return Ok(DelaunayRemovalResult {
                 new_faces: Vec::new(),
@@ -2758,15 +2086,13 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
             DelaunayOperation::FlipK1Remove,
         )?;
         let mut mutation = self.mutation(rollback);
-        let info =
-            mutation
-                .dt
-                .flip_k1_remove(vertex_key)
-                .map_err(|err| DelaunayError::RemovalFailed {
-                    operation: DelaunayOperation::FlipK1Remove,
-                    target: format!("vertex {:?}", vertex.key),
-                    detail: err.to_string(),
-                })?;
+        let info = mutation.dt.flip_k1_remove(vertex_key).map_err(|err| {
+            flip_error(
+                DelaunayOperation::FlipK1Remove,
+                format!("vertex {:?}", vertex.key),
+                &err,
+            )
+        })?;
         mutation.update_interior_facet_index(
             &removed_edges,
             &info.new_simplices,
@@ -2780,6 +2106,26 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
             .collect();
         mutation.commit();
         Ok(DelaunayRemovalResult { new_faces })
+    }
+
+    /// Explicitly restores Level 5 only for constructors that promise Delaunay output.
+    ///
+    /// Filtering an initial point set needs Delaunay connectivity between removals.
+    /// Ordinary CDT edits never invoke this repair, since it may change evolved topology.
+    pub(crate) fn refine_delaunay_for_construction(&mut self) -> Result<(), DelaunayError>
+    where
+        DelaunayKernel: ExactPredicates<D>,
+    {
+        let refined = DelaunayRefinementBuilder::new(self.dt.clone())
+            .repair_by_flips()
+            .build()
+            .map_err(|error| DelaunayError::ValidationFailed {
+                level: DelaunayValidationLevel::Five,
+                detail: error.to_string(),
+            })?;
+        self.dt = refined.triangulation.into_triangulation();
+        self.rebuild_interior_facet_index();
+        Ok(())
     }
 
     /// Flips one edge with either backend- or caller-owned rollback.
@@ -2808,19 +2154,18 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
         let removed_edges =
             self.local_edges_for_simplices(&removed_simplices, DelaunayOperation::FlipK2)?;
         let mut mutation = self.mutation(rollback);
-        let info = mutation
-            .dt
-            .flip_k2(facet)
-            .map_err(|err| DelaunayError::FlipFailed {
-                operation: DelaunayOperation::FlipK2,
-                target: format!(
+        let info = mutation.dt.flip_k2(facet).map_err(|err| {
+            flip_error(
+                DelaunayOperation::FlipK2,
+                format!(
                     "edge {:?} -- {:?} via facet {:?}",
                     edge.key.v0(),
                     edge.key.v1(),
                     facet
                 ),
-                detail: err.to_string(),
-            })?;
+                &err,
+            )
+        })?;
         let mut inserted = info.inserted_face_vertices.iter().copied();
         let Some(v0) = inserted.next() else {
             return Err(DelaunayError::UnexpectedFlipOutput {
@@ -2889,10 +2234,12 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
         let info = mutation
             .dt
             .flip_k1_insert(face_key, vertex)
-            .map_err(|err| DelaunayError::FlipFailed {
-                operation: DelaunayOperation::FlipK1Insert,
-                target: format!("face {:?} at point {:?}", face.key, point),
-                detail: err.to_string(),
+            .map_err(|err| {
+                flip_error(
+                    DelaunayOperation::FlipK1Insert,
+                    format!("face {:?} at point {:?}", face.key, point),
+                    &err,
+                )
             })?;
         let mut inserted = info.inserted_face_vertices.iter().copied();
         let Some(new_vertex) = inserted.next() else {
@@ -2960,10 +2307,12 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
                     .map(|key| self.face_handle(key))
                     .collect()
             })
-            .map_err(|err| DelaunayError::RemovalFailed {
-                operation: DelaunayOperation::FlipK1Remove,
-                target: format!("vertex {:?}", vertex.key),
-                detail: err.to_string(),
+            .map_err(|err| {
+                flip_error(
+                    DelaunayOperation::FlipK1Remove,
+                    format!("vertex {:?}", vertex.key),
+                    &err,
+                )
             })
     }
 
@@ -2993,27 +2342,21 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
         coords: &[Self::Coordinate],
     ) -> Result<Self::VertexHandle, Self::Error> {
         let vertex = Self::build_vertex(coords, None, DelaunayOperation::InsertVertex)?;
-        let mut certified = DelaunayRefinementBuilder::new(self.dt.clone())
-            .build()
-            .map_err(|err| DelaunayError::ValidationFailed {
-                level: DelaunayValidationLevel::Five,
-                detail: err.to_string(),
-            })?;
-        let key =
-            certified
-                .insert_vertex(vertex)
-                .map_err(|err| DelaunayError::InsertionFailed {
+        // No Level 5 promotion: evolved non-Delaunay owners remain editable.
+        // Upstream validates Levels 1–4 and restores the complete owner on failure.
+        let key = self.dt.insert_vertex(vertex).map_err(|err| match err {
+            TriangulationEditError::UnsupportedTopology { topology } => {
+                DelaunayError::UnsupportedTopology {
                     operation: DelaunayOperation::InsertVertex,
-                    coordinates: coords.to_vec(),
-                    detail: err.to_string(),
-                })?;
-        let candidate = certified.into_triangulation();
-        Self::validate_candidate_embedding(
-            &candidate,
-            DelaunayOperation::InsertVertex,
-            format!("{coords:?}"),
-        )?;
-        self.dt = candidate;
+                    topology,
+                }
+            }
+            err => DelaunayError::InsertionFailed {
+                operation: DelaunayOperation::InsertVertex,
+                coordinates: coords.to_vec(),
+                detail: err.to_string(),
+            },
+        })?;
         self.rebuild_interior_facet_index();
         Ok(self.vertex_handle(key))
     }
@@ -3083,7 +2426,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::CdtError;
     use crate::geometry::DelaunayBackend2D;
@@ -3100,10 +2443,195 @@ mod tests {
     use std::collections::HashSet;
     use std::num::NonZeroU32;
 
+    #[test]
+    fn flip_error_distinguishes_candidate_geometry_from_internal_context_failures() {
+        let recoverable = flip_error(
+            DelaunayOperation::FlipK2,
+            "edge".to_string(),
+            &FlipError::DegenerateSimplex,
+        );
+        assert_matches!(
+            recoverable,
+            DelaunayError::CandidateRejected {
+                reason: DelaunayCandidateRejection::DegenerateReplacement,
+                ..
+            }
+        );
+        let hard = flip_error(
+            DelaunayOperation::FlipK2,
+            "edge".to_string(),
+            &FlipContextError::WrongRemovedFaceArity {
+                expected: 2,
+                found: 1,
+            }
+            .into(),
+        );
+        assert_matches!(
+            hard,
+            DelaunayError::FlipFailed {
+                operation: DelaunayOperation::FlipK2,
+                ..
+            }
+        );
+        let orientation = flip_error(
+            DelaunayOperation::FlipK2,
+            "edge".to_string(),
+            &FlipError::PostconditionRepair {
+                source: Box::new(InsertionError::TopologyValidationFailed {
+                    context: InsertionTopologyValidationContext::PositiveOrientationPromotion,
+                    source: TriangulationValidationError::OrientationPromotionNonConvergence {
+                        residual_count: 1,
+                        sampled: Vec::new(),
+                    },
+                }),
+            },
+        );
+        assert_matches!(
+            orientation,
+            DelaunayError::CandidateRejected {
+                reason: DelaunayCandidateRejection::OrientationConflict,
+                ..
+            }
+        );
+    }
+
     /// Wraps generated test fixtures through the public checked constructor.
     fn validated_backend(dt: DelaunayTriangulation2D) -> DelaunayBackend2D {
         DelaunayBackend2D::from_triangulation(dt)
             .expect("test Delaunay triangulation should validate")
+    }
+
+    /// Captures TDS storage independently of the exact owner envelope for assertions.
+    pub fn backend_state_value(backend: &DelaunayBackend2D) -> Value {
+        let owner = to_value(&backend.dt).expect("owner should serialize");
+        serde_json::json!({
+            "tds": backend.dt.clone().into_tds(),
+            "global_topology": owner["global_topology"],
+            "topology_guarantee": owner["topology_guarantee"],
+            "validation_policy": owner["validation_policy"],
+            "delaunay_check_policy": SerializableDelaunayCheckPolicy::from(backend.delaunay_check_policy),
+        })
+    }
+
+    /// Checks UUID connectivity, neighbor slots, offsets, payloads, policy, and export.
+    fn assert_exact_backend_round_trip(backend: &DelaunayBackend2D) {
+        let expected = backend_state_value(backend);
+        let export = to_value(backend.mesh_export().expect("mesh export should work"))
+            .expect("mesh export should serialize");
+        assert_eq!(export["metadata"]["producer"], env!("CARGO_PKG_NAME"));
+        assert_eq!(
+            export["vertices"].as_array().expect("vertices").len(),
+            backend.vertex_count()
+        );
+        assert_eq!(
+            export["simplices"].as_array().expect("simplices").len(),
+            backend.face_count()
+        );
+        assert_eq!(
+            export["adjacency"].as_array().expect("adjacency").len(),
+            3 * backend.face_count()
+        );
+
+        let encoded = to_value(backend).expect("owner should serialize");
+        assert!(
+            encoded["triangulation"]["tds"].is_array(),
+            "upstream exact persistence envelope"
+        );
+        let restored: DelaunayBackend2D =
+            serde_json::from_value(encoded).expect("Level 4 owner should restore");
+        assert_eq!(backend_state_value(&restored), expected);
+        assert_eq!(
+            to_value(restored.mesh_export().expect("restored export")).expect("export JSON"),
+            export,
+        );
+        assert_interior_facet_index_matches_rebuild(&restored);
+        assert!(
+            !restored.is_delaunay(),
+            "restoration must not repair Level 5"
+        );
+    }
+
+    #[test]
+    fn evolved_euclidean_and_toroidal_owners_preserve_exact_persistence_and_export() {
+        let torus = CdtTriangulation::from_toroidal_cdt(4, 3).expect("toroidal fixture");
+        for mut backend in [embedded_non_delaunay_backend(), torus.geometry().clone()] {
+            let face = backend
+                .faces()
+                .find(|face| {
+                    backend.periodic_domain().is_none()
+                        || backend
+                            .dt
+                            .simplex(face.key)
+                            .expect("live simplex")
+                            .periodic_vertex_offsets()
+                            .is_some_and(|offsets| {
+                                offsets.iter().flatten().any(|&offset| offset != 0)
+                            })
+                })
+                .expect("Euclidean face or toroidal seam face");
+            let point = backend.face_barycenter(&face).expect("lifted barycenter");
+            let subdivision = backend
+                .subdivide_face(face, &point)
+                .expect("direct Level 4 subdivision");
+            backend
+                .set_vertex_data(&subdivision.new_vertex, Some(42))
+                .expect("vertex payload");
+            let faces: Vec<_> = backend.faces().collect();
+            for face in faces {
+                backend
+                    .set_simplex_data(&face, Some(17))
+                    .expect("simplex payload");
+            }
+            backend.delaunay_check_policy =
+                DelaunayCheckPolicy::EveryN(NonZeroUsize::new(7).expect("nonzero cadence"));
+            backend.validate_embedding().expect("evolved realization");
+            assert!(
+                !backend.is_delaunay(),
+                "subdivision should create an evolved non-Delaunay owner"
+            );
+            assert_exact_backend_round_trip(&backend);
+        }
+    }
+
+    #[test]
+    fn toroidal_general_edits_reject_without_changing_local_edit_support() {
+        let torus = CdtTriangulation::from_toroidal_cdt(4, 3).expect("toroidal fixture");
+        let mut backend = torus.geometry().clone();
+        let vertex = backend.vertices().next().expect("torus has vertices");
+        assert!(backend.dt.can_flip_k1_remove(vertex.key).is_err());
+        let before = to_value(&backend).expect("owner snapshot");
+        let facets = backend.interior_facets_by_edge.clone();
+        let handles: Vec<_> = backend.vertices().collect();
+        assert_matches!(
+            backend.insert_vertex(&[0.2, 0.3]),
+            Err(DelaunayError::UnsupportedTopology {
+                operation: DelaunayOperation::InsertVertex,
+                topology: TopologyKind::Toroidal,
+            })
+        );
+        assert_matches!(
+            backend.remove_vertex(vertex),
+            Err(DelaunayError::UnsupportedTopology {
+                operation: DelaunayOperation::RemoveVertex,
+                topology: TopologyKind::Toroidal,
+            })
+        );
+        assert_eq!(to_value(&backend).expect("unchanged snapshot"), before);
+        assert_eq!(backend.interior_facets_by_edge, facets);
+        assert_eq!(backend.vertices().collect::<Vec<_>>(), handles);
+
+        let face = backend.faces().next().expect("torus has faces");
+        let point = backend.face_barycenter(&face).expect("lifted barycenter");
+        let subdivision = backend
+            .subdivide_face(face, &point)
+            .expect("local insertion");
+        backend
+            .remove_vertex(subdivision.new_vertex)
+            .expect("local inverse removal");
+        backend
+            .validate_embedding()
+            .expect("local pair should preserve Level 4");
+        assert_interior_facet_index_matches_rebuild(&backend);
     }
 
     /// Builds an embedding-valid explicit quad whose chosen diagonal is not Delaunay.
@@ -3125,7 +2653,6 @@ mod tests {
                 .build_triangulation()
                 .expect("non-Delaunay quad should pass Levels 1-4 embedding validation");
         DelaunayBackend2D::from_realized_triangulation(dt)
-            .expect("non-Delaunay quad should pass Levels 1-4 embedding validation")
     }
 
     /// `serde_json` wraps custom visitor failures as data errors; assert that
@@ -3139,163 +2666,6 @@ mod tests {
                 "deserialization error {message:?} did not contain {expected_detail:?}"
             );
         }
-    }
-
-    /// `serde::de::value::Error` does not expose categories, so centralize the
-    /// remaining custom-message assertions for direct conversion tests.
-    fn assert_value_deserialization_error(
-        error: &serde::de::value::Error,
-        expected_details: &[&str],
-    ) {
-        let message = error.to_string();
-        for expected_detail in expected_details {
-            assert!(
-                message.contains(expected_detail),
-                "value deserialization error {message:?} did not contain {expected_detail:?}"
-            );
-        }
-    }
-
-    /// Rewrites a serialized convex-quad TDS to use the embedding-valid
-    /// non-Delaunay diagonal.
-    fn set_non_delaunay_quad_diagonal(value: &mut Value) {
-        let tds = value
-            .get("tds")
-            .expect("serialized backend should contain a TDS");
-        let vertices = tds
-            .get("vertices")
-            .and_then(Value::as_array)
-            .expect("serialized TDS should contain vertices");
-        let find_vertex_uuid = |target: [f64; 2]| {
-            vertices
-                .iter()
-                .find_map(|vertex| {
-                    let point = vertex.get("point")?.as_array()?;
-                    let coords = [point.first()?.as_f64()?, point.get(1)?.as_f64()?];
-                    if coords.map(f64::to_bits) == target.map(f64::to_bits) {
-                        vertex.get("uuid")?.as_str().map(str::to_string)
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or_else(|| panic!("serialized quad should contain vertex {target:?}"))
-        };
-        let v0 = find_vertex_uuid([0.0, 0.0]);
-        let v1 = find_vertex_uuid([4.0, 0.0]);
-        let v2 = find_vertex_uuid([4.0, 2.0]);
-        let v3 = find_vertex_uuid([1.0, 2.0]);
-
-        let simplex_uuids: Vec<_> = tds
-            .get("simplices")
-            .and_then(Value::as_array)
-            .expect("serialized TDS should contain simplices")
-            .iter()
-            .filter_map(|simplex| simplex.get("uuid")?.as_str())
-            .map(str::to_string)
-            .collect();
-        assert_eq!(
-            simplex_uuids.len(),
-            2,
-            "convex quad fixture should serialize exactly two simplices"
-        );
-
-        let simplex_vertices = value
-            .get_mut("tds")
-            .and_then(|tds| tds.get_mut("simplex_vertices"))
-            .and_then(Value::as_object_mut)
-            .expect("serialized TDS should contain simplex_vertices");
-        simplex_vertices.insert(
-            simplex_uuids[0].clone(),
-            Value::Array(vec![
-                Value::String(v0.clone()),
-                Value::String(v1),
-                Value::String(v2.clone()),
-            ]),
-        );
-        simplex_vertices.insert(
-            simplex_uuids[1].clone(),
-            Value::Array(vec![
-                Value::String(v0),
-                Value::String(v2),
-                Value::String(v3),
-            ]),
-        );
-
-        let simplex_neighbors = value
-            .get_mut("tds")
-            .and_then(|tds| tds.get_mut("simplex_neighbors"))
-            .and_then(Value::as_object_mut)
-            .expect("serialized TDS should contain simplex_neighbors");
-        simplex_neighbors.insert(
-            simplex_uuids[0].clone(),
-            Value::Array(vec![
-                Value::Null,
-                Value::String(simplex_uuids[1].clone()),
-                Value::Null,
-            ]),
-        );
-        simplex_neighbors.insert(
-            simplex_uuids[1].clone(),
-            Value::Array(vec![
-                Value::Null,
-                Value::Null,
-                Value::String(simplex_uuids[0].clone()),
-            ]),
-        );
-    }
-
-    #[test]
-    fn toroidal_topology_deserialization_rejects_invalid_periods() {
-        for period in [f64::NAN, f64::INFINITY, 0.0, -1.0] {
-            let topology = SerializableGlobalTopology::Toroidal {
-                domain: vec![period, 1.0],
-                mode: SerializableToroidalConstructionMode::Explicit,
-            };
-
-            let error = topology
-                .into_global_topology::<2, serde::de::value::Error>()
-                .expect_err("invalid toroidal period should fail deserialization");
-
-            assert_value_deserialization_error(&error, &["invalid toroidal period"]);
-        }
-    }
-
-    #[test]
-    fn toroidal_topology_deserialization_rejects_domain_length_mismatch() {
-        let topology = SerializableGlobalTopology::Toroidal {
-            domain: vec![1.0],
-            mode: SerializableToroidalConstructionMode::Explicit,
-        };
-
-        let error = topology
-            .into_global_topology::<2, serde::de::value::Error>()
-            .expect_err("wrong-dimensional toroidal domain should fail deserialization");
-
-        assert_value_deserialization_error(
-            &error,
-            &["toroidal domain length mismatch", "got 1", "expected 2"],
-        );
-    }
-
-    #[test]
-    fn toroidal_topology_deserialization_rejects_legacy_canonicalized_mode() {
-        let topology = SerializableGlobalTopology::Toroidal {
-            domain: vec![1.0, 1.0],
-            mode: SerializableToroidalConstructionMode::Canonicalized,
-        };
-
-        let error = topology
-            .into_global_topology::<2, serde::de::value::Error>()
-            .expect_err("legacy canonicalized topology must fail deserialization");
-
-        assert_value_deserialization_error(
-            &error,
-            &[
-                "Canonicalized",
-                "not semantically equivalent",
-                "PeriodicImagePoint",
-            ],
-        );
     }
 
     #[test]
@@ -3492,70 +2862,6 @@ mod tests {
                 ..
             })
         );
-    }
-
-    #[test]
-    fn embedding_validation_errors_trigger_transaction_rollback() {
-        let validation_errors = [
-            (
-                DelaunayError::ValidationFailed {
-                    level: DelaunayValidationLevel::Four,
-                    detail: "non-adjacent simplices intersect".to_string(),
-                },
-                "insert_vertex produced invalid geometry for [0.25, 0.25]: non-adjacent simplices intersect",
-            ),
-            (
-                DelaunayError::NotImplemented {
-                    operation: DelaunayOperation::ReserveCapacity,
-                },
-                "insert_vertex produced invalid geometry for [0.25, 0.25]: not implemented: reserve_capacity",
-            ),
-        ];
-
-        for (validation_error, expected_detail) in validation_errors {
-            let dt =
-                build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 0)])
-                    .expect("triangle should build");
-            let mut backend = validated_backend(dt);
-            let serialized_before = to_value(&backend).expect("backend should serialize");
-            let expected_facets = backend.interior_facets_by_edge.clone();
-            let error = {
-                let vertex = DelaunayBackend::<u32, i32, 2>::build_vertex(
-                    &[0.25, 0.25],
-                    None,
-                    DelaunayOperation::InsertVertex,
-                )
-                .expect("test vertex should build");
-                let mut mutation = DelaunayMutation::new(&mut backend);
-                let mut certified = DelaunayRefinementBuilder::new(mutation.dt.clone())
-                    .build()
-                    .expect("triangle should certify before insertion");
-                certified
-                    .insert_vertex(vertex)
-                    .expect("inside-point insertion should mutate the guarded backend");
-                mutation.dt = certified.into_triangulation();
-                mutation.rebuild_interior_facet_index();
-                DelaunayBackend::<u32, i32, 2>::map_embedding_validation_error(
-                    Err(validation_error),
-                    DelaunayOperation::InsertVertex,
-                    "[0.25, 0.25]".to_string(),
-                )
-                .expect_err("failed embedding validation should reject the mutation")
-            };
-
-            assert_matches!(
-                error,
-                DelaunayError::ValidationFailed {
-                    level: DelaunayValidationLevel::Four,
-                    detail,
-                } if detail == expected_detail
-            );
-            assert_eq!(
-                to_value(&backend).expect("restored backend should serialize"),
-                serialized_before
-            );
-            assert_eq!(backend.interior_facets_by_edge, expected_facets);
-        }
     }
 
     #[test]
@@ -4428,8 +3734,9 @@ mod tests {
         assert!(!backend.can_subdivide_face(&face, &[0.5, 0.0]));
         assert_matches!(
             backend.subdivide_face(face.clone(), &[0.5, 0.0]),
-            Err(DelaunayError::FlipFailed {
+            Err(DelaunayError::CandidateRejected {
                 operation: DelaunayOperation::FlipK1Insert,
+                reason: DelaunayCandidateRejection::DegenerateReplacement,
                 ..
             })
         );
@@ -4521,17 +3828,20 @@ mod tests {
 
     #[test]
     fn failed_vertex_removal_restores_backend_snapshot() {
-        let mut backend = embedded_non_delaunay_backend();
+        let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 1)])
+            .expect("triangle should build");
+        let mut backend = validated_backend(dt);
         let vertex = backend
             .vertices()
             .next()
             .expect("rollback fixture vertex should be present");
         let serialized_before = to_value(&backend).expect("backend should serialize");
         let facets_before = backend.interior_facets_by_edge.clone();
+        let handles_before: Vec<_> = backend.vertices().collect();
 
         let error = backend
             .remove_vertex(vertex)
-            .expect_err("a non-Delaunay state cannot enter the certified deletion path");
+            .expect_err("removing a triangle corner cannot preserve a realized 2D owner");
 
         assert_matches!(
             error,
@@ -4545,30 +3855,110 @@ mod tests {
             serialized_before
         );
         assert_eq!(backend.interior_facets_by_edge, facets_before);
+        assert_eq!(backend.vertices().collect::<Vec<_>>(), handles_before);
+        backend
+            .validate_embedding()
+            .expect("rollback should preserve realization");
     }
 
     #[test]
-    fn non_delaunay_state_rejects_vertex_insertion_without_mutation() {
+    fn non_delaunay_state_rejects_degenerate_insertion_without_mutation() {
         let mut backend = embedded_non_delaunay_backend();
         let serialized_before = to_value(&backend).expect("backend should serialize");
         let facets_before = backend.interior_facets_by_edge.clone();
+        let handles_before: Vec<_> = backend.vertices().collect();
 
         let error = backend
-            .insert_vertex(&[0.5, 0.25])
-            .expect_err("a non-Delaunay state cannot enter the certified insertion path");
+            .insert_vertex(&[2.0, 0.5])
+            .expect_err("a point on the interior diagonal cannot form a stellar subdivision");
 
         assert_matches!(
             error,
-            DelaunayError::ValidationFailed {
-                level: DelaunayValidationLevel::Five,
-                ref detail,
-            } if !detail.is_empty()
+            DelaunayError::InsertionFailed {
+                operation: DelaunayOperation::InsertVertex,
+                ref coordinates,
+                ..
+            } if coordinates.iter().copied().map(f64::to_bits).eq([2.0_f64, 0.5].map(f64::to_bits))
         );
         assert_eq!(
             to_value(&backend).expect("restored backend should serialize"),
             serialized_before
         );
         assert_eq!(backend.interior_facets_by_edge, facets_before);
+        assert_eq!(backend.vertices().collect::<Vec<_>>(), handles_before);
+        backend
+            .validate_embedding()
+            .expect("rollback should preserve realization");
+    }
+
+    #[test]
+    fn non_delaunay_state_supports_general_insertion_and_deletion() {
+        let mut backend = embedded_non_delaunay_backend();
+        assert!(
+            backend.is_valid(),
+            "structural validity does not imply Level 5"
+        );
+        assert!(!backend.is_delaunay());
+        let original_vertex = backend.vertices().next().expect("quad has vertices");
+        let vertex_records = backend_state_value(&backend)["tds"]["vertices"].clone();
+        for point in [[0.5, 0.25], [5.0, 2.0]] {
+            let before = backend.vertex_count();
+            let inserted = backend
+                .insert_vertex(&point)
+                .expect("Level 4 insertion should work");
+            assert_eq!(backend.vertex_count(), before + 1);
+            assert_eq!(
+                backend
+                    .vertex_coordinates(&inserted)
+                    .expect("new handle should resolve")
+                    .iter()
+                    .copied()
+                    .map(f64::to_bits)
+                    .collect::<Vec<_>>(),
+                point.map(f64::to_bits),
+            );
+            assert_interior_facet_index_matches_rebuild(&backend);
+            backend
+                .validate_embedding()
+                .expect("inserted mesh should retain Level 4");
+        }
+        assert_matches!(
+            backend.vertex_coordinates(&original_vertex),
+            Err(DelaunayError::StaleHandle { .. })
+        );
+        let current_vertices = backend_state_value(&backend)["tds"]["vertices"].clone();
+        for record in vertex_records.as_array().expect("vertex records") {
+            assert!(
+                current_vertices
+                    .as_array()
+                    .expect("vertex records")
+                    .contains(record)
+            );
+        }
+
+        // The original quad corner is not a degree-three inverse stellar site.
+        let vertex = backend
+            .vertices()
+            .find(|vertex| {
+                backend
+                    .vertex_coordinates(vertex)
+                    .is_ok_and(|point| point == [4.0, 1.0])
+            })
+            .expect("original corner should remain");
+        assert!(backend.dt.can_flip_k1_remove(vertex.key).is_err());
+        assert!(
+            !backend.is_delaunay(),
+            "generic deletion must receive a non-Delaunay owner"
+        );
+        let before = backend.vertex_count();
+        backend
+            .remove_vertex(vertex)
+            .expect("Level 4 cavity deletion should work");
+        assert_eq!(backend.vertex_count(), before - 1);
+        backend
+            .validate_embedding()
+            .expect("deleted mesh should retain Level 4");
+        assert_interior_facet_index_matches_rebuild(&backend);
     }
 
     #[test]
@@ -4604,108 +3994,6 @@ mod tests {
         assert_eq!(backend.vertex_count(), original_vertex_count - 1);
         assert_eq!(backend.face_count(), original_face_count - 2);
         assert!(backend.is_valid());
-    }
-
-    #[test]
-    fn backend_deserialization_accepts_realized_non_delaunay_connectivity() {
-        let dt = build_delaunay2_with_data(&[
-            ([0.0, 0.0], 0),
-            ([4.0, 0.0], 0),
-            ([4.0, 2.0], 1),
-            ([1.0, 2.0], 1),
-        ])
-        .expect("convex quad should build");
-        let mut backend = validated_backend(dt);
-        let vertices: Vec<_> = backend.vertices().collect();
-        for (vertex, payload) in vertices
-            .into_iter()
-            .zip([Some(2), Some(3), Some(5), Some(7)])
-        {
-            backend
-                .set_vertex_data(&vertex, payload)
-                .expect("fixture vertex payload should update");
-        }
-        let faces: Vec<_> = backend.faces().collect();
-        for (face, payload) in faces.into_iter().zip([Some(11), Some(13)]) {
-            backend
-                .set_simplex_data(&face, payload)
-                .expect("fixture simplex payload should update");
-        }
-        let collect_vertex_payloads = |backend: &DelaunayBackend2D| {
-            let mut payloads: Vec<_> = backend
-                .vertices()
-                .map(|vertex| {
-                    let coordinates = backend
-                        .vertex_coordinates(&vertex)
-                        .expect("vertex coordinates should resolve");
-                    let payload = backend
-                        .vertex_data(&vertex)
-                        .expect("vertex payload should resolve");
-                    (
-                        [coordinates[0].to_bits(), coordinates[1].to_bits()],
-                        payload,
-                    )
-                })
-                .collect();
-            payloads.sort_unstable();
-            payloads
-        };
-        let collect_simplex_payloads = |backend: &DelaunayBackend2D| {
-            let mut payloads: Vec<_> = backend
-                .faces()
-                .map(|face| {
-                    backend
-                        .simplex_data(&face)
-                        .expect("simplex payload should resolve")
-                })
-                .collect();
-            payloads.sort_unstable();
-            payloads
-        };
-        let original_vertex_payloads = collect_vertex_payloads(&backend);
-        let original_simplex_payloads = collect_simplex_payloads(&backend);
-        let mut value = to_value(&backend).expect("backend should serialize");
-        set_non_delaunay_quad_diagonal(&mut value);
-        let non_delaunay_json = to_string(&value).expect("modified backend should serialize");
-
-        let restored = from_str::<DelaunayBackend2D>(&non_delaunay_json)
-            .expect("embedding-valid non-Delaunay connectivity should deserialize");
-
-        restored
-            .validate_embedding()
-            .expect("restored connectivity should satisfy Levels 1-4");
-        assert!(!restored.is_delaunay());
-        assert_eq!(collect_vertex_payloads(&restored), original_vertex_payloads);
-        assert_eq!(
-            collect_simplex_payloads(&restored),
-            original_simplex_payloads
-        );
-    }
-
-    #[test]
-    fn backend_deserialization_rejects_invalid_realization_without_repair() {
-        let dt =
-            build_delaunay2_with_data(&[([0.0, 0.0], 0_u32), ([1.0, 0.0], 0), ([0.0, 1.0], 1)])
-                .expect("labeled triangle should build");
-        let backend = validated_backend(dt);
-        let mut value = to_value(&backend).expect("backend should serialize");
-        let vertices = value
-            .get_mut("tds")
-            .and_then(|tds| tds.get_mut("vertices"))
-            .and_then(Value::as_array_mut)
-            .expect("serialized TDS should contain vertices");
-        for (vertex, point) in vertices
-            .iter_mut()
-            .zip([[0.0, 0.0], [1.0, 0.0], [2.0, 0.0]])
-        {
-            vertex["point"] = serde_json::json!(point);
-        }
-        let invalid_json = to_string(&value).expect("modified backend should serialize");
-
-        let error = from_str::<DelaunayBackend2D>(&invalid_json)
-            .expect_err("degenerate Level 4 realization must be rejected without repair");
-
-        assert_json_data_error(&error, &["realization"]);
     }
 
     #[test]

@@ -128,8 +128,6 @@ causal-triangulations/
 ├── tests/
 │   ├── common/
 │   │   └── proptest_config.rs
-│   ├── fixtures/
-│   │   └── checkpoint_v1.json
 │   ├── semgrep/
 │   │   ├── .github/
 │   │   │   └── workflows/
@@ -237,7 +235,7 @@ enforce this boundary against new CDT-local generic acceptance draws or manual a
 Assigns each vertex to a discrete time slice, enabling classification of edges as spacelike or timelike and triangles as up or down. See `docs/foliation.md` for
 design details.
 
-- `Foliation` — aggregate bookkeeping (per-slice vertex counts, total slices)
+- `Foliation` — aggregate bookkeeping (per-slice vertex counts, total slices, and a checked labeled-vertex total maintained by local edits)
 - `EdgeType` — `Spacelike` (same slice) or `Timelike` (adjacent slices)
 - `SimplexType` — `Up` (2,1) or `Down` (1,2) triangle classification, encoded as `i32` simplex data
 - Time labels are stored directly as vertex data (`Vertex.data: Option<u32>`), mirroring CDT-plusplus’s `vertex->info()`
@@ -255,8 +253,8 @@ through to upstream `delaunay::` APIs directly.
 - `from_cdt_strip(vertices_per_slice, num_slices)` — exact-time open-boundary 1+1 CDT strip imported through the Delaunay adapter with strict Up/Down simplex
   classification and upstream Level 1–4 realization validation before wrapping
 - `from_filtered_delaunay_strip(vertices_per_slice, num_slices)` — open-boundary 1+1 CDT initial-state constructor that starts from surplus labeled Delaunay
-  points, removes vertices incident to non-strict CDT simplices through the backend `remove_vertex` path, and returns only after the strict causal simplex
-  violation count converges to zero and full initial validation passes
+  points, removes vertices incident to non-strict CDT simplices through the backend `remove_vertex` path, explicitly refines Delaunay connectivity between
+  filtering passes, and returns only after the strict causal simplex violation count converges to zero and full initial validation passes
 - `from_cdt_strip_spatial_vertex_profile(profile)` — exact-time open-boundary 1+1 CDT strip from explicit nonuniform per-slice vertex counts; builds balanced
   staircase connectivity and delegates Level 1–4 realization validation to the Delaunay adapter
 - `from_toroidal_cdt(vertices_per_slice, num_slices)` — periodic Delaunay S¹×S¹ toroidal CDT (χ = 0) with upstream Level 1–5 validation before wrapping;
@@ -277,6 +275,7 @@ The implementation lives under `src/cdt/triangulation/` and is wired from `src/l
 
 - `builders.rs` — Delaunay-backed random/seeded/labeled builders plus strip and periodic toroidal CDT builders
 - `foliation.rs` — foliation assignment, slice and label queries, slab-triangle profiles, simplex/edge classification, and foliation synchronization
+  including immutable shared profile snapshots with checked totals and local per-slab change receipts
 - `moves.rs` — narrow crate-internal Delaunay mutation hooks used by ergodic moves
 - `state.rs` — module entry point, `CdtTriangulation`, `CdtMetadata`, triangulation serialization, cached geometry accessors, and backend-agnostic state
   methods; it does not store a duplicate simulation event log
@@ -306,14 +305,20 @@ for `markov-chain-monte-carlo` proposal and target traits. `runner.rs` owns `Met
 continuation view, delegates generic acceptance, proposal-ratio application, chain counters, and planned-proposal commit ordering to the upstream MCMC crate,
 then consumes the chain state back into the CDT result without cloning topology per step or per chunk. CDT-owned telemetry and RNG state travel beside that
 single canonical triangulation owner. `checkpoint.rs` owns resumable state, the versioned CDT-owned JSON envelope, dependency-neutral RNG/duration adapters,
-and resume validation. The committed `tests/fixtures/checkpoint_v1.json` artifact guards that compatibility boundary. `telemetry.rs` owns public step/proposal
+and resume validation. Format version 2 delegates exact geometry persistence to Delaunay's Level 4 owner snapshot. `telemetry.rs` owns public step/proposal
 telemetry, and `helpers.rs` holds shared CDT-domain calculations.
+
+Checkpoint JSON first decodes raw CDT records, then runs the same typed constructors used by standalone configuration and telemetry APIs. Domain errors retain
+their variants; malformed encodings remain serialization errors. RNG errors identify the acceptance or proposal stream, and sampler failures retain the
+planning, scoring, ratio, or commit stage. Local backend edits preserve adapter errors and only recognized candidate failures become ordinary rejections.
 
 See `docs/metropolis.md` for the current planned-proposal ordering and enforced MCMC backend boundary.
 
 ### `cdt/results.rs` — Simulation outputs
 
 - `Measurement` records per-step action, simplex counts, and optional per-slab triangle profiles `N₂(t)`.
+- Measurements and scalar trace rows share immutable profile snapshots with the current geometry; unchanged local edits preserve sharing. Public profile
+  accessors and serialized numeric arrays retain their existing shape, and deserialization shares equal adjacent snapshots after trajectory validation.
 - `SimulationEvent` is the public value type for reconstructed history entries.
 - `SimulationResultsBackend` owns the final triangulation, Monte Carlo step telemetry, upstream scalar trace rows, move statistics, and measurement history.
 - `SimulationHistory` is an allocation-free, exact-size borrowed iterator that reconstructs creation, attempted-move, accepted-move, and measurement events
@@ -336,6 +341,7 @@ See `docs/metropolis.md` for the current planned-proposal ordering and enforced 
 - Offered-site counts and deterministic ID iteration share `MoveSiteCache` and the exact visitor used by conventional sampler selection and reverse-site
   accounting. These sites belong to the actual proposal support but are not an eligible/executable-site mask: later backend edits or CDT validation may still
   reject an offered site as an ordinary self-loop proposal.
+- Each family retains two entries with owner and modification provenance, allowing speculative reverse inspection without evicting the live entry.
 - `tests/proposal_policy.rs` verifies the public boundary, including empty families, ordering, state facts, invalidation, independent concrete-pair
   detailed-balance calculations, fixed-policy checkpoint reproducibility, and representative accepted toroidal inverse moves.
 
@@ -359,7 +365,8 @@ See `docs/metropolis.md` for the current planned-proposal ordering and enforced 
 - `TriangulationQuery` is the read-only surface used by CDT logic for counts, handles, adjacency, coordinates, face vertices, and validation. Entity and
   adjacency scans are lazy borrowed iterators, face vertices are exact-size iterators, and coordinates are borrowed slices over canonical storage.
 - `TriangulationMut` is the narrow mutation surface used by CDT-owned move kernels through CDT state mutation methods, not broad mutable backend exposure
-- `TriangulationOps` supplies blanket high-level operations to sized and unsized query implementations, with handle capabilities constrained per operation
+- `TriangulationOps` supplies blanket hull and boundary operations to sized and unsized query implementations, with handle capabilities constrained per
+  operation. Structural validity remains on `TriangulationQuery`; the Level 5 `is_delaunay` predicate belongs to `DelaunayBackend`.
 - Result structs such as `FlipResult`, `EdgeAdjacentFaces`, and `SubdivisionResult` keep local topology operations backend-neutral
 - Use `prelude::geometry` for real backend construction and geometry traits; use `prelude::testing` for mock-backend doctests or downstream fixture code
 
@@ -377,10 +384,16 @@ See `docs/metropolis.md` for the current planned-proposal ordering and enforced 
   Handles are hashable for runtime maps and sets, but owner and topology-generation provenance makes them non-durable; clones, deserialization, and topology
   mutation reject old handles with typed foreign/stale errors.
 - Translates upstream Delaunay operations and errors into this crate's trait contracts
+- Separates recognized candidate geometry/link failures from backend contract failures before translating upstream diagnostics
+- Resolves owner-checked edge handles through upstream checked edge views, retaining incidence diagnostics without materializing incident-edge sets
 - Exposes named validation adapters for Level 1–3 structure, Level 1–4 embedding/realization, and Level 1–5 Delaunay validity
-- Projects MCMC checkpoint geometry into CDT-owned coordinate, payload, and index-relation arrays, then rebuilds that stable record through explicit Level 1–4
-  realization validation so exact layered and evolved non-Delaunay states remain restorable. The current upstream-shaped hydration adapter stays confined here
-  and is tracked for removal by #268 pending upstream delaunay#591.
+- Delegates mesh export and exact persistence to upstream Level 1–4 owner APIs, preserving CDT's export producer identity.
+  General Euclidean insertion/deletion uses upstream transactional Level 1–4 edits; toroidal evolution uses
+  direct local bistellar moves. Successful general edits rebuild the derived facet index; rejected edits preserve handles, geometry, and the index.
+- Shares the same borrowed serialization and exact `TriangulationSnapshot::try_into_triangulation` restoration path between standalone backends and MCMC
+  checkpoint geometry. Wrapping the upstream owner builds the adapter index without repeating its Level 1–4 validation. Exact restoration preserves
+  layered and evolved non-Delaunay states without repair; CDT validates metadata and foliation
+  before publishing the restored checkpoint. Older checkpoint formats and standalone backend representations have no compatibility reader.
 - Together with `geometry/generators.rs`, this is the only place that directly imports from the `delaunay` crate
 
 ### `geometry/generators.rs` — Delaunay triangulation generators

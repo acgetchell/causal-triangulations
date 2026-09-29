@@ -29,8 +29,8 @@ For each step:
    `log(forward_site_count / reverse_site_count)` to the ordinary action term. Unequal or state-dependent policies additionally contribute
    `log(p(reverse(m) | y) / p(m | x))`.
 7. Only after acceptance, replace the live triangulation with the planned proposed state.
-8. If proposal planning hits a hard backend or invariant failure, return `CdtError::MetropolisMoveApplicationFailed` with the step, move type, retry count, and
-   lower-level failure.
+8. If a proposal hits a hard backend or invariant failure, return `CdtError::MetropolisProposalApplicationFailed` with the step, failure stage, move type,
+   attempt number, and typed lower-level failure. Planning errors occur before acceptance; the commit stage occurs after acceptance.
 
 This ordering avoids mutating the live triangulation for Metropolis-rejected moves while still binding each proposal to a concrete local transition before the
 acceptance draw. The speculative clone is itself the rollback boundary during planning, so move kernels do not clone it again; direct public move attempts own
@@ -78,25 +78,24 @@ together between chunks.
 
 ### Serialized Checkpoint Compatibility
 
-`CdtMcmcCheckpoint::to_json()` writes the CDT-owned format named by `CdtMcmcCheckpoint::FORMAT_VERSION` (currently version 1), and `from_json()` reads and fully
+`CdtMcmcCheckpoint::to_json()` writes the CDT-owned format named by `CdtMcmcCheckpoint::FORMAT_VERSION` (currently version 2), and `from_json()` reads and fully
 validates it. The top-level `format_version` tag is mandatory. Unknown tags return `CdtError::UnsupportedCheckpointVersion` with both the encountered and
 supported versions, allowing callers to distinguish an upgrade requirement from malformed state.
 
-Version 1 freezes a dependency-neutral representation. Geometry contains coordinate and payload arrays whose connectivity and neighbor relations use numeric
-array indices; it does not embed Delaunay UUIDs or a TDS snapshot. Accepted/rejected chain counters are CDT fields rather than a serialized
+Version 2 embeds Delaunay's exact Level 4 owner snapshot, including UUIDs, coordinate bits, connectivity, ordered neighbor slots, periodic offsets, topology
+context, validation policy, and payloads. Its geometry schema follows upstream's persistence contract. Accepted/rejected chain counters are CDT fields rather
+than a serialized
 `markov-chain-monte-carlo::ChainCheckpoint`. The record also preserves the Metropolis and action configurations, current action and step, move and proposal
 counters, step telemetry, measurements, scalar trace rows, normalized elapsed time, and explicit state words for the acceptance and ergodic-proposal RNGs.
 Transient geometry and proposal-site caches are rebuilt on load.
 
-Restoration translates version 1 geometry inside the `src/geometry/` adapter, validates exact connectivity through Delaunay Levels 1–4, and then checks CDT
+Restoration uses `TriangulationSnapshot::try_into_triangulation` inside the `src/geometry/` adapter to certify Delaunay Levels 1–4, and then checks CDT
 topology, foliation, causality, simplex classification, action consistency, counters, and telemetry before exposing the checkpoint. Evolved state need not
 satisfy the Level 5 empty-circumsphere predicate, and restore performs no repair or retriangulation. Toroidal records preserve their periodic domain,
 realization mode, relative lift offsets, connectivity, and payloads.
 
-Releases that continue to support version 1 must read this representation across compatible CDT and dependency upgrades; an incompatible future shape receives
-a new version tag. Unversioned legacy payloads are deliberately rejected. There is no migration reader for checkpoints written through the old Delaunay 0.7
-representation or before required CDT fields such as `initial_vertex_count`; regenerate those checkpoints with the originating build if continued sampling is
-needed.
+Older and unversioned checkpoints are deliberately unsupported. There is no migration reader; start a new run with the current build. A future incompatible
+format receives a new version tag. Serialization borrows the geometry and payloads without cloning them; transient storage keys and caches are rebuilt on load.
 
 Checkpoint JSON is an exact stochastic-continuation artifact, not the preferred long-term analysis format. Use trace CSV for rectangular per-step diagnostics
 and the simulation-summary JSON for durable cross-version results and metadata. Those exports intentionally omit resumable RNG and live geometry state.
@@ -250,7 +249,7 @@ implementation for policy consumers.
 #### Offered Sites Versus Eligible Sites
 
 - An **offered site** passed the deterministic pre-mutation guards, can be sampled by the checked planner, and contributes to the proposal denominator below.
-  A later composite backend edit, allocation failure, or post-mutation CDT validation may still reject it as ordinary self-loop probability, as described
+  A later composite backend edit or CDT shape check may still reject it as ordinary self-loop probability, as described
   under [Ordinary Rejections](#ordinary-rejections).
 - An **eligible site**, also called an executable site, would satisfy a stronger contract: for an unchanged state, all deterministic backend mutation
   preconditions and CDT postconditions needed by the move are known before sampling. This would support an executable-only action mask, although it still
@@ -300,11 +299,12 @@ the proposal ratio from empirical counters.
 Ordinary rejections include:
 
 - selected sites that fail CDT-local geometric or causal checks
-- selected backend edits that fail atomically before committing a new CDT state
+- selected backend edits with a recognized candidate geometry or link-condition failure, rolled back before publishing a new CDT state
 - Metropolis rejections of otherwise valid proposed transitions
 
-Hard failures are different. A hard failure means a mutation partially committed or a required rollback/finalization invariant failed. Hard failures are
-diagnostic errors, not normal MCMC rejection outcomes.
+Hard failures include stale or foreign handles, malformed backend mutation output, incidence/index failures, and failed rollback or finalization invariants.
+Unknown backend failures also remain hard errors. The live state is restored or the speculative state discarded; successful rollback does not turn a backend
+contract failure into ordinary rejection probability. Typed adapter errors remain available through `CdtError::BackendEditFailed`.
 
 ## Proposal Statistics
 

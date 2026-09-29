@@ -9,7 +9,7 @@ use crate::cdt::foliation::{
 use crate::config::CdtTopology;
 use crate::errors::{
     BackendMutationOperation, BackendRollbackFailure, BackendRollbackFailures, CdtError, CdtResult,
-    CdtValidationCheck, CdtValidationFailure, MeasurementCountField, TriangulationMetadataField,
+    CdtValidationCheck, CdtValidationFailure, SimplexCountField, TriangulationMetadataField,
 };
 use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayError, DelaunayFaceHandle, DelaunayVertexHandle,
@@ -17,14 +17,158 @@ use crate::geometry::backends::delaunay::{
 use crate::geometry::traits::{TriangulationQuery, exactly_three};
 use crate::geometry::{DelaunayBackend2D, SpacetimeCoordinate};
 use crate::util::f64_band_to_u32;
+use serde::{Serialize, Serializer};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroU32;
+use std::ops::Deref;
+use std::sync::Arc;
+
+/// Immutable profile snapshot with a checked total, shared by geometry and telemetry.
+///
+/// Empty profiles need no allocation. Local edits copy only when a slab count
+/// actually changes and another state or historical row retains the snapshot.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SlabTriangleProfile {
+    counts: Option<Arc<[u32]>>,
+    total: u64,
+}
+
+impl SlabTriangleProfile {
+    /// Parses counts once so consumers can compare the total without rescanning.
+    pub(crate) fn try_new(counts: Vec<u32>) -> CdtResult<Self> {
+        if counts.is_empty() {
+            return Ok(Self::default());
+        }
+        let total = counts.iter().try_fold(0_u64, |total, &count| {
+            total
+                .checked_add(u64::from(count))
+                .ok_or(CdtError::SlabTriangleProfileTotalOverflow)
+        })?;
+        Ok(Self {
+            counts: Some(counts.into()),
+            total,
+        })
+    }
+
+    /// Borrows the unchanged public sequence representation.
+    pub(crate) fn as_slice(&self) -> &[u32] {
+        self.counts.as_deref().unwrap_or_default()
+    }
+
+    /// Returns the sum established at construction and maintained by local edits.
+    pub(crate) const fn total(&self) -> u64 {
+        self.total
+    }
+
+    /// Applies the complete per-slab receipts, leaving unchanged snapshots shared.
+    fn apply_changes(&mut self, changes: &[LocalProfileChange]) -> CdtResult<()> {
+        for &LocalProfileChange {
+            slice,
+            removed,
+            added,
+        } in changes
+        {
+            let index = slice as usize;
+            let old = self.get(index).copied().ok_or_else(|| {
+                local_move_validation_error(CdtValidationFailure::SlabProfileIndexOutOfRange {
+                    slice,
+                    profile_len: self.len(),
+                })
+            })?;
+            let next = old
+                .checked_sub(removed)
+                .ok_or_else(|| {
+                    local_move_validation_error(
+                        CdtValidationFailure::SlabProfileRemovalExceedsCount {
+                            slice,
+                            available: old,
+                            removed,
+                        },
+                    )
+                })?
+                .checked_add(added)
+                .ok_or_else(|| {
+                    slab_triangle_profile_count_overflow(
+                        slice,
+                        u64::from(old - removed) + u64::from(added),
+                    )
+                })?;
+            let total = self
+                .total
+                .checked_sub(u64::from(removed))
+                .ok_or_else(|| {
+                    local_move_validation_error(
+                        CdtValidationFailure::SlabProfileRemovalExceedsTotal {
+                            total: self.total,
+                            removed,
+                        },
+                    )
+                })?
+                .checked_add(u64::from(added))
+                .ok_or(CdtError::SlabTriangleProfileTotalOverflow)?;
+            if old != next
+                && let Some(counts) = &mut self.counts
+            {
+                // A successful indexed read above proves the nonempty snapshot.
+                Arc::make_mut(counts)[index] = next;
+            }
+            self.total = total;
+        }
+        Ok(())
+    }
+}
+
+impl Deref for SlabTriangleProfile {
+    type Target = [u32];
+
+    fn deref(&self) -> &Self::Target {
+        self.as_slice()
+    }
+}
+
+impl Serialize for SlabTriangleProfile {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.as_slice().serialize(serializer)
+    }
+}
+
+/// Local face receipts aggregated by slab before copying a shared profile.
+struct LocalProfileChange {
+    slice: u32,
+    removed: u32,
+    added: u32,
+}
+
+/// Records a removed or replacement face without touching unrelated slab counts.
+fn record_profile_change(
+    changes: &mut Vec<LocalProfileChange>,
+    slice: u32,
+    removed: bool,
+) -> CdtResult<()> {
+    if let Some(change) = changes.iter_mut().find(|change| change.slice == slice) {
+        let count = if removed {
+            &mut change.removed
+        } else {
+            &mut change.added
+        };
+        *count = count
+            .checked_add(1)
+            .ok_or_else(|| slab_triangle_profile_count_overflow(slice, u64::from(*count) + 1))?;
+    } else {
+        changes.push(LocalProfileChange {
+            slice,
+            removed: u32::from(removed),
+            added: u32::from(!removed),
+        });
+    }
+    Ok(())
+}
 
 /// Pre-mutation derived state needed to prove and cache one local CDT edit.
 pub struct LocalMoveBaseline {
     counts: CdtSimplexCounts,
-    slab_triangle_profile: Vec<u32>,
-    removed_profile_slices: Vec<u32>,
+    slab_triangle_profile: SlabTriangleProfile,
+    profile_changes: Vec<LocalProfileChange>,
 }
 
 /// Count and foliation delta guaranteed by a concrete 2D bistellar edit.
@@ -908,7 +1052,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ///
     /// # Errors
     ///
-    /// Returns [`CdtError::MeasurementCountOverflow`] if any per-slice triangle
+    /// Returns [`CdtError::SlabTriangleCountOverflow`] if any per-slice triangle
     /// count exceeds the compact `u32` storage used by measurements and scalar
     /// traces. Returns [`CdtError::ValidationFailed`] if a backend face query
     /// fails while reconstructing the profile.
@@ -925,17 +1069,22 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// }
     /// ```
     pub fn slab_triangle_profile(&self) -> CdtResult<Vec<u32>> {
+        Ok(self.slab_triangle_profile_snapshot()?.to_vec())
+    }
+
+    /// Shares the current immutable profile with telemetry and speculative owners.
+    pub(crate) fn slab_triangle_profile_snapshot(&self) -> CdtResult<SlabTriangleProfile> {
         if let Some(profile) = self.cached_slab_triangle_profile() {
             return Ok(profile);
         }
         if !self.has_current_foliation() {
-            let profile = Vec::new();
+            let profile = SlabTriangleProfile::default();
             self.cache_slab_triangle_profile(profile.clone());
             return Ok(profile);
         }
 
         let Ok(slice_count) = usize::try_from(self.metadata.time_slices.get()) else {
-            return Ok(Vec::new());
+            return Ok(SlabTriangleProfile::default());
         };
         let mut profile = vec![0_u32; slice_count];
 
@@ -947,12 +1096,13 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 continue;
             };
             if let Some(count) = profile.get_mut(index) {
-                *count = count
-                    .checked_add(1)
-                    .ok_or_else(slab_triangle_profile_count_overflow)?;
+                *count = count.checked_add(1).ok_or_else(|| {
+                    slab_triangle_profile_count_overflow(slice, u64::from(*count) + 1)
+                })?;
             }
         }
 
+        let profile = SlabTriangleProfile::try_new(profile)?;
         self.cache_slab_triangle_profile(profile.clone());
         Ok(profile)
     }
@@ -1364,7 +1514,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// ```
     pub fn classify_all_simplices(&mut self) -> CdtResult<Option<usize>> {
         if self.foliation.is_none() {
-            self.cache_slab_triangle_profile(Vec::new());
+            self.cache_slab_triangle_profile(SlabTriangleProfile::default());
             return Ok(None);
         }
         if !self.has_current_foliation() {
@@ -1385,9 +1535,9 @@ impl CdtTriangulation<DelaunayBackend2D> {
             };
             classifications.push((face.simplex_key(), ct));
             let count = profile_count_mut(&mut slab_triangle_profile, slice)?;
-            *count = count
-                .checked_add(1)
-                .ok_or_else(slab_triangle_profile_count_overflow)?;
+            *count = count.checked_add(1).ok_or_else(|| {
+                slab_triangle_profile_count_overflow(slice, u64::from(*count) + 1)
+            })?;
         }
 
         let count = classifications.len();
@@ -1451,7 +1601,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 ));
             }
         }
-        self.cache_slab_triangle_profile(slab_triangle_profile);
+        self.cache_slab_triangle_profile(SlabTriangleProfile::try_new(slab_triangle_profile)?);
         Ok(Some(count))
     }
 
@@ -1482,11 +1632,16 @@ impl CdtTriangulation<DelaunayBackend2D> {
     }
 
     /// Captures the trusted derived state that a local bistellar edit will update.
-    pub(crate) fn begin_local_move(&self) -> CdtResult<LocalMoveBaseline> {
+    pub(crate) fn begin_local_move(&mut self) -> CdtResult<LocalMoveBaseline> {
+        let counts = self.simplex_counts()?;
+        let slab_triangle_profile = self.slab_triangle_profile_snapshot()?;
+        // Transfer the cache's ownership into the transaction. The caller owns
+        // rollback/discard on failure; finalized edits publish a new revision.
+        self.cache.slab_triangle_profile.take();
         Ok(LocalMoveBaseline {
-            counts: self.simplex_counts()?,
-            slab_triangle_profile: self.slab_triangle_profile()?,
-            removed_profile_slices: Vec::with_capacity(4),
+            counts,
+            slab_triangle_profile,
+            profile_changes: Vec::with_capacity(4),
         })
     }
 
@@ -1504,12 +1659,13 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
         for face in faces {
             let Some(slice) = self.live_face_time_slice(face)? else {
-                return Err(local_move_validation_error(format!(
-                    "removed face {:?} is not a strict CDT simplex",
-                    face.simplex_key()
-                )));
+                return Err(local_move_validation_error(
+                    CdtValidationFailure::NonStrictSimplex {
+                        face: format!("{:?}", face.simplex_key()),
+                    },
+                ));
             };
-            baseline.removed_profile_slices.push(slice);
+            record_profile_change(&mut baseline.profile_changes, slice, true)?;
         }
         Ok(())
     }
@@ -1530,7 +1686,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
         }
         for face in faces {
             if let Some(slice) = self.live_face_time_slice(face)? {
-                baseline.removed_profile_slices.push(slice);
+                record_profile_change(&mut baseline.profile_changes, slice, true)?;
             }
         }
         Ok(())
@@ -1546,28 +1702,27 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// run the global validator as a differential oracle.
     pub(crate) fn finish_local_move(
         &mut self,
-        baseline: LocalMoveBaseline,
+        mut baseline: LocalMoveBaseline,
         affected_faces: &[DelaunayFaceHandle],
         delta: LocalMoveDelta,
     ) -> CdtResult<()> {
         let expected = local_expected_counts(baseline.counts, delta)?;
         if self.vertex_count() != expected.vertices || self.face_count() != expected.faces {
-            return Err(local_move_validation_error(format!(
-                "local move count delta mismatch: expected V={}, F={}; got V={}, F={}",
-                expected.vertices,
-                expected.faces,
-                self.vertex_count(),
-                self.face_count()
-            )));
+            return Err(local_move_validation_error(
+                CdtValidationFailure::LocalMoveCountMismatch {
+                    expected_vertices: expected.vertices,
+                    expected_faces: expected.faces,
+                    actual_vertices: self.vertex_count(),
+                    actual_faces: self.face_count(),
+                },
+            ));
         }
 
         self.apply_local_foliation_delta(delta)?;
         self.validate_touched_spatial_degrees(affected_faces)?;
-        let mut slab_triangle_profile = remove_profile_mass(
-            baseline.slab_triangle_profile,
-            baseline.removed_profile_slices,
-        )?;
-        self.classify_local_faces(&mut slab_triangle_profile, affected_faces)?;
+        self.classify_local_faces(&mut baseline.profile_changes, affected_faces)?;
+        let mut slab_triangle_profile = baseline.slab_triangle_profile;
+        slab_triangle_profile.apply_changes(&baseline.profile_changes)?;
         self.validate_local_derived_totals(&slab_triangle_profile, expected)?;
 
         self.cache_edge_count(expected.edges);
@@ -1675,7 +1830,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                 }
                 LocalMoveDelta::Insert { label: None } | LocalMoveDelta::Remove { label: None } => {
                     return Err(local_move_validation_error(
-                        "foliated volume move did not carry a time-slice label".to_string(),
+                        CdtValidationFailure::MissingLocalMoveTimeLabel,
                     ));
                 }
             }
@@ -1687,7 +1842,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Classifies each unique replacement face and adds it to the affected slab count.
     fn classify_local_faces(
         &mut self,
-        slab_triangle_profile: &mut [u32],
+        profile_changes: &mut Vec<LocalProfileChange>,
         affected_faces: &[DelaunayFaceHandle],
     ) -> CdtResult<()> {
         let mut seen_faces = HashSet::with_capacity(affected_faces.len());
@@ -1714,10 +1869,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     detail: err.to_string(),
                 });
             }
-            let count = profile_count_mut(slab_triangle_profile, slice)?;
-            *count = count
-                .checked_add(1)
-                .ok_or_else(slab_triangle_profile_count_overflow)?;
+            record_profile_change(profile_changes, slice, false)?;
         }
         Ok(())
     }
@@ -1725,23 +1877,18 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Verifies the CDT-owned incremental profile and foliation-size invariants.
     fn validate_local_derived_totals(
         &self,
-        slab_triangle_profile: &[u32],
+        slab_triangle_profile: &SlabTriangleProfile,
         expected: LocalExpectedCounts,
     ) -> CdtResult<()> {
         if self.foliation.is_some() {
-            let profile_total = slab_triangle_profile
-                .iter()
-                .try_fold(0_usize, |total, &count| total.checked_add(count as usize))
-                .ok_or_else(|| {
-                    local_move_validation_error(
-                        "local slab-triangle-profile total overflowed usize".to_string(),
-                    )
-                })?;
-            if profile_total != expected.faces {
-                return Err(local_move_validation_error(format!(
-                    "local slab-triangle-profile total {profile_total} does not match {} faces",
-                    expected.faces
-                )));
+            let profile_total = slab_triangle_profile.total();
+            if usize::try_from(profile_total) != Ok(expected.faces) {
+                return Err(local_move_validation_error(
+                    CdtValidationFailure::SlabProfileTotalMismatch {
+                        actual: profile_total,
+                        expected: expected.faces,
+                    },
+                ));
             }
             let labeled_vertices = self
                 .foliation
@@ -1772,45 +1919,67 @@ fn local_expected_counts(
             faces: counts.triangle_count(),
         }),
         LocalMoveDelta::Insert { .. } => Ok(LocalExpectedCounts {
-            vertices: checked_local_count_add(counts.vertex_count(), 1, "vertices")?,
-            edges: checked_local_count_add(counts.edge_count(), 3, "edges")?,
-            faces: checked_local_count_add(counts.triangle_count(), 2, "triangles")?,
+            vertices: checked_local_count_add(
+                counts.vertex_count(),
+                1,
+                SimplexCountField::Vertices,
+            )?,
+            edges: checked_local_count_add(counts.edge_count(), 3, SimplexCountField::Edges)?,
+            faces: checked_local_count_add(
+                counts.triangle_count(),
+                2,
+                SimplexCountField::Triangles,
+            )?,
         }),
         LocalMoveDelta::Remove { .. } => Ok(LocalExpectedCounts {
-            vertices: checked_local_count_sub(counts.vertex_count(), 1, "vertices")?,
-            edges: checked_local_count_sub(counts.edge_count(), 3, "edges")?,
-            faces: checked_local_count_sub(counts.triangle_count(), 2, "triangles")?,
+            vertices: checked_local_count_sub(
+                counts.vertex_count(),
+                1,
+                SimplexCountField::Vertices,
+            )?,
+            edges: checked_local_count_sub(counts.edge_count(), 3, SimplexCountField::Edges)?,
+            faces: checked_local_count_sub(
+                counts.triangle_count(),
+                2,
+                SimplexCountField::Triangles,
+            )?,
         }),
     }
-}
-
-/// Removes the baseline contribution of faces replaced by a local move.
-fn remove_profile_mass(
-    mut slab_triangle_profile: Vec<u32>,
-    removed_profile_slices: Vec<u32>,
-) -> CdtResult<Vec<u32>> {
-    for slice in removed_profile_slices {
-        let count = profile_count_mut(&mut slab_triangle_profile, slice)?;
-        *count = count.checked_sub(1).ok_or_else(|| {
-            local_move_validation_error(format!("removed slab {slice} has no cached triangle mass"))
-        })?;
-    }
-    Ok(slab_triangle_profile)
 }
 
 /// Applies an expected local count increase without permitting overflow.
-fn checked_local_count_add(value: usize, delta: usize, field: &str) -> CdtResult<usize> {
-    value
-        .checked_add(delta)
-        .ok_or_else(|| local_move_validation_error(format!("local {field} count overflowed")))
+fn checked_local_count_add(
+    value: usize,
+    delta: usize,
+    field: SimplexCountField,
+) -> CdtResult<usize> {
+    value.checked_add(delta).ok_or_else(|| {
+        local_move_validation_error(CdtValidationFailure::LocalCountTransition {
+            field,
+            previous: value,
+            removed: 0,
+            added: delta,
+        })
+    })
 }
 
 /// Applies an expected local count decrease while preserving nonzero CDT counts.
-fn checked_local_count_sub(value: usize, delta: usize, field: &str) -> CdtResult<usize> {
+fn checked_local_count_sub(
+    value: usize,
+    delta: usize,
+    field: SimplexCountField,
+) -> CdtResult<usize> {
     value
         .checked_sub(delta)
         .filter(|&count| count != 0)
-        .ok_or_else(|| local_move_validation_error(format!("local {field} count underflowed")))
+        .ok_or_else(|| {
+            local_move_validation_error(CdtValidationFailure::LocalCountTransition {
+                field,
+                previous: value,
+                removed: delta,
+                added: 0,
+            })
+        })
 }
 
 /// Resolves a mutable slab count while retaining typed out-of-range diagnostics.
@@ -1820,27 +1989,24 @@ fn profile_count_mut(profile: &mut [u32], slice: u32) -> CdtResult<&mut u32> {
         .ok()
         .and_then(|index| profile.get_mut(index))
         .ok_or_else(|| {
-            local_move_validation_error(format!(
-                "time slab {slice} is outside slab-triangle profile length {profile_len}"
-            ))
+            local_move_validation_error(CdtValidationFailure::SlabProfileIndexOutOfRange {
+                slice,
+                profile_len,
+            })
         })
 }
 
 /// Classifies a failed local proof as an ergodic-move candidate geometry error.
-const fn local_move_validation_error(detail: String) -> CdtError {
+const fn local_move_validation_error(failure: CdtValidationFailure) -> CdtError {
     CdtError::ValidationFailed {
         check: CdtValidationCheck::ErgodicMoveCandidateGeometry,
-        failure: CdtValidationFailure::ErgodicMoveCandidateGeometry { detail },
+        failure,
     }
 }
 
-/// Builds the typed measurement overflow reported by [`CdtTriangulation::slab_triangle_profile`].
-fn slab_triangle_profile_count_overflow() -> CdtError {
-    CdtError::MeasurementCountOverflow {
-        field: MeasurementCountField::Triangles,
-        provided_value: usize::try_from(u32::MAX).map_or(usize::MAX, |max| max.saturating_add(1)),
-        max: u32::MAX,
-    }
+/// Retains the affected slab and exact attempted count when its u32 representation overflows.
+const fn slab_triangle_profile_count_overflow(slice: u32, value: u64) -> CdtError {
+    CdtError::SlabTriangleCountOverflow { slice, value }
 }
 
 const OPEN_BOUNDARY_TIME_COORDINATE_EPSILON: f64 = 1e-9;
@@ -1974,6 +2140,135 @@ mod tests {
     use std::time::Duration;
 
     const TEST_POINT_SEED: u64 = 0xF011_A710;
+
+    #[test]
+    fn profile_receipts_preserve_shared_history_and_checked_totals() {
+        let history = SlabTriangleProfile::try_new(vec![6, 6, 0]).expect("valid profile");
+        let mut draft = history.clone();
+        draft
+            .apply_changes(&[LocalProfileChange {
+                slice: 0,
+                removed: 2,
+                added: 2,
+            }])
+            .expect("flip preserves slab mass");
+        assert_eq!(
+            draft.as_ptr(),
+            history.as_ptr(),
+            "unchanged profiles stay shared"
+        );
+        draft
+            .apply_changes(&[LocalProfileChange {
+                slice: 1,
+                removed: 1,
+                added: 3,
+            }])
+            .expect("insertion adds two triangles");
+        assert_eq!(history.as_slice(), &[6, 6, 0]);
+        assert_eq!(history.total(), 12);
+        assert_eq!(draft.as_slice(), &[6, 8, 0]);
+        assert_eq!(draft.total(), 14);
+        assert_ne!(draft.as_ptr(), history.as_ptr());
+        draft
+            .apply_changes(&[LocalProfileChange {
+                slice: 1,
+                removed: 3,
+                added: 1,
+            }])
+            .expect("inverse move restores mass");
+        assert_eq!(draft, history);
+    }
+
+    #[test]
+    fn profile_receipts_reject_underflow_overflow_and_invalid_slabs() {
+        for (counts, change, expected) in [
+            (
+                vec![1],
+                LocalProfileChange {
+                    slice: 0,
+                    removed: 2,
+                    added: 2,
+                },
+                local_move_validation_error(CdtValidationFailure::SlabProfileRemovalExceedsCount {
+                    slice: 0,
+                    available: 1,
+                    removed: 2,
+                }),
+            ),
+            (
+                vec![u32::MAX],
+                LocalProfileChange {
+                    slice: 0,
+                    removed: 0,
+                    added: 1,
+                },
+                CdtError::SlabTriangleCountOverflow {
+                    slice: 0,
+                    value: u64::from(u32::MAX) + 1,
+                },
+            ),
+            (
+                vec![1],
+                LocalProfileChange {
+                    slice: 1,
+                    removed: 0,
+                    added: 1,
+                },
+                local_move_validation_error(CdtValidationFailure::SlabProfileIndexOutOfRange {
+                    slice: 1,
+                    profile_len: 1,
+                }),
+            ),
+        ] {
+            let history = SlabTriangleProfile::try_new(counts).expect("valid profile");
+            let mut draft = history.clone();
+            assert_eq!(draft.apply_changes(&[change]), Err(expected));
+            assert_eq!(draft, history);
+        }
+    }
+
+    #[test]
+    fn local_count_errors_retain_operands_for_overflow_underflow_and_zero() {
+        assert_matches!(
+            checked_local_count_add(usize::MAX, 1, SimplexCountField::Vertices),
+            Err(CdtError::ValidationFailed {
+                failure: CdtValidationFailure::LocalCountTransition {
+                    field: SimplexCountField::Vertices,
+                    previous: usize::MAX,
+                    removed: 0,
+                    added: 1
+                },
+                ..
+            })
+        );
+        for value in [1, 2] {
+            assert_matches!(checked_local_count_sub(value, 2, SimplexCountField::Triangles),
+                Err(CdtError::ValidationFailed { failure: CdtValidationFailure::LocalCountTransition {
+                    field: SimplexCountField::Triangles, previous, removed: 2, added: 0 }, .. }) if previous == value);
+        }
+    }
+
+    #[test]
+    fn local_finalization_errors_preserve_expected_counts_labels_and_profile_totals() {
+        let mut tri = CdtTriangulation::from_cdt_strip(4, 3).expect("valid strip");
+        let baseline = tri.begin_local_move().expect("valid baseline");
+        let expected =
+            local_expected_counts(baseline.counts, LocalMoveDelta::Flip).expect("valid counts");
+        let (vertices, faces) = (tri.vertex_count(), tri.face_count());
+        assert_matches!(tri.finish_local_move(baseline, &[], LocalMoveDelta::Insert { label: Some(1) }),
+            Err(CdtError::ValidationFailed { failure: CdtValidationFailure::LocalMoveCountMismatch { actual_vertices, expected_vertices, actual_faces, expected_faces }, .. })
+                if actual_vertices == vertices && expected_vertices == vertices + 1 && actual_faces == faces && expected_faces == faces + 2);
+        assert_matches!(
+            tri.apply_local_foliation_delta(LocalMoveDelta::Insert { label: None }),
+            Err(CdtError::ValidationFailed {
+                failure: CdtValidationFailure::MissingLocalMoveTimeLabel,
+                ..
+            })
+        );
+        let profile = SlabTriangleProfile::try_new(vec![1]).expect("valid profile");
+        assert_matches!(tri.validate_local_derived_totals(&profile, expected),
+            Err(CdtError::ValidationFailed { failure: CdtValidationFailure::SlabProfileTotalMismatch { actual: 1, expected }, .. }) if expected == faces);
+    }
 
     fn slice_count(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).expect("test slice count should be nonzero")

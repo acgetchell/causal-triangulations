@@ -128,7 +128,7 @@ pub fn measurement_for(
 ) -> CdtResult<Measurement> {
     let counts = triangulation.simplex_counts()?;
     Measurement::try_from_simplex_counts(step, action, counts)?
-        .try_with_slab_triangle_profile(triangulation.slab_triangle_profile()?)
+        .try_with_profile_snapshot(triangulation.slab_triangle_profile_snapshot()?)
 }
 
 /// Returns true when a completed step is on the post-thermalization measurement cadence.

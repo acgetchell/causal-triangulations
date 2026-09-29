@@ -107,7 +107,7 @@ pub struct ActionConfig {
 }
 
 #[derive(Deserialize)]
-struct ActionConfigWire {
+pub(crate) struct ActionConfigWire {
     coupling_0: f64,
     coupling_2: f64,
     cosmological_constant: f64,
@@ -118,9 +118,17 @@ impl<'de> Deserialize<'de> for ActionConfig {
     where
         D: Deserializer<'de>,
     {
-        let wire = ActionConfigWire::deserialize(deserializer)?;
-        Self::new(wire.coupling_0, wire.coupling_2, wire.cosmological_constant)
+        ActionConfigWire::deserialize(deserializer)?
+            .try_into()
             .map_err(serde::de::Error::custom)
+    }
+}
+
+impl TryFrom<ActionConfigWire> for ActionConfig {
+    type Error = CdtError;
+
+    fn try_from(wire: ActionConfigWire) -> CdtResult<Self> {
+        Self::new(wire.coupling_0, wire.coupling_2, wire.cosmological_constant)
     }
 }
 

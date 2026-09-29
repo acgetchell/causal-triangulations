@@ -122,6 +122,48 @@ fn move_family_identifiers_and_reverse_mapping_are_stable() {
 }
 
 #[test]
+fn discarded_and_committed_flip_plans_preserve_site_provenance() {
+    let mut state = CdtTriangulation2D::from_cdt_strip(12, 8).expect("strip");
+    let policy =
+        CdtMoveFamilyDistribution::from_weights([1.0, 0.0, 0.0, 0.0]).expect("flip policy");
+    let mut proposal = CdtProposal::new(ActionConfig::default())
+        .with_seed(7)
+        .with_policy(policy);
+    let before = proposal
+        .policy_view(&state, MoveType::Move22)
+        .offered_sites()
+        .collect::<Vec<_>>();
+    assert!(!before.is_empty());
+    let mut rng = StdRng::seed_from_u64(11);
+    for accept in [false, false, true] {
+        let plan = (0..64)
+            .find_map(|_| proposal.propose_plan(&state, &mut rng).expect("plan"))
+            .expect("fixture offers a concrete flip");
+        if accept {
+            let reverse_count = plan.reverse_site_count();
+            proposal.commit(&mut state, plan, &mut rng).expect("commit");
+            let view = proposal.policy_view(&state, MoveType::Move22);
+            assert_eq!(view.offered_site_count(), reverse_count);
+            assert!(
+                view.validate_site(before[0]).is_err(),
+                "committed state rejects previous owner IDs"
+            );
+        } else {
+            drop(plan);
+            let view = proposal.policy_view(&state, MoveType::Move22);
+            assert_eq!(view.offered_sites().collect::<Vec<_>>(), before);
+            for &site in &before {
+                view.validate_site(site)
+                    .expect("live IDs survive discarded plans");
+            }
+        }
+    }
+    state
+        .validate()
+        .expect("committed state preserves CDT invariants");
+}
+
+#[test]
 fn fixed_family_distribution_normalizes_and_rejects_invalid_support() {
     let distribution = CdtMoveFamilyDistribution::from_weights([1.0, 3.0, 0.0, 2.0])
         .expect("finite nonnegative weights with positive support should normalize");
