@@ -16,9 +16,9 @@ contracts. The report-to-README integration verifies absolute timings, confidenc
 
 Generic parser, renderer, subprocess, and notebook infrastructure tests belong to `research-repo-tools` and are not duplicated here.
 
-Use `just --list` for maintained commands and [the command guide](../docs/dev/commands.md) for details.
+Use `just --list` for maintained commands and [the command guide](../docs/dev/DEVELOPING.md) for details.
 Changelog, release metadata, coverage, dependency/tool updates, notebooks, Semgrep fixtures, and performance evidence all use shared APIs.
 CDT-specific workloads and output expectations live in `benches/`, `examples/`, `notebooks/`, and `tooling/`.
 
 The owner chose to retire historical performance reports and legacy formats during the September 2026 migration.
-[Performance testing](../docs/performance-testing.md) describes the fresh baseline workflow and absolute timing tables.
+[Performance testing](../docs/BENCHMARKING.md) describes the fresh baseline workflow and absolute timing tables.

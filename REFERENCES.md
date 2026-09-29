@@ -1,5 +1,39 @@
 # References and Citations
 
+This page owns bibliographic records and stable citation anchors. Model assumptions, coupling normalization, and evidence limits belong to
+[Scientific Basis and Scope](docs/scientific-basis.md); [README](README.md) owns project selection and getting started.
+
+## Contents
+
+- [Topic-to-source index](#topic-to-source-index)
+- [How to Cite This Library](#how-to-cite-this-library)
+- [AI-Assisted Development Tools](#ai-assisted-development-tools)
+- [Computational Geometry and Delaunay Triangulations](#computational-geometry-and-delaunay-triangulations)
+- [Discrete Approaches to General Relativity](#discrete-approaches-to-general-relativity)
+- [Foundational Causal Dynamical Triangulations Theory](#foundational-causal-dynamical-triangulations-theory)
+- [Monte Carlo Methods in Quantum Gravity](#monte-carlo-methods-in-quantum-gravity)
+- [Numerical Methods and Performance](#numerical-methods-and-performance)
+
+## Topic-to-source index
+
+| Topic | Sources and their role |
+| --- | --- |
+| 1+1 model and critical coupling | [Ambjørn and Loll][refs-mh] and [exact benchmarks][refs-exact] |
+| Action | [Regge calculus](#regge-calculus-and-discrete-action): original formulation and background |
+| CDT framework | [Original CDT framework](#original-cdt-framework) and [reviews](#comprehensive-reviews): physics foundations |
+| Geometry backend | [Delaunay](#computational-geometry-and-delaunay-triangulations): implementation dependency with its own bibliography |
+| Local moves | [Alexander and Pachner](#ergodic-moves-and-alexander-moves): combinatorial foundations, not a proof of constrained-kernel ergodicity |
+| Profiles and dimensions | [Volume and dimension studies][refs-observables]: scientific definitions and studies |
+| Simulation practice | [CDT simulations and ensembles](#cdt-simulation-implementation-and-ensembles): algorithms; CDT++ is implementation lineage |
+| Generic sampling | [MCMC framework](#generic-mcmc-framework): backend ownership; [Hastings][refs-mh]: original acceptance correction |
+
+[refs-mh]: #metropolis-hastings-algorithm-in-cdt
+[refs-exact]: #exact-11-cdt-benchmarks-and-coupling-calibration
+[refs-observables]: #volume-profiles-topology-and-dimensional-observables
+
+The discrete-gravity alternatives and numerical-methods sections are background, not claims that those methods are implemented here. Literature on higher
+dimensions and fixed-volume ensembles supplies context without establishing validation of this crate's unfixed-volume 1+1 sampler.
+
 ## How to Cite This Library
 
 If you use this library in your research or project, please cite it using the information provided in our [CITATION.cff](CITATION.cff) file. This file contains
@@ -8,7 +42,7 @@ structured citation metadata that can be automatically processed by GitHub and o
 **Quick citation:**
 
 ```text
-Adam Getchell. 2026. causal-triangulations: A Causal Dynamical Triangulation library for quantum gravity research (Version 0.1.0).
+Adam Getchell. 2026. causal-triangulations: A Causal Dynamical Triangulation library for quantum gravity research.
 Zenodo. https://doi.org/10.5281/zenodo.20513228
 ```
 
@@ -138,10 +172,9 @@ improvements to the `markov-chain-monte-carlo` crate. Refer to that crate and it
   104035. DOI: [10.1103/PhysRevD.60.104035](https://doi.org/10.1103/PhysRevD.60.104035). arXiv:
   [hep-th/9904012](https://arxiv.org/abs/hep-th/9904012)
 
-- The default non-volume-fixed 1+1 CDT action constants use the critical 2D CDT cosmological coupling `lambda_c = ln 2` from the exactly solved model described
-  by Ambjørn and Loll (1998) and reviewed by Ambjørn, Görlich, Jurkiewicz, and Loll (2012). Because this crate's action writes the cosmological term as
-  `lambda_edge N1` while the standard 2D CDT convention weights triangle volume `N2`, the default toroidal edge-count value is
-  `lambda_edge = (2 / 3) ln 2`, using the closed 1+1 relation `N1 = 3 N2 / 2`.
+See also Ambjørn and Loll (1998) under [Metropolis-Hastings Algorithm in CDT](#metropolis-hastings-algorithm-in-cdt) and Ambjørn et al. (2012) under
+[Comprehensive Reviews](#comprehensive-reviews). The conversion from their triangle-volume coupling to this crate's edge-count action, including the
+temperature and boundary qualifications, is documented under [Action Calibration](docs/scientific-basis.md#action-calibration).
 
 ### Regge Calculus and Discrete Action
 

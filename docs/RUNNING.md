@@ -175,7 +175,7 @@ done
 ## Performance Runs
 
 Use release builds for representative timings. For benchmark-quality comparisons, use [benches/README.md](../benches/README.md) and
-[performance-testing.md](performance-testing.md) rather than ad hoc CLI timings.
+[BENCHMARKING.md](BENCHMARKING.md) rather than ad hoc CLI timings.
 
 ```bash
 cdt \

@@ -14,7 +14,6 @@ Typical development loop:
 just check
 just fix
 just test
-just update
 ```
 
 These commands ensure:
@@ -25,9 +24,19 @@ These commands ensure:
 - tests
 - notebook execution and output hygiene
 
+## Dependency And Tool Maintenance
+
+```bash
+just update
+```
+
 `just update` updates uv and declared Cargo tools first, runs shared setup, then refreshes Cargo/Python dependencies and lockfiles. Pins live in
 `pyproject.toml`. Use `update-tools` or `update-dependencies` for an independent scope, and `tools-check` for non-mutating installed-version verification.
 Review every resulting manifest, lockfile, and pin change before committing it.
+
+To adopt a newer published shared package and its Python baseline, preview `just shared-python-plan VERSION`, then apply the reviewed plan with
+`just shared-python-update VERSION`. Supply the package version, not a Python version. These commands run outside the old environment.
+`just tools-clean` previews unused managed-cache entries; `just tools-clean --apply` removes them.
 
 Release metadata is a separate deterministic transaction:
 
@@ -36,8 +45,9 @@ TAG=vX.Y.Z
 just update-version "$TAG" --date "$RELEASE_DATE" --previous-release "$PREVIOUS_TAG"
 ```
 
-An explicit previous tag keeps preparation offline; omitting it discovers the latest published stable GitHub release. The updater synchronizes Cargo/Python/CFF
-versions and owned active-documentation references, uses the declared date, rejects version-specific DOI identifiers, validates the complete candidate tree
+An explicit previous tag keeps preparation offline; omitting it discovers the latest published stable GitHub release. The updater synchronizes Cargo/CFF
+versions and owned active-documentation references; Python remains a dependency-only environment. It uses the declared date, rejects version-specific DOI
+identifiers, validates the complete candidate tree
 before replacement, and rolls back byte-for-byte on a caught publication failure. It does not update dependencies, generate the changelog, or run benchmarks.
 
 Release performance is a separate evidence transaction:
@@ -53,11 +63,13 @@ just performance-readme tooling/performance-readme.toml
 `bench-latest` runs the correctness gate before `ci_performance_suite`. `performance-release` requires two explicit fresh-series tags and measures
 in temporary worktrees before retaining and promoting shared evidence. It is a user-invoked operation because agents may not mutate Git state.
 The first post-migration tag establishes a baseline; comparisons and README tables wait until a second compatible measurement exists.
-`performance-doc` and `performance-readme CONFIG` render retained evidence without measurement. See [performance testing](../performance-testing.md).
+`performance-doc` and `performance-readme CONFIG` render retained evidence without measurement. See [performance testing](../BENCHMARKING.md).
 
 ## Justfile Usage
 
 This repository standardizes development tasks through the `justfile`.
+Run bare `just` for the complete public recipe list with arguments and descriptions. The explicit private default runs `just --list`; there is no separate
+hand-maintained help list. Recipe definitions stay lexicographically sorted and `just justfile-fmt-check` checks formatting.
 
 Agents should **prefer running `just` commands instead of invoking the underlying tools directly**. The justfile ensures the correct flags, configuration, and
 tool ordering are used.
@@ -72,6 +84,54 @@ Direct tool invocation should only be used when a corresponding `just` command d
 
 Rust unit, integration, CLI, slow, example, and release test recipes run with `cargo nextest`. Documentation tests intentionally remain on `cargo test --doc`
 because nextest does not run rustdoc doctests.
+
+## Documentation And Command Policy
+
+- README owns project evaluation, early API/model-scope guidance, and runnable Quickstart commands, including bare `just` for discovery.
+- CONTRIBUTING owns contributor setup, checks, fixes, tests, security scans, and PR preparation. Dedicated guides own release, dependency-maintenance,
+  benchmark, CLI, and cluster procedures; link to them instead of copying full command lists.
+- REFERENCES owns bibliographic records, stable citation identifiers, and a topic-to-source index. `docs/scientific-basis.md` owns assumptions, conventions,
+  method summaries, and evidence limits. Detailed foliation, move, and sampler contracts retain their own pages.
+- Preserve Contents navigation, prerequisites before dependent methods, and meaningful deep links. Sort independent methods lexicographically within coherent
+  groups; retain thematic reference ordering. Separate implemented behavior, validated evidence, planned capabilities, and implementation lineage.
+- Use uppercase verbs or verb phrases, preferably gerunds, for task guides with execution instructions. Use lowercase descriptive names for policy,
+  architecture, invariants, reference, analysis, and results. Preserve directory `README.md` indexes, conventional root names, historical archives, and hyphens.
+- Use relative links inside the repository documentation tree. README links reused by package pages use explicit default-branch repository URLs for guides and
+  `latest` API URLs for callable contracts. Release updates must not rewrite active navigation to a release tag; immutable evidence and citations keep their
+  pins.
+- Name equivalent workflows consistently across the research repositories. Checks validate without changing tracked sources, fixes apply changes, and
+  run/example commands execute user workloads. Describe every public recipe; keep an explicit private default and sorted definitions. A library need not invent
+  a binary.
+- Update navigation, architecture inventories, generator inputs, configured output paths, and callers together when paths move. Regenerate owned outputs through
+  their workflow; a filename change alone does not require new measurements.
+
+## Dependency And Secret Scanning
+
+```bash
+just audit             # OSV: Cargo.lock and uv.lock
+just security-secrets  # Gitleaks: all reachable history and current tracked/nonignored files
+just security          # Both scans
+```
+
+The shared `research-repo-tools security` CLI owns scanning, report validation, and failure propagation. `pyproject.toml` declares exact `osv-scanner` and
+`gitleaks` binary versions; `just setup-tools` installs them into the managed cache, and `just tools-check` verifies them. No scanner relies on an ambient
+executable silently satisfying a managed pin. OSV scans explicit lockfiles without executing dependency code and needs network access. Secret scanning
+requires full history and includes local edits and untracked nonignored files; shallow repositories fail instead of presenting partial history as clean.
+
+Reports live under `target/security/`; secret values are redacted. Findings, execution errors, and absent or malformed reports fail the invoked command.
+These explicit scans remain outside ordinary `check`/`ci`. Dedicated OSV and Gitleaks workflows invoke the same recipes on main-branch pushes and pull
+requests, weekly, and by manual dispatch. They retain reports for seven days, including on scan failure. Gitleaks uses a full-history checkout.
+The hosted cargo-audit, CodeQL, Semgrep, Clippy, and zizmor workflows remain separate.
+
+## Local CodeRabbit Review
+
+`just review [base]` and `just review-uncommitted` delegate to the pinned shared CLI. Install and authenticate CodeRabbit separately; neither recipe installs
+it, enables paid credits, fetches Git refs, or retries failed reviews. Agents invoke a live review only on an explicit maintainer request for CodeRabbit.
+
+Branch review defaults to `origin/main`, checks it against the live remote, and includes committed changes, staged/unstaged edits, and nonignored new files.
+Missing/stale refs or failed remote lookups stop review. An explicit local base avoids the freshness check; uncommitted review avoids it and excludes committed
+branch changes. The shared implementation discovers `AGENTS.md` and `.coderabbit.yml`, streams review output, and preserves interruptions and failure status.
+Authentication, service, or allowance failures mean unavailable review, never a clean result. Consumer tests use local stubs without contacting CodeRabbit.
 
 ---
 
@@ -202,7 +262,6 @@ examples/scripts/
 Validate with:
 
 ```bash
-just examples
 just examples-validate
 ```
 
@@ -212,7 +271,7 @@ Examples must:
 - run successfully
 - demonstrate correct API usage
 
-`just examples-validate` additionally checks stable output markers for user-facing Cargo examples. Keep those markers semantic rather than exact numeric values
+`just examples-validate` checks stable output markers for user-facing Cargo examples. Keep those markers semantic rather than exact numeric values
 so simulation output can evolve without making the example contract brittle.
 
 The example runner compiles all Cargo examples once with `cargo build --release --examples`, then executes the compiled binaries directly. This preserves
@@ -255,8 +314,7 @@ just toml-check       # Non-mutating formatting and lint checks
 just toml-fix         # Apply formatting fixes
 ```
 
-Compatibility aliases remain available as granular recipes:
-`just toml-lint`, `just toml-fmt-check`, and `just toml-fmt`.
+Use `just toml-lint` or `just toml-fmt-check` for a single check.
 
 ---
 
@@ -290,8 +348,6 @@ Commands:
 just shell-check       # Lint (non-mutating)
 just shell-fix         # Format (mutating)
 ```
-
-`just shell-fmt` remains as a compatibility alias for the formatter.
 
 ---
 
@@ -529,7 +585,6 @@ just publish-check
 | Run slow tests        | `just test-slow`         |
 | Run all tests         | `just test-all`          |
 | Run Python tests      | `just test-python`       |
-| Run examples          | `just examples`          |
 | Validate examples     | `just examples-validate` |
 | Validate notebooks    | `just notebook-check`    |
 | Run full CI           | `just ci`                |

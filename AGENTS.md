@@ -185,7 +185,7 @@ just fix
 just ci
 ```
 
-Refer to `docs/dev/commands.md` for full details.
+Refer to `docs/dev/DEVELOPING.md` for full details.
 
 When adding or renaming Cargo examples, update `tooling/examples.toml` markers so `just examples-validate` keeps validating user-facing contracts.
 
@@ -254,6 +254,14 @@ Detailed Python guidance lives in `docs/dev/python.md`.
 
 ## Documentation Maintenance
 
+- `README.md` owns project selection and runnable Quickstart workflows; `REFERENCES.md` owns bibliographic records and stable citation identifiers;
+  `docs/scientific-basis.md` owns scientific scope, assumptions, conventions, and evidence limits. Link between owners instead of duplicating detail.
+- Preserve Contents navigation and early API/model-scope guidance. Sort independent method discussions lexicographically while keeping prerequisites first,
+  thematic references, and existing deep links.
+- Name task guides with uppercase verbs or verb phrases, preferably gerunds; use lowercase descriptive names for policy, architecture, reference, and results.
+  Preserve directory `README.md` indexes, standard root names, historical archives, and the existing hyphen style.
+- Keep runnable usage and bare `just` in README; put checks, fixes, tests, security, and PR preparation in CONTRIBUTING. Follow the detailed
+  [documentation and command policy](docs/dev/DEVELOPING.md#documentation-and-command-policy).
 - Never edit `CHANGELOG.md` directly — it's auto-generated from git commits
 - Run `just changelog` to regenerate
 

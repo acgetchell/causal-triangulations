@@ -1,6 +1,7 @@
 """Consumer contracts for the pinned maintenance CLI and CDT command wiring."""
 
 import json
+import os
 import re
 import tomllib
 from importlib.metadata import version
@@ -62,19 +63,63 @@ def test_python_fixtures_are_in_the_ci_gate() -> None:
     assert "review uncommitted" not in commands
 
 
-def test_update_order_and_independent_scopes() -> None:
-    """The aggregate updates tools first; component commands retain their scope."""
-    aggregate = run_safe_command("just", ["--dry-run", "update"], cwd=ROOT).stderr
-    assert aggregate.index("deps update-uv") < aggregate.index("toolchain upgrade") < aggregate.index("cargo upgrade")
-    assert aggregate.index("cargo update") < aggregate.index("deps update-python") < aggregate.index("uv lock --upgrade")
-    dependencies = run_safe_command("just", ["--dry-run", "update-dependencies"], cwd=ROOT).stderr
-    assert "toolchain upgrade" not in dependencies
-    assert "deps update-uv" not in dependencies
-    tools = run_safe_command("just", ["--dry-run", "update-tools"], cwd=ROOT).stderr
-    assert "cargo upgrade" not in tools
-    assert "deps update-python" not in tools
-    assert "uv lock --upgrade" not in tools
-    assert "uv sync --locked --managed-python --group dev" in dependencies
+UPDATE_STEPS = (
+    "deps update-uv",
+    "toolchain upgrade",
+    "research-repo-tools setup",
+    "cargo upgrade --incompatible allow",
+    "cargo update",
+    "deps update-python",
+    "lock --upgrade",
+    "uv sync --locked --managed-python --group dev",
+)
+
+
+@pytest.mark.parametrize(
+    ("recipe", "steps", "failure"),
+    [
+        ("update", UPDATE_STEPS, ""),
+        ("update-tools", UPDATE_STEPS[:3], ""),
+        ("update-dependencies", UPDATE_STEPS[3:], ""),
+        ("update-cargo-dependencies", UPDATE_STEPS[3:5], ""),
+        ("update-python-dependencies", UPDATE_STEPS[5:], ""),
+        ("update-python-deps", UPDATE_STEPS[5:], ""),
+        *[("update", UPDATE_STEPS[: index + 1], step) for index, step in enumerate(UPDATE_STEPS)],
+    ],
+)
+def test_update_execution_order_scope_and_failure(
+    recipe: str,
+    steps: tuple[str, ...],
+    failure: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Execute the merged Just graph with an external uv stub, never host upgrades."""
+    stub = tmp_path / "uv"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$UPDATE_LOG"\n'
+        'if [ -n "$UPDATE_FAIL" ]; then\n'
+        '  case "$*" in *"$UPDATE_FAIL"*) echo "Injected updater failure: $UPDATE_FAIL" >&2; exit 23;; esac\n'
+        "fi\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    stub.chmod(0o700)
+    # Just uses the configured POSIX shell on Windows as well as Unix.
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    log = tmp_path / "update.log"
+    monkeypatch.setenv("UPDATE_LOG", log.as_posix())
+    monkeypatch.setenv("UPDATE_FAIL", failure)
+    (tmp_path / "Cargo.toml").write_bytes((ROOT / "Cargo.toml").read_bytes())
+    result = run_safe_command("just", ["--justfile", str(ROOT / "justfile"), "--working-directory", str(tmp_path), recipe], cwd=tmp_path, check=False)
+    assert result.returncode == (23 if failure else 0), result.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert len(calls) == len(steps)
+    for call, step in zip(calls, steps, strict=True):
+        assert step in call
+    if failure:
+        assert f"Injected updater failure: {failure}" in result.stderr
 
 
 def test_review_recipes_forward_arguments() -> None:
@@ -85,10 +130,86 @@ def test_review_recipes_forward_arguments() -> None:
     assert "review uncommitted" in uncommitted.stderr
 
 
+@pytest.mark.parametrize("recipe", [("review", "HEAD"), ("review-uncommitted",)])
+@pytest.mark.parametrize("status", [0, 23])
+def test_review_uses_consumer_instructions_and_propagates_failure(
+    recipe: tuple[str, ...],
+    status: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Run the actual Just/shared CLI boundary against a local reviewer stub."""
+    stub = tmp_path / ("coderabbit.cmd" if os.name == "nt" else "coderabbit")
+    content = f"@echo off\necho REVIEW_STUB %*\nexit /b {status}\n" if os.name == "nt" else f'#!/bin/sh\nprintf "REVIEW_STUB\\n%s\\n" "$@"\nexit {status}\n'
+    stub.write_text(content, encoding="utf-8")
+    stub.chmod(0o700)
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    result = run_safe_command("just", list(recipe), cwd=ROOT, check=False)
+    assert result.returncode == status
+    assert "REVIEW_STUB" in result.stdout
+    for argument in ("--agent", "--include-untracked", "--config", "AGENTS.md", ".coderabbit.yml"):
+        assert argument in result.stdout
+    assert ("--base=HEAD" if recipe[0] == "review" else "--uncommitted") in result.stdout
+
+
+def test_security_covers_maintained_lockfiles_and_stays_opt_in() -> None:
+    """New resolution roots must join the explicit consumer audit inventory."""
+    files = run_safe_command("git", ["--no-pager", "ls-files"], cwd=ROOT).stdout.splitlines()
+    lockfiles = {name for name in files if Path(name).name in {"Cargo.lock", "uv.lock"}}
+    audit = run_safe_command("just", ["--dry-run", "audit"], cwd=ROOT).stderr
+    assert set(audit.split("security osv ", 1)[1].split()) == lockfiles
+    security = run_safe_command("just", ["--dry-run", "security"], cwd=ROOT).stderr
+    assert "security osv" in security
+    assert "security secrets" in security
+    for recipe in ("check", "ci"):
+        commands = run_safe_command("just", ["--dry-run", recipe], cwd=ROOT).stderr
+        assert "security osv" not in commands
+        assert "security secrets" not in commands
+
+
 def test_changelog_recipe_forwards_explicit_release_date() -> None:
     """CDT's release recipe forwards the supplied tag and date to the shared CLI."""
     result = run_safe_command("just", ["--dry-run", "changelog-release", "v0.2.0", "2026-10-01"], cwd=ROOT)
     assert '--tag "$1" --date "$2"' in result.stderr
+
+
+def test_changelog_regeneration_rotation_and_archived_notes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """The installed generator must accept CDT history before and after rotation."""
+    for name in ("pyproject.toml", "rumdl.toml", "CHANGELOG.md"):
+        (tmp_path / name).write_bytes((ROOT / name).read_bytes())
+    archive = tmp_path / "docs/archives/changelog"
+    archive.mkdir(parents=True)
+    for source in (ROOT / "docs/archives/changelog").glob("*.md"):
+        (archive / source.name).write_bytes(source.read_bytes())
+    # Read real commits/tags without creating commits or modifying the checkout.
+    git_dir = run_safe_command("git", ["--no-pager", "rev-parse", "--absolute-git-dir"], cwd=ROOT).stdout.strip()
+    (tmp_path / ".git").write_text(f"gitdir: {Path(git_dir).as_posix()}\n", encoding="utf-8")
+    args = ["--root", str(tmp_path), "changelog"]
+    assert main([*args, "generate"]) == 0
+    sources = [tmp_path / "CHANGELOG.md", *archive.glob("*.md")]
+    generated = {path: path.read_bytes() for path in sources}
+    assert main([*args, "generate"]) == 0
+    assert {path: path.read_bytes() for path in sources} == generated
+
+    # Every current release must remain accessible when the next minor is prepared.
+    current = (tmp_path / "CHANGELOG.md").read_text(encoding="utf-8")
+    releases = re.findall(r"^## \[([0-9.]+)\] - (\d{4}-\d{2}-\d{2})$", current, re.MULTILINE)
+    assert releases, "Full Git history and release tags are required (fetch-depth: 0)."
+    major, minor, _patch = releases[0][0].split(".")
+    prospective = ["--tag", f"v{major}.{int(minor) + 1}.0", "--date", "2099-01-01"]
+    assert main([*args, "generate", *prospective, "--dry-run"]) == 0
+    assert {path: path.read_bytes() for path in sources} == generated
+    assert set(archive.glob("*.md")) == set(sources[1:])
+    assert main([*args, "generate", *prospective]) == 0
+    assert main([*args, "check"]) == 0
+    rotated = archive / f"{major}.{minor}.md"
+    assert rotated.is_file()
+    for release, date in releases:
+        assert f"## [{release}] - {date}" in rotated.read_text(encoding="utf-8")
+        capsys.readouterr()
+        assert main([*args, "notes", f"v{release}"]) == 0
+        assert "https://github.com/acgetchell/causal-triangulations/commit/" in capsys.readouterr().out
+    assert f"## [{major}.{int(minor) + 1}.0] - 2099-01-01" in (tmp_path / "CHANGELOG.md").read_text(encoding="utf-8")
 
 
 def test_example_contract_covers_every_cargo_example() -> None:
@@ -107,6 +228,28 @@ def test_benchmark_configuration_uses_current_correctness_gates() -> None:
     commands = run_safe_command("just", ["--dry-run", "bench-latest"], cwd=ROOT).stderr
     assert commands.index("--test physics_integration") < commands.index("--bench ci_performance_suite")
     assert dict(config.dependencies).keys() == {"criterion", "delaunay", "la-stack", "markov-chain-monte-carlo"}
+
+
+@pytest.mark.parametrize(
+    "orphan",
+    [None, "docs/performance/v2/pair.comparison.json", "docs/performance/v2/pair.evidence.json", "tooling/performance-readme.toml"],
+)
+def test_performance_check_accepts_only_empty_initial_inventory(orphan: str | None, tmp_path: Path) -> None:
+    """Missing reports are valid before measurement, never after evidence is retained."""
+    if orphan is not None:
+        path = tmp_path / orphan
+        path.parent.mkdir(parents=True)
+        path.write_text("orphaned evidence", encoding="utf-8")
+    result = run_safe_command(
+        "just",
+        ["--justfile", str(ROOT / "justfile"), "--working-directory", str(tmp_path), "performance-check"],
+        cwd=tmp_path,
+        check=False,
+    )
+    assert result.returncode == (0 if orphan is None else 1), result.stderr
+    assert ("No release comparison yet" in result.stdout) == (orphan is None)
+    if orphan is not None:
+        assert "Release evidence exists without its current report" in result.stderr
 
 
 def test_shared_report_and_readme_publication_use_consumer_configuration(tmp_path: Path) -> None:
@@ -147,6 +290,22 @@ def test_shared_report_and_readme_publication_use_consumer_configuration(tmp_pat
         )
         == 0
     )
+    report_check = [
+        "--justfile",
+        str(ROOT / "justfile"),
+        "--working-directory",
+        str(tmp_path),
+        "--set",
+        "_tools",
+        "research-repo-tools --root .",
+        "performance-check",
+    ]
+    assert run_safe_command("just", report_check, cwd=tmp_path).returncode == 0
+    report = tmp_path / "docs/performance/v2/performance.md"
+    original_report = report.read_bytes()
+    report.write_text("stale report\n", encoding="utf-8")
+    assert run_safe_command("just", report_check, cwd=tmp_path, check=False).returncode != 0
+    report.write_bytes(original_report)
     publication = template.replace("REPLACE-pair", "v0.1.1-vs-v0.1.0")
     for placeholder, value in (
         ("REPLACE_WITH_BASELINE_COMMIT", "a" * 40),
