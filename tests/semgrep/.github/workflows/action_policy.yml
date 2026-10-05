@@ -9,30 +9,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Allowed shared approval workflow path
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
         uses: acgetchell/research-repo-tools/.github/workflows/dependabot-approve.yml@cbb2ea6dee8866b3f0547bca935aef48fdd71707 # reviewed 2026-09-28
 
-      - name: Floating shared approval workflow
-        # ok: causal-triangulations.github-actions.external-action-approved-allowlist
-        # ruleid: causal-triangulations.github-actions.external-action-sha-pinned
-        uses: acgetchell/research-repo-tools/.github/workflows/dependabot-approve.yml@main
-
       - name: Different unapproved shared workflow
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-version-comment
         # ruleid: causal-triangulations.github-actions.external-action-approved-allowlist
         uses: acgetchell/research-repo-tools/.github/workflows/unapproved.yml@cbb2ea6dee8866b3f0547bca935aef48fdd71707 # reviewed 2026-09-28
 
       - name: Shared workflow missing review annotation
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ruleid: causal-triangulations.github-actions.external-action-version-comment
         uses: acgetchell/research-repo-tools/.github/workflows/dependabot-approve.yml@cbb2ea6dee8866b3f0547bca935aef48fdd71707
 
       - name: Allowed pinned action
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
         # ok: causal-triangulations.github-actions.checkout-persist-credentials-false
@@ -41,20 +32,17 @@ jobs:
           persist-credentials: false
 
       - name: Checkout missing credential persistence hardening
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
         # ruleid: causal-triangulations.github-actions.checkout-persist-credentials-false
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Allowed cached Cargo installer
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
         uses: taiki-e/cache-cargo-install-action@417450f3c33ee20393705369577571770643d4c7 # v3.0.7
 
       - name: Allowed zizmor action
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
         # ruleid: causal-triangulations.github-actions.zizmor-tool-version-pinned
@@ -63,7 +51,6 @@ jobs:
           version: "1.30.0"
 
       - name: Floating zizmor tool version
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
         # ruleid: causal-triangulations.github-actions.zizmor-tool-version-pinned
@@ -72,7 +59,6 @@ jobs:
           inputs: .github
 
       - name: Mismatched zizmor tool version
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
         # ruleid: causal-triangulations.github-actions.zizmor-tool-version-pinned
@@ -101,7 +87,6 @@ jobs:
           cache: "true"
 
       - name: Release setup-uv cache default
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
         # ruleid: causal-triangulations.github-actions.release-setup-uv-cache-disabled
@@ -111,7 +96,6 @@ jobs:
           prune-cache: true
 
       - name: Release setup-uv cache disabled
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
         # ok: causal-triangulations.github-actions.release-setup-uv-cache-disabled
@@ -122,7 +106,6 @@ jobs:
           prune-cache: true
 
       - name: Release setup-uv cache enabled
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
         # ruleid: causal-triangulations.github-actions.release-setup-uv-cache-disabled
@@ -133,7 +116,6 @@ jobs:
           prune-cache: true
 
       - name: Unsafe github-script interpolation
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -144,7 +126,6 @@ jobs:
             console.log(title);
 
       - name: Safe github-script env handoff
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -168,10 +149,6 @@ jobs:
         # ruleid: causal-triangulations.github-actions.external-action-approved-allowlist
         uses: taiki-e/install-action@8f531eaecd1898bc3da7d104ad91bee98d1b97bd # v2.79.9
 
-      - name: Moving tag action
-        # ruleid: causal-triangulations.github-actions.external-action-sha-pinned
-        uses: actions/checkout@v6
-
       - name: Unapproved external action
         # ruleid: causal-triangulations.github-actions.external-action-approved-allowlist
         uses: unapproved/example-action@1111111111111111111111111111111111111111 # v1.0.0
@@ -181,7 +158,6 @@ jobs:
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae
 
       - name: Local action
-        # ok: causal-triangulations.github-actions.external-action-sha-pinned
         # ok: causal-triangulations.github-actions.external-action-approved-allowlist
         # ok: causal-triangulations.github-actions.external-action-version-comment
         uses: ./.github/actions/local-action

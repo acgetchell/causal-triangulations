@@ -25,10 +25,22 @@ rules:
       - pattern-either:
           - pattern: println!(...)
           - pattern: eprintln!(...)
-      - pattern-not: |
-          mod tests {
-              ...
-          }
+          - pattern: print!(...)
+          - pattern: eprint!(...)
+          - pattern: dbg!(...)
+          - pattern: std::println!(...)
+          - pattern: std::eprintln!(...)
+          - pattern: std::print!(...)
+          - pattern: std::eprint!(...)
+          - pattern: std::dbg!(...)
+      # Rust module-name metavariables do not match namespace labels reliably
+      # in this Semgrep version. Bound cfg(test) modules by their rustfmt
+      # indentation so helpers with any module name retain the test exemption.
+      - pattern-not-regex: >-
+          (?mx)^(?<test_indent>[ \t]*)\#[ \t]*\[[ \t]*cfg\([ \t]*
+          (?:test|any\([ \t]*test(?:[ \t]*,[^\]\r\n]+)?[ \t]*\))[ \t]*\)[ \t]*\][ \t]*\r?\n
+          (?P=test_indent)(?:pub(?:\([^)]*\))?[ \t]+)?mod[ \t]+[A-Za-z_][A-Za-z0-9_]*[ \t]*\{
+          (?:(?!^(?P=test_indent)\})[\s\S])*^(?P=test_indent)\}
       - pattern-not-inside: |
           #[cfg(test)]
           mod $MOD {
@@ -57,44 +69,6 @@ rules:
       - pattern-not-inside: |
           #[cfg(any(test, ...))]
           impl $TYPE {
-              ...
-          }
-
-  - id: causal-triangulations.rust.no-env-gated-stdio-diagnostics
-    languages:
-      - rust
-    severity: WARNING
-    message: "Environment-gated diagnostics should use log macros instead of stdio macros."
-    metadata:
-      category: maintainability
-      rationale: "Debug hooks should remain filterable through log/env_logger."
-    paths:
-      include:
-        - "/src/**/*.rs"
-        - "/tests/semgrep/src/**/*.rs"
-    pattern-either:
-      - pattern: |
-          if std::env::var_os($NAME).is_some() {
-              ...
-              println!(...);
-              ...
-          }
-      - pattern: |
-          if std::env::var_os($NAME).is_some() {
-              ...
-              eprintln!(...);
-              ...
-          }
-      - pattern: |
-          if env::var_os($NAME).is_some() {
-              ...
-              println!(...);
-              ...
-          }
-      - pattern: |
-          if env::var_os($NAME).is_some() {
-              ...
-              eprintln!(...);
               ...
           }
 
@@ -171,6 +145,48 @@ rules:
               metavariable: $METHOD
               regex: ^algebraic_(?:add|sub|mul|div|rem)$
           - pattern-not-inside: $FLOAT::$METHOD(...)
+      # Rust AST matching does not inspect documentation comments. Match
+      # complete Rust fences, skipping compliant/non-Rust fences so their
+      # closing delimiters cannot start a match over later prose. Rust string
+      # literals containing Markdown examples are not documentation mirrors.
+      - patterns:
+          - pattern-not-inside: '"..."'
+          - pattern-regex: >-
+              (?mx)
+              (?:
+                ^[ \t]*//[/!][ \t]*`{3}
+                (?:(?:rust|no_run|ignore(?:-[A-Za-z0-9_-]+)?|compile_fail|should_panic|standalone_crate|edition[0-9]+)
+                (?:[ \t]*,[ \t]*[A-Za-z0-9_-]+)*)?[ \t]*\r?\n
+                (?:(?![ \t]*//[/!][ \t]*`{3})[ \t]*//[/!][^\n]*\n)*?
+                [ \t]*//[/!][^\n]*(?:\.|::)[ \t]*algebraic_(?:add|sub|mul|div|rem)\b[^\n]*\n
+                (?:(?![ \t]*//[/!][ \t]*`{3})[ \t]*//[/!][^\n]*\n)*
+                [ \t]*//[/!][ \t]*`{3}[ \t]*\r?$
+              )
+              |
+              (?:
+                ^[ \t]*//[/!][ \t]*`{3}[^\n]*\n
+                (?:(?![ \t]*//[/!][ \t]*`{3})[ \t]*//[/!][^\n]*\n)*
+                [ \t]*//[/!][ \t]*`{3}[ \t]*\r?$
+              )(*SKIP)(*F)
+      - patterns:
+          - pattern-not-inside: '"..."'
+          - pattern-regex: >-
+              (?mx)
+              (?:
+                ^[ \t]*(?:\*[ \t]*)?`{3}
+                (?:(?:rust|no_run|ignore(?:-[A-Za-z0-9_-]+)?|compile_fail|should_panic|standalone_crate|edition[0-9]+)
+                (?:[ \t]*,[ \t]*[A-Za-z0-9_-]+)*)?[ \t]*\r?\n
+                (?:(?![ \t]*(?:\*[ \t]*)?(?:`{3}|\*/))[^\n]*\n)*?
+                [ \t]*(?:\*[ \t]*)?[^\n]*(?:\.|::)[ \t]*algebraic_(?:add|sub|mul|div|rem)\b[^\n]*\n
+                (?:(?![ \t]*(?:\*[ \t]*)?(?:`{3}|\*/))[^\n]*\n)*
+                [ \t]*(?:\*[ \t]*)?`{3}[ \t]*\r?$
+              )
+              |
+              (?:
+                ^[ \t]*(?:\*[ \t]*)?`{3}[^\n]*\n
+                (?:(?![ \t]*(?:\*[ \t]*)?(?:`{3}|\*/))[^\n]*\n)*
+                [ \t]*(?:\*[ \t]*)?`{3}[ \t]*\r?$
+              )(*SKIP)(*F)
 
   - id: causal-triangulations.rust.no-silent-conversion-fallbacks
     languages:
@@ -575,16 +591,13 @@ rules:
         - "/tests/semgrep/src/**/*.rs"
       exclude:
         - "/src/geometry/**/*.rs"
-    pattern-regex: >-
-      (?mx)^\s*
-      (?:pub(?:\([^)]*\))?\s+)?
-      use\s+delaunay
-      (?:
-        \s+as\s+[A-Za-z_][A-Za-z0-9_]*
-        |::(?:[^;\n]*\{[\s\S]*?\}|[^;\n]+)
-        |\s*
-      )
-      \s*;
+    patterns:
+      # Rust normalizes use trees and aliases into individual imports. Match
+      # the complete path so crate::geometry::...::delaunay stays compliant.
+      - pattern: use $IMPORT;
+      - metavariable-regex:
+          metavariable: $IMPORT
+          regex: ^(?:::)?delaunay(?:::|$)
 
   - id: causal-triangulations.rust.no-direct-delaunay-paths-outside-geometry
     languages:
@@ -602,24 +615,26 @@ rules:
         - "/tests/semgrep/src/**/*.rs"
       exclude:
         - "/src/geometry/**/*.rs"
-    pattern-regex: >-
-      (?mx)^
-      \s*
-      (?!
-        (?:
-          (?:pub(?:\([^)]*\))?\s+)?
-          use\b
-          |///
-          |//!
-          |//
-          |/\*
-          |\*
-        )
-      )
-      (?:
-        delaunay::
-        |[^\n]*[^A-Za-z0-9_:]delaunay::
-      )
+    patterns:
+      - pattern-not-inside: use $IMPORT;
+      - pattern-regex: >-
+          (?mx)^
+          \s*
+          (?!
+            (?:
+              (?:pub(?:\([^)]*\))?\s+)?
+              use\b
+              |///
+              |//!
+              |//
+              |/\*
+              |\*
+            )
+          )
+          (?:
+            delaunay::
+            |[^\n]*[^A-Za-z0-9_:]delaunay::
+          )
 
   - id: causal-triangulations.rust.no-direct-mcmc-imports-outside-metropolis
     languages:
@@ -640,16 +655,11 @@ rules:
         - "/src/cdt/metropolis/**/*.rs"
         - "/src/errors.rs"
         - "/src/lib.rs"
-    pattern-regex: >-
-      (?mx)^\s*
-      (?:pub(?:\([^)]*\))?\s+)?
-      use\s+markov_chain_monte_carlo
-      (?:
-        \s+as\s+[A-Za-z_][A-Za-z0-9_]*
-        |::(?:[^;\n]*\{[\s\S]*?\}|[^;\n]+)
-        |\s*
-      )
-      \s*;
+    patterns:
+      - pattern: use $IMPORT;
+      - metavariable-regex:
+          metavariable: $IMPORT
+          regex: ^(?:::)?markov_chain_monte_carlo(?:::|$)
 
   - id: causal-triangulations.rust.no-direct-mcmc-paths-outside-metropolis
     languages:
@@ -669,24 +679,26 @@ rules:
         - "/src/cdt/metropolis/**/*.rs"
         - "/src/errors.rs"
         - "/src/lib.rs"
-    pattern-regex: >-
-      (?mx)^
-      \s*
-      (?!
-        (?:
-          (?:pub(?:\([^)]*\))?\s+)?
-          use\b
-          |///
-          |//!
-          |//
-          |/\*
-          |\*
-        )
-      )
-      (?:
-        markov_chain_monte_carlo::
-        |[^\n]*[^A-Za-z0-9_:]markov_chain_monte_carlo::
-      )
+    patterns:
+      - pattern-not-inside: use $IMPORT;
+      - pattern-regex: >-
+          (?mx)^
+          \s*
+          (?!
+            (?:
+              (?:pub(?:\([^)]*\))?\s+)?
+              use\b
+              |///
+              |//!
+              |//
+              |/\*
+              |\*
+            )
+          )
+          (?:
+            markov_chain_monte_carlo::
+            |[^\n]*[^A-Za-z0-9_:]markov_chain_monte_carlo::
+          )
 
   - id: causal-triangulations.rust.no-local-metropolis-acceptance-draws
     languages:
@@ -789,27 +801,6 @@ rules:
               ...
           }
 
-  - id: causal-triangulations.rust.planned-step-record-requires-sampler-state-sync
-    languages:
-      - rust
-    severity: WARNING
-    message: "Sync the annotated CDT state back into the sampler after recording a planned proposal step."
-    metadata:
-      category: correctness
-      rationale: >-
-        CDT records metadata and history after planned-proposal outcomes, while
-        the upstream sampler owns the state used by later proposals. Advancing
-        the step counter without sampler.replace_state(...) can discard those
-        annotations on a later handoff.
-    paths:
-      include:
-        - "/src/cdt/metropolis/**/*.rs"
-        - "/tests/semgrep/src/**/*.rs"
-    pattern-regex: >-
-      (?ms)^\s*record_planned_step\([^;]*\)\?;\s*
-      (?:(?!replace_state\s*\().)*?
-      state\.current_step\s*=
-
   - id: causal-triangulations.rust.expect-requires-reason
     languages:
       - rust
@@ -858,7 +849,7 @@ rules:
     languages:
       - rust
     severity: WARNING
-    message: "Use a typed error enum in production src/ instead of Box<dyn Error>, &dyn Error, or anyhow::Error."
+    message: "Use typed errors in production src/; borrowed dyn Error is allowed only in standard Error::source implementations."
     metadata:
       category: maintainability
       rationale: >-
@@ -876,8 +867,21 @@ rules:
       # Regex is deliberate here: Rust AST patterns over-match associated
       # error types such as serde's `S::Error`; this rule is about exact
       # dynamic-error spellings in production code.
-      - pattern-regex: >-
-          ^[ \t]*[^\n]*(\bBox\s*<\s*dyn\s+(std::error::)?Error\b|&\s*dyn\s+(std::error::)?Error\b|\banyhow::Error\b)
+      - pattern-either:
+          - pattern-regex: >-
+              ^[ \t]*[^\n]*(\bBox\s*<\s*dyn\s+(std::error::)?Error\b|\banyhow::Error\b)
+          - patterns:
+              - pattern-regex: >-
+                  ^[ \t]*[^\n]*&\s*dyn\s+(std::error::)?Error\b
+              # Semgrep's Rust AST omits the implemented trait. Inspect the
+              # header and stop at the source method's rustfmt-aligned end,
+              # rather than exempting ordinary inherent methods named source.
+              - pattern-not-regex: >-
+                  (?mx)^(?<impl_indent>[ \t]*)impl(?:[ \t]*<[^\n]+>)?[ \t]+
+                  (?:(?:std|core)::error::)?Error[ \t]+for[^{;]+\{
+                  (?:(?!^(?P=impl_indent)\})[\s\S])*?
+                  ^(?<source_indent>(?P=impl_indent)[ \t]+)fn[ \t]+source\(&self\)[^{;]*\{
+                  (?:(?!^(?P=source_indent)\})[\s\S])*^(?P=source_indent)\}
       - pattern-not-regex: '^[ \t]*(//|///|/\*|\*)'
       - pattern-not-inside: |
           mod tests {
@@ -1095,24 +1099,6 @@ rules:
       - pattern-regex: '"execution_count"\s*:\s*(?!\s*null\b)[^,\n}]+'
       - pattern-regex: '(?ms)"outputs"\s*:\s*\[\s*\{'
 
-  - id: causal-triangulations.github-actions.external-action-sha-pinned
-    languages:
-      - regex
-    severity: WARNING
-    message: "Pin external GitHub Actions to a full 40-character commit SHA."
-    metadata:
-      category: security
-      tracking_issue: "https://github.com/acgetchell/causal-triangulations/issues/129"
-      rationale: "Moving tags can change workflow behavior without review."
-    paths:
-      include:
-        - "/.github/workflows/**/*.yml"
-        - "/.github/workflows/**/*.yaml"
-        - "/tests/semgrep/.github/workflows/**/*.yml"
-        - "/tests/semgrep/.github/workflows/**/*.yaml"
-    patterns:
-      - pattern-regex: '(?m)^[ \t]*(?:-[ \t]*)?uses:[ \t]*(?!\./)(?!docker://)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@(?![a-fA-F0-9]{40}(?:\s+#|$))[^\s#]+' # yamllint disable-line rule:line-length
-
   - id: causal-triangulations.github-actions.external-action-approved-allowlist
     languages:
       - regex
@@ -1257,21 +1243,6 @@ rules:
     patterns:
       - pattern-regex: '(?m)^\s*(?:run:\s*)?uv\s+sync\b(?![^\n]*\s--locked\b)[^\n]*$' # yamllint disable-line rule:line-length
 
-  - id: causal-triangulations.python.no-raw-exception-in-tests
-    languages:
-      - python
-    severity: WARNING
-    message: "Raise a specific exception type in Python tests instead of raw Exception."
-    metadata:
-      category: maintainability
-      rationale: "Typed exceptions make test failures and expected errors easier to diagnose."
-    paths:
-      include:
-        - "/scripts/tests/**/*.py"
-        - "/tests/semgrep/scripts/tests/**/*.py"
-        - "/tests/semgrep/scripts/tests/**/*.py"
-    pattern: raise Exception(...)
-
   - id: causal-triangulations.python.explicit-path-text-encoding-in-tests
     languages:
       - python
@@ -1399,7 +1370,7 @@ rules:
     languages:
       - python
     severity: WARNING
-    message: "Use subprocess_utils command wrappers instead of calling subprocess.run directly."
+    message: "Use research_repo_tools.process.run_safe_command instead of calling subprocess.run directly."
     metadata:
       category: security
       rationale: >-
@@ -1410,22 +1381,5 @@ rules:
         - "/scripts/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
       exclude:
-        - "/scripts/subprocess_utils.py"
         - "/scripts/tests/**/*.py"
     pattern: subprocess.run(...)
-
-  - id: causal-triangulations.python.no-untyped-defs-in-scripts
-    languages:
-      - python
-    severity: WARNING
-    message: "Add an explicit return annotation to script functions."
-    metadata:
-      category: maintainability
-      rationale: "Typed script helpers are easier for ty and reviewers to reason about."
-    paths:
-      include:
-        - "/scripts/**/*.py"
-        - "/tests/semgrep/scripts/tests/**/*.py"
-    # Regex catches obvious unannotated definitions while avoiding a custom
-    # Python parser rule that would duplicate ty.
-    pattern-regex: '^( {0,4}|\t)(async\s+)?def\s+[A-Za-z_][A-Za-z0-9_]*\([^#\n]*\)\s*:'

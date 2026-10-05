@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING
 from unittest import mock
 from unittest.mock import MagicMock, Mock
 
+from research_repo_tools.process import run_safe_command
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -30,16 +32,6 @@ def catches_specific_exception() -> None:
     # ok: causal-triangulations.python.no-broad-exception
     except OSError:
         pass
-
-
-def raises_raw_exception() -> None:
-    # ruleid: causal-triangulations.python.no-raw-exception-in-tests
-    raise Exception("too broad")
-
-
-def raises_specific_exception() -> None:
-    # ok: causal-triangulations.python.no-raw-exception-in-tests
-    raise RuntimeError("specific failure")
 
 
 def implicit_path_read_text_encoding(path: Path) -> None:
@@ -100,11 +92,6 @@ def direct_subprocess_run() -> None:
     subprocess.run(["git", "status"], check=True)
 
 
-# ruleid: causal-triangulations.python.no-untyped-defs-in-scripts
-def missing_return_annotation():
-    return None
-
-
-# ok: causal-triangulations.python.no-untyped-defs-in-scripts
-def explicit_return_annotation() -> None:
-    return None
+def shared_subprocess_run() -> None:
+    # ok: causal-triangulations.python.no-direct-subprocess-run-outside-wrapper
+    run_safe_command("git", ["--no-pager", "status"])

@@ -1,5 +1,24 @@
 # Tooling Alignment
 
+## October 2026 Semgrep Ownership And Coverage
+
+The installed Ruff policy already rejects missing function return annotations and raw `Exception` raises through ANN and TRY002. Zizmor 1.30.1's regular
+persona already requires full action SHA pins, including quoted YAML references that the Semgrep regex misses. Remove those three duplicate Semgrep rules
+and their exclusive fixtures and Ruff exceptions; the canonical `check` and `ci` recipes continue to invoke Ruff and Zizmor.
+
+Consolidate environment-gated production diagnostics into the general stdio rule, preserving its test exemptions and covering qualified macros, `print!`,
+`eprint!`, and `dbg!`. Remove the old planned-step sampler-state synchronization rule: the current runner keeps CDT telemetry beside the sampler-owned
+triangulation, so its former `replace_state()` requirement no longer describes the continuation contract.
+
+Keep CDT's scientific and architecture rules. Strengthen backend import checks for grouped root imports and preserve the approved geometry and Metropolis
+adapter scopes. Extend the algebraic floating-point rule to doctest mirrors while retaining ordinary IEEE operations and deliberate FMA as compliant controls.
+Allow borrowed dynamic errors inside standard `Error::source` implementations, while retaining the typed fallible-error boundary. Update the subprocess
+diagnostic to name `research_repo_tools.process.run_safe_command`, which replaced the removed local wrapper.
+
+Each changed rule retains its existing ID and gains positive and closest-compliant fixtures. Validation covers the rule schema, shared fixture harness, real
+repository scan, Python consumer checks, and matching YAML, TOML, Markdown, and spelling checks. The accompanying dependency refresh updates development-tool
+pins for uv, Ruff, Semgrep, dprint, and rumdl; workflow wiring does not change.
+
 ## Invariant-Preserving Performance Contracts
 
 The repository-wide Rust performance audit extends the existing `allocation_profile` harness with checked edge queries, warm family-cache reuse after

@@ -18,22 +18,6 @@ impl SamplerFixture {
     fn proposal_ref(&self) -> ProposalRefFixture {
         ProposalRefFixture
     }
-
-    fn replace_state(&mut self, _state: u32) -> Result<(), &'static str> {
-        Ok(())
-    }
-}
-
-struct StateFixture {
-    current_step: u32,
-    triangulation: u32,
-}
-
-fn record_planned_step(
-    _sampler: &SamplerFixture,
-    _state: &mut StateFixture,
-) -> Result<(), &'static str> {
-    Ok(())
 }
 
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
@@ -51,26 +35,81 @@ type DirectMcmcPathFixture = markov_chain_monte_carlo::Trace;
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 pub use delaunay::prelude::VertexBuilder;
 
-// ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
-use delaunay::{core::DataType, geometry::kernel::AdaptiveKernel};
+use delaunay::{
+    // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+    core::DataType,
+    // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+    geometry::kernel::AdaptiveKernel,
+};
 
-// ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
-pub use delaunay::{core::edge::EdgeKey, core::tds::VertexKey};
+pub use delaunay::{
+    // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+    core::edge::EdgeKey,
+    // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+    core::tds::VertexKey,
+};
 
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 pub(crate) use delaunay::prelude::Tds;
 
-// ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
-pub(super) use delaunay::tds::{FacetHandle, SimplexKey};
+pub(super) use delaunay::tds::{
+    // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+    FacetHandle,
+    // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+    SimplexKey,
+};
 
-// ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 use delaunay::{
+    // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
     core::triangulation::TopologyGuarantee,
+    // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
     topology::traits::topological_space::GlobalTopology,
 };
 
 // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
 use delaunay as dt;
+
+// ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+use {delaunay::TopologyGuarantee, std::time::Duration};
+
+pub(crate) use {
+    // ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+    delaunay::TopologyGuarantee as GroupedTopologyGuarantee,
+    std::time::Instant,
+};
+
+// ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+use {delaunay as grouped_dt, std::time::SystemTime};
+
+// ruleid: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+use ::delaunay::TopologyGuarantee as AbsoluteTopologyGuarantee;
+
+// ok: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+use {crate::geometry::backends::delaunay::DelaunayBackend, std::time::Duration};
+
+use crate::geometry::{
+    // ok: causal-triangulations.rust.no-direct-delaunay-imports-outside-geometry
+    // ok: causal-triangulations.rust.no-direct-delaunay-paths-outside-geometry
+    backends::delaunay::DelaunayBackend as LocalDelaunayBackend,
+};
+
+// ruleid: causal-triangulations.rust.no-direct-mcmc-imports-outside-metropolis
+use {markov_chain_monte_carlo::Target as GroupedTarget, std::time::Duration};
+
+pub(crate) use {
+    // ruleid: causal-triangulations.rust.no-direct-mcmc-imports-outside-metropolis
+    markov_chain_monte_carlo::Trace as GroupedTrace,
+    std::time::Instant,
+};
+
+// ruleid: causal-triangulations.rust.no-direct-mcmc-imports-outside-metropolis
+use {markov_chain_monte_carlo as grouped_mcmc, std::time::SystemTime};
+
+// ruleid: causal-triangulations.rust.no-direct-mcmc-imports-outside-metropolis
+use ::markov_chain_monte_carlo::Trace as AbsoluteTrace;
+
+// ok: causal-triangulations.rust.no-direct-mcmc-imports-outside-metropolis
+use {crate::prelude::simulation::Trace, std::time::Duration};
 
 pub fn production_stdio() {
     // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
@@ -78,14 +117,85 @@ pub fn production_stdio() {
 
     // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
     eprintln!("debug output");
+
+    // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    print!("debug output");
+
+    // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    eprint!("debug output");
+
+    // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    dbg!(42);
+
+    // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    std::println!("debug output");
+
+    // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    std::eprintln!("debug output");
+
+    // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    std::print!("debug output");
+
+    // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    std::eprint!("debug output");
+
+    // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    std::dbg!(42);
+
+    // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    ::std::println!("debug output");
+
+    // ok: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    log::debug!("debug output");
+
+    // ok: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    log::error!("error output");
 }
 
 pub fn env_gated_stdio() {
-    // ruleid: causal-triangulations.rust.no-env-gated-stdio-diagnostics
     if std::env::var_os("CDT_DEBUG").is_some() {
         // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
         println!("debug output");
     }
+}
+
+#[cfg(test)]
+fn test_only_stdio() {
+    // ok: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    std::println!("test output");
+    // ok: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    print!("test output");
+    // ok: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    eprint!("test output");
+    // ok: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    dbg!(42);
+    if std::env::var_os("CDT_DEBUG").is_some() {
+        // ok: causal-triangulations.rust.no-stdio-diagnostics-in-src
+        println!("test output");
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    fn test_helper() {
+        // ok: causal-triangulations.rust.no-stdio-diagnostics-in-src
+        std::eprintln!("test output");
+        // ok: causal-triangulations.rust.no-stdio-diagnostics-in-src
+        std::dbg!(42);
+    }
+}
+
+#[cfg(any(test, feature = "fixture-tests"))]
+mod conditional_diagnostic_tests {
+    fn test_helper() {
+        // ok: causal-triangulations.rust.no-stdio-diagnostics-in-src
+        std::println!("test output");
+    }
+}
+
+fn diagnostics_after_test_module() {
+    // ruleid: causal-triangulations.rust.no-stdio-diagnostics-in-src
+    std::eprintln!("production output");
 }
 
 fn nonfinite_conversion_default_fixture(value: Option<f64>) {
@@ -212,6 +322,31 @@ trait ProductionDynamicErrors {
     fn borrowed_error(&self, error: &dyn std::error::Error);
 }
 
+#[derive(Debug)]
+struct SourceError {
+    cause: std::io::Error,
+}
+
+impl std::fmt::Display for SourceError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("fixture error")
+    }
+}
+
+impl std::error::Error for SourceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // ok: causal-triangulations.rust.no-box-dyn-error-in-src
+        Some(&self.cause as &dyn std::error::Error)
+    }
+}
+
+impl SourceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        // ruleid: causal-triangulations.rust.no-box-dyn-error-in-src
+        Some(&self.cause as &dyn std::error::Error)
+    }
+}
+
 /// # Ok::<(), Box<dyn std::error::Error>>(())
 fn doctest_style_error_is_ignored() {}
 
@@ -292,29 +427,6 @@ fn planned_step_info_from_proposal_cache_fixture(sampler: &SamplerFixture, step_
         step_info,
         "proposal telemetry cache should mirror planned step info"
     );
-}
-
-fn planned_step_record_without_sampler_sync_fixture(
-    sampler: &mut SamplerFixture,
-    state: &mut StateFixture,
-    step: u32,
-) -> Result<(), &'static str> {
-    // ruleid: causal-triangulations.rust.planned-step-record-requires-sampler-state-sync
-    record_planned_step(sampler, state)?;
-    state.current_step = step;
-    Ok(())
-}
-
-fn planned_step_record_with_sampler_sync_fixture(
-    sampler: &mut SamplerFixture,
-    state: &mut StateFixture,
-    step: u32,
-) -> Result<(), &'static str> {
-    // ok: causal-triangulations.rust.planned-step-record-requires-sampler-state-sync
-    record_planned_step(sampler, state)?;
-    sampler.replace_state(state.triangulation)?;
-    state.current_step = step;
-    Ok(())
 }
 
 fn local_metropolis_acceptance_draw_fixture<R: Rng + ?Sized>(

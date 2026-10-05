@@ -61,7 +61,7 @@ just performance-readme tooling/performance-readme.toml
 ```
 
 `bench-latest` runs the correctness gate before `ci_performance_suite`. `performance-release` requires two explicit fresh-series tags and measures
-in temporary worktrees before retaining and promoting shared evidence. It is a user-invoked operation because agents may not mutate Git state.
+in temporary worktrees before retaining and promoting shared evidence. It requires an explicit user request because it mutates Git state.
 The first post-migration tag establishes a baseline; comparisons and README tables wait until a second compatible measurement exists.
 `performance-doc` and `performance-readme CONFIG` render retained evidence without measurement. See [performance testing](../BENCHMARKING.md).
 
@@ -422,6 +422,8 @@ repository-owned allowlist in `semgrep.yaml`, and keep a readable version
 comment next to each pin. Dependabot remains configured for the
 `github-actions` ecosystem; its update PRs should preserve both the SHA pin and
 the adjacent human-readable version comment.
+
+Zizmor owns full-SHA pin validation. Semgrep owns the CDT action allowlist and readable version-comment policy.
 
 ### Dependabot Approval and Auto-Merge
 
