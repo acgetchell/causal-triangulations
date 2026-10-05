@@ -155,7 +155,7 @@ rules:
               (?mx)
               (?:
                 ^[ \t]*//[/!][ \t]*`{3}
-                (?:(?:rust|no_run|ignore|compile_fail|should_panic|edition[0-9]+)
+                (?:(?:rust|no_run|ignore(?:-[A-Za-z0-9_-]+)?|compile_fail|should_panic|standalone_crate|edition[0-9]+)
                 (?:[ \t]*,[ \t]*[A-Za-z0-9_-]+)*)?[ \t]*\r?\n
                 (?:(?![ \t]*//[/!][ \t]*`{3})[ \t]*//[/!][^\n]*\n)*?
                 [ \t]*//[/!][^\n]*(?:\.|::)[ \t]*algebraic_(?:add|sub|mul|div|rem)\b[^\n]*\n
@@ -174,7 +174,7 @@ rules:
               (?mx)
               (?:
                 ^[ \t]*(?:\*[ \t]*)?`{3}
-                (?:(?:rust|no_run|ignore|compile_fail|should_panic|edition[0-9]+)
+                (?:(?:rust|no_run|ignore(?:-[A-Za-z0-9_-]+)?|compile_fail|should_panic|standalone_crate|edition[0-9]+)
                 (?:[ \t]*,[ \t]*[A-Za-z0-9_-]+)*)?[ \t]*\r?\n
                 (?:(?![ \t]*(?:\*[ \t]*)?(?:`{3}|\*/))[^\n]*\n)*?
                 [ \t]*(?:\*[ \t]*)?[^\n]*(?:\.|::)[ \t]*algebraic_(?:add|sub|mul|div|rem)\b[^\n]*\n

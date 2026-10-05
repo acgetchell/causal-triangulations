@@ -16,7 +16,8 @@ Allow borrowed dynamic errors inside standard `Error::source` implementations, w
 diagnostic to name `research_repo_tools.process.run_safe_command`, which replaced the removed local wrapper.
 
 Each changed rule retains its existing ID and gains positive and closest-compliant fixtures. Validation covers the rule schema, shared fixture harness, real
-repository scan, Python consumer checks, and matching YAML, TOML, Markdown, and spelling checks. Tool versions and workflow wiring do not change.
+repository scan, Python consumer checks, and matching YAML, TOML, Markdown, and spelling checks. The accompanying dependency refresh updates development-tool
+pins for uv, Ruff, Semgrep, dprint, and rumdl; workflow wiring does not change.
 
 ## Invariant-Preserving Performance Contracts
 
