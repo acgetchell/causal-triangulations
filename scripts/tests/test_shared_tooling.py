@@ -63,6 +63,63 @@ def test_python_fixtures_are_in_the_ci_gate() -> None:
     assert "review uncommitted" not in commands
 
 
+@pytest.mark.parametrize(
+    ("recipe", "failure"),
+    [("ci", ""), ("ci", "notebooks lint"), ("ci", "cargo clippy"), ("notebook-check", ""), ("notebook-check", "notebooks lint")],
+)
+def test_validation_graph_orders_static_checks_and_stops_on_failure(
+    recipe: str,
+    failure: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Execute the real validation graph without running host validators or workloads."""
+    stub_script = (
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" >> "$VALIDATION_LOG"\n'
+        'if [ -n "$VALIDATION_FAIL" ]; then\n'
+        '  case "$*" in *"$VALIDATION_FAIL"*) echo "Injected validation failure: $VALIDATION_FAIL" >&2; exit 23;; esac\n'
+        "fi\n"
+    )
+    for executable in ("uv", "uvx", "jq"):
+        stub = tmp_path / executable
+        stub.write_text(stub_script, encoding="utf-8", newline="\n")
+        stub.chmod(0o700)
+    (tmp_path / "justfile").write_bytes((ROOT / "justfile").read_bytes())
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    log = tmp_path / "validation.log"
+    monkeypatch.setenv("VALIDATION_LOG", log.as_posix())
+    monkeypatch.setenv("VALIDATION_FAIL", failure)
+    result = run_safe_command("just", [recipe], cwd=tmp_path, check=False)
+    assert result.returncode == (23 if failure else 0), result.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    assert sum("notebooks lint" in call for call in calls) == 1
+    workloads = ("python -m pytest", "cargo nextest run", "cargo test --doc", "notebooks execute", "cargo bench --profile perf", "validation run")
+    runtime_positions = [index for index, call in enumerate(calls) if any(workload in call for workload in workloads)]
+    if failure:
+        assert f"Injected validation failure: {failure}" in result.stderr
+        assert not runtime_positions, calls
+    elif recipe == "ci":
+        first_runtime = min(runtime_positions)
+        for check in ("notebooks lint", "shellcheck -x", "semgrep scan", "cargo fmt", "cargo clippy", "cargo doc", "cargo bench --workspace --no-run"):
+            assert next(index for index, call in enumerate(calls) if check in call) < first_runtime, (check, calls)
+    else:
+        assert "notebooks lint" in calls[0]
+        assert "notebooks execute" in calls[1]
+
+
+def test_release_validation_coalesces_runnable_tests_in_commit_check() -> None:
+    """Pre-commit retains debug/release doctests without replaying the release suite."""
+    commit = run_safe_command("just", ["--dry-run", "commit-check"], cwd=ROOT).stderr
+    assert commit.count("cargo nextest run") == 1
+    assert commit.index("cargo bench --workspace --no-run") < commit.index("cargo nextest run")
+    assert "cargo test --doc --verbose" in commit
+    assert "cargo test --doc --release" in commit
+    release = run_safe_command("just", ["--dry-run", "test-release"], cwd=ROOT).stderr
+    assert release.count("cargo nextest run --release --profile ci --lib --tests --verbose") == 1
+    assert release.index("cargo nextest run") < release.index("cargo test --doc --release")
+
+
 UPDATE_STEPS = (
     "deps update-uv",
     "toolchain upgrade",

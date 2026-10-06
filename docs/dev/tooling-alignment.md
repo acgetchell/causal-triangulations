@@ -1,5 +1,80 @@
 # Tooling Alignment
 
+## 6 October 2026 Tooling Review Follow-Up
+
+The changed-file tooling review checks the Rust 1.99 baseline, managed-tool pin propagation, local validation graph, Clippy/Semgrep enforcement, affected
+workflow consumers, and active command documentation. `just tools-check` verifies the declared tools, including Rust 1.99.0 and typos-cli 1.51.0;
+`uv lock --check --offline` verifies the existing Python resolution. This is a consistency review, not a claim that every installed tool is the latest release.
+
+The local `ci` graph previously ran Python tests and fast notebooks before shell, Semgrep, Rust formatting, Clippy, and documentation checks. Move all static
+checks and benchmark compilation before runtime workloads, and include `notebook-lint` early while retaining it on `notebook-check`. Just coalesces that
+shared dependency so it runs once in CI; standalone notebook validation still lints before execution. Consumer regressions execute the real graph with
+external-command stubs and verify that notebook-lint and Clippy failures stop before any runtime workload.
+
+The `commit-check` graph previously selected release Rust tests through both `test-all` and `test-release`. Nextest inventories confirm that the two
+selections contain the same 755 tests across 12 binaries. Make `test-release` depend on `test-rust-ci` and retain its release-profile doctests. Just then
+coalesces the runnable Rust suite within `commit-check`, while debug and release doctests remain distinct evidence. A dry-run regression protects both
+standalone release validation and pre-commit composition. The pre-commit gate also compiles benchmarks before runtime tests, so a benchmark compilation
+failure stops before those workloads.
+
+Both defects belong to CDT's consumer-owned aggregate recipes. The published `research-repo-tools` 0.1.7 template supplies a minimal `ci: check` wrapper and
+does not own CDT's Rust test selections or notebook execution inventory, so these changes require no new upstream issue or shared-package update.
+Retain the existing warning-denying Clippy groups, project-specific Semgrep rules and fixtures, pinned workflow setup/cache keys, and native platform matrix.
+The core-workflow description is also corrected: notebook execution belongs to `ci`, rather than the smaller `check`, `fix`, and `test` cycle.
+
+## 6 October 2026 Rust 1.99 Upgrade
+
+The Rust baseline moves from 1.98.1 to the released 1.99.0 toolchain, following the repository policy that the contributor pin and crate MSRV match.
+`Cargo.toml`, `rust-toolchain.toml`, `clippy.toml`, and active contributor/user/agent guidance move together. The shared setup action already reads the
+toolchain file, keys its cache on that file, and installs the declared components, so no workflow-local version or dependency update is needed.
+This raises the minimum compiler version for downstream users without changing the edition or public API.
+
+The evaluation uses the final [Rust 1.99 release notes][rust-199], [release announcement][rust-199-announcement], and [Cargo changelog][cargo-199].
+The installed compiler reports LLVM 23.1.1. Relevant improvements and adoption decisions are:
+
+- Cargo's manifest/index parsing improvements, rustdoc's faster trait-implementation filtering, and improved inclusive-range iteration apply through the
+  toolchain upgrade. CDT already uses inclusive ranges in seed searches and layered construction; their exhausted endpoints are not inspected.
+  Upstream performance figures are not CDT measurements.
+- Cargo disables incremental compilation by default when `CI` is set. The release/perf validation buckets are already nonincremental; the existing
+  host/target CI matrix remains appropriate. The new `debug` profile currently behaves like `dev`, so changing recipes would bring no immediate benefit.
+  Edition-2024 overrides of inherited dependency default features have no application to this single-crate manifest.
+- Rust 1.99 checks statically zero-sized chunk/window calls through `unconditional_panic`, and rustdoc warns about unused footnote definitions.
+  Existing warning-denying Clippy and documentation recipes pick these checks up without additional lint configuration.
+- `String::from_utf8_lossy_owned` and `FromUtf8Error::into_utf8_lossy` help consumers that need owned decoded text. CDT's only lossy UTF-8 calls borrow
+  subprocess stdout/stderr in a test failure message; consuming those buffers would not improve that path.
+- `VecDeque::retain_back` has no queue-filtering call site: the observable breadth-first search queue uses push/pop operations. Boxed-array iteration,
+  `StepBy`'s fused-iterator implementation, and filesystem timestamp setters likewise have no matching repository workflow.
+- C variadics, raw-pointer layout access, and raw allocation reconstruction do not fit the crate's safe-Rust architecture. No allocation ownership or
+  numerical algorithm changes are justified by these additions.
+- Exact `doc(alias)` matches now help rustc suggest methods. Add aliases when a demonstrated caller-facing naming mismatch warrants them;
+  the current audit found no existing alias or migration shim needing adjustment.
+
+Compatibility checks cover deprecated integral-module paths, macro/attribute diagnostics, iterator use, all Cargo targets, and documentation examples.
+The numerical policy continues to require ordinary IEEE arithmetic and deliberate FMA; compiler optimization changes are checked with the existing
+seeded physics, checkpoint, property, and allocation contracts rather than adopting relaxed arithmetic.
+
+The installed Clippy adds [`assert_is_empty`][assert-is-empty] diagnostics and detects additional [`suboptimal_flops`][suboptimal-flops] expressions.
+Tests adopt diagnostic equality/inequality assertions for empty integer collections. Error-detail strings use `!is_empty()` with contextual failure messages.
+Empty floating-point outputs use `is_empty()` with explicit failure messages showing the actual values, avoiding numerical equality comparisons while
+retaining useful diagnostics.
+The coordinate builders deliberately use `mul_add` for toroidal perturbations and open-strip interior coordinates, removing their lint exceptions.
+A rational-arithmetic regression captures a toroidal sum whose fused result is exactly representable while separate operations round one ULP above it;
+the existing open-strip analytical fixture also checks both signs of interior jitter. Toroidal coordinates can change in their last bit relative to the
+previous arithmetic, so seed/checkpoint reproducibility is validated for the updated construction path rather than claiming cross-version bit identity.
+The squared-deviation accumulation in `slab_triangle_fluctuations` also uses `mul_add`, removing its lint exception. An independent analytical fixture with
+volumes `[1, 1, 2]` checks the correctly rounded standard deviation of `sqrt(1/3)`; separate multiplication and addition round one ULP higher in this case.
+
+Validation on 6 October 2026 passes the complete `just ci` gate on `aarch64-apple-darwin`: 755 unit/integration tests, 333 doctests, 34 Python consumer tests,
+warning-denying Clippy/docs, notebook execution, benchmark compilation, allocation budgets, and validated examples. Production library/CLI checks also pass
+with all features for `x86_64-unknown-linux-gnu` and `x86_64-pc-windows-msvc`; native Linux/Windows execution remains the hosted CI matrix's responsibility.
+The local `target/rust-1.99-results-fma-validation.md` ledger records the exact commands, toolchain, source fingerprint, profiles, instrumentation, and logs.
+
+[rust-199]: https://doc.rust-lang.org/stable/releases.html#version-1990-2026-10-01
+[rust-199-announcement]: https://blog.rust-lang.org/2026/10/01/Rust-1.99.0/
+[cargo-199]: https://doc.rust-lang.org/cargo/CHANGELOG.html#cargo-199-2026-10-01
+[assert-is-empty]: https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#assert_is_empty
+[suboptimal-flops]: https://rust-lang.github.io/rust-clippy/rust-1.99.0/index.html#suboptimal_flops
+
 ## October 2026 Semgrep Ownership And Coverage
 
 The installed Ruff policy already rejects missing function return annotations and raw `Exception` raises through ANN and TRY002. Zizmor 1.30.1's regular

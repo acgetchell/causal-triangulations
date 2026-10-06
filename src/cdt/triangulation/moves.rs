@@ -148,7 +148,7 @@ mod tests {
         );
         assert!(tri.cache.edge_count.get().is_none());
         assert!(!tri.has_foliation());
-        assert!(tri.slice_sizes().is_empty());
+        assert_eq!(tri.slice_sizes(), [] as [usize; 0]);
     }
 
     #[test]

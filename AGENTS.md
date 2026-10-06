@@ -215,7 +215,7 @@ Key principle:
 
 - **Language**: Rust
 - **Project**: {2,3,4}D Causal Dynamical Triangulations library
-- **MSRV**: 1.98.1
+- **MSRV**: 1.99.0
 - **Edition**: 2024
 - **Unsafe code**: forbidden (`#![forbid(unsafe_code)]`)
 - **Architecture**: `src/geometry/` is the backend interface layer for the `delaunay` crate; `src/cdt/` is the CDT domain layer. Direct `use delaunay::` imports

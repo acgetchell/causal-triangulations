@@ -22,7 +22,8 @@ These commands ensure:
 - linting
 - static analysis
 - tests
-- notebook execution and output hygiene
+
+`just ci` also validates notebook output hygiene and executes the fast notebook set.
 
 ## Dependency And Tool Maintenance
 
@@ -204,6 +205,9 @@ This runs:
 The `ci` recipe is a flat union of these focused validators. It does not depend on broad `check`, `lint`, or `test-all` bundles. Clippy covers every Cargo
 target to match the GitHub SARIF workflow; the test, benchmark, and example buckets still own their runtime or compile-contract evidence because ordinary
 compilation does not execute Clippy lints.
+
+Static checks and benchmark compilation finish before runtime workloads. Notebook lint is an early dependency and remains a prerequisite of the standalone
+notebook gate; Just executes that shared dependency once per CI invocation.
 
 For heavier stabilization work, run the slow-test wrapper:
 

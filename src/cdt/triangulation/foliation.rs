@@ -2635,7 +2635,7 @@ mod tests {
             .expect("Failed to create triangulation");
         assert!(!tri.has_foliation());
         assert!(tri.foliation().is_none());
-        assert!(tri.slice_sizes().is_empty());
+        assert_eq!(tri.slice_sizes(), [] as [usize; 0]);
         assert!(tri.vertices_at_time(0).next().is_none());
 
         tri.assign_foliation_by_y(slice_count(1))
@@ -2945,11 +2945,11 @@ mod tests {
         let triangulation = CdtTriangulation::from_seeded_points(5, 3, 2, TEST_POINT_SEED)
             .expect("create unfoliated triangulation");
 
-        assert!(
+        assert_eq!(
             triangulation
                 .slab_triangle_profile()
-                .expect("missing foliation should not fail")
-                .is_empty()
+                .expect("missing foliation should not fail"),
+            [] as [u32; 0]
         );
 
         let mut triangulation = strict_strip(4, 2);
@@ -2966,11 +2966,11 @@ mod tests {
             .set_vertex_data(&vertex, Some(label))
             .expect("label rewrite should stale foliation bookkeeping");
 
-        assert!(
+        assert_eq!(
             triangulation
                 .slab_triangle_profile()
-                .expect("stale foliation should not fail")
-                .is_empty()
+                .expect("stale foliation should not fail"),
+            [] as [u32; 0]
         );
     }
 }
