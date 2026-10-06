@@ -123,7 +123,7 @@ check-fast:
     {{ _run }} cargo check
 
 # Run all GitHub-equivalent validators, tests, examples, and benchmark compilation.
-ci: justfile-fmt-check action-lint zizmor markdown-check spell-check performance-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check test-python notebook-check shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check test-rust-ci test-doc bench-compile allocation-check examples-validate
+ci: justfile-fmt-check action-lint zizmor markdown-check spell-check performance-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check notebook-lint shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check bench-compile test-python test-rust-ci test-doc notebook-check allocation-check examples-validate
     @echo "🎯 CI checks complete!"
 
 # CI with performance baseline
@@ -155,7 +155,7 @@ clippy-all-targets:
     {{ _run }} cargo clippy --workspace --all-targets --all-features -- -D warnings -W clippy::pedantic -W clippy::nursery -W clippy::cargo
 
 # Pre-commit workflow: comprehensive validation (checks + tests + release + benches)
-commit-check: check test-all test-release bench-compile
+commit-check: check bench-compile test-all test-release
     @echo "🚀 Ready to commit! All checks passed."
 
 # Coverage analysis for local development (HTML output)
@@ -504,8 +504,7 @@ test-python:
     {{ _run }} uv run --locked python -m pytest
 
 # Run release-mode Rust tests and doctests.
-test-release:
-    {{ _run }} cargo nextest run --release --workspace
+test-release: test-rust-ci
     {{ _run }} cargo test --doc --release
 
 # Broad Rust test workflow; doctests remain a separate cargo-test bucket.

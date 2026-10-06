@@ -1300,12 +1300,12 @@ mod tests {
         assert!(results.triangulation().face_count() > 0);
         assert!(results.triangulation().has_foliation());
         assert_eq!(results.triangulation().slice_sizes(), &[12, 12, 12]);
-        assert!(
-            !results
+        assert_ne!(
+            results
                 .triangulation()
                 .slab_triangle_profile()
-                .expect("run triangulation should have a valid slab-triangle profile")
-                .is_empty()
+                .expect("run triangulation should have a valid slab-triangle profile"),
+            [] as [u32; 0]
         );
         results
             .triangulation()

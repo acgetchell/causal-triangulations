@@ -174,7 +174,7 @@ git-cliff = "2.14.2"
 rumdl = "0.2.78"
 sarif-fmt = "0.8.0"
 taplo-cli = "0.10.0"
-typos-cli = "1.50.3"
+typos-cli = "1.51.0"
 zizmor = "1.30.1"
 
 [tool.research-repo-tools.zizmor]

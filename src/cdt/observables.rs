@@ -608,15 +608,17 @@ mod tests {
 
     #[test]
     fn dual_ball_averages_are_empty_for_too_small_graphs() {
+        let empty_graph_volumes = average_dual_ball_volumes_from_adjacency(&[])
+            .expect("empty adjacency should not fail numerically");
         assert!(
-            average_dual_ball_volumes_from_adjacency(&[])
-                .expect("empty adjacency should not fail numerically")
-                .is_empty()
+            empty_graph_volumes.is_empty(),
+            "empty graph should yield no ball volumes, got {empty_graph_volumes:?}"
         );
+        let single_node_volumes = average_dual_ball_volumes_from_adjacency(&[vec![]])
+            .expect("single-node adjacency should not fail numerically");
         assert!(
-            average_dual_ball_volumes_from_adjacency(&[vec![]])
-                .expect("single-node adjacency should not fail numerically")
-                .is_empty()
+            single_node_volumes.is_empty(),
+            "single-node graph should yield no ball volumes, got {single_node_volumes:?}"
         );
     }
 
@@ -625,7 +627,10 @@ mod tests {
         let probabilities = average_return_probabilities(&[], 4)
             .expect("empty adjacency should not fail numerically");
 
-        assert!(probabilities.is_empty());
+        assert!(
+            probabilities.is_empty(),
+            "empty graph should yield no return probabilities, got {probabilities:?}"
+        );
     }
 
     #[test]

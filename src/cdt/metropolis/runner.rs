@@ -2913,13 +2913,13 @@ mod tests {
             measurement_for(0, 1.0, &triangulation).expect("measurement should build");
 
         assert!(!triangulation.has_foliation());
-        assert!(
+        assert_eq!(
             triangulation
                 .slab_triangle_profile()
-                .expect("unfoliated triangulation should report an empty profile")
-                .is_empty()
+                .expect("unfoliated triangulation should report an empty profile"),
+            [] as [u32; 0]
         );
-        assert!(measurement.slab_triangle_profile().is_empty());
+        assert_eq!(measurement.slab_triangle_profile(), [] as [u32; 0]);
     }
 
     #[test]

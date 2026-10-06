@@ -535,16 +535,22 @@ fn toroidal_vertex_offset(slice: u32, index: u32, num_slices: u32, candidate: u8
         return [phase.sin() / 32.0, 0.0];
     }
 
+    combined_toroidal_vertex_offset(slice, index, candidate, phase.sin() / 16.0)
+}
+
+/// Combines a toroidal hash perturbation with a supplied horizontal slice shear.
+///
+/// The candidate must be at least two, as selected by `toroidal_vertex_offset`.
+/// Keeping the shear separate lets the single-rounding contract be checked
+/// independently of platform-dependent trigonometric precision.
+fn combined_toroidal_vertex_offset(slice: u32, index: u32, candidate: u8, shear: f64) -> [f64; 2] {
     let seed = u64::from(candidate - 1);
     let x_hash = (17 * u64::from(index) + (29 + seed) * u64::from(slice) + 7 * seed) % 97;
     let y_hash = ((43 + seed) * u64::from(index) + 11 * u64::from(slice) + 3 * seed) % 89;
     let centered_x = f64::from(u32::try_from(x_hash).unwrap_or(0)) / 97.0 - 0.5;
     let centered_y = f64::from(u32::try_from(y_hash).unwrap_or(0)) / 89.0 - 0.5;
     let amplitude = f64::from(u32::from(candidate % 3) + 1) / 32.0;
-    [
-        phase.sin() / 16.0 + centered_x * amplitude,
-        centered_y * amplitude,
-    ]
+    [centered_x.mul_add(amplitude, shear), centered_y * amplitude]
 }
 
 /// Builds labeled periodic coordinates for a toroidal CDT profile.
@@ -642,15 +648,19 @@ fn open_strip_vertex_spec(
         }
     } else {
         let sign = if (index + slice).is_multiple_of(2) {
-            1.0
+            1.0_f64
         } else {
             -1.0
         };
-        f64::from(index).mul_add(spacing, side_jitter) + sign * interior_jitter
+        sign.mul_add(
+            interior_jitter,
+            f64::from(index).mul_add(spacing, side_jitter),
+        )
     };
     let spatial_index = f64::from(index);
+    // Convert before squaring so large legal slices do not overflow u32.
     let arc = vertical_jitter * spatial_index * f64::from(vertices - 1 - index)
-        / f64::from((vertices - 1).pow(2));
+        / f64::from(vertices - 1).powi(2);
     let base_y = f64::from(slice);
     let y = if slice == 0 {
         base_y - arc
@@ -2359,6 +2369,28 @@ mod tests {
     }
 
     #[test]
+    fn toroidal_vertex_offset_fuses_perturbation_with_slice_shear() {
+        let [x_offset, y_offset] = combined_toroidal_vertex_offset(1, 33, 2, 1.0 / 16.0);
+
+        // With shear 1/16, the binary64 centered x value times 3/32 plus
+        // that shear is exactly 8960770392603151/2^58.
+        // Independent rational arithmetic gives these bits; separate multiply
+        // and add operations round one ULP above this exactly representable sum.
+        assert_eq!(x_offset.to_bits(), 0x3f9f_d5c5_f02a_3a0f);
+        assert_relative_eq!(y_offset, -15.0 / 5696.0, epsilon = 1e-15);
+
+        // Check the full quarter-turn path with a tolerance: sin's precision
+        // can vary across platforms even though mul_add has defined rounding.
+        let [full_x_offset, full_y_offset] = toroidal_vertex_offset(1, 33, 4, 2);
+        assert_relative_eq!(
+            full_x_offset,
+            f64::from_bits(0x3f9f_d5c5_f02a_3a0f),
+            epsilon = 1e-15
+        );
+        assert_relative_eq!(full_y_offset, -15.0 / 5696.0, epsilon = 1e-15);
+    }
+
+    #[test]
     fn open_strip_vertex_spec_applies_spatial_perturbations_at_exact_time() {
         let side_jitter = 1.0 / 12.0;
         let interior_jitter = 1.0 / 48.0;
@@ -2375,11 +2407,38 @@ mod tests {
         assert_relative_eq!(interior_x, 7.0 / 16.0, epsilon = 1e-15);
         assert_eq!(interior_y.to_bits(), 1.0_f64.to_bits());
 
+        let ([negative_jitter_x, negative_jitter_y], negative_jitter_label) =
+            open_strip_vertex_spec(1, 2, 4, 3, side_jitter, interior_jitter, 0.0);
+        assert_eq!(negative_jitter_label, 1);
+        assert_relative_eq!(negative_jitter_x, 35.0 / 48.0, epsilon = 1e-15);
+        assert_eq!(negative_jitter_y.to_bits(), 1.0_f64.to_bits());
+
         let ([top_boundary_x, top_boundary_y], top_boundary_label) =
             open_strip_vertex_spec(2, 3, 4, 3, side_jitter, interior_jitter, 0.0);
         assert_eq!(top_boundary_label, 2);
         assert_relative_eq!(top_boundary_x, 13.0 / 12.0, epsilon = 1e-15);
         assert_eq!(top_boundary_y.to_bits(), 2.0_f64.to_bits());
+    }
+
+    #[test]
+    fn open_strip_vertex_spec_keeps_large_slice_arcs_finite() {
+        for vertices in [65_537, 1_073_741_825] {
+            let midpoint = (vertices - 1) / 2;
+            for slice in 0..2 {
+                let ([x, exact_time], label) =
+                    open_strip_vertex_spec(slice, midpoint, vertices, 2, 0.0, 0.0, 0.0);
+                assert_relative_eq!(x, 0.5, epsilon = 1e-15);
+                assert_eq!(label, slice);
+                assert_eq!(exact_time.to_bits(), f64::from(slice).to_bits());
+
+                let ([_, perturbed_time], _) =
+                    open_strip_vertex_spec(slice, midpoint, vertices, 2, 0.0, 0.0, 0.125);
+                // At the midpoint, i * (span - i) / span^2 is exactly 1/4.
+                // Vertical jitter 1/8 therefore shifts each boundary by 1/32.
+                let expected_time: f64 = if slice == 0 { -1.0 / 32.0 } else { 33.0 / 32.0 };
+                assert_eq!(perturbed_time.to_bits(), expected_time.to_bits());
+            }
+        }
     }
 
     #[test]

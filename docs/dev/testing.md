@@ -199,6 +199,9 @@ just test-rust-ci
 just test-doc
 ```
 
+`test-release` shares the `test-rust-ci` runnable suite and adds release-profile doctests. When `commit-check` combines `test-all` and `test-release`, Just
+executes the release runnable suite once, while retaining both debug and release doctests.
+
 Run Python tests:
 
 ```bash
@@ -253,6 +256,9 @@ The `ci` recipe directly composes the GitHub-equivalent leaf validators instead 
   environment
 - **benchmarks and examples**: benchmark harnesses compile without warnings, the deterministic allocation contract executes, and Cargo examples build once
   before running with stable output markers
+
+Static validators and benchmark compilation precede runtime workloads. Notebook lint runs early and only once, including when `notebook-check` later
+executes the fast notebooks. Consumer graph tests verify ordering, dependency coalescing, and failure propagation with external-command stubs.
 
 For non-core changes, run the smallest relevant test or integration crate first and compose each focused final bucket once. For core Rust changes or exact
 GitHub-equivalent evidence, run `just ci` directly rather than pre-running broad bundles that select the same tests.

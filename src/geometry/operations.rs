@@ -412,7 +412,7 @@ mod tests {
 
         let hull: HashSet<_> = backend.convex_hull().into_iter().collect();
         assert_eq!(hull, HashSet::from([0, 2]));
-        assert!(backend.boundary_edges().is_empty());
+        assert_eq!(backend.boundary_edges(), [] as [usize; 0]);
     }
 
     #[test]

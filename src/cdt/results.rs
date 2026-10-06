@@ -2597,7 +2597,9 @@ impl SimulationResultsBackend {
     ///
     /// The sample standard deviation is evaluated over post-thermalization
     /// measurements, using the same configured selection as
-    /// [`Self::average_slab_triangle_profile`]. Returns an empty vector when fewer
+    /// [`Self::average_slab_triangle_profile`]. Each entry is in triangle-count
+    /// units and uses the `n - 1` denominator for `n` measurements. Missing slab
+    /// entries are treated as zero. Returns an empty vector when fewer
     /// than two post-thermalization measurements are available.
     ///
     /// # Examples
@@ -2637,7 +2639,7 @@ impl SimulationResultsBackend {
                     .get(index)
                     .map_or(0.0, |&volume| <f64 as From<u32>>::from(volume));
                 let delta = volume - mean;
-                variances[index] += delta * delta;
+                variances[index] = delta.mul_add(delta, variances[index]);
             }
         }
 
@@ -5037,7 +5039,10 @@ mod tests {
         assert_eq!(format, OutputFormat::Csv);
         assert_eq!(stage, OutputWriteStage::CreateParentDirectory);
         assert_eq!(path, csv_path.display().to_string());
-        assert!(!detail.is_empty());
+        assert!(
+            !detail.is_empty(),
+            "CSV parent-directory failure should include I/O error detail"
+        );
 
         let json_path = parent_file.join("summary.json");
         let config = CdtConfig::new(12, 3)
@@ -5058,7 +5063,10 @@ mod tests {
         assert_eq!(format, OutputFormat::Json);
         assert_eq!(stage, OutputWriteStage::CreateParentDirectory);
         assert_eq!(path, json_path.display().to_string());
-        assert!(!detail.is_empty());
+        assert!(
+            !detail.is_empty(),
+            "JSON parent-directory failure should include I/O error detail"
+        );
 
         fs::remove_file(&parent_file).expect("parent fixture file should be removable");
     }
@@ -5181,6 +5189,33 @@ mod tests {
     }
 
     #[test]
+    fn slab_triangle_fluctuations_fuse_squared_deviation_accumulation() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let measurements = [(0, 1), (5, 1), (10, 2)]
+            .into_iter()
+            .map(|(step, volume)| {
+                measurement(step, 0.0, 4, 5, volume)
+                    .try_with_slab_triangle_profile(vec![volume])
+                    .expect("slab-triangle profile should fit triangle count")
+            })
+            .collect();
+        let results = results_with(
+            metropolis_config(1.0, 20, 0, 5),
+            vec![],
+            measurements,
+            triangulation,
+        );
+
+        let fluctuations = results.slab_triangle_fluctuations();
+        assert_eq!(fluctuations.len(), 1);
+        // The sample variance of [1, 1, 2] is exactly 1/3. Independent
+        // 100-digit arithmetic gives these correctly rounded sqrt(1/3) bits;
+        // separate squared-deviation multiplication and addition land one ULP higher.
+        assert_eq!(fluctuations[0].to_bits(), 0x3fe2_79a7_4590_331c);
+    }
+
+    #[test]
     fn slab_triangle_observables_are_empty_when_profiles_are_empty() {
         let triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
@@ -5191,8 +5226,16 @@ mod tests {
             triangulation,
         );
 
-        assert!(results.average_slab_triangle_profile().is_empty());
-        assert!(results.slab_triangle_fluctuations().is_empty());
+        let profile = results.average_slab_triangle_profile();
+        assert!(
+            profile.is_empty(),
+            "empty measurement profiles should yield no average profile, got {profile:?}"
+        );
+        let fluctuations = results.slab_triangle_fluctuations();
+        assert!(
+            fluctuations.is_empty(),
+            "empty measurement profiles should yield no fluctuations, got {fluctuations:?}"
+        );
     }
 
     #[test]
@@ -5214,7 +5257,11 @@ mod tests {
         );
 
         assert_slice_relative_eq(&results.average_slab_triangle_profile(), &[2.0]);
-        assert!(results.slab_triangle_fluctuations().is_empty());
+        let fluctuations = results.slab_triangle_fluctuations();
+        assert!(
+            fluctuations.is_empty(),
+            "one post-thermalization measurement should yield no fluctuations, got {fluctuations:?}"
+        );
     }
 
     #[test]
@@ -5231,8 +5278,16 @@ mod tests {
         assert_relative_eq!(results.acceptance_rate(), 0.0);
         assert_relative_eq!(results.average_action(), 0.0);
         assert!(results.post_thermalization_measurements().is_empty());
-        assert!(results.average_slab_triangle_profile().is_empty());
-        assert!(results.slab_triangle_fluctuations().is_empty());
+        let profile = results.average_slab_triangle_profile();
+        assert!(
+            profile.is_empty(),
+            "no measurements should yield no average profile, got {profile:?}"
+        );
+        let fluctuations = results.slab_triangle_fluctuations();
+        assert!(
+            fluctuations.is_empty(),
+            "no measurements should yield no fluctuations, got {fluctuations:?}"
+        );
     }
 
     #[test]

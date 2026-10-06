@@ -2100,7 +2100,7 @@ mod tests {
             initial_modification_count + 1
         );
         assert!(!tri.has_foliation());
-        assert!(tri.slice_sizes().is_empty());
+        assert_eq!(tri.slice_sizes(), [] as [usize; 0]);
     }
 
     #[test]

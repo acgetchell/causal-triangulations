@@ -133,7 +133,7 @@ fn discarded_and_committed_flip_plans_preserve_site_provenance() {
         .policy_view(&state, MoveType::Move22)
         .offered_sites()
         .collect::<Vec<_>>();
-    assert!(!before.is_empty());
+    assert_ne!(before, [] as [CdtProposalSiteId; 0]);
     let mut rng = StdRng::seed_from_u64(11);
     for accept in [false, false, true] {
         let plan = (0..64)

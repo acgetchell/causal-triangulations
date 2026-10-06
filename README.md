@@ -101,7 +101,7 @@ just notebook-setup
 just notebook
 ```
 
-The quickstart notebook runs the `cdt` engine and plots its CSV/JSON outputs. Rust 1.98.1 or newer is required; repository tooling and notebooks use the
+The quickstart notebook runs the `cdt` engine and plots its CSV/JSON outputs. Rust 1.99.0 or newer is required; repository tooling and notebooks use the
 declared uv environment. See [CLI workflows][repo-docs-running-md] for scriptable runs and [cluster workflows][repo-docs-running-on-hpc-md] for Slurm and Open
 OnDemand.
 
