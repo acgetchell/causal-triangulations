@@ -32,11 +32,12 @@ Retain the existing field names. Replace every `provided_value: String` in these
 - `ActionCouplings { coupling_0, coupling_2, cosmological_constant }` and `MeasurementSchedule { steps, thermalization_steps, measurement_frequency }`
   preserve related inputs together.
 
-`ExpectedConstraint` is a non-exhaustive enum for the actual validation contracts. Shared count bounds use `AtLeast`, `Exactly`, and `AtMost` with numeric
-payloads. Relational constraints preserve their dependencies: topology-dependent minimums, divisibility by time slices, minimum total vertices, profile
-length and sum, maximum steps, and backend dimension. Distinct variants identify finite values, finite increasing coordinate bounds, positive periods,
-positive finite reciprocal, safe action magnitude, and finite log probability. The latter two retain the maximum simplex count or action magnitude used
-by the existing check. Overflow constraints identify `u32`/`usize` capacity, profile-sum capacity, or checked open-strip face-count evaluation.
+`ExpectedConstraint` is a non-exhaustive enum for the actual validation contracts. Shared count constraints use `AtLeast` and `Exactly` with numeric payloads;
+upper bounds use `AtMostSteps` to retain their schedule dependency. Relational constraints preserve their dependencies: topology-dependent minimums,
+divisibility by time slices, minimum total vertices, profile length and sum, maximum steps, and backend dimension. Distinct variants identify finite values,
+finite increasing coordinate bounds, positive periods, positive finite reciprocal, safe action magnitude, and finite log probability. The latter two retain the
+maximum simplex count or action magnitude used by the existing check. Overflow constraints identify `u32`/`usize` capacity, profile-sum capacity, or checked
+open-strip face-count evaluation.
 
 Both enums implement `Debug`, `Clone`, `PartialEq`, and `Display`. They are diagnostic records, not a second validation engine: do not add a generic
 `is_valid` predicate that could drift from the domain validators. Floating-point payloads deliberately do not implement `Eq`; use `is_nan`, sign checks,

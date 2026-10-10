@@ -8,8 +8,8 @@
 //! `docs/dev/rust.md § Geometry Backend Isolation`).
 
 use crate::errors::{
-    CdtError, CdtResult, DelaunayGenerationFailure, DelaunayGenerationStage,
-    GenerationParameterIssue,
+    CdtError, CdtResult, DelaunayGenerationFailure, DelaunayGenerationStage, ExpectedConstraint,
+    GenerationParameterIssue, ObservedValue,
 };
 pub use delaunay::TopologyGuarantee;
 use delaunay::geometry::{
@@ -51,15 +51,15 @@ fn generate_delaunay2_vertex_build_error(
 }
 
 /// Builds a consistent typed validation error for generator argument checks.
-fn invalid_generation_parameters(
+const fn invalid_generation_parameters(
     issue: GenerationParameterIssue,
-    provided_value: String,
-    expected_range: &str,
+    provided_value: ObservedValue,
+    expected_range: ExpectedConstraint,
 ) -> CdtError {
     CdtError::InvalidGenerationParameters {
         issue,
         provided_value,
-        expected_range: expected_range.to_string(),
+        expected_range,
     }
 }
 
@@ -71,8 +71,8 @@ fn validate_coordinate_range(coordinate_range: (f64, f64)) -> CdtResult<()> {
     } else {
         Err(invalid_generation_parameters(
             GenerationParameterIssue::InvalidCoordinateRange,
-            format!("[{min}, {max}]"),
-            "finite min < max",
+            ObservedValue::CoordinateRange { min, max },
+            ExpectedConstraint::FiniteIncreasingBounds,
         ))
     }
 }
@@ -84,8 +84,12 @@ fn validate_explicit_coordinates(coords_with_data: &[([f64; 2], u32)]) -> CdtRes
             if !value.is_finite() {
                 return Err(invalid_generation_parameters(
                     GenerationParameterIssue::NonFiniteVertexCoordinate,
-                    format!("vertex {vertex_index} axis {axis} = {value}"),
-                    "finite coordinate values",
+                    ObservedValue::VertexCoordinate {
+                        vertex_index,
+                        axis,
+                        value,
+                    },
+                    ExpectedConstraint::Finite,
                 ));
             }
         }
@@ -143,8 +147,11 @@ fn validate_toroidal_domain(domain: [f64; 2]) -> CdtResult<()> {
         if !period.is_finite() || period <= 0.0 {
             return Err(invalid_generation_parameters(
                 GenerationParameterIssue::InvalidToroidalDomain,
-                format!("axis {axis} period {period}"),
-                "finite and positive periods",
+                ObservedValue::ToroidalPeriod {
+                    axis,
+                    value: period,
+                },
+                ExpectedConstraint::FinitePositivePeriods,
             ));
         }
     }
@@ -186,8 +193,8 @@ pub fn generate_delaunay2(
     if number_of_vertices < 3 {
         return Err(invalid_generation_parameters(
             GenerationParameterIssue::InsufficientVertexCount,
-            number_of_vertices.to_string(),
-            "≥ 3",
+            number_of_vertices.into(),
+            ExpectedConstraint::AtLeast { minimum: 3 },
         ));
     }
 
@@ -509,8 +516,11 @@ pub fn build_toroidal_delaunay2(
         GlobalTopology::try_toroidal(domain, ToroidalConstructionMode::Explicit).map_err(|e| {
             invalid_generation_parameters(
                 GenerationParameterIssue::InvalidToroidalDomain,
-                format!("{domain:?}: {e}"),
-                "finite and positive periods",
+                ObservedValue::ToroidalDomain {
+                    periods: domain,
+                    detail: e.to_string(),
+                },
+                ExpectedConstraint::FinitePositivePeriods,
             )
         })?,
     )
@@ -975,11 +985,11 @@ mod tests {
     fn test_build_periodic_toroidal_delaunay2_rejects_invalid_domain() {
         let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.0, 1.0], 1)];
 
-        for (domain, expected_value) in [
-            ([0.0, 3.0], "axis 0 period 0"),
-            ([-1.0, 3.0], "axis 0 period -1"),
-            ([3.0, f64::NAN], "axis 1 period NaN"),
-            ([f64::INFINITY, 3.0], "axis 0 period inf"),
+        for (domain, expected_axis) in [
+            ([0.0, 3.0], 0),
+            ([-1.0, 3.0], 0),
+            ([3.0, f64::NAN], 1),
+            ([f64::INFINITY, 3.0], 0),
         ] {
             let result = build_periodic_toroidal_delaunay2(&vertices, domain);
             assert_matches!(
@@ -989,8 +999,8 @@ mod tests {
                     ref provided_value,
                     ref expected_range,
                 }) if *issue == GenerationParameterIssue::InvalidToroidalDomain
-                    && provided_value == expected_value
-                    && expected_range == "finite and positive periods",
+                    && matches!(provided_value, ObservedValue::ToroidalPeriod { axis, value } if *axis == expected_axis && value.to_bits() == domain[expected_axis].to_bits())
+                    && matches!(expected_range, ExpectedConstraint::FinitePositivePeriods),
                 "invalid periodic toroidal domain {domain:?} should be rejected"
             );
         }
@@ -1012,8 +1022,8 @@ mod tests {
                 ref provided_value,
                 ref expected_range,
             }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
-                && provided_value == "vertex 1 axis 1 = -inf"
-                && expected_range == "finite coordinate values",
+                && matches!(provided_value, ObservedValue::VertexCoordinate { vertex_index: 1, axis: 1, value } if value.to_bits() == f64::NEG_INFINITY.to_bits())
+                && matches!(expected_range, ExpectedConstraint::Finite),
             "periodic toroidal non-finite coordinate should be rejected"
         );
     }
@@ -1068,7 +1078,7 @@ mod tests {
                 issue: GenerationParameterIssue::InsufficientVertexCount,
                 ref provided_value,
                 ref expected_range,
-            }) if provided_value == "2" && expected_range == "≥ 3"
+            }) if matches!(provided_value, ObservedValue::Count(2)) && matches!(expected_range, ExpectedConstraint::AtLeast { minimum: 3 })
         );
     }
 
@@ -1081,7 +1091,7 @@ mod tests {
                 issue: GenerationParameterIssue::InvalidCoordinateRange,
                 ref provided_value,
                 ref expected_range,
-            }) if provided_value == "[10, 5]" && expected_range == "finite min < max"
+            }) if matches!(provided_value, ObservedValue::CoordinateRange { min, max } if min.to_bits() == 10.0_f64.to_bits() && max.to_bits() == 5.0_f64.to_bits()) && matches!(expected_range, ExpectedConstraint::FiniteIncreasingBounds)
         );
     }
 
@@ -1094,7 +1104,7 @@ mod tests {
                 issue: GenerationParameterIssue::InvalidCoordinateRange,
                 ref provided_value,
                 ref expected_range,
-            }) if provided_value == "[5, 5]" && expected_range == "finite min < max"
+            }) if matches!(provided_value, ObservedValue::CoordinateRange { min, max } if min.to_bits() == 5.0_f64.to_bits() && max.to_bits() == 5.0_f64.to_bits()) && matches!(expected_range, ExpectedConstraint::FiniteIncreasingBounds)
         );
     }
 
@@ -1109,7 +1119,7 @@ mod tests {
                     ref expected_range,
                     ..
                 }) if *issue == GenerationParameterIssue::InvalidCoordinateRange
-                    && expected_range == "finite min < max",
+                    && matches!(expected_range, ExpectedConstraint::FiniteIncreasingBounds),
                 "non-finite range {range:?} should be rejected"
             );
         }
@@ -1127,8 +1137,8 @@ mod tests {
                 ref provided_value,
                 ref expected_range,
             }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
-                && provided_value == "vertex 1 axis 1 = NaN"
-                && expected_range == "finite coordinate values",
+                && matches!(provided_value, ObservedValue::VertexCoordinate { vertex_index: 1, axis: 1, value } if value.is_nan())
+                && matches!(expected_range, ExpectedConstraint::Finite),
             "explicit non-finite coordinate should be rejected"
         );
     }
@@ -1150,8 +1160,8 @@ mod tests {
                 ref provided_value,
                 ref expected_range,
             }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
-                && provided_value == "vertex 2 axis 1 = -inf"
-                && expected_range == "finite coordinate values",
+                && matches!(provided_value, ObservedValue::VertexCoordinate { vertex_index: 2, axis: 1, value } if value.to_bits() == f64::NEG_INFINITY.to_bits())
+                && matches!(expected_range, ExpectedConstraint::Finite),
             "delegating explicit-simplex builder should reject non-finite coordinates"
         );
     }
@@ -1178,8 +1188,8 @@ mod tests {
                 ref provided_value,
                 ref expected_range,
             }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
-                && provided_value == "vertex 1 axis 0 = inf"
-                && expected_range == "finite coordinate values",
+                && matches!(provided_value, ObservedValue::VertexCoordinate { vertex_index: 1, axis: 0, value } if value.to_bits() == f64::INFINITY.to_bits())
+                && matches!(expected_range, ExpectedConstraint::Finite),
             "explicit non-finite topology coordinate should be rejected"
         );
     }
@@ -1189,11 +1199,11 @@ mod tests {
         let vertices = [([0.0, 0.0], 0u32), ([1.0, 0.0], 0), ([0.5, 1.0], 1)];
         let simplices = vec![vec![0, 1, 2]];
 
-        for (domain, expected_value) in [
-            ([0.0, 1.0], "axis 0 period 0"),
-            ([-1.0, 1.0], "axis 0 period -1"),
-            ([1.0, f64::NAN], "axis 1 period NaN"),
-            ([f64::INFINITY, 1.0], "axis 0 period inf"),
+        for (domain, expected_axis) in [
+            ([0.0, 1.0], 0),
+            ([-1.0, 1.0], 0),
+            ([1.0, f64::NAN], 1),
+            ([f64::INFINITY, 1.0], 0),
         ] {
             let result = build_toroidal_delaunay2(&vertices, &simplices, domain);
             assert_matches!(
@@ -1203,8 +1213,8 @@ mod tests {
                     ref provided_value,
                     ref expected_range,
                 }) if *issue == GenerationParameterIssue::InvalidToroidalDomain
-                    && provided_value == expected_value
-                    && expected_range == "finite and positive periods",
+                    && matches!(provided_value, ObservedValue::ToroidalPeriod { axis, value } if *axis == expected_axis && value.to_bits() == domain[expected_axis].to_bits())
+                    && matches!(expected_range, ExpectedConstraint::FinitePositivePeriods),
                 "invalid domain {domain:?} should be rejected"
             );
         }

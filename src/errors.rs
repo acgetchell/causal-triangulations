@@ -2,6 +2,10 @@
 
 //! Error types for the CDT library.
 
+mod diagnostics;
+
+pub use diagnostics::{ExpectedConstraint, ObservedValue};
+
 use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::FoliationError;
 use crate::cdt::proposal_policy::CdtMoveFamilyPolicyError;
@@ -325,15 +329,15 @@ pub enum DelaunayGenerationFailure {
 /// # Examples
 ///
 /// ```
-/// use causal_triangulations::prelude::errors::{CdtError, TriangulationMetadataField};
+/// use causal_triangulations::prelude::errors::{CdtError, ExpectedConstraint, ObservedValue, TriangulationMetadataField};
 /// use causal_triangulations::prelude::triangulation::CdtTopology;
 /// use std::assert_matches;
 ///
 /// let metadata_error = CdtError::InvalidTriangulationMetadata {
 ///     field: TriangulationMetadataField::Timeslices,
 ///     topology: CdtTopology::Toroidal,
-///     provided_value: "2".to_string(),
-///     expected: "at least three time slices".to_string(),
+///     provided_value: ObservedValue::Count(2),
+///     expected: ExpectedConstraint::AtLeast { minimum: 3 },
 /// };
 ///
 /// assert_matches!(
@@ -1855,9 +1859,9 @@ pub enum CdtError {
         /// Structured category for the rejected generation parameter.
         issue: GenerationParameterIssue,
         /// The actual value that was provided
-        provided_value: String,
+        provided_value: ObservedValue,
         /// The expected range or constraint for the parameter
-        expected_range: String,
+        expected_range: ExpectedConstraint,
     },
     /// Top-level CDT configuration failed validation.
     #[error("Invalid configuration: {setting} (got: {provided_value}, expected: {expected})")]
@@ -1865,9 +1869,9 @@ pub enum CdtError {
         /// Structured category for the invalid configuration setting.
         setting: ConfigurationSetting,
         /// Value supplied for the setting.
-        provided_value: String,
+        provided_value: ObservedValue,
         /// Expected constraint for the setting.
-        expected: String,
+        expected: ExpectedConstraint,
     },
     /// Metropolis / simulation configuration failed validation.
     #[error(
@@ -1877,9 +1881,9 @@ pub enum CdtError {
         /// Structured category for the invalid simulation setting.
         setting: ConfigurationSetting,
         /// Value supplied for the setting.
-        provided_value: String,
+        provided_value: ObservedValue,
         /// Expected constraint for the setting.
-        expected: String,
+        expected: ExpectedConstraint,
     },
     /// Live CDT simplex counts failed the strictly-positive triangulation-state invariant.
     #[error(
@@ -2065,9 +2069,9 @@ pub enum CdtError {
         /// Topology whose invariant was violated.
         topology: CdtTopology,
         /// Value stored in the triangulation metadata.
-        provided_value: String,
+        provided_value: ObservedValue,
         /// Expected constraint for the metadata field.
-        expected: String,
+        expected: ExpectedConstraint,
     },
     /// Validation of a constructed triangulation failed.
     ///
@@ -2347,8 +2351,8 @@ mod tests {
     fn test_invalid_configuration_error() {
         let error = CdtError::InvalidConfiguration {
             setting: ConfigurationSetting::Vertices,
-            provided_value: "2".to_string(),
-            expected: "≥ 3".to_string(),
+            provided_value: ObservedValue::Count(2),
+            expected: ExpectedConstraint::AtLeast { minimum: 3 },
         };
         let display = format!("{error}");
         assert_eq!(
@@ -2361,13 +2365,13 @@ mod tests {
     fn test_invalid_simulation_configuration_error() {
         let error = CdtError::InvalidSimulationConfiguration {
             setting: ConfigurationSetting::Temperature,
-            provided_value: "NaN".to_string(),
-            expected: "finite and positive".to_string(),
+            provided_value: ObservedValue::Float(f64::NAN),
+            expected: ExpectedConstraint::PositiveFiniteReciprocal,
         };
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Invalid simulation configuration: temperature (got: NaN, expected: finite and positive)"
+            "Invalid simulation configuration: temperature (got: NaN, expected: finite and positive with a finite reciprocal)"
         );
     }
 
@@ -2376,8 +2380,8 @@ mod tests {
         let error = CdtError::InvalidTriangulationMetadata {
             field: TriangulationMetadataField::Timeslices,
             topology: CdtTopology::Toroidal,
-            provided_value: "2".to_string(),
-            expected: "≥ 3".to_string(),
+            provided_value: ObservedValue::Count(2),
+            expected: ExpectedConstraint::AtLeast { minimum: 3 },
         };
         let display = format!("{error}");
         assert_eq!(
@@ -2706,13 +2710,13 @@ mod tests {
     fn test_invalid_generation_parameters_error() {
         let error = CdtError::InvalidGenerationParameters {
             issue: GenerationParameterIssue::InsufficientVertexCount,
-            provided_value: "2".to_string(),
-            expected_range: "at least 3".to_string(),
+            provided_value: ObservedValue::Count(2),
+            expected_range: ExpectedConstraint::AtLeast { minimum: 3 },
         };
         let display = format!("{error}");
         assert_eq!(
             display,
-            "Invalid triangulation parameters: Insufficient vertex count (got: 2, expected: at least 3)"
+            "Invalid triangulation parameters: Insufficient vertex count (got: 2, expected: ≥ 3)"
         );
     }
 
@@ -3357,18 +3361,18 @@ mod tests {
     fn test_error_equality() {
         let error1 = CdtError::InvalidConfiguration {
             setting: ConfigurationSetting::Steps,
-            provided_value: "0".to_string(),
-            expected: "≥ 1".to_string(),
+            provided_value: ObservedValue::Count(0),
+            expected: ExpectedConstraint::AtLeast { minimum: 1 },
         };
         let error2 = CdtError::InvalidConfiguration {
             setting: ConfigurationSetting::Steps,
-            provided_value: "0".to_string(),
-            expected: "≥ 1".to_string(),
+            provided_value: ObservedValue::Count(0),
+            expected: ExpectedConstraint::AtLeast { minimum: 1 },
         };
         let error3 = CdtError::InvalidConfiguration {
             setting: ConfigurationSetting::Steps,
-            provided_value: "10".to_string(),
-            expected: "≥ 1".to_string(),
+            provided_value: ObservedValue::Count(10),
+            expected: ExpectedConstraint::AtLeast { minimum: 1 },
         };
 
         assert_eq!(error1, error2);
@@ -3386,8 +3390,8 @@ mod tests {
     fn test_error_debug() {
         let error = CdtError::InvalidConfiguration {
             setting: ConfigurationSetting::Vertices,
-            provided_value: "2".to_string(),
-            expected: "≥ 3".to_string(),
+            provided_value: ObservedValue::Count(2),
+            expected: ExpectedConstraint::AtLeast { minimum: 3 },
         };
         let debug_str = format!("{error:?}");
         assert!(debug_str.contains("InvalidConfiguration"));
@@ -3399,8 +3403,8 @@ mod tests {
         let success: CdtResult<i32> = Ok(42);
         let failure: CdtResult<i32> = Err(CdtError::InvalidConfiguration {
             setting: ConfigurationSetting::Steps,
-            provided_value: "0".to_string(),
-            expected: "≥ 1".to_string(),
+            provided_value: ObservedValue::Count(0),
+            expected: ExpectedConstraint::AtLeast { minimum: 1 },
         });
 
         assert_eq!(success, Ok(42));
@@ -3410,7 +3414,7 @@ mod tests {
                 setting: ConfigurationSetting::Steps,
                 ref provided_value,
                 ref expected,
-            }) if provided_value == "0" && expected == "≥ 1"
+            }) if matches!(provided_value, ObservedValue::Count(0)) && matches!(expected, ExpectedConstraint::AtLeast { minimum: 1 })
         );
     }
 
@@ -3424,8 +3428,8 @@ mod tests {
     fn test_std_error_trait() {
         let error = CdtError::InvalidConfiguration {
             setting: ConfigurationSetting::Temperature,
-            provided_value: "NaN".to_string(),
-            expected: "finite and positive".to_string(),
+            provided_value: ObservedValue::Float(f64::NAN),
+            expected: ExpectedConstraint::PositiveFiniteReciprocal,
         };
         let _: &dyn Error = &error;
         // If this compiles, the trait is implemented correctly

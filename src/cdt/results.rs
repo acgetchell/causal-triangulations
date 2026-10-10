@@ -2990,7 +2990,7 @@ mod tests {
     use crate::cdt::metropolis::{CdtMcmcCheckpoint, MetropolisAlgorithm};
     use crate::cdt::proposal_policy::CdtMoveFamilyDistribution;
     use crate::cdt::triangulation::CdtTriangulation;
-    use crate::errors::ConfigurationSetting;
+    use crate::errors::{ConfigurationSetting, ExpectedConstraint, ObservedValue};
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
     use serde_json::{Value, from_str, from_value, json, to_string, to_value};
@@ -4280,8 +4280,8 @@ mod tests {
                 ref provided_value,
                 ref expected,
             } if *setting == ConfigurationSetting::Temperature
-                && provided_value == "0"
-                && expected == "finite and positive with a finite reciprocal"
+                && matches!(provided_value, ObservedValue::Float(value) if value.to_bits() == 0.0_f64.to_bits())
+                && matches!(expected, ExpectedConstraint::PositiveFiniteReciprocal)
         );
     }
 
@@ -4296,7 +4296,7 @@ mod tests {
                 ref setting,
                 ref provided_value,
                 ref expected,
-            } if *setting == ConfigurationSetting::Coupling0 && provided_value == "NaN" && expected == "finite"
+            } if *setting == ConfigurationSetting::Coupling0 && matches!(provided_value, ObservedValue::Float(value) if value.is_nan()) && matches!(expected, ExpectedConstraint::Finite)
         );
     }
 

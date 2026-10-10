@@ -9,7 +9,8 @@ use crate::cdt::foliation::{
 use crate::config::CdtTopology;
 use crate::errors::{
     BackendMutationOperation, BackendRollbackFailure, BackendRollbackFailures, CdtError, CdtResult,
-    CdtValidationCheck, CdtValidationFailure, SimplexCountField, TriangulationMetadataField,
+    CdtValidationCheck, CdtValidationFailure, ExpectedConstraint, SimplexCountField,
+    TriangulationMetadataField,
 };
 use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayError, DelaunayFaceHandle, DelaunayVertexHandle,
@@ -296,8 +297,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
             return Err(CdtError::InvalidTriangulationMetadata {
                 field: TriangulationMetadataField::Timeslices,
                 topology: self.metadata.topology,
-                provided_value: total.to_string(),
-                expected: "representable as usize".to_string(),
+                provided_value: total.into(),
+                expected: ExpectedConstraint::FitsUsize,
             });
         };
 
@@ -2134,7 +2135,7 @@ fn open_slab_edge_label(edge: &SlabEdge) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::TriangulationMetadataField;
+    use crate::errors::{ObservedValue, TriangulationMetadataField};
     use crate::geometry::generators::build_delaunay2_with_data;
     use std::assert_matches;
     use std::time::Duration;
@@ -2621,8 +2622,8 @@ mod tests {
                 ref expected,
             }) if *field == TriangulationMetadataField::Timeslices
                 && topology == CdtTopology::Toroidal
-                && provided_value == "2"
-                && expected == "≥ 3"
+                && matches!(provided_value, ObservedValue::Count(2))
+                && matches!(expected, ExpectedConstraint::AtLeast { minimum: 3 })
         );
         assert_eq!(tri.time_slices().get(), 3);
         assert_eq!(tri.slice_sizes(), initial_slice_sizes.as_slice());

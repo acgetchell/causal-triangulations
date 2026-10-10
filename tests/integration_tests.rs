@@ -9,7 +9,9 @@ use approx::assert_relative_eq;
 use causal_triangulations::prelude::action::{
     ActionConfig, DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
 };
-use causal_triangulations::prelude::errors::{CdtError, GenerationParameterIssue};
+use causal_triangulations::prelude::errors::{
+    CdtError, ExpectedConstraint, GenerationParameterIssue, ObservedValue,
+};
 use causal_triangulations::prelude::moves::{ErgodicsSystem, MoveResult, MoveType};
 use causal_triangulations::prelude::simulation::{MetropolisAlgorithm, MetropolisConfig};
 use causal_triangulations::prelude::triangulation::{
@@ -241,7 +243,7 @@ mod integration_tests {
                 issue: GenerationParameterIssue::InsufficientVertexCount,
                 ref provided_value,
                 ref expected_range,
-            }) if provided_value == "2" && expected_range == "≥ 3"
+            }) if matches!(provided_value, ObservedValue::Count(2)) && matches!(expected_range, ExpectedConstraint::AtLeast { minimum: 3 })
         );
 
         assert_matches!(
