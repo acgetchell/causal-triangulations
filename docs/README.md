@@ -15,6 +15,7 @@ Start with [the project README](../README.md) to choose a workflow and run a sma
 - [Cluster runs](RUNNING-ON-HPC.md): Slurm and Open OnDemand workflows.
 - [Quickstart notebook](../notebooks/00_quickstart.ipynb): a local run and diagnostic plots.
 - [Visualization notebook](../notebooks/01_spacetime_visualization.ipynb): exported triangulation geometry.
+- [Typed error diagnostics](error-diagnostics.md): structured matching, human-readable output, and migration from string payloads.
 - [Analysis notebook](../notebooks/02_analysis_caches.ipynb): Polars caches and exploratory diagnostics.
 
 ## Scientific contracts

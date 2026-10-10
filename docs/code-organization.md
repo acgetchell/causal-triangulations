@@ -60,6 +60,7 @@ causal-triangulations/
 │   │   └── tooling-alignment.md
 │   ├── BENCHMARKING.md
 │   ├── code-organization.md
+│   ├── error-diagnostics.md
 │   ├── foliation.md
 │   ├── metropolis.md
 │   ├── moves.md
