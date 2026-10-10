@@ -1215,14 +1215,13 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ) -> CdtResult<Self> {
         validate_regular_open_strip_dimensions(vertices_per_slice, num_slices)?;
 
-        let core_vertices =
-            vertices_per_slice
-                .checked_mul(num_slices)
-                .ok_or(count_product_overflow(
-                    GenerationParameterIssue::VertexCountOverflow,
-                    vertices_per_slice,
-                    num_slices,
-                ))?;
+        let core_vertices = vertices_per_slice.checked_mul(num_slices).ok_or_else(|| {
+            count_product_overflow(
+                GenerationParameterIssue::VertexCountOverflow,
+                vertices_per_slice,
+                num_slices,
+            )
+        })?;
         let surplus_vertices = if num_slices > 2 { 2 } else { 0 };
         let total_vertices = core_vertices.checked_add(surplus_vertices).ok_or(
             CdtError::InvalidGenerationParameters {
@@ -1336,30 +1335,30 @@ impl CdtTriangulation<DelaunayBackend2D> {
     pub fn from_cdt_strip(vertices_per_slice: u32, num_slices: u32) -> CdtResult<Self> {
         validate_regular_open_strip_dimensions(vertices_per_slice, num_slices)?;
 
-        let total_vertices =
-            vertices_per_slice
-                .checked_mul(num_slices)
-                .ok_or(count_product_overflow(
-                    GenerationParameterIssue::VertexCountOverflow,
-                    vertices_per_slice,
-                    num_slices,
-                ))?;
+        let total_vertices = vertices_per_slice.checked_mul(num_slices).ok_or_else(|| {
+            count_product_overflow(
+                GenerationParameterIssue::VertexCountOverflow,
+                vertices_per_slice,
+                num_slices,
+            )
+        })?;
 
         let spatial_quads = vertices_per_slice - 1;
         let temporal_quads = num_slices - 1;
-        let total_quads =
-            spatial_quads
-                .checked_mul(temporal_quads)
-                .ok_or(count_product_overflow(
-                    GenerationParameterIssue::SimplexCountOverflow,
-                    spatial_quads,
-                    temporal_quads,
-                ))?;
-        let total_simplices = total_quads.checked_mul(2).ok_or(count_product_overflow(
-            GenerationParameterIssue::SimplexCountOverflow,
-            2,
-            total_quads,
-        ))?;
+        let total_quads = spatial_quads.checked_mul(temporal_quads).ok_or_else(|| {
+            count_product_overflow(
+                GenerationParameterIssue::SimplexCountOverflow,
+                spatial_quads,
+                temporal_quads,
+            )
+        })?;
+        let total_simplices = total_quads.checked_mul(2).ok_or_else(|| {
+            count_product_overflow(
+                GenerationParameterIssue::SimplexCountOverflow,
+                2,
+                total_quads,
+            )
+        })?;
 
         let coordinate_max = f64::from(num_slices).max(2.0);
         let generation_failed = |failure: DelaunayGenerationFailure| {
@@ -1608,19 +1607,20 @@ impl CdtTriangulation<DelaunayBackend2D> {
             });
         }
 
-        let total_vertices =
-            vertices_per_slice
-                .checked_mul(num_slices)
-                .ok_or(count_product_overflow(
-                    GenerationParameterIssue::VertexCountOverflow,
-                    vertices_per_slice,
-                    num_slices,
-                ))?;
-        let total_simplices = total_vertices.checked_mul(2).ok_or(count_product_overflow(
-            GenerationParameterIssue::SimplexCountOverflow,
-            2,
-            total_vertices,
-        ))?;
+        let total_vertices = vertices_per_slice.checked_mul(num_slices).ok_or_else(|| {
+            count_product_overflow(
+                GenerationParameterIssue::VertexCountOverflow,
+                vertices_per_slice,
+                num_slices,
+            )
+        })?;
+        let total_simplices = total_vertices.checked_mul(2).ok_or_else(|| {
+            count_product_overflow(
+                GenerationParameterIssue::SimplexCountOverflow,
+                2,
+                total_vertices,
+            )
+        })?;
 
         let generation_failed = |attempt: u32, failure: DelaunayGenerationFailure| {
             let coordinate_max = f64::from(vertices_per_slice.max(num_slices) - 1);
@@ -1744,11 +1744,13 @@ impl CdtTriangulation<DelaunayBackend2D> {
     ) -> CdtResult<Self> {
         let (total_vertices, num_slices) =
             validate_spatial_profile(spatial_vertex_profile, 3, 3, CdtTopology::Toroidal)?;
-        let total_simplices = total_vertices.checked_mul(2).ok_or(count_product_overflow(
-            GenerationParameterIssue::SimplexCountOverflow,
-            2,
-            total_vertices,
-        ))?;
+        let total_simplices = total_vertices.checked_mul(2).ok_or_else(|| {
+            count_product_overflow(
+                GenerationParameterIssue::SimplexCountOverflow,
+                2,
+                total_vertices,
+            )
+        })?;
         let expected_vertices = usize::try_from(total_vertices).map_err(|err| {
             toroidal_generation_error(
                 total_vertices,
