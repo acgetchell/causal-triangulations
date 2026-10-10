@@ -11,12 +11,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The minimum Rust version is now 1.98.1. Local Python maintenance entry points and legacy performance commands are removed;
   use the shared Just recipes. Release comparisons require explicit tags and fresh benchmark evidence in the new format.
+- Checkpoint format v2 and standalone backend snapshots use Delaunay's exact persistence schema. Checkpoint v1 and earlier backend representations are
+  unsupported without migration. Present null/unit payloads follow upstream rejection rules. TriangulationOps::is_delaunay is removed; use
+  DelaunayBackend::is_delaunay for Level 5 validation.
+- The minimum supported Rust version increases from 1.98.1 to 1.99.0.
+- InvalidConfiguration, InvalidSimulationConfiguration, InvalidGenerationParameters, and InvalidTriangulationMetadata now carry ObservedValue and
+  ExpectedConstraint instead of String fields. Migrate field construction and string comparisons to typed variants; category-only matches using .. continue to
+  work. Configuration and checkpoint wire formats are unchanged.
 
 ### Merged Pull Requests
 
+- Defer overflow diagnostic construction [#297](https://github.com/acgetchell/causal-triangulations/pull/297)
+- Bump acgetchell/research-repo-tools/.github/workflows/dependabot-approve.yml [#296](https://github.com/acgetchell/causal-triangulations/pull/296)
+- Adopt Rust 1.99 and harden CDT calculations [#295](https://github.com/acgetchell/causal-triangulations/pull/295)
+- Streamline Semgrep rules and refresh tooling [#294](https://github.com/acgetchell/causal-triangulations/pull/294)
 - Prevent Semgrep SARIF setup timeouts [#291](https://github.com/acgetchell/causal-triangulations/pull/291)
 - Bump the github-actions group with 6 updates [#282](https://github.com/acgetchell/causal-triangulations/pull/282)
 - Bump the github-actions group with 3 updates [#278](https://github.com/acgetchell/causal-triangulations/pull/278)
+
+### Added
+
+- [**breaking**] Adopt upstream Level 4 checkpoints and geometry edits
+  [`f553906`](https://github.com/acgetchell/causal-triangulations/commit/f55390692323ada3ce39d73aa5d7d3be8da675ef)
+
+  - Delegate exact persistence and visualization export to Delaunay, removing local snapshot and hydration mirrors.
+  - Support transactional Euclidean insertion and deletion on evolved non-Delaunay states while retaining direct CDT bistellar moves.
+  - Reuse proposal caches, maintain foliation counts incrementally, and share unchanged slab profiles across measurements and trace rows.
+  - Reduce checked-query allocations and streamline dual-graph observables.
+  - Preserve typed checkpoint and local invariant errors, distinguish candidate rejections from hard backend failures, and report the proposal stage that
+    failed.
+  - Retain primary output failures alongside rollback recovery paths.
+- [**breaking**] Expose typed validation diagnostics
+  [`4e2788a`](https://github.com/acgetchell/causal-triangulations/commit/4e2788ae76f4aa6f96825378f2db5fa8c1709d89)
+
+  - Separate observed values and expected constraints from finite error categories.
+  - Preserve numeric inputs, topology relationships, schedule settings, and overflow operands for caller matching.
+  - Document the public matching workflow and retain readable diagnostics without introducing an error serialization format.
 
 ### Changed
 
@@ -29,6 +59,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [`c1fe01f`](https://github.com/acgetchell/causal-triangulations/commit/c1fe01f31176f2467bf568e66ba0689cc60e5250)
 - Bump the github-actions group with 6 updates [#282](https://github.com/acgetchell/causal-triangulations/pull/282)
   [`70499f2`](https://github.com/acgetchell/causal-triangulations/commit/70499f2a353f61e24b6b6b36a974609e5d5e327c)
+- Bump acgetchell/research-repo-tools/.github/workflows/dependabot-approve.yml [#296](https://github.com/acgetchell/causal-triangulations/pull/296)
+  [`90cc2e0`](https://github.com/acgetchell/causal-triangulations/commit/90cc2e019713fceb22c8bdb6d3d3d028aeefd557)
+
+### Documentation
+
+- Propose typed error diagnostics [`17c0b74`](https://github.com/acgetchell/causal-triangulations/commit/17c0b747f3b0c0eefd58af65f30115b04b7eb0eb)
+
+  Document the value and constraint model, caller migration, and serialization boundary before implementing the public error changes.
+- Update changelog [`179551c`](https://github.com/acgetchell/causal-triangulations/commit/179551c673acdd2d3c04a389a2ae268b3c1b33d0)
+
+  - Regenerate release notes with the typed diagnostic API migration and explicit breaking-change guidance.
+
+### Fixed
+
+- Defer overflow diagnostic construction [#297](https://github.com/acgetchell/causal-triangulations/pull/297)
+  [`743eb80`](https://github.com/acgetchell/causal-triangulations/commit/743eb80c3c525ea956382dc10969a1d56a9e1edb)
+
+  - Construct typed product-overflow diagnostics only when checked multiplication fails.
 
 ### Maintenance
 
@@ -46,6 +94,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - Run Semgrep through the locked uv development environment and shared Just tooling.
   - Skip unnecessary Rust and Cargo-tool installation that exhausted the job's time limit.
+- Align docs, Just workflows, and security tooling
+  [`56006a2`](https://github.com/acgetchell/causal-triangulations/commit/56006a2d07de090431f6c05e9b52627a2621913f)
+
+  - Clarify documentation ownership, API navigation, CDT model scope, scientific conventions, and validation limits.
+  - Add a documentation index, rename task guides, and update navigation while preserving citation anchors and historical paths.
+  - Complete generated Just help, sort and describe public recipes, remove redundant entry points, and enforce Justfile formatting.
+  - Add opt-in dependency and secret scans with managed OSV Scanner and Gitleaks versions.
+  - Regenerate changelog history in the shared format to resolve archive conflicts while preserving declared release dates.
+  - Align contributor setup, review, and release guidance with the published shared tooling contract, and correct the runnable simulation example.
+- Complete security workflows and streamline Just tooling
+  [`90767bb`](https://github.com/acgetchell/causal-triangulations/commit/90767bb9e7183a613154fe704a59f3e55ce44a76)
+
+  - Add OSV and Gitleaks workflows for pull requests, main-branch pushes, weekly scans, and manual runs, with retained reports and Dependabot support.
+  - Add missing security badges in the same order as MCMC.
+  - Add managed-cache cleanup, shared Python adoption, tag preview, and published-release inspection recipes.
+  - Check retained performance reports during local validation and CI, allowing an empty initial inventory while rejecting stale or orphaned output.
+  - Consolidate duplicate recipes under check, examples-validate, shell-fix, and toml-fix, and reuse the parameterized benchmark baseline recipe.
+  - Shorten README selection guidance, link scientific details to their owning document, and align AI guidance with the other repositories.
+- Streamline Semgrep rules and refresh tooling [#294](https://github.com/acgetchell/causal-triangulations/pull/294)
+  [`a65c5bb`](https://github.com/acgetchell/causal-triangulations/commit/a65c5bb0fdcfac721ca3622009f7ef4030e4b69c)
+
+#### chore: streamline Semgrep rules and refresh tooling
+
+- Remove redundant Ruff and Zizmor checks and the obsolete sampler synchronization rule.
+- Strengthen backend import, diagnostic, and floating-point doctest checks while allowing standard Error::source implementations.
+- Refresh development tools and dependencies, including MCMC 0.5.1, and update shared subprocess guidance.
+- Correct nested bullets in the archived 0.0.1 changelog.
+- Allow explicitly requested Git operations in agent guidance.
+
+#### fix: recognize additional Rustdoc fence attributes
+
+- Detect forbidden algebraic float operations in standalone and target-ignored doctests in line and block documentation comments.
+- Correct the tooling change record to acknowledge updated development-tool pins.
+- [**breaking**] Adopt Rust 1.99 and harden CDT calculations [#295](https://github.com/acgetchell/causal-triangulations/pull/295)
+  [`737c502`](https://github.com/acgetchell/causal-triangulations/commit/737c5023df2089428b523704513a881ebbed7b65)
+
+  - Align the crate MSRV, contributor toolchain, Clippy, and documentation on Rust 1.99.
+  - Use fused arithmetic for CDT coordinates and slab fluctuations, and prevent overflow in large-strip coordinates.
+  - Run static checks and benchmark compilation before CI workloads and reuse the release suite in commit-check.
+  - Improve empty-collection and I/O-error diagnostics and document slab fluctuation conventions.
+  - Refresh Rust and notebook dependencies and the spelling tool.
 
 ## [0.1.1] - 2026-09-02
 

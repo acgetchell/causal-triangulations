@@ -60,6 +60,7 @@ causal-triangulations/
 │   │   └── tooling-alignment.md
 │   ├── BENCHMARKING.md
 │   ├── code-organization.md
+│   ├── error-diagnostics.md
 │   ├── foliation.md
 │   ├── metropolis.md
 │   ├── moves.md
@@ -121,6 +122,8 @@ causal-triangulations/
 │   │   ├── operations.rs
 │   │   └── traits.rs
 │   ├── config.rs
+│   ├── errors/
+│   │   └── diagnostics.rs
 │   ├── errors.rs
 │   ├── lib.rs
 │   ├── main.rs
@@ -150,6 +153,7 @@ causal-triangulations/
 │   │           ├── bench_example_usage.rs
 │   │           └── rust_style.rs
 │   ├── cli.rs
+│   ├── error_diagnostics.rs
 │   ├── integration_tests.rs
 │   ├── large_scale_debug.rs
 │   ├── physics_integration.rs

@@ -30,7 +30,8 @@ use crate::cdt::results::{
 };
 use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::errors::{
-    CdtError, CdtResult, CheckpointResumeFailure, ConfigurationSetting, ProposalFailureStage,
+    CdtError, CdtResult, CheckpointResumeFailure, ConfigurationSetting, ExpectedConstraint,
+    ProposalFailureStage,
 };
 use markov_chain_monte_carlo::{
     Chain, ChainCheckpoint, DelayedStep, DelayedStepError, Sampler, StepOutcome,
@@ -163,15 +164,15 @@ impl MetropolisConfig {
         let Some(steps) = NonZeroU32::new(steps) else {
             return Err(CdtError::InvalidSimulationConfiguration {
                 setting: ConfigurationSetting::Steps,
-                provided_value: steps.to_string(),
-                expected: "≥ 1".to_string(),
+                provided_value: steps.into(),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
             });
         };
         let Some(measurement_frequency) = NonZeroU32::new(measurement_frequency) else {
             return Err(CdtError::InvalidSimulationConfiguration {
                 setting: ConfigurationSetting::MeasurementFrequency,
-                provided_value: measurement_frequency.to_string(),
-                expected: "≥ 1".to_string(),
+                provided_value: measurement_frequency.into(),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
             });
         };
         Ok(Self::from_validated_parts(
@@ -1368,6 +1369,7 @@ mod tests {
     use crate::cdt::triangulation::CdtTriangulation;
     use crate::errors::{
         BackendMutationOperation, CheckpointMoveCounter, MetropolisMoveApplicationFailure,
+        ObservedValue,
     };
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
@@ -3068,8 +3070,8 @@ mod tests {
         stats.record_site_rejection(&CdtProposalSiteRejection::Kernel(
             CdtError::InvalidSimulationConfiguration {
                 setting: ConfigurationSetting::Steps,
-                provided_value: "0".to_string(),
-                expected: "≥ 1".to_string(),
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
             },
         ));
         stats.record_metropolis_rejection();
@@ -3516,8 +3518,8 @@ mod tests {
                 expected,
             } => {
                 assert_eq!(setting, ConfigurationSetting::MeasurementFrequency);
-                assert_eq!(provided_value, "0");
-                assert_eq!(expected, "≥ 1");
+                assert_eq!(provided_value, ObservedValue::Count(0));
+                assert_eq!(expected, ExpectedConstraint::AtLeast { minimum: 1 });
             }
             other => panic!("Expected InvalidSimulationConfiguration, got {other:?}"),
         }
@@ -3534,7 +3536,8 @@ mod tests {
                 } => {
                     assert_eq!(setting, ConfigurationSetting::Temperature, "T={bad_temp}");
                     assert_eq!(
-                        expected, "finite and positive with a finite reciprocal",
+                        expected,
+                        ExpectedConstraint::PositiveFiniteReciprocal,
                         "T={bad_temp}"
                     );
                 }
@@ -3566,13 +3569,15 @@ mod tests {
                 expected,
             } => {
                 assert_eq!(setting, ConfigurationSetting::MeasurementSchedule);
-                assert!(
-                    provided_value.contains("steps=19")
-                        && provided_value.contains("thermalization_steps=15")
-                        && provided_value.contains("measurement_frequency=10"),
-                    "Unexpected provided value: {provided_value}"
+                assert_matches!(
+                    provided_value,
+                    ObservedValue::MeasurementSchedule {
+                        steps: 19,
+                        thermalization_steps: 15,
+                        measurement_frequency: 10
+                    }
                 );
-                assert_eq!(expected, "at least one post-thermalization measurement");
+                assert_eq!(expected, ExpectedConstraint::PostThermalizationMeasurement);
             }
             other => panic!("Expected InvalidSimulationConfiguration, got {other:?}"),
         }
@@ -3590,13 +3595,15 @@ mod tests {
                 expected,
             } => {
                 assert_eq!(setting, ConfigurationSetting::MeasurementSchedule);
-                assert!(
-                    provided_value.contains("steps=4294967295")
-                        && provided_value.contains("thermalization_steps=4294967295")
-                        && provided_value.contains("measurement_frequency=2"),
-                    "Unexpected provided value: {provided_value}"
+                assert_matches!(
+                    provided_value,
+                    ObservedValue::MeasurementSchedule {
+                        steps: u32::MAX,
+                        thermalization_steps: u32::MAX,
+                        measurement_frequency: 2
+                    }
                 );
-                assert_eq!(expected, "at least one post-thermalization measurement");
+                assert_eq!(expected, ExpectedConstraint::PostThermalizationMeasurement);
             }
             other => panic!("Expected InvalidSimulationConfiguration, got {other:?}"),
         }
@@ -3629,8 +3636,8 @@ mod tests {
                 expected,
             } => {
                 assert_eq!(setting, ConfigurationSetting::Coupling0);
-                assert_eq!(provided_value, "inf");
-                assert_eq!(expected, "finite");
+                assert_matches!(provided_value, ObservedValue::Float(value) if value.is_infinite() && value.is_sign_positive());
+                assert_eq!(expected, ExpectedConstraint::Finite);
             }
             other => panic!("Expected InvalidConfiguration, got {other:?}"),
         }
@@ -3650,7 +3657,7 @@ mod tests {
                     expected,
                 } => {
                     assert_eq!(setting, ConfigurationSetting::Temperature);
-                    assert_eq!(expected, "finite and positive with a finite reciprocal");
+                    assert_eq!(expected, ExpectedConstraint::PositiveFiniteReciprocal);
                 }
                 other => panic!("Expected InvalidSimulationConfiguration, got {other:?}"),
             }
@@ -3698,7 +3705,7 @@ mod tests {
                 expected,
             } => {
                 assert_eq!(setting, ConfigurationSetting::Coupling0);
-                assert_eq!(expected, "finite");
+                assert_eq!(expected, ExpectedConstraint::Finite);
             }
             other => panic!("Expected InvalidConfiguration, got {other:?}"),
         }
@@ -3716,7 +3723,7 @@ mod tests {
                 expected,
             } => {
                 assert_eq!(setting, ConfigurationSetting::Coupling2);
-                assert_eq!(expected, "finite");
+                assert_eq!(expected, ExpectedConstraint::Finite);
             }
             other => panic!("Expected InvalidConfiguration, got {other:?}"),
         }
