@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Merged Pull Requests
 
+- Defer overflow diagnostic construction [#297](https://github.com/acgetchell/causal-triangulations/pull/297)
 - Bump acgetchell/research-repo-tools/.github/workflows/dependabot-approve.yml [#296](https://github.com/acgetchell/causal-triangulations/pull/296)
 - Adopt Rust 1.99 and harden CDT calculations [#295](https://github.com/acgetchell/causal-triangulations/pull/295)
 - Streamline Semgrep rules and refresh tooling [#294](https://github.com/acgetchell/causal-triangulations/pull/294)
@@ -66,6 +67,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Propose typed error diagnostics [`17c0b74`](https://github.com/acgetchell/causal-triangulations/commit/17c0b747f3b0c0eefd58af65f30115b04b7eb0eb)
 
   Document the value and constraint model, caller migration, and serialization boundary before implementing the public error changes.
+- Update changelog [`179551c`](https://github.com/acgetchell/causal-triangulations/commit/179551c673acdd2d3c04a389a2ae268b3c1b33d0)
+
+  - Regenerate release notes with the typed diagnostic API migration and explicit breaking-change guidance.
+
+### Fixed
+
+- Defer overflow diagnostic construction [#297](https://github.com/acgetchell/causal-triangulations/pull/297)
+  [`743eb80`](https://github.com/acgetchell/causal-triangulations/commit/743eb80c3c525ea956382dc10969a1d56a9e1edb)
+
+  - Construct typed product-overflow diagnostics only when checked multiplication fails.
 
 ### Maintenance
 
