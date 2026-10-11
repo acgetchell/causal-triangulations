@@ -1762,6 +1762,8 @@ mod tests {
     fn test_try_new_rejects_dimension_mismatch() {
         let backend = labeled_triangle_backend([0, 0, 1]);
         let result = CdtTriangulation::try_new(backend, 2, 3);
+        let rendered = result.as_ref().expect_err("dimension mismatch").to_string();
+        assert!(rendered.contains("backend dimension (2)"), "{rendered}");
 
         assert_matches!(
             result,
