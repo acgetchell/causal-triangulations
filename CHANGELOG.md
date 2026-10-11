@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Cover typed diagnostic context and count boundaries [#297](https://github.com/acgetchell/causal-triangulations/pull/297)
 - Defer overflow diagnostic construction [#297](https://github.com/acgetchell/causal-triangulations/pull/297)
+- Refine typed diagnostic contracts and regressions [#297](https://github.com/acgetchell/causal-triangulations/pull/297)
 - Bump acgetchell/research-repo-tools/.github/workflows/dependabot-approve.yml [#296](https://github.com/acgetchell/causal-triangulations/pull/296)
 - Adopt Rust 1.99 and harden CDT calculations [#295](https://github.com/acgetchell/causal-triangulations/pull/295)
 - Streamline Semgrep rules and refresh tooling [#294](https://github.com/acgetchell/causal-triangulations/pull/294)
@@ -79,6 +80,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update changelog [`061ac48`](https://github.com/acgetchell/causal-triangulations/commit/061ac485e5bac5928960e461484cc364ece6aeaf)
 
   - Refresh generated release notes after the overflow-diagnostic construction fix.
+- Update changelog [`ef3dc94`](https://github.com/acgetchell/causal-triangulations/commit/ef3dc94663028a38ffead152d5554606466538b5)
+
+  - Record the typed diagnostic coverage and count-boundary regression checks.
 
 ### Fixed
 
@@ -86,6 +90,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [`743eb80`](https://github.com/acgetchell/causal-triangulations/commit/743eb80c3c525ea956382dc10969a1d56a9e1edb)
 
   - Construct typed product-overflow diagnostics only when checked multiplication fails.
+- Refine typed diagnostic contracts and regressions [#297](https://github.com/acgetchell/causal-triangulations/pull/297)
+  [`ed38450`](https://github.com/acgetchell/causal-triangulations/commit/ed3845079182e0b1ef97fa2074741dd5c1b55248)
+
+  - Clarify intermediate count overflow and action-dependent temperature constraints.
+  - Assert the reported action bound and match structured diagnostic fields directly.
+  - Consolidate configuration error construction while preserving validation order.
+  - Correct estimator failure guidance and current repository architecture references.
 
 ### Maintenance
 
