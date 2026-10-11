@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Merged Pull Requests
 
+- Cover typed diagnostic context and count boundaries [#297](https://github.com/acgetchell/causal-triangulations/pull/297)
 - Defer overflow diagnostic construction [#297](https://github.com/acgetchell/causal-triangulations/pull/297)
 - Bump acgetchell/research-repo-tools/.github/workflows/dependabot-approve.yml [#296](https://github.com/acgetchell/causal-triangulations/pull/296)
 - Adopt Rust 1.99 and harden CDT calculations [#295](https://github.com/acgetchell/causal-triangulations/pull/295)
@@ -52,6 +53,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Merge remote-tracking branch 'origin/main' into build/281-shared-tooling
   [`96ed580`](https://github.com/acgetchell/causal-triangulations/commit/96ed58040bf060ab1209b3fcd1c65ad41b7870c4)
+- Cover typed diagnostic context and count boundaries [#297](https://github.com/acgetchell/causal-triangulations/pull/297)
+  [`5e1e9e7`](https://github.com/acgetchell/causal-triangulations/commit/5e1e9e7f223d92b20c5383fba3a04ca62bd8aeb7)
+
+  - Verify actionable rendering of validation bounds, topology, indices, schedule settings, and overflow operands.
+  - Exercise empty profiles and reachable vertex and simplex count overflows before mesh allocation.
 
 ### Dependencies
 
@@ -70,6 +76,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update changelog [`179551c`](https://github.com/acgetchell/causal-triangulations/commit/179551c673acdd2d3c04a389a2ae268b3c1b33d0)
 
   - Regenerate release notes with the typed diagnostic API migration and explicit breaking-change guidance.
+- Update changelog [`061ac48`](https://github.com/acgetchell/causal-triangulations/commit/061ac485e5bac5928960e461484cc364ece6aeaf)
+
+  - Refresh generated release notes after the overflow-diagnostic construction fix.
 
 ### Fixed
 
