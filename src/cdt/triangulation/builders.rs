@@ -2162,11 +2162,11 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                ref provided_value,
-                ref expected,
+                field: TriangulationMetadataField::Timeslices,
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
                 ..
-            }) if *field == TriangulationMetadataField::Timeslices && matches!(provided_value, ObservedValue::Count(0)) && matches!(expected, ExpectedConstraint::AtLeast { minimum: 1 })
+            })
         );
     }
 
@@ -2179,9 +2179,9 @@ mod tests {
                 result,
                 Err(CdtError::InvalidGenerationParameters {
                     issue: GenerationParameterIssue::InsufficientVertexCount,
-                    ref provided_value,
-                    ref expected_range,
-                }) if matches!(provided_value, ObservedValue::Count(value) if *value == u128::from(count)) && matches!(expected_range, ExpectedConstraint::AtLeast { minimum: 3 }),
+                    provided_value: ObservedValue::Count(value),
+                    expected_range: ExpectedConstraint::AtLeast { minimum: 3 },
+                }) if value == u128::from(count),
                 "error should report insufficient vertex count {count}"
             );
         }
@@ -2194,9 +2194,9 @@ mod tests {
             result,
             Err(CdtError::InvalidGenerationParameters {
                 issue: GenerationParameterIssue::InsufficientVertexCount,
-                ref provided_value,
-                ref expected_range,
-            }) if matches!(provided_value, ObservedValue::Count(2)) && matches!(expected_range, ExpectedConstraint::AtLeast { minimum: 3 })
+                provided_value: ObservedValue::Count(2),
+                expected_range: ExpectedConstraint::AtLeast { minimum: 3 },
+            })
         );
     }
 
@@ -2235,11 +2235,11 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                ref provided_value,
-                ref expected,
+                field: TriangulationMetadataField::Timeslices,
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
                 ..
-            }) if *field == TriangulationMetadataField::Timeslices && matches!(provided_value, ObservedValue::Count(0)) && matches!(expected, ExpectedConstraint::AtLeast { minimum: 1 })
+            })
         );
     }
 
@@ -2351,24 +2351,20 @@ mod tests {
         assert_matches!(
             few_vertices,
             Err(CdtError::InvalidGenerationParameters {
-                ref issue,
-                ref provided_value,
-                ref expected_range,
-            }) if *issue == GenerationParameterIssue::InsufficientVerticesPerSlice
-                && matches!(provided_value, ObservedValue::Count(3))
-                && matches!(expected_range, ExpectedConstraint::AtLeast { minimum: 4 })
+                issue: GenerationParameterIssue::InsufficientVerticesPerSlice,
+                provided_value: ObservedValue::Count(3),
+                expected_range: ExpectedConstraint::AtLeast { minimum: 4 },
+            })
         );
 
         let few_slices = CdtTriangulation::from_cdt_strip(4, 1);
         assert_matches!(
             few_slices,
             Err(CdtError::InvalidGenerationParameters {
-                ref issue,
-                ref provided_value,
-                ref expected_range,
-            }) if *issue == GenerationParameterIssue::InsufficientNumberOfTimeSlices
-                && matches!(provided_value, ObservedValue::Count(1))
-                && matches!(expected_range, ExpectedConstraint::AtLeast { minimum: 2 })
+                issue: GenerationParameterIssue::InsufficientNumberOfTimeSlices,
+                provided_value: ObservedValue::Count(1),
+                expected_range: ExpectedConstraint::AtLeast { minimum: 2 },
+            })
         );
     }
 
@@ -2379,12 +2375,13 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidGenerationParameters {
-                ref issue,
-                ref provided_value,
-                ref expected_range,
-            }) if *issue == GenerationParameterIssue::SimplexCountOverflow
-                && matches!(provided_value, ObservedValue::CountProduct { left: 2, right: 4_294_836_224 })
-                && matches!(expected_range, ExpectedConstraint::FitsU32)
+                issue: GenerationParameterIssue::SimplexCountOverflow,
+                provided_value: ObservedValue::CountProduct {
+                    left: 2,
+                    right: 4_294_836_224
+                },
+                expected_range: ExpectedConstraint::FitsU32,
+            })
         );
     }
 
@@ -2633,10 +2630,12 @@ mod tests {
             product_overflow,
             Err(CdtError::InvalidGenerationParameters {
                 issue: GenerationParameterIssue::VertexCountOverflow,
-                ref provided_value,
-                ref expected_range,
-            }) if matches!(provided_value, ObservedValue::CountProduct { left: u32::MAX, right: 2 })
-                && matches!(expected_range, ExpectedConstraint::FitsU32)
+                provided_value: ObservedValue::CountProduct {
+                    left: u32::MAX,
+                    right: 2
+                },
+                expected_range: ExpectedConstraint::FitsU32,
+            })
         );
 
         let surplus_overflow = CdtTriangulation::from_filtered_delaunay_strip(1_431_655_765, 3);
@@ -2644,9 +2643,12 @@ mod tests {
             surplus_overflow,
             Err(CdtError::InvalidGenerationParameters {
                 issue: GenerationParameterIssue::VertexCountOverflow,
-                ref provided_value,
-                ref expected_range,
-            }) if matches!(provided_value, ObservedValue::CountSum { left: u32::MAX, right: 2 }) && matches!(expected_range, ExpectedConstraint::FitsU32)
+                provided_value: ObservedValue::CountSum {
+                    left: u32::MAX,
+                    right: 2
+                },
+                expected_range: ExpectedConstraint::FitsU32,
+            })
         );
     }
 
@@ -2717,12 +2719,10 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidGenerationParameters {
-                ref issue,
-                ref provided_value,
-                ref expected_range,
-            }) if *issue == GenerationParameterIssue::EmptySpatialVertexProfile
-                && matches!(provided_value, ObservedValue::SpatialVertexProfile(profile) if profile.is_empty())
-                && matches!(expected_range, ExpectedConstraint::AtLeast { minimum: 1 })
+                issue: GenerationParameterIssue::EmptySpatialVertexProfile,
+                provided_value: ObservedValue::SpatialVertexProfile(ref profile),
+                expected_range: ExpectedConstraint::AtLeast { minimum: 1 },
+            }) if profile.is_empty()
         );
     }
 
@@ -2755,12 +2755,16 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidGenerationParameters {
-                ref issue,
-                ref provided_value,
-                ref expected_range,
-            }) if *issue == GenerationParameterIssue::InsufficientVerticesInSpatialVertexProfileSlice
-                && matches!(provided_value, ObservedValue::ProfileSlice { index: 1, vertices: 3 })
-                && matches!(expected_range, ExpectedConstraint::ProfileSliceMinimum { minimum: 4, topology: CdtTopology::OpenBoundary })
+                issue: GenerationParameterIssue::InsufficientVerticesInSpatialVertexProfileSlice,
+                provided_value: ObservedValue::ProfileSlice {
+                    index: 1,
+                    vertices: 3
+                },
+                expected_range: ExpectedConstraint::ProfileSliceMinimum {
+                    minimum: 4,
+                    topology: CdtTopology::OpenBoundary,
+                },
+            })
         );
     }
 
@@ -2771,12 +2775,13 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidGenerationParameters {
-                ref issue,
-                ref provided_value,
-                ref expected_range,
-            }) if *issue == GenerationParameterIssue::InsufficientNumberOfTimeSlices
-                && matches!(provided_value, ObservedValue::Count(1))
-                && matches!(expected_range, ExpectedConstraint::AtLeastForTopology { minimum: 2, topology: CdtTopology::OpenBoundary })
+                issue: GenerationParameterIssue::InsufficientNumberOfTimeSlices,
+                provided_value: ObservedValue::Count(1),
+                expected_range: ExpectedConstraint::AtLeastForTopology {
+                    minimum: 2,
+                    topology: CdtTopology::OpenBoundary,
+                },
+            })
         );
     }
 
@@ -2878,24 +2883,29 @@ mod tests {
         assert_matches!(
             few_slices,
             Err(CdtError::InvalidGenerationParameters {
-                ref issue,
-                ref provided_value,
-                ref expected_range,
-            }) if *issue == GenerationParameterIssue::InsufficientNumberOfTimeSlices
-                && matches!(provided_value, ObservedValue::Count(2))
-                && matches!(expected_range, ExpectedConstraint::AtLeastForTopology { minimum: 3, topology: CdtTopology::Toroidal })
+                issue: GenerationParameterIssue::InsufficientNumberOfTimeSlices,
+                provided_value: ObservedValue::Count(2),
+                expected_range: ExpectedConstraint::AtLeastForTopology {
+                    minimum: 3,
+                    topology: CdtTopology::Toroidal,
+                },
+            })
         );
 
         let small_slice = CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&[3, 2, 3]);
         assert_matches!(
             small_slice,
             Err(CdtError::InvalidGenerationParameters {
-                ref issue,
-                ref provided_value,
-                ref expected_range,
-            }) if *issue == GenerationParameterIssue::InsufficientVerticesInSpatialVertexProfileSlice
-                && matches!(provided_value, ObservedValue::ProfileSlice { index: 1, vertices: 2 })
-                && matches!(expected_range, ExpectedConstraint::ProfileSliceMinimum { minimum: 3, topology: CdtTopology::Toroidal })
+                issue: GenerationParameterIssue::InsufficientVerticesInSpatialVertexProfileSlice,
+                provided_value: ObservedValue::ProfileSlice {
+                    index: 1,
+                    vertices: 2
+                },
+                expected_range: ExpectedConstraint::ProfileSliceMinimum {
+                    minimum: 3,
+                    topology: CdtTopology::Toroidal,
+                },
+            })
         );
     }
 
@@ -2931,12 +2941,10 @@ mod tests {
         assert_matches!(
             few_vertices,
             Err(CdtError::InvalidGenerationParameters {
-                ref issue,
-                ref provided_value,
-                ref expected_range,
-            }) if *issue == GenerationParameterIssue::InsufficientVerticesPerSlice
-                && matches!(provided_value, ObservedValue::Count(2))
-                && matches!(expected_range, ExpectedConstraint::AtLeast { minimum: 3 })
+                issue: GenerationParameterIssue::InsufficientVerticesPerSlice,
+                provided_value: ObservedValue::Count(2),
+                expected_range: ExpectedConstraint::AtLeast { minimum: 3 },
+            })
         );
 
         for slices in [1, 2] {
@@ -2944,12 +2952,10 @@ mod tests {
             assert_matches!(
                 few_slices,
                 Err(CdtError::InvalidGenerationParameters {
-                    ref issue,
-                    ref provided_value,
-                    ref expected_range,
-                }) if *issue == GenerationParameterIssue::InsufficientNumberOfTimeSlices
-                    && matches!(provided_value, ObservedValue::Count(value) if *value == u128::from(slices))
-                    && matches!(expected_range, ExpectedConstraint::AtLeast { minimum: 3 })
+                    issue: GenerationParameterIssue::InsufficientNumberOfTimeSlices,
+                    provided_value: ObservedValue::Count(value),
+                    expected_range: ExpectedConstraint::AtLeast { minimum: 3 },
+                }) if value == u128::from(slices)
             );
         }
     }
@@ -2961,12 +2967,13 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidGenerationParameters {
-                ref issue,
-                ref provided_value,
-                ref expected_range,
-            }) if *issue == GenerationParameterIssue::VertexCountOverflow
-                && matches!(provided_value, ObservedValue::CountProduct { left: u32::MAX, right: 3 })
-                && matches!(expected_range, ExpectedConstraint::FitsU32)
+                issue: GenerationParameterIssue::VertexCountOverflow,
+                provided_value: ObservedValue::CountProduct {
+                    left: u32::MAX,
+                    right: 3
+                },
+                expected_range: ExpectedConstraint::FitsU32,
+            })
         );
     }
 

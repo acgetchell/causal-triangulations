@@ -10,6 +10,7 @@ use causal_triangulations::prelude::geometry::{
 };
 use causal_triangulations::prelude::simulation::{ActionConfig, CdtTarget, MetropolisConfig};
 use causal_triangulations::{CdtConfig, CdtConfigOverrides, CdtTopology, CdtTriangulation};
+use num_traits::ToPrimitive;
 use std::assert_matches;
 
 /// Check actionable context without treating complete diagnostic prose as a schema.
@@ -99,7 +100,9 @@ fn action_and_target_range_failures_expose_distinct_constraints() {
             && coupling_2.to_bits() == (-1.0_f64).to_bits()
             && cosmological_constant.to_bits() == 0.0_f64.to_bits());
 
-    let error = CdtTarget::new(ActionConfig::default(), f64::MIN_POSITIVE)
+    let action = ActionConfig::new(1.0, 0.0, 0.0).expect("valid unit vertex coupling");
+    let expected_bound = usize::MAX.to_f64().expect("platform count fits finite f64");
+    let error = CdtTarget::new(action, f64::MIN_POSITIVE)
         .err()
         .expect("log-probability bound overflows");
     assert_rendered_context(
@@ -112,6 +115,7 @@ fn action_and_target_range_failures_expose_distinct_constraints() {
             provided_value: ObservedValue::Float(value),
             expected: ExpectedConstraint::FiniteLogProbability { maximum_action_magnitude },
         } if value.to_bits() == f64::MIN_POSITIVE.to_bits()
+            && maximum_action_magnitude.to_bits() == expected_bound.to_bits()
             && maximum_action_magnitude.is_finite()
             && (maximum_action_magnitude / value).is_infinite());
 }
@@ -290,7 +294,12 @@ fn profile_constructors_reject_count_overflow_before_allocating_meshes() {
     } if actual == &profile);
     assert_rendered_context(
         &error,
-        &["[2147483647, 4]", "open-strip face count", "fit in u32"],
+        &[
+            "[2147483647, 4]",
+            "open-strip face count",
+            "intermediate",
+            "fit in u32",
+        ],
     );
 }
 

@@ -995,12 +995,10 @@ mod tests {
             assert_matches!(
                 result,
                 Err(CdtError::InvalidGenerationParameters {
-                    ref issue,
-                    ref provided_value,
-                    ref expected_range,
-                }) if *issue == GenerationParameterIssue::InvalidToroidalDomain
-                    && matches!(provided_value, ObservedValue::ToroidalPeriod { axis, value } if *axis == expected_axis && value.to_bits() == domain[expected_axis].to_bits())
-                    && matches!(expected_range, ExpectedConstraint::FinitePositivePeriods),
+                    issue: GenerationParameterIssue::InvalidToroidalDomain,
+                    provided_value: ObservedValue::ToroidalPeriod { axis, value },
+                    expected_range: ExpectedConstraint::FinitePositivePeriods,
+                }) if axis == expected_axis && value.to_bits() == domain[expected_axis].to_bits(),
                 "invalid periodic toroidal domain {domain:?} should be rejected"
             );
         }
@@ -1018,12 +1016,10 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidGenerationParameters {
-                ref issue,
-                ref provided_value,
-                ref expected_range,
-            }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
-                && matches!(provided_value, ObservedValue::VertexCoordinate { vertex_index: 1, axis: 1, value } if value.to_bits() == f64::NEG_INFINITY.to_bits())
-                && matches!(expected_range, ExpectedConstraint::Finite),
+                issue: GenerationParameterIssue::NonFiniteVertexCoordinate,
+                provided_value: ObservedValue::VertexCoordinate { vertex_index: 1, axis: 1, value },
+                expected_range: ExpectedConstraint::Finite,
+            }) if value.to_bits() == f64::NEG_INFINITY.to_bits(),
             "periodic toroidal non-finite coordinate should be rejected"
         );
     }
@@ -1076,9 +1072,9 @@ mod tests {
             result,
             Err(CdtError::InvalidGenerationParameters {
                 issue: GenerationParameterIssue::InsufficientVertexCount,
-                ref provided_value,
-                ref expected_range,
-            }) if matches!(provided_value, ObservedValue::Count(2)) && matches!(expected_range, ExpectedConstraint::AtLeast { minimum: 3 })
+                provided_value: ObservedValue::Count(2),
+                expected_range: ExpectedConstraint::AtLeast { minimum: 3 },
+            })
         );
     }
 
@@ -1089,9 +1085,9 @@ mod tests {
             result,
             Err(CdtError::InvalidGenerationParameters {
                 issue: GenerationParameterIssue::InvalidCoordinateRange,
-                ref provided_value,
-                ref expected_range,
-            }) if matches!(provided_value, ObservedValue::CoordinateRange { min, max } if min.to_bits() == 10.0_f64.to_bits() && max.to_bits() == 5.0_f64.to_bits()) && matches!(expected_range, ExpectedConstraint::FiniteIncreasingBounds)
+                provided_value: ObservedValue::CoordinateRange { min, max },
+                expected_range: ExpectedConstraint::FiniteIncreasingBounds,
+            }) if min.to_bits() == 10.0_f64.to_bits() && max.to_bits() == 5.0_f64.to_bits()
         );
     }
 
@@ -1102,9 +1098,9 @@ mod tests {
             result,
             Err(CdtError::InvalidGenerationParameters {
                 issue: GenerationParameterIssue::InvalidCoordinateRange,
-                ref provided_value,
-                ref expected_range,
-            }) if matches!(provided_value, ObservedValue::CoordinateRange { min, max } if min.to_bits() == 5.0_f64.to_bits() && max.to_bits() == 5.0_f64.to_bits()) && matches!(expected_range, ExpectedConstraint::FiniteIncreasingBounds)
+                provided_value: ObservedValue::CoordinateRange { min, max },
+                expected_range: ExpectedConstraint::FiniteIncreasingBounds,
+            }) if min.to_bits() == 5.0_f64.to_bits() && max.to_bits() == 5.0_f64.to_bits()
         );
     }
 
@@ -1115,11 +1111,10 @@ mod tests {
             assert_matches!(
                 result,
                 Err(CdtError::InvalidGenerationParameters {
-                    ref issue,
-                    ref expected_range,
+                    issue: GenerationParameterIssue::InvalidCoordinateRange,
+                    expected_range: ExpectedConstraint::FiniteIncreasingBounds,
                     ..
-                }) if *issue == GenerationParameterIssue::InvalidCoordinateRange
-                    && matches!(expected_range, ExpectedConstraint::FiniteIncreasingBounds),
+                }),
                 "non-finite range {range:?} should be rejected"
             );
         }
@@ -1133,12 +1128,10 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidGenerationParameters {
-                ref issue,
-                ref provided_value,
-                ref expected_range,
-            }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
-                && matches!(provided_value, ObservedValue::VertexCoordinate { vertex_index: 1, axis: 1, value } if value.is_nan())
-                && matches!(expected_range, ExpectedConstraint::Finite),
+                issue: GenerationParameterIssue::NonFiniteVertexCoordinate,
+                provided_value: ObservedValue::VertexCoordinate { vertex_index: 1, axis: 1, value },
+                expected_range: ExpectedConstraint::Finite,
+            }) if value.is_nan(),
             "explicit non-finite coordinate should be rejected"
         );
     }
@@ -1156,12 +1149,10 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidGenerationParameters {
-                ref issue,
-                ref provided_value,
-                ref expected_range,
-            }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
-                && matches!(provided_value, ObservedValue::VertexCoordinate { vertex_index: 2, axis: 1, value } if value.to_bits() == f64::NEG_INFINITY.to_bits())
-                && matches!(expected_range, ExpectedConstraint::Finite),
+                issue: GenerationParameterIssue::NonFiniteVertexCoordinate,
+                provided_value: ObservedValue::VertexCoordinate { vertex_index: 2, axis: 1, value },
+                expected_range: ExpectedConstraint::Finite,
+            }) if value.to_bits() == f64::NEG_INFINITY.to_bits(),
             "delegating explicit-simplex builder should reject non-finite coordinates"
         );
     }
@@ -1184,12 +1175,10 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidGenerationParameters {
-                ref issue,
-                ref provided_value,
-                ref expected_range,
-            }) if *issue == GenerationParameterIssue::NonFiniteVertexCoordinate
-                && matches!(provided_value, ObservedValue::VertexCoordinate { vertex_index: 1, axis: 0, value } if value.to_bits() == f64::INFINITY.to_bits())
-                && matches!(expected_range, ExpectedConstraint::Finite),
+                issue: GenerationParameterIssue::NonFiniteVertexCoordinate,
+                provided_value: ObservedValue::VertexCoordinate { vertex_index: 1, axis: 0, value },
+                expected_range: ExpectedConstraint::Finite,
+            }) if value.to_bits() == f64::INFINITY.to_bits(),
             "explicit non-finite topology coordinate should be rejected"
         );
     }
@@ -1209,12 +1198,10 @@ mod tests {
             assert_matches!(
                 result,
                 Err(CdtError::InvalidGenerationParameters {
-                    ref issue,
-                    ref provided_value,
-                    ref expected_range,
-                }) if *issue == GenerationParameterIssue::InvalidToroidalDomain
-                    && matches!(provided_value, ObservedValue::ToroidalPeriod { axis, value } if *axis == expected_axis && value.to_bits() == domain[expected_axis].to_bits())
-                    && matches!(expected_range, ExpectedConstraint::FinitePositivePeriods),
+                    issue: GenerationParameterIssue::InvalidToroidalDomain,
+                    provided_value: ObservedValue::ToroidalPeriod { axis, value },
+                    expected_range: ExpectedConstraint::FinitePositivePeriods,
+                }) if axis == expected_axis && value.to_bits() == domain[expected_axis].to_bits(),
                 "invalid domain {domain:?} should be rejected"
             );
         }

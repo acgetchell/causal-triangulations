@@ -1747,14 +1747,11 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                topology,
-                ref provided_value,
-                ref expected,
-            }) if *field == TriangulationMetadataField::Timeslices
-                && topology == CdtTopology::OpenBoundary
-                && matches!(provided_value, ObservedValue::Count(0))
-                && matches!(expected, ExpectedConstraint::AtLeast { minimum: 1 })
+                field: TriangulationMetadataField::Timeslices,
+                topology: CdtTopology::OpenBoundary,
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
+            })
         );
     }
 
@@ -1768,14 +1765,11 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                topology,
-                ref provided_value,
-                ref expected,
-            }) if *field == TriangulationMetadataField::Dimension
-                && topology == CdtTopology::OpenBoundary
-                && matches!(provided_value, ObservedValue::Count(3))
-                && matches!(expected, ExpectedConstraint::BackendDimension { dimension: 2 })
+                field: TriangulationMetadataField::Dimension,
+                topology: CdtTopology::OpenBoundary,
+                provided_value: ObservedValue::Count(3),
+                expected: ExpectedConstraint::BackendDimension { dimension: 2 },
+            })
         );
     }
 
@@ -1805,13 +1799,11 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                ref provided_value,
-                ref expected,
+                field: TriangulationMetadataField::Dimension,
+                provided_value: ObservedValue::Count(3),
+                expected: ExpectedConstraint::BackendDimension { dimension: 2 },
                 ..
-            }) if *field == TriangulationMetadataField::Dimension
-                && matches!(provided_value, ObservedValue::Count(3))
-                && matches!(expected, ExpectedConstraint::BackendDimension { dimension: 2 })
+            })
         );
     }
 
@@ -2052,11 +2044,11 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                ref provided_value,
-                ref expected,
+                field: TriangulationMetadataField::Timeslices,
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
                 ..
-            }) if *field == TriangulationMetadataField::Timeslices && matches!(provided_value, ObservedValue::Count(0)) && matches!(expected, ExpectedConstraint::AtLeast { minimum: 1 })
+            })
         );
     }
 
@@ -2243,14 +2235,11 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                topology,
-                ref provided_value,
-                ref expected,
-            }) if *field == TriangulationMetadataField::Timeslices
-                && topology == CdtTopology::Toroidal
-                && matches!(provided_value, ObservedValue::Count(2))
-                && matches!(expected, ExpectedConstraint::AtLeast { minimum: 3 })
+                field: TriangulationMetadataField::Timeslices,
+                topology: CdtTopology::Toroidal,
+                provided_value: ObservedValue::Count(2),
+                expected: ExpectedConstraint::AtLeast { minimum: 3 },
+            })
         );
         assert_eq!(tri.time_slices().get(), 3);
         assert!(tri.validate_topology().is_ok());
@@ -2267,14 +2256,11 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                topology,
-                ref provided_value,
-                ref expected,
-            }) if *field == TriangulationMetadataField::Timeslices
-                && topology == CdtTopology::Toroidal
-                && matches!(provided_value, ObservedValue::Count(2))
-                && matches!(expected, ExpectedConstraint::AtLeast { minimum: 3 })
+                field: TriangulationMetadataField::Timeslices,
+                topology: CdtTopology::Toroidal,
+                provided_value: ObservedValue::Count(2),
+                expected: ExpectedConstraint::AtLeast { minimum: 3 },
+            })
         );
     }
 

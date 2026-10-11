@@ -42,8 +42,10 @@ impl CdtTarget {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if `temperature` is
-    /// not finite and positive with a finite reciprocal. [`ActionConfig`] has already validated its
-    /// couplings before this constructor receives it.
+    /// not finite and positive with a finite reciprocal, or if dividing the
+    /// conservative action-magnitude bound by `temperature` is non-finite (see
+    /// [`ExpectedConstraint::FiniteLogProbability`]). [`ActionConfig`] has already
+    /// validated its couplings before this constructor receives it.
     ///
     /// # Examples
     ///

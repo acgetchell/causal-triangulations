@@ -1179,18 +1179,9 @@ fn invalid_config(
     provided_value: impl Into<ObservedValue>,
     expected: ExpectedConstraint,
 ) -> CdtError {
-    invalid_config_parts(setting, provided_value.into(), expected)
-}
-
-/// Preserves typed diagnostics from shared validators.
-const fn invalid_config_parts(
-    setting: ConfigurationSetting,
-    provided_value: ObservedValue,
-    expected: ExpectedConstraint,
-) -> CdtError {
     CdtError::InvalidConfiguration {
         setting,
-        provided_value,
+        provided_value: provided_value.into(),
         expected,
     }
 }
@@ -1523,9 +1514,9 @@ impl CdtConfig {
         };
 
         if self.timeslices < minimum_slices {
-            return Err(invalid_config_parts(
+            return Err(invalid_config(
                 ConfigurationSetting::Timeslices,
-                self.timeslices.into(),
+                self.timeslices,
                 ExpectedConstraint::AtLeastForTopology {
                     minimum: minimum_slices,
                     topology: self.topology,
@@ -1539,9 +1530,9 @@ impl CdtConfig {
         }
 
         if !self.vertices.is_multiple_of(self.timeslices) {
-            return Err(invalid_config_parts(
+            return Err(invalid_config(
                 ConfigurationSetting::Vertices,
-                self.vertices.into(),
+                self.vertices,
                 ExpectedConstraint::DivisibleByTimeslices {
                     timeslices: self.timeslices,
                     topology: self.topology,
@@ -1553,9 +1544,9 @@ impl CdtConfig {
             .timeslices
             .checked_mul(minimum_vertices_per_slice)
             .ok_or_else(|| {
-                invalid_config_parts(
+                invalid_config(
                     ConfigurationSetting::Timeslices,
-                    self.timeslices.into(),
+                    self.timeslices,
                     ExpectedConstraint::ProductFitsU32 {
                         factor: minimum_vertices_per_slice,
                         topology: self.topology,
@@ -1563,9 +1554,9 @@ impl CdtConfig {
                 )
             })?;
         if self.vertices < min_total {
-            return Err(invalid_config_parts(
+            return Err(invalid_config(
                 ConfigurationSetting::Vertices,
-                self.vertices.into(),
+                self.vertices,
                 ExpectedConstraint::MinimumTotalVertices {
                     vertices_per_slice: minimum_vertices_per_slice,
                     timeslices: self.timeslices,
@@ -1587,16 +1578,16 @@ impl CdtConfig {
         minimum_vertices_per_slice: u32,
     ) -> CdtResult<()> {
         let expected_len = usize::try_from(self.timeslices).map_err(|_| {
-            invalid_config_parts(
+            invalid_config(
                 ConfigurationSetting::Timeslices,
-                self.timeslices.into(),
+                self.timeslices,
                 ExpectedConstraint::FitsUsize,
             )
         })?;
         if profile.len() != expected_len {
-            return Err(invalid_config_parts(
+            return Err(invalid_config(
                 ConfigurationSetting::SpatialVertexProfile,
-                profile.len().into(),
+                profile.len(),
                 ExpectedConstraint::ProfileLength {
                     timeslices: self.timeslices,
                 },
@@ -1606,7 +1597,7 @@ impl CdtConfig {
         let mut total = 0_u32;
         for (slice, &volume) in profile.iter().enumerate() {
             if volume < minimum_vertices_per_slice {
-                return Err(invalid_config_parts(
+                return Err(invalid_config(
                     ConfigurationSetting::SpatialVertexProfile,
                     ObservedValue::ProfileSlice {
                         index: slice,
@@ -1619,7 +1610,7 @@ impl CdtConfig {
                 ));
             }
             total = total.checked_add(volume).ok_or_else(|| {
-                invalid_config_parts(
+                invalid_config(
                     ConfigurationSetting::SpatialVertexProfile,
                     ObservedValue::SpatialVertexProfile(profile.to_vec()),
                     ExpectedConstraint::ProfileSumFitsU32,
@@ -1628,9 +1619,9 @@ impl CdtConfig {
         }
 
         if total != self.vertices {
-            return Err(invalid_config_parts(
+            return Err(invalid_config(
                 ConfigurationSetting::Vertices,
-                self.vertices.into(),
+                self.vertices,
                 ExpectedConstraint::ProfileSum { total },
             ));
         }
@@ -1971,10 +1962,10 @@ mod tests {
         assert_matches!(
             invalid_vertices.into_validated(),
             Err(CdtError::InvalidConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::Vertices && matches!(provided_value, ObservedValue::Count(2)) && matches!(expected, ExpectedConstraint::AtLeast { minimum: 3 })
+                setting: ConfigurationSetting::Vertices,
+                provided_value: ObservedValue::Count(2),
+                expected: ExpectedConstraint::AtLeast { minimum: 3 },
+            })
         );
 
         let invalid_timeslices = CdtConfig {
@@ -1984,10 +1975,10 @@ mod tests {
         assert_matches!(
             invalid_timeslices.into_validated(),
             Err(CdtError::InvalidConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::Timeslices && matches!(provided_value, ObservedValue::Count(0)) && matches!(expected, ExpectedConstraint::AtLeast { minimum: 1 })
+                setting: ConfigurationSetting::Timeslices,
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
+            })
         );
 
         let invalid_temperature = CdtConfig {
@@ -1997,12 +1988,10 @@ mod tests {
         assert_matches!(
             invalid_temperature.into_validated(),
             Err(CdtError::InvalidSimulationConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::Temperature
-                && matches!(provided_value, ObservedValue::Float(value) if value.to_bits() == (-1.0_f64).to_bits())
-                && matches!(expected, ExpectedConstraint::PositiveFiniteReciprocal)
+                setting: ConfigurationSetting::Temperature,
+                provided_value: ObservedValue::Float(value),
+                expected: ExpectedConstraint::PositiveFiniteReciprocal,
+            }) if value.to_bits() == (-1.0_f64).to_bits()
         );
 
         let incompatible_action_temperature = CdtConfig {
@@ -2024,12 +2013,10 @@ mod tests {
         assert_matches!(
             invalid_measurement_frequency.into_validated(),
             Err(CdtError::InvalidSimulationConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::MeasurementFrequency
-                && matches!(provided_value, ObservedValue::Count(0))
-                && matches!(expected, ExpectedConstraint::AtLeast { minimum: 1 })
+                setting: ConfigurationSetting::MeasurementFrequency,
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
+            })
         );
 
         let invalid_steps = CdtConfig {
@@ -2039,10 +2026,10 @@ mod tests {
         assert_matches!(
             invalid_steps.into_validated(),
             Err(CdtError::InvalidSimulationConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::Steps && matches!(provided_value, ObservedValue::Count(0)) && matches!(expected, ExpectedConstraint::AtLeast { minimum: 1 })
+                setting: ConfigurationSetting::Steps,
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
+            })
         );
 
         let invalid_dimension = CdtConfig {
@@ -2052,10 +2039,10 @@ mod tests {
         assert_matches!(
             invalid_dimension.into_validated(),
             Err(CdtError::InvalidConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::Dimension && matches!(provided_value, ObservedValue::Count(4)) && matches!(expected, ExpectedConstraint::Exactly { value: 2 })
+                setting: ConfigurationSetting::Dimension,
+                provided_value: ObservedValue::Count(4),
+                expected: ExpectedConstraint::Exactly { value: 2 },
+            })
         );
 
         for (setting, value) in [
@@ -2079,9 +2066,9 @@ mod tests {
                 invalid_action_coupling.into_validated(),
                 Err(CdtError::InvalidConfiguration {
                     setting: invalid_setting,
-                    expected,
+                    expected: ExpectedConstraint::Finite,
                     ..
-                }) if invalid_setting == setting && matches!(expected, ExpectedConstraint::Finite)
+                }) if invalid_setting == setting
             );
         }
 
@@ -2103,12 +2090,10 @@ mod tests {
         assert_matches!(
             measurement_frequency_exceeds_steps.into_validated(),
             Err(CdtError::InvalidSimulationConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::MeasurementFrequency
-                && matches!(provided_value, ObservedValue::Count(2000))
-                && matches!(expected, ExpectedConstraint::AtMostSteps { steps: 1000 })
+                setting: ConfigurationSetting::MeasurementFrequency,
+                provided_value: ObservedValue::Count(2000),
+                expected: ExpectedConstraint::AtMostSteps { steps: 1000 },
+            })
         );
 
         let boundary_aligned_measurement = CdtConfig {
@@ -2179,12 +2164,10 @@ mod tests {
         assert_matches!(
             thermalization_exceeds_steps.into_validated(),
             Err(CdtError::InvalidSimulationConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::ThermalizationSteps
-                && matches!(provided_value, ObservedValue::Count(11))
-                && matches!(expected, ExpectedConstraint::AtMostSteps { steps: 10 })
+                setting: ConfigurationSetting::ThermalizationSteps,
+                provided_value: ObservedValue::Count(11),
+                expected: ExpectedConstraint::AtMostSteps { steps: 10 },
+            })
         );
 
         let overflowed_post_thermalization_boundary = CdtConfig {
@@ -2238,12 +2221,13 @@ mod tests {
         assert_matches!(
             toroidal_t_too_small.into_validated(),
             Err(CdtError::InvalidConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::Timeslices
-                && matches!(provided_value, ObservedValue::Count(2))
-                && matches!(expected, ExpectedConstraint::AtLeastForTopology { minimum: 3, topology: CdtTopology::Toroidal })
+                setting: ConfigurationSetting::Timeslices,
+                provided_value: ObservedValue::Count(2),
+                expected: ExpectedConstraint::AtLeastForTopology {
+                    minimum: 3,
+                    topology: CdtTopology::Toroidal,
+                },
+            })
         );
 
         // Vertices not divisible by timeslices must be rejected.
@@ -2256,12 +2240,13 @@ mod tests {
         assert_matches!(
             toroidal_indivisible.into_validated(),
             Err(CdtError::InvalidConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::Vertices
-                && matches!(provided_value, ObservedValue::Count(11))
-                && matches!(expected, ExpectedConstraint::DivisibleByTimeslices { timeslices: 3, topology: CdtTopology::Toroidal })
+                setting: ConfigurationSetting::Vertices,
+                provided_value: ObservedValue::Count(11),
+                expected: ExpectedConstraint::DivisibleByTimeslices {
+                    timeslices: 3,
+                    topology: CdtTopology::Toroidal,
+                },
+            })
         );
 
         // Fewer than 3 vertices per slice must be rejected (e.g. T=3, N=2).
@@ -2274,12 +2259,14 @@ mod tests {
         assert_matches!(
             toroidal_too_few_per_slice.into_validated(),
             Err(CdtError::InvalidConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::Vertices
-                && matches!(provided_value, ObservedValue::Count(6))
-                && matches!(expected, ExpectedConstraint::MinimumTotalVertices { vertices_per_slice: 3, timeslices: 3, topology: CdtTopology::Toroidal })
+                setting: ConfigurationSetting::Vertices,
+                provided_value: ObservedValue::Count(6),
+                expected: ExpectedConstraint::MinimumTotalVertices {
+                    vertices_per_slice: 3,
+                    timeslices: 3,
+                    topology: CdtTopology::Toroidal,
+                },
+            })
         );
 
         let toroidal_min_total_overflow = CdtConfig {
@@ -2291,12 +2278,13 @@ mod tests {
         assert_matches!(
             toroidal_min_total_overflow.into_validated(),
             Err(CdtError::InvalidConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::Timeslices
-                && matches!(provided_value, ObservedValue::Count(value) if value == u128::from(u32::MAX))
-                && matches!(expected, ExpectedConstraint::ProductFitsU32 { factor: 3, topology: CdtTopology::Toroidal })
+                setting: ConfigurationSetting::Timeslices,
+                provided_value: ObservedValue::Count(value),
+                expected: ExpectedConstraint::ProductFitsU32 {
+                    factor: 3,
+                    topology: CdtTopology::Toroidal,
+                },
+            }) if value == u128::from(u32::MAX)
         );
     }
 
@@ -2322,12 +2310,13 @@ mod tests {
         assert_matches!(
             open_boundary_too_few_slices.into_validated(),
             Err(CdtError::InvalidConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::Timeslices
-                && matches!(provided_value, ObservedValue::Count(1))
-                && matches!(expected, ExpectedConstraint::AtLeastForTopology { minimum: 2, topology: CdtTopology::OpenBoundary })
+                setting: ConfigurationSetting::Timeslices,
+                provided_value: ObservedValue::Count(1),
+                expected: ExpectedConstraint::AtLeastForTopology {
+                    minimum: 2,
+                    topology: CdtTopology::OpenBoundary,
+                },
+            })
         );
 
         let open_boundary_indivisible = CdtConfig {
@@ -2339,12 +2328,13 @@ mod tests {
         assert_matches!(
             open_boundary_indivisible.into_validated(),
             Err(CdtError::InvalidConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::Vertices
-                && matches!(provided_value, ObservedValue::Count(11))
-                && matches!(expected, ExpectedConstraint::DivisibleByTimeslices { timeslices: 3, topology: CdtTopology::OpenBoundary })
+                setting: ConfigurationSetting::Vertices,
+                provided_value: ObservedValue::Count(11),
+                expected: ExpectedConstraint::DivisibleByTimeslices {
+                    timeslices: 3,
+                    topology: CdtTopology::OpenBoundary,
+                },
+            })
         );
 
         let open_boundary_too_few_per_slice = CdtConfig {
@@ -2356,12 +2346,14 @@ mod tests {
         assert_matches!(
             open_boundary_too_few_per_slice.into_validated(),
             Err(CdtError::InvalidConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::Vertices
-                && matches!(provided_value, ObservedValue::Count(9))
-                && matches!(expected, ExpectedConstraint::MinimumTotalVertices { vertices_per_slice: 4, timeslices: 3, topology: CdtTopology::OpenBoundary })
+                setting: ConfigurationSetting::Vertices,
+                provided_value: ObservedValue::Count(9),
+                expected: ExpectedConstraint::MinimumTotalVertices {
+                    vertices_per_slice: 4,
+                    timeslices: 3,
+                    topology: CdtTopology::OpenBoundary,
+                },
+            })
         );
     }
 
@@ -2387,12 +2379,10 @@ mod tests {
         assert_matches!(
             mismatched_sum.into_validated(),
             Err(CdtError::InvalidConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::Vertices
-                && matches!(provided_value, ObservedValue::Count(14))
-                && matches!(expected, ExpectedConstraint::ProfileSum { total: 15 })
+                setting: ConfigurationSetting::Vertices,
+                provided_value: ObservedValue::Count(14),
+                expected: ExpectedConstraint::ProfileSum { total: 15 },
+            })
         );
 
         let mismatched_len = CdtConfig {
@@ -2404,12 +2394,10 @@ mod tests {
         assert_matches!(
             mismatched_len.into_validated(),
             Err(CdtError::InvalidConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::SpatialVertexProfile
-                && matches!(provided_value, ObservedValue::Count(3))
-                && matches!(expected, ExpectedConstraint::ProfileLength { timeslices: 4 })
+                setting: ConfigurationSetting::SpatialVertexProfile,
+                provided_value: ObservedValue::Count(3),
+                expected: ExpectedConstraint::ProfileLength { timeslices: 4 },
+            })
         );
     }
 
@@ -2434,12 +2422,16 @@ mod tests {
         assert_matches!(
             too_small.into_validated(),
             Err(CdtError::InvalidConfiguration {
-                setting,
-                provided_value,
-                expected,
-            }) if setting == ConfigurationSetting::SpatialVertexProfile
-                && matches!(provided_value, ObservedValue::ProfileSlice { index: 1, vertices: 2 })
-                && matches!(expected, ExpectedConstraint::ProfileSliceMinimum { minimum: 3, topology: CdtTopology::Toroidal })
+                setting: ConfigurationSetting::SpatialVertexProfile,
+                provided_value: ObservedValue::ProfileSlice {
+                    index: 1,
+                    vertices: 2
+                },
+                expected: ExpectedConstraint::ProfileSliceMinimum {
+                    minimum: 3,
+                    topology: CdtTopology::Toroidal,
+                },
+            })
         );
     }
 
@@ -2631,10 +2623,9 @@ mod tests {
             result,
             Err(CdtError::InvalidConfiguration {
                 setting: ConfigurationSetting::Vertices,
-                ref provided_value,
-                ref expected,
-            }) if matches!(provided_value, ObservedValue::SpatialVertexProfile(profile) if profile == &[u32::MAX, 1])
-                && matches!(expected, ExpectedConstraint::ProfileSumFitsU32)
+                provided_value: ObservedValue::SpatialVertexProfile(ref profile),
+                expected: ExpectedConstraint::ProfileSumFitsU32,
+            }) if profile == &[u32::MAX, 1]
         );
     }
 
@@ -2652,9 +2643,9 @@ mod tests {
             result,
             Err(CdtError::InvalidSimulationConfiguration {
                 setting: ConfigurationSetting::MeasurementFrequency,
-                ref provided_value,
-                ref expected,
-            }) if matches!(provided_value, ObservedValue::Count(0)) && matches!(expected, ExpectedConstraint::AtLeast { minimum: 1 })
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
+            })
         );
     }
 
@@ -2671,9 +2662,9 @@ mod tests {
             result,
             Err(CdtError::InvalidSimulationConfiguration {
                 setting: ConfigurationSetting::MeasurementFrequency,
-                ref provided_value,
-                ref expected,
-            }) if matches!(provided_value, ObservedValue::Count(0)) && matches!(expected, ExpectedConstraint::AtLeast { minimum: 1 })
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
+            })
         );
     }
 

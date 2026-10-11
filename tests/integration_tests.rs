@@ -241,9 +241,9 @@ mod integration_tests {
             CdtTriangulation::from_seeded_points(2, 1, 2, 102),
             Err(CdtError::InvalidGenerationParameters {
                 issue: GenerationParameterIssue::InsufficientVertexCount,
-                ref provided_value,
-                ref expected_range,
-            }) if matches!(provided_value, ObservedValue::Count(2)) && matches!(expected_range, ExpectedConstraint::AtLeast { minimum: 3 })
+                provided_value: ObservedValue::Count(2),
+                expected_range: ExpectedConstraint::AtLeast { minimum: 3 },
+            })
         );
 
         assert_matches!(

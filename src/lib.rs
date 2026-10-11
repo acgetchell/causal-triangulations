@@ -1848,9 +1848,9 @@ mod tests {
             config.into_validated(),
             Err(CdtError::InvalidSimulationConfiguration {
                 setting: ConfigurationSetting::MeasurementFrequency,
-                ref provided_value,
-                ref expected,
-            }) if matches!(provided_value, ObservedValue::Count(0)) && matches!(expected, ExpectedConstraint::AtLeast { minimum: 1 })
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
+            })
         );
     }
 
@@ -1864,9 +1864,9 @@ mod tests {
             config.into_validated(),
             Err(CdtError::InvalidSimulationConfiguration {
                 setting: ConfigurationSetting::MeasurementFrequency,
-                ref provided_value,
-                ref expected,
-            }) if matches!(provided_value, ObservedValue::Count(200)) && matches!(expected, ExpectedConstraint::AtMostSteps { steps: 100 })
+                provided_value: ObservedValue::Count(200),
+                expected: ExpectedConstraint::AtMostSteps { steps: 100 },
+            })
         );
     }
 
@@ -1879,9 +1879,9 @@ mod tests {
             config.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting: ConfigurationSetting::Vertices,
-                ref provided_value,
-                ref expected,
-            }) if matches!(provided_value, ObservedValue::Count(2)) && matches!(expected, ExpectedConstraint::AtLeast { minimum: 3 })
+                provided_value: ObservedValue::Count(2),
+                expected: ExpectedConstraint::AtLeast { minimum: 3 },
+            })
         );
     }
 
@@ -1894,10 +1894,9 @@ mod tests {
             config.into_validated(),
             Err(CdtError::InvalidSimulationConfiguration {
                 setting: ConfigurationSetting::Temperature,
-                ref provided_value,
-                ref expected,
-            }) if matches!(provided_value, ObservedValue::Float(value) if value.to_bits() == (-1.0_f64).to_bits())
-                && matches!(expected, ExpectedConstraint::PositiveFiniteReciprocal)
+                provided_value: ObservedValue::Float(value),
+                expected: ExpectedConstraint::PositiveFiniteReciprocal,
+            }) if value.to_bits() == (-1.0_f64).to_bits()
         );
     }
 

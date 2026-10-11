@@ -2135,7 +2135,7 @@ fn open_slab_edge_label(edge: &SlabEdge) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::errors::{ObservedValue, TriangulationMetadataField};
+    use crate::errors::ObservedValue;
     use crate::geometry::generators::build_delaunay2_with_data;
     use std::assert_matches;
     use std::time::Duration;
@@ -2616,14 +2616,11 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                topology,
-                ref provided_value,
-                ref expected,
-            }) if *field == TriangulationMetadataField::Timeslices
-                && topology == CdtTopology::Toroidal
-                && matches!(provided_value, ObservedValue::Count(2))
-                && matches!(expected, ExpectedConstraint::AtLeast { minimum: 3 })
+                field: TriangulationMetadataField::Timeslices,
+                topology: CdtTopology::Toroidal,
+                provided_value: ObservedValue::Count(2),
+                expected: ExpectedConstraint::AtLeast { minimum: 3 },
+            })
         );
         assert_eq!(tri.time_slices().get(), 3);
         assert_eq!(tri.slice_sizes(), initial_slice_sizes.as_slice());

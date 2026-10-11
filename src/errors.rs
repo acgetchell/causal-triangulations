@@ -3412,9 +3412,9 @@ mod tests {
             failure,
             Err(CdtError::InvalidConfiguration {
                 setting: ConfigurationSetting::Steps,
-                ref provided_value,
-                ref expected,
-            }) if matches!(provided_value, ObservedValue::Count(0)) && matches!(expected, ExpectedConstraint::AtLeast { minimum: 1 })
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
+            })
         );
     }
 

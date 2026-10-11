@@ -332,7 +332,9 @@ impl fmt::Display for ExpectedConstraint {
             }
             Self::ProfileSumFitsU32 => f.write_str("sum must fit in u32"),
             Self::ProfileSum { total } => write!(f, "sum of spatial_vertex_profile ({total})"),
-            Self::OpenStripFaceCountFitsU32 => f.write_str("open-strip face count must fit in u32"),
+            Self::OpenStripFaceCountFitsU32 => {
+                f.write_str("open-strip face count and intermediate calculations must fit in u32")
+            }
             Self::Finite => f.write_str("finite"),
             Self::FiniteIncreasingBounds => f.write_str("finite min < max"),
             Self::FinitePositivePeriods => f.write_str("finite and positive periods"),

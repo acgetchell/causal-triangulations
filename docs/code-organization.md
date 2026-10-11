@@ -225,7 +225,7 @@ enforce this boundary against new CDT-local generic acceptance draws or manual a
 - `notebooks/` — notebook front ends and analysis consumers for CLI-generated artifacts such as trace CSV and JSON summary files. Notebook code may run the
   binary for tutorials, but simulation logic stays in Rust.
 - `tests/` — CLI, integration, physics, property-based, property-configuration, regression, slow-debug, and project-rule tests, with shared property-test
-  configuration under `tests/common/` and committed compatibility artifacts under `tests/fixtures/`.
+  configuration under `tests/common/`.
 - `benches/` — Criterion benchmark harnesses and CI performance suites, with shared fail-fast fixture setup support under `benches/support/`.
 - `docs/` — user guides, architecture notes, development rules, and release/testing/performance documentation.
   [The documentation index](README.md) maps their owners; [documentation policy](dev/DEVELOPING.md#documentation-and-command-policy) defines guide naming.
@@ -352,7 +352,7 @@ See `docs/metropolis.md` for the current planned-proposal ordering and enforced 
 ### `cdt/observables.rs` — User-facing estimators
 
 - `estimate_all_scale_effective_hausdorff_slope` — fits an explicitly finite-graph all-scale slope from combinatorial dual-graph geodesic ball growth,
-  returning `None` when the triangulation is too small or live face adjacency cannot be resolved
+  returning `Ok(None)` when fewer than two usable radii remain; unresolved face adjacency or unrepresentable fitting inputs return a typed error
 - `estimate_short_time_effective_spectral_dimension` — fits an explicitly finite-window effective spectral dimension from dual-graph diffusion return
   probability, returning `None` when the graph is too small or lacks enough positive return-probability samples for a fit
 - `average_dual_ball_volume_curve` and `average_dual_return_probability_curve` expose the underlying radius- and diffusion-time-indexed curves so callers can
@@ -441,5 +441,5 @@ Notebook files live in `notebooks/` and should wrap the CLI or consume generated
 
 - `delaunay` (v0.8.2) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
   `set_vertex_data_by_key` for O(1) label mutation)
-- `markov-chain-monte-carlo` (v0.5.0) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, invariant-bearing `Step<Info>` telemetry, `Target`)
+- `markov-chain-monte-carlo` (v0.5.1) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, invariant-bearing `Step<Info>` telemetry, `Target`)
 - `num-traits` — `ToPrimitive` and `NumCast` for checked or saturating numeric conversions

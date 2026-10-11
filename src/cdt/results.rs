@@ -4276,12 +4276,10 @@ mod tests {
         assert_matches!(
             error,
             CdtError::InvalidSimulationConfiguration {
-                ref setting,
-                ref provided_value,
-                ref expected,
-            } if *setting == ConfigurationSetting::Temperature
-                && matches!(provided_value, ObservedValue::Float(value) if value.to_bits() == 0.0_f64.to_bits())
-                && matches!(expected, ExpectedConstraint::PositiveFiniteReciprocal)
+                setting: ConfigurationSetting::Temperature,
+                provided_value: ObservedValue::Float(value),
+                expected: ExpectedConstraint::PositiveFiniteReciprocal,
+            } if value.to_bits() == 0.0_f64.to_bits()
         );
     }
 
@@ -4293,10 +4291,10 @@ mod tests {
         assert_matches!(
             error,
             CdtError::InvalidConfiguration {
-                ref setting,
-                ref provided_value,
-                ref expected,
-            } if *setting == ConfigurationSetting::Coupling0 && matches!(provided_value, ObservedValue::Float(value) if value.is_nan()) && matches!(expected, ExpectedConstraint::Finite)
+                setting: ConfigurationSetting::Coupling0,
+                provided_value: ObservedValue::Float(value),
+                expected: ExpectedConstraint::Finite,
+            } if value.is_nan()
         );
     }
 
