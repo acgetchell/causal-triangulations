@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 //! Property-based tests for CDT foliation construction and validation.
 
-use causal_triangulations::prelude::errors::TriangulationMetadataField;
+use causal_triangulations::prelude::errors::{
+    ExpectedConstraint, ObservedValue, TriangulationMetadataField,
+};
 use causal_triangulations::prelude::geometry::{DelaunayBackend2D, GeometryBackend};
 use causal_triangulations::prelude::triangulation::*;
 use proptest::prelude::*;
@@ -108,8 +110,8 @@ proptest! {
                 ..
             }) => {
                 prop_assert_eq!(field, TriangulationMetadataField::Timeslices);
-                prop_assert_eq!(provided_value, "0");
-                prop_assert_eq!(expected, "≥ 1");
+                prop_assert_eq!(provided_value, ObservedValue::Count(0));
+                prop_assert_eq!(expected, ExpectedConstraint::AtLeast { minimum: 1 });
             }
             other => prop_assert!(
                 false,

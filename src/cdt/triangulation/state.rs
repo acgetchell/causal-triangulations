@@ -9,8 +9,8 @@
 use crate::cdt::foliation::{Foliation, FoliationError};
 use crate::config::CdtTopology;
 use crate::errors::{
-    CdtError, CdtResult, CheckpointOperation, CheckpointResumeFailure, SimplexCountField,
-    TriangulationMetadataField,
+    CdtError, CdtResult, CheckpointOperation, CheckpointResumeFailure, ExpectedConstraint,
+    ObservedValue, SimplexCountField, TriangulationMetadataField,
 };
 use crate::geometry::DelaunayBackend2D;
 use crate::geometry::traits::TriangulationQuery;
@@ -715,8 +715,8 @@ impl<B> CdtTriangulation<B> {
             return Err(CdtError::InvalidTriangulationMetadata {
                 field: TriangulationMetadataField::Timeslices,
                 topology,
-                provided_value: "0".to_string(),
-                expected: "≥ 1".to_string(),
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
             });
         }
 
@@ -724,16 +724,16 @@ impl<B> CdtTriangulation<B> {
             return Err(CdtError::InvalidTriangulationMetadata {
                 field: TriangulationMetadataField::Timeslices,
                 topology,
-                provided_value: time_slices.to_string(),
-                expected: "≥ 3".to_string(),
+                provided_value: time_slices.into(),
+                expected: ExpectedConstraint::AtLeast { minimum: 3 },
             });
         }
 
         NonZeroU32::new(time_slices).ok_or_else(|| CdtError::InvalidTriangulationMetadata {
             field: TriangulationMetadataField::Timeslices,
             topology,
-            provided_value: time_slices.to_string(),
-            expected: "≥ 1".to_string(),
+            provided_value: time_slices.into(),
+            expected: ExpectedConstraint::AtLeast { minimum: 1 },
         })
     }
 
@@ -913,7 +913,7 @@ impl<B> CdtTriangulation<B> {
     /// # Examples
     ///
     /// ```
-    /// use causal_triangulations::prelude::errors::{CdtError, TriangulationMetadataField};
+    /// use causal_triangulations::prelude::errors::{CdtError, ExpectedConstraint, ObservedValue, TriangulationMetadataField};
     /// use causal_triangulations::prelude::triangulation::{CdtTopology, CdtTriangulation};
     /// use std::assert_matches;
     ///
@@ -924,14 +924,11 @@ impl<B> CdtTriangulation<B> {
     /// assert_matches!(
     ///     err,
     ///     CdtError::InvalidTriangulationMetadata {
-    ///         field,
-    ///         topology,
-    ///         provided_value,
-    ///         expected,
-    ///     } if field == TriangulationMetadataField::Timeslices
-    ///         && topology == CdtTopology::Toroidal
-    ///         && provided_value == "2"
-    ///         && expected == "≥ 3"
+    ///         field: TriangulationMetadataField::Timeslices,
+    ///         topology: CdtTopology::Toroidal,
+    ///         provided_value: ObservedValue::Count(2),
+    ///         expected: ExpectedConstraint::AtLeast { minimum: 3 },
+    ///     }
     /// );
     /// # Ok(())
     /// # }
@@ -1058,7 +1055,7 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     /// ```
     ///
     /// ```rust
-    /// use causal_triangulations::prelude::errors::TriangulationMetadataField;
+    /// use causal_triangulations::prelude::errors::{TriangulationMetadataField, ExpectedConstraint, ObservedValue};
     /// use causal_triangulations::prelude::geometry::*;
     /// use causal_triangulations::prelude::triangulation::*;
     /// use causal_triangulations::{CdtError, CdtResult};
@@ -1082,14 +1079,11 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
     ///     assert_matches!(
     ///         err,
     ///         CdtError::InvalidTriangulationMetadata {
-    ///             field,
-    ///             topology,
-    ///             provided_value,
-    ///             expected,
-    ///         } if field == TriangulationMetadataField::Timeslices
-    ///             && topology == CdtTopology::Toroidal
-    ///             && provided_value == "2"
-    ///             && expected == "≥ 3"
+    ///             field: TriangulationMetadataField::Timeslices,
+    ///             topology: CdtTopology::Toroidal,
+    ///             provided_value: ObservedValue::Count(2),
+    ///             expected: ExpectedConstraint::AtLeast { minimum: 3 },
+    ///         }
     ///     );
     ///     Ok(())
     /// }
@@ -1179,8 +1173,10 @@ impl<B: TriangulationQuery> CdtTriangulation<B> {
             return Err(CdtError::InvalidTriangulationMetadata {
                 field: TriangulationMetadataField::Dimension,
                 topology: self.metadata.topology,
-                provided_value: self.metadata.dimension.to_string(),
-                expected: format!("backend dimension ({backend_dimension})"),
+                provided_value: self.metadata.dimension.into(),
+                expected: ExpectedConstraint::BackendDimension {
+                    dimension: backend_dimension,
+                },
             });
         }
 
@@ -1751,14 +1747,11 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                topology,
-                ref provided_value,
-                ref expected,
-            }) if *field == TriangulationMetadataField::Timeslices
-                && topology == CdtTopology::OpenBoundary
-                && provided_value == "0"
-                && expected == "≥ 1"
+                field: TriangulationMetadataField::Timeslices,
+                topology: CdtTopology::OpenBoundary,
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
+            })
         );
     }
 
@@ -1766,18 +1759,17 @@ mod tests {
     fn test_try_new_rejects_dimension_mismatch() {
         let backend = labeled_triangle_backend([0, 0, 1]);
         let result = CdtTriangulation::try_new(backend, 2, 3);
+        let rendered = result.as_ref().expect_err("dimension mismatch").to_string();
+        assert!(rendered.contains("backend dimension (2)"), "{rendered}");
 
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                topology,
-                ref provided_value,
-                ref expected,
-            }) if *field == TriangulationMetadataField::Dimension
-                && topology == CdtTopology::OpenBoundary
-                && provided_value == "3"
-                && expected == "backend dimension (2)"
+                field: TriangulationMetadataField::Dimension,
+                topology: CdtTopology::OpenBoundary,
+                provided_value: ObservedValue::Count(3),
+                expected: ExpectedConstraint::BackendDimension { dimension: 2 },
+            })
         );
     }
 
@@ -1807,13 +1799,11 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                ref provided_value,
-                ref expected,
+                field: TriangulationMetadataField::Dimension,
+                provided_value: ObservedValue::Count(3),
+                expected: ExpectedConstraint::BackendDimension { dimension: 2 },
                 ..
-            }) if *field == TriangulationMetadataField::Dimension
-                && provided_value == "3"
-                && expected == "backend dimension (2)"
+            })
         );
     }
 
@@ -2054,11 +2044,11 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                ref provided_value,
-                ref expected,
+                field: TriangulationMetadataField::Timeslices,
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
                 ..
-            }) if *field == TriangulationMetadataField::Timeslices && provided_value == "0" && expected == "≥ 1"
+            })
         );
     }
 
@@ -2245,14 +2235,11 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                topology,
-                ref provided_value,
-                ref expected,
-            }) if *field == TriangulationMetadataField::Timeslices
-                && topology == CdtTopology::Toroidal
-                && provided_value == "2"
-                && expected == "≥ 3"
+                field: TriangulationMetadataField::Timeslices,
+                topology: CdtTopology::Toroidal,
+                provided_value: ObservedValue::Count(2),
+                expected: ExpectedConstraint::AtLeast { minimum: 3 },
+            })
         );
         assert_eq!(tri.time_slices().get(), 3);
         assert!(tri.validate_topology().is_ok());
@@ -2269,14 +2256,11 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::InvalidTriangulationMetadata {
-                ref field,
-                topology,
-                ref provided_value,
-                ref expected,
-            }) if *field == TriangulationMetadataField::Timeslices
-                && topology == CdtTopology::Toroidal
-                && provided_value == "2"
-                && expected == "≥ 3"
+                field: TriangulationMetadataField::Timeslices,
+                topology: CdtTopology::Toroidal,
+                provided_value: ObservedValue::Count(2),
+                expected: ExpectedConstraint::AtLeast { minimum: 3 },
+            })
         );
     }
 

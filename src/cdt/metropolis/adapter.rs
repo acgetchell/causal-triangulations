@@ -15,7 +15,8 @@ use crate::cdt::proposal_policy::{
 };
 use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::errors::{
-    CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, MetropolisMoveApplicationFailure,
+    CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, ConfigurationSetting,
+    ExpectedConstraint, MetropolisMoveApplicationFailure,
 };
 use markov_chain_monte_carlo::{
     Chain, ChainCheckpoint, DelayedProposal, DiscreteProposalEndpoint, DiscreteProposalRatio,
@@ -41,8 +42,10 @@ impl CdtTarget {
     /// # Errors
     ///
     /// Returns [`CdtError::InvalidSimulationConfiguration`] if `temperature` is
-    /// not finite and positive with a finite reciprocal. [`ActionConfig`] has already validated its
-    /// couplings before this constructor receives it.
+    /// not finite and positive with a finite reciprocal, or if dividing the
+    /// conservative action-magnitude bound by `temperature` is non-finite (see
+    /// [`ExpectedConstraint::FiniteLogProbability`]). [`ActionConfig`] has already
+    /// validated its couplings before this constructor receives it.
     ///
     /// # Examples
     ///
@@ -55,13 +58,14 @@ impl CdtTarget {
     pub fn new(action_config: ActionConfig, temperature: f64) -> CdtResult<Self> {
         action_config.validate();
         validate_temperature(temperature)?;
-        if !(action_config.maximum_action_magnitude() / temperature).is_finite() {
+        let maximum_action_magnitude = action_config.maximum_action_magnitude();
+        if !(maximum_action_magnitude / temperature).is_finite() {
             return Err(CdtError::InvalidSimulationConfiguration {
-                setting: crate::errors::ConfigurationSetting::Temperature,
-                provided_value: temperature.to_string(),
-                expected:
-                    "large enough to keep -action / temperature finite for representable CDT states"
-                        .to_string(),
+                setting: ConfigurationSetting::Temperature,
+                provided_value: temperature.into(),
+                expected: ExpectedConstraint::FiniteLogProbability {
+                    maximum_action_magnitude,
+                },
             });
         }
         Ok(Self {

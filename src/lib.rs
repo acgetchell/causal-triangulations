@@ -217,10 +217,10 @@ pub use errors::{
     CdtValidationCheck, CdtValidationFailure, CheckpointMoveCounter, CheckpointOperation,
     CheckpointResumeFailure, CheckpointRngStream, ConfigurationSetting, DelaunayGenerationFailure,
     DelaunayGenerationQuantity, DelaunayGenerationStage, DelaunayValidationLevel,
-    GenerationParameterIssue, MeasurementCountField, MetropolisMoveApplicationFailure,
-    ObservableQuantity, OutputFormat, OutputPreparationStage, OutputRollbackFailure,
-    OutputWriteStage, ProposalFailureStage, ProposalTelemetryCounter, ScalarTraceField,
-    SimplexCountField, TriangulationMetadataField,
+    ExpectedConstraint, GenerationParameterIssue, MeasurementCountField,
+    MetropolisMoveApplicationFailure, ObservableQuantity, ObservedValue, OutputFormat,
+    OutputPreparationStage, OutputRollbackFailure, OutputWriteStage, ProposalFailureStage,
+    ProposalTelemetryCounter, ScalarTraceField, SimplexCountField, TriangulationMetadataField,
 };
 pub use geometry::traits::TriangulationQuery;
 pub use geometry::{SpacetimeCoordinate, SpacetimeCoordinateComponent, SpacetimeCoordinateError};
@@ -358,10 +358,11 @@ pub mod prelude {
             CdtResult, CdtValidationCheck, CdtValidationFailure, CheckpointMoveCounter,
             CheckpointOperation, CheckpointResumeFailure, CheckpointRngStream,
             ConfigurationSetting, DelaunayGenerationFailure, DelaunayGenerationQuantity,
-            DelaunayGenerationStage, DelaunayValidationLevel, GenerationParameterIssue,
-            MeasurementCountField, MetropolisMoveApplicationFailure, ObservableQuantity,
-            OutputFormat, OutputPreparationStage, OutputRollbackFailure, OutputWriteStage,
-            ProposalFailureStage, ProposalTelemetryCounter, ScalarTraceField, SimplexCountField,
+            DelaunayGenerationStage, DelaunayValidationLevel, ExpectedConstraint,
+            GenerationParameterIssue, MeasurementCountField, MetropolisMoveApplicationFailure,
+            ObservableQuantity, ObservedValue, OutputFormat, OutputPreparationStage,
+            OutputRollbackFailure, OutputWriteStage, ProposalFailureStage,
+            ProposalTelemetryCounter, ScalarTraceField, SimplexCountField,
             TriangulationMetadataField,
         };
         pub use crate::geometry::SpacetimeCoordinateComponent;
@@ -1847,9 +1848,9 @@ mod tests {
             config.into_validated(),
             Err(CdtError::InvalidSimulationConfiguration {
                 setting: ConfigurationSetting::MeasurementFrequency,
-                ref provided_value,
-                ref expected,
-            }) if provided_value == "0" && expected == "≥ 1"
+                provided_value: ObservedValue::Count(0),
+                expected: ExpectedConstraint::AtLeast { minimum: 1 },
+            })
         );
     }
 
@@ -1863,9 +1864,9 @@ mod tests {
             config.into_validated(),
             Err(CdtError::InvalidSimulationConfiguration {
                 setting: ConfigurationSetting::MeasurementFrequency,
-                ref provided_value,
-                ref expected,
-            }) if provided_value == "200" && expected == "≤ steps (100)"
+                provided_value: ObservedValue::Count(200),
+                expected: ExpectedConstraint::AtMostSteps { steps: 100 },
+            })
         );
     }
 
@@ -1878,9 +1879,9 @@ mod tests {
             config.into_validated(),
             Err(CdtError::InvalidConfiguration {
                 setting: ConfigurationSetting::Vertices,
-                ref provided_value,
-                ref expected,
-            }) if provided_value == "2" && expected == "≥ 3"
+                provided_value: ObservedValue::Count(2),
+                expected: ExpectedConstraint::AtLeast { minimum: 3 },
+            })
         );
     }
 
@@ -1893,10 +1894,9 @@ mod tests {
             config.into_validated(),
             Err(CdtError::InvalidSimulationConfiguration {
                 setting: ConfigurationSetting::Temperature,
-                ref provided_value,
-                ref expected,
-            }) if provided_value == "-1"
-                && expected == "finite and positive with a finite reciprocal"
+                provided_value: ObservedValue::Float(value),
+                expected: ExpectedConstraint::PositiveFiniteReciprocal,
+            }) if value.to_bits() == (-1.0_f64).to_bits()
         );
     }
 

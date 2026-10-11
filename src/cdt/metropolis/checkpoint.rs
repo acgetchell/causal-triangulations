@@ -1524,7 +1524,9 @@ mod tests {
     use super::*;
     use crate::cdt::foliation::FoliationError;
     use crate::cdt::triangulation::CdtTriangulation;
-    use crate::errors::{ConfigurationSetting, MeasurementCountField};
+    use crate::errors::{
+        ConfigurationSetting, ExpectedConstraint, MeasurementCountField, ObservedValue,
+    };
     use crate::geometry::backends::delaunay::tests::backend_state_value;
     use serde_json::{json, to_value};
     use std::assert_matches;
@@ -1586,15 +1588,17 @@ mod tests {
             checkpoint_field_error("/config/temperature", json!(0)),
             CdtError::InvalidSimulationConfiguration {
                 setting: ConfigurationSetting::Temperature,
-                ..
-            }
+                provided_value: ObservedValue::Float(value),
+                expected: ExpectedConstraint::PositiveFiniteReciprocal,
+            } if value.to_bits() == 0.0_f64.to_bits()
         );
         assert_matches!(
             checkpoint_field_error("/action_config/coupling_0", json!(f64::MAX)),
             CdtError::InvalidConfiguration {
                 setting: ConfigurationSetting::ActionCouplings,
-                ..
-            }
+                provided_value: ObservedValue::ActionCouplings { coupling_0, .. },
+                expected: ExpectedConstraint::FiniteAction { maximum_simplex_count: usize::MAX },
+            } if coupling_0.to_bits() == f64::MAX.to_bits()
         );
     }
 

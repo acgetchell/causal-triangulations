@@ -7,7 +7,7 @@ use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::results::Measurement;
 use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::config::validate_schedule;
-use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
+use crate::errors::{CdtError, CdtResult, ConfigurationSetting, ExpectedConstraint, ObservedValue};
 use std::num::NonZeroU32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,8 +27,8 @@ pub struct SimplexCounts {
 /// public Metropolis error contract.
 pub const fn invalid_sim_config(
     setting: ConfigurationSetting,
-    provided_value: String,
-    expected: String,
+    provided_value: ObservedValue,
+    expected: ExpectedConstraint,
 ) -> CdtError {
     CdtError::InvalidSimulationConfiguration {
         setting,
@@ -81,8 +81,8 @@ pub fn validate_temperature(temperature: f64) -> CdtResult<()> {
     } else {
         Err(invalid_sim_config(
             ConfigurationSetting::Temperature,
-            temperature.to_string(),
-            "finite and positive with a finite reciprocal".to_string(),
+            temperature.into(),
+            ExpectedConstraint::PositiveFiniteReciprocal,
         ))
     }
 }

@@ -5,7 +5,7 @@
 //! This module implements the discrete Einstein-Hilbert action used in CDT,
 //! which is based on the Regge calculus formulation of general relativity.
 
-use crate::errors::{CdtError, CdtResult, ConfigurationSetting};
+use crate::errors::{CdtError, CdtResult, ConfigurationSetting, ExpectedConstraint, ObservedValue};
 use num_traits::cast::NumCast;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::f64::consts::LN_2;
@@ -317,8 +317,8 @@ fn validate_coupling(setting: ConfigurationSetting, value: f64) -> CdtResult<()>
     } else {
         Err(CdtError::InvalidConfiguration {
             setting,
-            provided_value: value.to_string(),
-            expected: "finite".to_string(),
+            provided_value: value.into(),
+            expected: ExpectedConstraint::Finite,
         })
     }
 }
@@ -350,10 +350,14 @@ fn validate_action_range(
 
     Err(CdtError::InvalidConfiguration {
         setting: ConfigurationSetting::ActionCouplings,
-        provided_value: format!("[{coupling_0}, {coupling_2}, {cosmological_constant}]"),
-        expected:
-            "joint magnitude that keeps action evaluation finite for representable simplex counts"
-                .to_string(),
+        provided_value: ObservedValue::ActionCouplings {
+            coupling_0,
+            coupling_2,
+            cosmological_constant,
+        },
+        expected: ExpectedConstraint::FiniteAction {
+            maximum_simplex_count: usize::MAX,
+        },
     })
 }
 
