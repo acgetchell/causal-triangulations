@@ -32,7 +32,7 @@ reviews:
   path_filters:
     - "!tests/semgrep/**"
   path_instructions:
-    - path: "scripts/tests/*.py"
+    - path: "tooling/tests/*.py"
       instructions: |
         These are consumer integration tests for the installed research-repo-tools package.
         Check CDT configuration and behavior at public API boundaries without duplicating generic upstream tests.

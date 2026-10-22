@@ -1,7 +1,10 @@
 # Tooling integration tests
 
-Generic maintenance uses the published `research-repo-tools==0.1.7` package.
-This directory contains only consumer integration tests; CDT no longer builds a Python support package or maintains local maintenance CLIs.
+Generic maintenance uses the published `research-repo-tools==0.2.3` package.
+This directory contains CDT's tooling configuration and consumer integration tests under `tests/`; CDT maintains no local maintenance CLIs.
+The independent `semgrep/` project retains Python 3.14, the exact scanner pin, and its MCP security override while root tooling and notebooks use Python 3.15.
+`selected-actions.json` declares exact approved workflow Action identities for the shared structured allowlist; Zizmor and Semgrep retain SHA and readable
+version-comment checks. See the [ownership catalog](../docs/dev/tooling-alignment.md#shared-tooling-retirement-catalog) for retained policy and upstream gaps.
 
 Bootstrap from the repository root:
 

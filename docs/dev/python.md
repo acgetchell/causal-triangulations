@@ -19,7 +19,9 @@ just test-python
 
 Shared file discovery covers every tracked and nonignored `.py` and `.pyi` file. Ruff check, Ruff format, and `ty check --error all` receive explicit paths
 with force-exclusion disabled. Both ordinary code and negative fixtures run the full configured Ruff policy; no recipe narrows it with `--select`.
-`python-fixtures-check` is an explicit CI prerequisite, with exact fixture/rule exceptions in `pyproject.toml` for deliberate violations.
+The canonical shared `python check` command owns this complete inventory in CI, with exact fixture/rule exceptions in `pyproject.toml` for deliberate
+violations. The compatibility names `python-fixtures-check` and `python-source-check` both alias the complete check. Shared `python fix` and
+`python typecheck` likewise own fixing and strict typing; CDT retains its newer explicit Ruff/Ty pins instead of adopting the older optional shared profile.
 
 `just check` also runs Python formatting checks, Ruff, `ty`, and repository-owned Semgrep rules as part of the normal validation bundle.
 
@@ -28,7 +30,7 @@ with force-exclusion disabled. Both ordinary code and negative fixtures run the 
 ## Typing
 
 - Annotate arguments and returns, including test fixtures, methods, and variadic parameters. Ruff ANN rules enforce this inventory.
-- Use Python 3.14's native deferred annotations; do not add `from __future__ import annotations`.
+- Use Python 3.15's native deferred annotations; do not add `from __future__ import annotations`.
 - Move imports used only by annotations into `if TYPE_CHECKING:` blocks. Strict Ruff TC rules enforce this separation.
 - Prefer concrete standard-library types over `Any`, `dict`, or bare `Mock` when the shape is known.
 - Keep helper signatures precise enough that `ty` can validate call sites.
@@ -72,7 +74,7 @@ Structured results keep tests close to production behavior and give `ty` real at
 
 ## Test Helpers
 
-Put reusable typed test helpers near the top of the test module or in `scripts/tests/conftest.py` when they are shared. Prefer one helper that returns the real
+Put reusable typed test helpers near the top of the test module or in `tooling/tests/conftest.py` when they are shared. Prefer one helper that returns the real
 structured type over repeating partially configured mocks throughout a file.
 
 ## Parser and File-Format Contracts

@@ -88,11 +88,6 @@ causal-triangulations/
 ├── proptest-regressions/
 │   └── cdt/
 │       └── triangulation.txt
-├── scripts/
-│   ├── tests/
-│   │   ├── __init__.py
-│   │   └── test_shared_tooling.py
-│   └── README.md
 ├── src/
 │   ├── cdt/
 │   │   ├── metropolis/
@@ -164,11 +159,20 @@ causal-triangulations/
 │   ├── regressions.rs
 │   └── trait_bound_ergonomics.rs
 ├── tooling/
+│   ├── semgrep/
+│   │   ├── .python-version
+│   │   ├── pyproject.toml
+│   │   └── uv.lock
+│   ├── tests/
+│   │   ├── __init__.py
+│   │   └── test_shared_tooling.py
 │   ├── benchmark.toml
 │   ├── examples.toml
 │   ├── performance-interpretation.md
 │   ├── performance-readme.example.toml
-│   └── performance-report.toml
+│   ├── performance-report.toml
+│   ├── selected-actions.json
+│   └── README.md
 ├── .bencher.toml
 ├── .codecov.yml
 ├── .coderabbit.yml
@@ -229,8 +233,8 @@ enforce this boundary against new CDT-local generic acceptance draws or manual a
 - `benches/` — Criterion benchmark harnesses and CI performance suites, with shared fail-fast fixture setup support under `benches/support/`.
 - `docs/` — user guides, architecture notes, development rules, and release/testing/performance documentation.
   [The documentation index](README.md) maps their owners; [documentation policy](dev/DEVELOPING.md#documentation-and-command-policy) defines guide naming.
-- `scripts/` — focused integration tests for the installed shared tooling and CDT configuration.
-- `tooling/` — benchmark measurement, example validation, report, and README publication contracts. Generic infrastructure uses `research-repo-tools`.
+- `tooling/` — benchmark measurement, example validation, report, and README publication contracts, plus consumer integration tests under `tests/` and the
+  independent Python 3.14 Semgrep environment under `semgrep/`. Generic infrastructure and root Python 3.15 tooling use `research-repo-tools`.
 
 ## Key Modules
 

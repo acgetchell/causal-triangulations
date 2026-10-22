@@ -1099,24 +1099,6 @@ rules:
       - pattern-regex: '"execution_count"\s*:\s*(?!\s*null\b)[^,\n}]+'
       - pattern-regex: '(?ms)"outputs"\s*:\s*\[\s*\{'
 
-  - id: causal-triangulations.github-actions.external-action-approved-allowlist
-    languages:
-      - regex
-    severity: WARNING
-    message: "Use only approved external GitHub Actions, or update the repository allowlist deliberately."
-    metadata:
-      category: security
-      tracking_issue: "https://github.com/acgetchell/causal-triangulations/issues/129"
-      rationale: "A small allowlist keeps workflow supply-chain review explicit."
-    paths:
-      include:
-        - "/.github/workflows/**/*.yml"
-        - "/.github/workflows/**/*.yaml"
-        - "/tests/semgrep/.github/workflows/**/*.yml"
-        - "/tests/semgrep/.github/workflows/**/*.yaml"
-    patterns:
-      - pattern-regex: '(?m)^[ \t]*(?:-[ \t]*)?uses:[ \t]*(?!\./)(?!docker://)(?!(?:actions/checkout|actions/cache|actions/upload-artifact|actions/download-artifact|actions/github-script|actions/setup-python|actions-rust-lang/setup-rust-toolchain|astral-sh/setup-uv|taiki-e/cache-cargo-install-action|github/codeql-action/(?:upload-sarif|init|analyze)|codecov/codecov-action|zizmorcore/zizmor-action|acgetchell/research-repo-tools/\.github/workflows/dependabot-approve\.yml)@)[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*@' # yamllint disable-line rule:line-length
-
   - id: causal-triangulations.github-actions.external-action-version-comment
     languages:
       - regex
@@ -1255,7 +1237,7 @@ rules:
         while failing on Windows when benchmark output contains Unicode symbols.
     paths:
       include:
-        - "/scripts/tests/**/*.py"
+        - "/tooling/tests/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
     patterns:
       - pattern-either:
@@ -1282,7 +1264,7 @@ rules:
         of swallowing unrelated errors.
     paths:
       include:
-        - "/scripts/**/*.py"
+        - "/tooling/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
     pattern-regex: '^\s*except\s+Exception(?:\s+as\s+\w+)?\s*:'
 
@@ -1298,7 +1280,7 @@ rules:
         mocks stay aligned with production subprocess APIs.
     paths:
       include:
-        - "/scripts/tests/**/*.py"
+        - "/tooling/tests/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
     pattern-either:
       - patterns:
@@ -1378,8 +1360,8 @@ rules:
         for executable resolution, shell rejection, text output, and timeouts.
     paths:
       include:
-        - "/scripts/**/*.py"
+        - "/tooling/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
       exclude:
-        - "/scripts/tests/**/*.py"
+        - "/tooling/tests/**/*.py"
     pattern: subprocess.run(...)

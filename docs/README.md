@@ -33,6 +33,7 @@ Start with [the project README](../README.md) to choose a workflow and run a sma
 - [Rust](dev/rust.md), [Python](dev/python.md), and [testing](dev/testing.md): development rules.
 - [Code organization](code-organization.md): architecture boundaries and file inventory.
 - [Tooling alignment](dev/tooling-alignment.md): shared-tool adoption and documented differences.
+- [Tooling contracts](../tooling/README.md): consumer tests and independent scanner environment.
 - [Benchmarking](BENCHMARKING.md): measurement, retained evidence, and report publication.
 - [Releasing](RELEASING.md): metadata preparation and publication.
 - [Security policy](../SECURITY.md): private vulnerability reporting.

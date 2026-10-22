@@ -35,6 +35,9 @@ just update
 `pyproject.toml`. Use `update-tools` or `update-dependencies` for an independent scope, and `tools-check` for non-mutating installed-version verification.
 Review every resulting manifest, lockfile, and pin change before committing it.
 
+Python updates delegate to `deps update-python --all-projects`: the root uses Python 3.15, and `tooling/semgrep` retains its own Python 3.14 selector,
+exact scanner pin, wheel-only installation, and MCP security override. Both projects refresh their locks and synchronize their own environments.
+
 To adopt a newer published shared package and its Python baseline, preview `just shared-python-plan VERSION`, then apply the reviewed plan with
 `just shared-python-update VERSION`. Supply the package version, not a Python version. These commands run outside the old environment.
 `just tools-clean` previews unused managed-cache entries; `just tools-clean --apply` removes them.
@@ -109,7 +112,7 @@ because nextest does not run rustdoc doctests.
 ## Dependency And Secret Scanning
 
 ```bash
-just audit             # OSV: Cargo.lock and uv.lock
+just audit             # OSV: Cargo.lock, uv.lock, and tooling/semgrep/uv.lock
 just security-secrets  # Gitleaks: all reachable history and current tracked/nonignored files
 just security          # Both scans
 ```
@@ -422,12 +425,13 @@ The repository has separate workflows for full CI, dependency audit, Codecov cov
 CodeQL analysis. Do not add another external analysis workflow unless it has a distinct signal and required secrets are configured for this repository.
 
 External GitHub Actions must use full commit-SHA pins, stay within the
-repository-owned allowlist in `semgrep.yaml`, and keep a readable version
+repository-owned allowlist in `tooling/selected-actions.json`, and keep a readable version
 comment next to each pin. Dependabot remains configured for the
 `github-actions` ecosystem; its update PRs should preserve both the SHA pin and
 the adjacent human-readable version comment.
 
-Zizmor owns full-SHA pin validation. Semgrep owns the CDT action allowlist and readable version-comment policy.
+`just actions-allowlist-check` uses the shared structured parser to enforce exact Action and nested workflow identities in workflows.
+Zizmor owns full-SHA pin validation. Semgrep owns the readable version-comment policy.
 
 ### Dependabot Approval and Auto-Merge
 
@@ -607,7 +611,7 @@ just publish-check
 | `examples/`   | `just examples-validate`                     |
 | `benches/`    | `just bench-compile`                         |
 | `src/`        | `just test-unit test-doc` (or `just ci`)     |
-| `scripts/`    | `just python-check test-python`              |
+| `tooling/`    | `just python-check test-python`              |
 | `notebooks/`  | `just notebook-check`                        |
 | Any Rust      | Also run `just doc-check` with the applicable Rust path command |
 

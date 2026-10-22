@@ -1,5 +1,135 @@
 # Tooling Alignment
 
+## Git Authorization Alignment With la-stack
+
+Align `AGENTS.md` with la-stack's Git guidance: explicit user authorization permits scoped branch, index, commit, push, and tag operations, including necessary
+supporting steps. Authorization persists for the task and requires clarification only when the scope changes. Preserve unrelated user changes, and present
+manual commands when authorization is absent. Commit-message guidance likewise defers to an explicitly authorized commit instead of always requiring a
+manual handoff. This documentation change grants no authorization to perform Git mutations itself.
+
+## Issue #299 Published Tooling Adoption
+
+Adopt published `research-repo-tools` 0.2.3 through `shared-python-plan` and `shared-python-update`, including its Python 3.15 root/notebook baseline.
+The first preview fails because Semgrep 1.182.1 pins Windows `pywin32` 311, which has no CPython 3.15 wheel. Follow la-stack's independent
+`tooling/semgrep` project: retain Python `>=3.14,<3.15`, selector 3.14, exact Semgrep 1.182.1, wheel-only scanner installation, and the patched
+`mcp>=1.30.0,<2` override. CDT previously had no independent scanner environment or active override; this explicitly adopts la-stack's security policy.
+Keep the shared package in the root, with nested uv execution supplying the scanner executable to the root fixture harness.
+
+Declare the scanner in `deps.python-projects` and delegate Python updates to `deps update-python --all-projects`. Root development pins advance while
+scanner requirements, interpreter bounds, and overrides remain intact; both locks and environments refresh. OSV and Dependabot inventories must cover the
+new project. Preserve the existing staged Cargo/Python dependency refresh and managed tool pins.
+
+Move the remaining consumer tests and their README from `scripts/` into `tooling/`, updating pytest discovery, Ruff source roots, CodeRabbit instructions,
+Semgrep production-path coverage, and architecture/navigation references. Remove the obsolete top-level directory; deliberate Semgrep fixture paths and
+runnable `examples/scripts` stay put. Rule IDs, patterns, and positive/closest-compliant fixtures retain their existing contracts.
+
+Issue #304 completes adoption of the available maintenance APIs in the same published package. Use canonical `python check/fix/typecheck` for the complete
+Python inventory, including deliberate negative fixtures with their existing narrow exceptions. Keep compatibility names as aliases to the complete check,
+and use public `just_inspect` helpers for native recipe inspection. Retain consumer-owned pytest 9.1.1, Ruff 0.17.1, and Ty 0.0.90 pins: the optional shared
+`python-tools` extra would downgrade Ruff to 0.16.9 and Ty to 0.0.84. Tool installation and execution remain shared independently of this version decision.
+
+Use shared aggregate `semgrep scan` with 50-file batches, paired JSON/SARIF reports under `target/security/semgrep/`, strict native errors, disabled inline
+suppressions, one worker, and the existing 30-second target timeout. Explicitly exclude the five files with no applicable CDT rule: `.codecov.yml`,
+`.coderabbit.yml`, `.github/actions/setup-toolchain/action.yml`, `.github/dependabot.yml`, and `semgrep.yaml`. They retain their owning YAML, workflow,
+configuration, and fixture checks. A real multi-batch consumer regression verifies complete eligible-input coverage and the final SARIF rule inventory;
+the SARIF workflow uploads that same aggregate report with its existing category and failure gates. Do not enable optional Rust-doc extraction.
+
+Replace the regex Actions identity allowlist with shared structured `actions allowlist`, using `tooling/selected-actions.json` and the explicit workflow
+directory. The installed parser rejects composite actions with `workflow requires jobs`; retain existing composite setup validation and track that upstream
+gap with a matching adoption issue. Preserve every approved exact identity, including the single approved nested Dependabot workflow; no owner-wide or verified
+action exemption is enabled. Keep readable-version comments in Semgrep, full-SHA enforcement in Zizmor, and all permissions, credentials, cache, and
+privileged workflow policies. Run the allowlist before runtime workloads in `ci` and through `lint-config` in local checks.
+
+Registry-only release jobs move to the same package version, uv pin, explicit Python baseline, and reviewed registry cutoff. They still execute no benchmark
+checkout with a write token. No local wheel, sibling source, editable dependency, or temporary registry override belongs in committed configuration.
+
+Trusted main-artifact reuse is applicable to future Cargo validation evidence, but this adoption does not implement a Cargo publisher or claim fresh
+scientific measurements from earlier main unit checks. CDT has no signed main package-evidence producer or native crates.io workflow yet (#289).
+Keep manual `cargo publish --locked`, Cargo package verification, `ci-slow`, the scientific claim checklist, geometry/CDT invariant gates, and fresh
+correctness-gated baseline-v2 measurements. Any later promotion must bind the exact source, run attempt, validator jobs, package/artifact IDs and digests,
+signatures, citation/source/harness provenance, and actual registry approval controls. Python wheel/sdist promotion commands do not establish that Cargo
+contract. Existing immutable benchmark attachments remain unchanged.
+
+Published identity, verified against [PyPI][rrt-023-pypi] and the [release attestation][rrt-023-attestation] on 22 October 2026:
+
+- Package version 0.2.3, Python `>=3.15`, source commit `4085125526e21b2855eb7c61a52ee312782ae31a`.
+- `research_repo_tools-0.2.3-py3-none-any.whl`: SHA-256 `da5f0259027662e7706b7f2b8a38d8e1f1d8a5dce314e2c996177b2947514fc6`.
+- `research_repo_tools-0.2.3.tar.gz`: SHA-256 `13700b174656ffad265ecb926dd66013949853b7a39c088ab6d3852aba72df95`.
+- Original main-push run `39683808521`, attempt 1; `distributions-1` artifact `12384819432`, ZIP SHA-256
+  `bed8d086c4f1693924293c3049c3ede8a6a2fca5cf1a73dbf2e2c353a26aeaee`.
+- Promotion run `39691177801`, attempt 1; `validated-evidence-1` artifact `12388710693`, ZIP SHA-256
+  `9a7d15463bb8dab2791005b04bfbd696c0b4e5bca98d520ed59d917d84c69e88`.
+
+Registry-only jobs use uv 0.13.5, Python 3.15, and cutoff `2026-10-22T08:29:37Z`. Root and scanner locks retain registry URLs and hashes.
+Hosted Linux/macOS/Windows `just ci`, target checks, and SARIF workflows remain required for the final PR head; local macOS evidence cannot establish
+their results. Cargo package verification and `ci-slow` remain additional release gates, independent of adoption checks.
+
+Local acceptance on `aarch64-apple-darwin` passes `just tools-check`, both `uv lock --check` commands, and the complete `just ci` gate: 42 consumer tests,
+768 Rust unit/integration tests, 333 doctests plus two additional rustdoc tests, strict Clippy/docs, Semgrep/fixtures, notebook hygiene/lint/execution,
+benchmark compilation, deterministic allocation budgets, and all four example contracts. This is the #299 acceptance run before the #304 command migration.
+The added real-scanner regression proves relocated Python violations are detected and adjacent compliant cases pass; the benchmark contract now checks
+the loader's `MeasurementConfig` variant before accessing Criterion-specific fields.
+
+The actual `update-python-dependencies` recipe also passes in a disposable consumer copy using registry packages. It refreshes both locks/environments,
+advances compatible dependencies, and preserves the scanner manifest and selector byte-for-byte. The installed environments report Python 3.15.0 with
+shared tooling 0.2.3, and Python 3.14.7 with Semgrep 1.182.1/MCP 1.30.0. The adopted project kernel targets the root `.venv` interpreter.
+Both registry-only release command help probes pass with the workflow's exact pin, Python selector, and cutoff; no release is created or uploaded.
+Local logs are retained under `target/issue-299-*.log`. These adoption checks do not produce or certify new release measurements.
+
+Production maintenance Python remains zero lines. The #304 consumer-test change grows `test_shared_tooling.py` from 503 to 567 lines and collected cases
+from 42 to 48; the one-line package docstring is unchanged. Additions protect the real multi-batch report/CI upload boundary, exact configured Action
+identities and early failure propagation. Repeated dry-run subprocess calls now use shared Just inspection; no generic parser/aggregation engine is copied.
+
+[rrt-023-pypi]: https://pypi.org/project/research-repo-tools/0.2.3/
+[rrt-023-attestation]: https://github.com/acgetchell/research-repo-tools/releases/download/v0.2.3/release-attestation.json
+
+### Shared Tooling Retirement Catalog
+
+The complete upstream 16-row catalog is reconciled below against installed registry version 0.2.3, source
+`4085125526e21b2855eb7c61a52ee312782ae31a`. Canonical Python commands and Just inspection first shipped in 0.1.8, Python-baseline inheritance in 0.1.7,
+and shared Zizmor in 0.1.6; this consumer adopts them together through 0.2.3. Other rows use the supported 0.2.3 interface. No copied maintenance Python,
+local wheel, editable dependency, production Python package, or local parser/renderer remains. Native tools and scientific workloads remain necessary.
+
+| Catalog row | Disposition, command owner, and retained boundary |
+| --- | --- |
+| 1. Package/bootstrap | Migrated: `pyproject.toml`/`uv.lock` exact registry tooling and notebook extras; `setup` delegates installation. No application Python package needs preservation. |
+| 2. Tool installation/version authority | Migrated: `setup`, `tools-check`, managed `toolchain run/export`; Just comes from `rust-just`. Retain Rust/MSRV, Cargo/binary declarations, system prerequisites, independent Semgrep compatibility, and newer consumer Ruff/Ty/pytest pins. |
+| 3. Tool/dependency updates | Migrated: shared `deps`, `toolchain upgrade`, and `update-python --all-projects`. Retain scientific Cargo dependency policy and explicit scanner project/override. |
+| 4. Python baseline/settings | Migrated: inherited Python 3.15 root/notebook baseline and supported mirrors; retain scanner Python 3.14 until its native wheel requirements permit an upgrade. |
+| 5. Python checks/defaults | Migrated: canonical `python check/fix/typecheck`, complete discovery and strict Ty. Retain Ruff selections, typing policy, and exact negative-fixture exceptions; optional older shared tool versions are deliberately not adopted. |
+| 6. Changelog/notes | Migrated: shared `changelog` generation, normalization, rotation and notes. Retain repository identity/format declarations and historical archives. |
+| 7. Release metadata | Migrated: shared `release` transactions/checks. Retain version/citation/DOI rules and approval boundaries; native Cargo publication remains separately tracked in #289. |
+| 8. Notebook infrastructure | Partially migrated: shared kernel sync, hygiene, lint, execution, output clearing. Retain scientific cells, fast/slow choice and timeout policy. Selected-file Lab launch adapter is blocked on upstream #131 → CDT #300. |
+| 9. Performance acquisition/evidence | Partially migrated: shared Criterion measurement, provenance, assets and evidence. Retain native harnesses, correctness gates, case inventories and immutable evidence. Generic CLI timer retirement is blocked on #134 → #303. |
+| 10. Reports/publication | Partially migrated: shared report promotion and README publication. Retain authored interpretation/selections; strict empty/orphan inventory adapter is blocked on #133 → #302. |
+| 11. Discovery/native validators | Partially migrated: shared selection, fixture harness, aggregate scanner and Just inspection. Retain Semgrep rules/fixtures, native format/lint policy and thin Just graph. Cargo example stderr assertions keep the existing adapter until #132 → #301. |
+| 12. Workflow security | Partially migrated: shared Zizmor, structured workflow allowlist and privileged Dependabot workflow. Retain exact Action identities, SHA/comments, permissions, triggers, cache/token boundaries and report gates. Composite allowlist extension is blocked on #135 → #305. |
+| 13. Code review | Migrated: opt-in shared CodeRabbit commands. Retain `AGENTS.md`, `.coderabbit.yml` and scientific review policy; ordinary checks do not run a review. |
+| 14. CI/SARIF/coverage | Migrated: managed exports, shared coverage summary and paired aggregate Semgrep reports. Retain native matrix, Cargo flags, Clippy SARIF pipeline, uploads, category/failure conditions, cache policy and required checks. |
+| 15. Process/file infrastructure | Migrated: public process/evidence/publication APIs and Just inspection in consumer tests. No copied production executable discovery, subprocess engine, file transaction or batching implementation remains. |
+| 16. Tests/dependencies/guidance | Migrated: `tooling/tests/` exercises installed-package integration and CDT policy; generic infrastructure tests stay upstream. Retain scientific tests/notebooks and native evidence. Top-level `scripts/` and obsolete one-batch SARIF guard are removed. |
+
+Native validators remain configured in `pyproject.toml`, `ty.toml`, `semgrep.yaml`, `rust-toolchain.toml`, `Cargo.toml`, formatter/spelling configuration and
+the Just graph. These declarations express consumer policy; shared ownership of invocation does not make them obsolete. The managed inventory includes
+Cargo audit/edit/coverage/machete/nextest, Clippy SARIF, dprint, git-cliff, rumdl, SARIF formatting, Taplo, typos, Zizmor, Gitleaks and OSV. Native actionlint,
+Ruff, Ty, pytest, Semgrep, Markdown/YAML/TOML/spelling, Rust tests/docs/format/Clippy, shell checks and scientific gates remain exercised.
+
+Each unfinished adapter has an upstream capability issue and a matching CDT adoption issue with a native dependency:
+
+- [Selected notebook launch #131](https://github.com/acgetchell/research-repo-tools/issues/131) →
+  [CDT #300](https://github.com/acgetchell/causal-triangulations/issues/300).
+- [Cargo example stderr #132](https://github.com/acgetchell/research-repo-tools/issues/132) →
+  [CDT #301](https://github.com/acgetchell/causal-triangulations/issues/301).
+- [Uninitialized report inventory #133](https://github.com/acgetchell/research-repo-tools/issues/133) →
+  [CDT #302](https://github.com/acgetchell/causal-triangulations/issues/302).
+- [External-command timing #134](https://github.com/acgetchell/research-repo-tools/issues/134) →
+  [CDT #303](https://github.com/acgetchell/causal-triangulations/issues/303).
+- [Composite Action references #135](https://github.com/acgetchell/research-repo-tools/issues/135) →
+  [CDT #305](https://github.com/acgetchell/causal-triangulations/issues/305).
+
+Retirement requires a published exact package release, preserved behavior, installed-consumer checks and native CI evidence. An upstream merge alone does
+not replace the working adapter. Python-tool version inheritance and native/scientific policy are justified retained ownership, not missing shared APIs.
+
 ## 6 October 2026 Tooling Review Follow-Up
 
 The changed-file tooling review checks the Rust 1.99 baseline, managed-tool pin propagation, local validation graph, Clippy/Semgrep enforcement, affected

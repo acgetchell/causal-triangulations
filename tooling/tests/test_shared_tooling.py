@@ -3,6 +3,7 @@
 import json
 import os
 import re
+import shlex
 import tomllib
 from importlib.metadata import version
 from pathlib import Path
@@ -12,8 +13,10 @@ import yaml
 from research_repo_tools.cli import main
 from research_repo_tools.criterion import COMPARISON_SCHEMA, Estimate, Sample, compare_samples, serialize_comparison
 from research_repo_tools.evidence import Evidence, Provenance, publish_evidence
-from research_repo_tools.measurement import load_measurement
+from research_repo_tools.just_inspect import dry_run, inspect_justfile
+from research_repo_tools.measurement import MeasurementConfig, load_measurement
 from research_repo_tools.process import run_safe_command
+from research_repo_tools.selection import select_files
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -35,7 +38,7 @@ def test_dependabot_caller_only_delegates_with_complete_cdt_file_policy() -> Non
     policy = json.loads(job["with"]["policy"])
     assert set(policy) == {"cargo", "uv", "github_actions"}
     assert set(policy["cargo"]["files"]) == {"Cargo.toml", "Cargo.lock"}
-    assert set(policy["uv"]["files"]) == {"pyproject.toml", "uv.lock"}
+    assert set(policy["uv"]["files"]) == {"pyproject.toml", "uv.lock", "tooling/semgrep/pyproject.toml", "tooling/semgrep/uv.lock"}
     action_files = {
         path.relative_to(ROOT).as_posix()
         for directory in (ROOT / ".github/workflows", ROOT / ".github/actions")
@@ -52,20 +55,176 @@ def test_published_tooling_pin_and_consumer_metadata() -> None:
     assert main(["--root", str(ROOT), "release", "check", "--final-release"]) == 0
 
 
+def test_independent_scanner_contract_and_update_inventory() -> None:
+    """Python adoption and ordinary updates preserve the scanner's supported environment."""
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert project["tool"]["research-repo-tools"]["deps"]["python-projects"] == ["tooling/semgrep"]
+    assert all(not (isinstance(item, str) and item.startswith("semgrep")) for item in project["dependency-groups"]["dev"])
+    scanner = ROOT / "tooling/semgrep"
+    manifest = tomllib.loads((scanner / "pyproject.toml").read_text(encoding="utf-8"))
+    assert manifest["project"]["requires-python"] == ">=3.14,<3.15"
+    assert (scanner / ".python-version").read_text(encoding="utf-8").strip() == "3.14"
+    assert manifest["project"]["dependencies"] == ["semgrep==1.182.1"]
+    assert manifest["tool"]["uv"]["no-build-package"] == ["semgrep"]
+    assert manifest["tool"]["uv"]["override-dependencies"] == ["mcp>=1.30.0,<2"]
+    dependabot = yaml.safe_load((ROOT / ".github/dependabot.yml").read_text(encoding="utf-8"))
+    updates = next(item for item in dependabot["updates"] if item["package-ecosystem"] == "uv")
+    assert set(updates["directories"]) == {"/", "/tooling/semgrep"}
+    for recipe in ("semgrep", "semgrep-test"):
+        commands = dry_run(ROOT, recipe).stderr
+        assert "--project tooling/semgrep uv run --locked --group dev research-repo-tools" in commands
+
+
+def test_python_rules_cover_relocated_tooling_tests(tmp_path: Path) -> None:
+    """Actual scanner path filters still reject violations beside the relocated tests."""
+    directory = tmp_path / "tooling/tests"
+    directory.mkdir(parents=True)
+    (tmp_path / "semgrep.yaml").write_bytes((ROOT / "semgrep.yaml").read_bytes())
+    (directory / "probe.py").write_text(
+        "from pathlib import Path\n"
+        "try:\n"
+        '    Path("bad.txt").read_text()\n'
+        "except Exception:\n"
+        "    pass\n"
+        "try:\n"
+        '    Path("good.txt").read_text(encoding="utf-8")\n'
+        "except OSError:\n"
+        "    pass\n",
+        encoding="utf-8",
+    )
+    result = run_safe_command(
+        "uv",
+        [
+            "run",
+            "--locked",
+            "--managed-python",
+            "--project",
+            str(ROOT / "tooling/semgrep"),
+            "semgrep",
+            "scan",
+            "--config",
+            "semgrep.yaml",
+            "--json",
+            "--quiet",
+            "--strict",
+            "--metrics",
+            "off",
+            "--disable-version-check",
+            "--no-rewrite-rule-ids",
+            "--no-git-ignore",
+            "tooling/tests/probe.py",
+        ],
+        cwd=tmp_path,
+    )
+    findings = json.loads(result.stdout)
+    assert not findings["errors"]
+    assert findings["paths"]["scanned"], findings
+    assert {(item["check_id"], item["start"]["line"]) for item in findings["results"]} == {
+        ("causal-triangulations.python.no-broad-exception", 4),
+        ("causal-triangulations.python.explicit-path-text-encoding-in-tests", 3),
+    }
+
+
+def test_semgrep_aggregates_the_complete_eligible_inventory(tmp_path: Path) -> None:
+    """The actual recipe retains all scanned inputs and rules across native batches."""
+    command = dry_run(ROOT, "semgrep").stderr.splitlines()[-1]
+    arguments = shlex.split(command)
+    include = tuple(arguments[index + 1] for index, item in enumerate(arguments) if item == "--include")
+    exclude = tuple(arguments[index + 1] for index, item in enumerate(arguments) if item == "--exclude")
+    names = select_files(ROOT, include=include, exclude=exclude)
+    assert "tooling/tests/test_shared_tooling.py" in names
+    reports = tmp_path / "reports"
+    run_safe_command("just", ["semgrep", str(reports)], cwd=ROOT, timeout=300)
+    data = json.loads((reports / "semgrep.json").read_text(encoding="utf-8"))
+    assert len(data["batches"]) > 1, "The consumer regression must exercise aggregation."
+    assert {Path(name).resolve() for name in data["paths"]["scanned"]} == {(ROOT / name).resolve() for name in names}
+    assert not data["errors"]
+    assert not data["results"]
+    assert all(not batch["errors"] and not batch["results"] for batch in data["batches"])
+    sarif = json.loads((reports / "semgrep.sarif").read_text(encoding="utf-8"))
+    assert len(sarif["runs"]) == 1
+    run = sarif["runs"][0]
+    rules = yaml.safe_load((ROOT / "semgrep.yaml").read_text(encoding="utf-8"))["rules"]
+    assert {rule["id"] for rule in run["tool"]["driver"]["rules"]} == {rule["id"] for rule in rules}
+    assert run["automationDetails"]["id"] == "semgrep-repository-rules/"
+    workflow = yaml.safe_load((ROOT / ".github/workflows/semgrep-sarif.yml").read_text(encoding="utf-8"))
+    upload = next(step for step in workflow["jobs"]["semgrep-sarif"]["steps"] if "upload-sarif@" in step.get("uses", ""))
+    assert upload["with"] == {
+        "sarif_file": "target/security/semgrep/semgrep.sarif",
+        "category": "semgrep-repository-rules",
+        "wait-for-processing": True,
+    }
+    assert upload["with"]["sarif_file"] in upload["if"]
+
+
+def test_registry_only_release_jobs_match_adopted_tooling() -> None:
+    """Privileged jobs install reviewed registry tooling without running checked-out code."""
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    workflow = yaml.safe_load((ROOT / ".github/workflows/release-benchmarks.yml").read_text(encoding="utf-8"))
+    cutoffs = set()
+    for name in ("validate-release", "publish-baseline"):
+        job = workflow["jobs"][name]
+        assert not any("checkout" in step.get("uses", "") for step in job["steps"])
+        setup = next(step for step in job["steps"] if "setup-uv@" in step.get("uses", ""))
+        assert "==" + setup["with"]["version"] == project["tool"]["uv"]["required-version"]
+        assert setup["with"]["enable-cache"] is False
+        command = next(step["run"] for step in job["steps"] if "--from research-repo-tools==" in step.get("run", ""))
+        assert "--from research-repo-tools==" + version("research-repo-tools") in command
+        assert "--no-config --isolated --managed-python --python 3.15" in command
+        cutoffs.add(command.split("--exclude-newer ", 1)[1].split()[0])
+    assert len(cutoffs) == 1
+
+
 def test_python_fixtures_are_in_the_ci_gate() -> None:
-    """A new negative fixture must receive the complete configured lint policy."""
-    result = run_safe_command("just", ["--dry-run", "ci"], cwd=ROOT)
+    """CI selects the complete shared policy once, including compatibility aliases."""
+    result = dry_run(ROOT, "ci")
     commands = result.stderr
-    for command in ("ruff check --no-fix --no-force-exclude", "ruff format --check --no-force-exclude", "ty check --no-force-exclude --error all"):
-        assert f"files run --include 'tests/semgrep/**/*.py' -- {command}" in commands
+    assert commands.count("research-repo-tools python check") == 1
+    metadata = inspect_justfile(ROOT)
+    for alias in ("python-fixtures-check", "python-source-check"):
+        assert metadata.aliases[alias] == "python-check"
+    assert "tests/semgrep/scripts/tests/python_exceptions.py" in select_files(ROOT, include=("*.py", "*.pyi"))
     assert "--select" not in commands
     assert "review branch" not in commands
     assert "review uncommitted" not in commands
 
 
 @pytest.mark.parametrize(
+    ("reference", "allowed"),
+    [
+        ("acgetchell/research-repo-tools/.github/workflows/dependabot-approve.yml", True),
+        ("acgetchell/research-repo-tools/.github/workflows/unapproved.yml", False),
+        ("taiki-e/install-action", False),
+        ("unapproved/example-action", False),
+    ],
+)
+def test_actions_policy_preserves_exact_approved_identities(
+    reference: str,
+    allowed: bool,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The installed checker enforces CDT's policy, including the nested workflow boundary."""
+    policy = tmp_path / "selected-actions.json"
+    policy.write_bytes((ROOT / "tooling/selected-actions.json").read_bytes())
+    workflow = tmp_path / "workflow.yml"
+    workflow.write_text(f"jobs:\n  approval:\n    uses: {json.dumps(reference + '@' + 'a' * 40)}\n", encoding="utf-8")
+    assert main(["--root", str(tmp_path), "actions", "allowlist", "--policy", str(policy), str(workflow)]) == (0 if allowed else 1)
+    if not allowed:
+        assert "unapproved reference" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
     ("recipe", "failure"),
-    [("ci", ""), ("ci", "notebooks lint"), ("ci", "cargo clippy"), ("notebook-check", ""), ("notebook-check", "notebooks lint")],
+    [
+        ("ci", ""),
+        ("ci", "actions allowlist"),
+        ("ci", "python check"),
+        ("ci", "notebooks lint"),
+        ("ci", "cargo clippy"),
+        ("notebook-check", ""),
+        ("notebook-check", "notebooks lint"),
+    ],
 )
 def test_validation_graph_orders_static_checks_and_stops_on_failure(
     recipe: str,
@@ -93,7 +252,7 @@ def test_validation_graph_orders_static_checks_and_stops_on_failure(
     result = run_safe_command("just", [recipe], cwd=tmp_path, check=False)
     assert result.returncode == (23 if failure else 0), result.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
-    assert sum("notebooks lint" in call for call in calls) == 1
+    assert sum("notebooks lint" in call for call in calls) == (0 if failure in {"actions allowlist", "python check"} else 1)
     workloads = ("python -m pytest", "cargo nextest run", "cargo test --doc", "notebooks execute", "cargo bench --profile perf", "validation run")
     runtime_positions = [index for index, call in enumerate(calls) if any(workload in call for workload in workloads)]
     if failure:
@@ -101,7 +260,17 @@ def test_validation_graph_orders_static_checks_and_stops_on_failure(
         assert not runtime_positions, calls
     elif recipe == "ci":
         first_runtime = min(runtime_positions)
-        for check in ("notebooks lint", "shellcheck -x", "semgrep scan", "cargo fmt", "cargo clippy", "cargo doc", "cargo bench --workspace --no-run"):
+        for check in (
+            "actions allowlist",
+            "python check",
+            "notebooks lint",
+            "shellcheck -x",
+            "semgrep scan",
+            "cargo fmt",
+            "cargo clippy",
+            "cargo doc",
+            "cargo bench --workspace --no-run",
+        ):
             assert next(index for index, call in enumerate(calls) if check in call) < first_runtime, (check, calls)
     else:
         assert "notebooks lint" in calls[0]
@@ -110,12 +279,12 @@ def test_validation_graph_orders_static_checks_and_stops_on_failure(
 
 def test_release_validation_coalesces_runnable_tests_in_commit_check() -> None:
     """Pre-commit retains debug/release doctests without replaying the release suite."""
-    commit = run_safe_command("just", ["--dry-run", "commit-check"], cwd=ROOT).stderr
+    commit = dry_run(ROOT, "commit-check").stderr
     assert commit.count("cargo nextest run") == 1
     assert commit.index("cargo bench --workspace --no-run") < commit.index("cargo nextest run")
     assert "cargo test --doc --verbose" in commit
     assert "cargo test --doc --release" in commit
-    release = run_safe_command("just", ["--dry-run", "test-release"], cwd=ROOT).stderr
+    release = dry_run(ROOT, "test-release").stderr
     assert release.count("cargo nextest run --release --profile ci --lib --tests --verbose") == 1
     assert release.index("cargo nextest run") < release.index("cargo test --doc --release")
 
@@ -126,9 +295,7 @@ UPDATE_STEPS = (
     "research-repo-tools setup",
     "cargo upgrade --incompatible allow",
     "cargo update",
-    "deps update-python",
-    "lock --upgrade",
-    "uv sync --locked --managed-python --group dev",
+    "deps update-python --all-projects",
 )
 
 
@@ -181,9 +348,9 @@ def test_update_execution_order_scope_and_failure(
 
 def test_review_recipes_forward_arguments() -> None:
     """Just preserves the base argument and keeps uncommitted review independent."""
-    branch = run_safe_command("just", ["--dry-run", "review"], cwd=ROOT)
+    branch = dry_run(ROOT, "review")
     assert 'review branch --base="$1"' in branch.stderr
-    uncommitted = run_safe_command("just", ["--dry-run", "review-uncommitted"], cwd=ROOT)
+    uncommitted = dry_run(ROOT, "review-uncommitted")
     assert "review uncommitted" in uncommitted.stderr
 
 
@@ -211,22 +378,22 @@ def test_review_uses_consumer_instructions_and_propagates_failure(
 
 def test_security_covers_maintained_lockfiles_and_stays_opt_in() -> None:
     """New resolution roots must join the explicit consumer audit inventory."""
-    files = run_safe_command("git", ["--no-pager", "ls-files"], cwd=ROOT).stdout.splitlines()
+    files = run_safe_command("git", ["--no-pager", "ls-files", "--cached", "--others", "--exclude-standard"], cwd=ROOT).stdout.splitlines()
     lockfiles = {name for name in files if Path(name).name in {"Cargo.lock", "uv.lock"}}
-    audit = run_safe_command("just", ["--dry-run", "audit"], cwd=ROOT).stderr
+    audit = dry_run(ROOT, "audit").stderr
     assert set(audit.split("security osv ", 1)[1].split()) == lockfiles
-    security = run_safe_command("just", ["--dry-run", "security"], cwd=ROOT).stderr
+    security = dry_run(ROOT, "security").stderr
     assert "security osv" in security
     assert "security secrets" in security
     for recipe in ("check", "ci"):
-        commands = run_safe_command("just", ["--dry-run", recipe], cwd=ROOT).stderr
+        commands = dry_run(ROOT, recipe).stderr
         assert "security osv" not in commands
         assert "security secrets" not in commands
 
 
 def test_changelog_recipe_forwards_explicit_release_date() -> None:
     """CDT's release recipe forwards the supplied tag and date to the shared CLI."""
-    result = run_safe_command("just", ["--dry-run", "changelog-release", "v0.2.0", "2026-10-01"], cwd=ROOT)
+    result = dry_run(ROOT, "changelog-release", ("v0.2.0", "2026-10-01"))
     assert '--tag "$1" --date "$2"' in result.stderr
 
 
@@ -281,8 +448,9 @@ def test_example_contract_covers_every_cargo_example() -> None:
 def test_benchmark_configuration_uses_current_correctness_gates() -> None:
     """The shared measurement config binds the actual CDT workload and dependencies."""
     config = load_measurement(ROOT, "tooling/benchmark.toml")
+    assert isinstance(config, MeasurementConfig)
     assert config.command == ("just", "bench-latest")
-    commands = run_safe_command("just", ["--dry-run", "bench-latest"], cwd=ROOT).stderr
+    commands = dry_run(ROOT, "bench-latest").stderr
     assert commands.index("--test physics_integration") < commands.index("--bench ci_performance_suite")
     assert dict(config.dependencies).keys() == {"criterion", "delaunay", "la-stack", "markov-chain-monte-carlo"}
 

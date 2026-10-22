@@ -3,10 +3,22 @@
 Release preparation uses the pinned shared CLI. Choose one stable tag, predecessor, and UTC date; reruns with those same inputs are deterministic.
 Benchmark measurements are separate and are not idempotent.
 
-This guide uses the published v0.1.7 command contract. The common release procedure is planned in
-[research-repo-tools#60](https://github.com/acgetchell/research-repo-tools/issues/60) for v0.1.8; reviewed crates.io publication is tracked in
-[#289](https://github.com/acgetchell/causal-triangulations/issues/289). Adopt those published capabilities together before replacing the manual publication
-steps below. Active documentation links stay on `main` and API links on `latest`; release preparation must preserve immutable evidence and citation pins.
+This guide uses published `research-repo-tools==0.2.3`. Root tooling and notebook kernels use Python 3.15; Semgrep retains its separately locked Python 3.14
+environment under `tooling/semgrep`, following la-stack. `just update` refreshes both declared Python projects while preserving scanner requirements and
+its MCP security override. Active documentation links stay on `main` and API links on `latest`; preserve immutable evidence and citation pins.
+
+## Validated artifact promotion assessment
+
+The shared package's selection and immutable retrieval helpers could support future reuse of exact-commit main validation. CDT currently has no signed
+main Cargo-package evidence producer or native crates.io publishing workflow; that work remains
+[#289](https://github.com/acgetchell/causal-triangulations/issues/289).
+The shared Python wheel/sdist promotion flow does not supply a Cargo publication policy. The manual native flow below remains authoritative, including
+`ci-slow`, Cargo package verification, the scientific checklist, and actual registry approvals.
+
+Before enabling reuse, design and validate a Cargo-specific producer and promotion policy binding source commit, workflow/run/attempt, validator job results,
+package identity, immutable artifact IDs/ZIP digests, and signatures. Preserve citation, source, dependency, and harness provenance. Main unit-test success
+does not establish fresh scientific release measurements: correctness-gated baseline-v2 workloads still run against the release tag, and immutable assets
+are never replaced. Adoption of the helpers alone does not authorize publishing or change registry approval controls.
 
 ## v0.1.1 scientific claim checklist
 
