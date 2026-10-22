@@ -1,0 +1,21 @@
+{
+  "github_owned_allowed": false,
+  "verified_allowed": false,
+  "patterns_allowed": [
+    "acgetchell/research-repo-tools/.github/workflows/dependabot-approve.yml@*",
+    "actions-rust-lang/setup-rust-toolchain@*",
+    "actions/cache@*",
+    "actions/checkout@*",
+    "actions/download-artifact@*",
+    "actions/github-script@*",
+    "actions/setup-python@*",
+    "actions/upload-artifact@*",
+    "astral-sh/setup-uv@*",
+    "codecov/codecov-action@*",
+    "github/codeql-action/analyze@*",
+    "github/codeql-action/init@*",
+    "github/codeql-action/upload-sarif@*",
+    "taiki-e/cache-cargo-install-action@*",
+    "zizmorcore/zizmor-action@*"
+  ]
+}

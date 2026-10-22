@@ -2,7 +2,7 @@ name: Release Benchmarks
 run-name: Release benchmark ${{ inputs.release_tag }}
 
 # Write-token jobs install registry tooling and never check out benchmark code.
-# Keep both resolution cutoffs aligned with the reviewed uv.lock snapshot.
+# Keep both registry resolution cutoffs aligned with the reviewed adoption.
 permissions:
   contents: read
 
@@ -34,7 +34,7 @@ jobs:
       - name: Install registry tooling runner
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.19"
+          version: "0.13.5"
           enable-cache: false
 
       - name: Validate draft GitHub Release
@@ -42,8 +42,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         run: >-
-          uvx --no-config --isolated --managed-python --exclude-newer 2026-09-26T20:01:10Z
-          --from research-repo-tools==0.1.7 research-repo-tools performance release-draft "$GH_REPO" "$RELEASE_TAG"
+          uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-10-22T08:29:37Z
+          --from research-repo-tools==0.2.3 research-repo-tools performance release-draft "$GH_REPO" "$RELEASE_TAG"
 
   release-baseline:
     needs: validate-release
@@ -83,7 +83,7 @@ jobs:
       - name: Install registry tooling runner
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.19"
+          version: "0.13.5"
           enable-cache: false
 
       - name: Download release baseline
@@ -96,5 +96,5 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         run: >-
-          uvx --no-config --isolated --managed-python --exclude-newer 2026-09-26T20:01:10Z
-          --from research-repo-tools==0.1.7 research-repo-tools performance release-upload "$GH_REPO" "$RELEASE_TAG" "$RELEASE_ASSET"
+          uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-10-22T08:29:37Z
+          --from research-repo-tools==0.2.3 research-repo-tools performance release-upload "$GH_REPO" "$RELEASE_TAG" "$RELEASE_ASSET"

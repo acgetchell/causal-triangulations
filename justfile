@@ -9,6 +9,7 @@ set positional-arguments
 _tools := "uv run --locked --group dev research-repo-tools"
 _run := _tools + " toolchain run --"
 _notebooks := "uv run --locked --group dev --group notebooks research-repo-tools"
+_scanner := "uv run --locked --managed-python --project tooling/semgrep"
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -20,6 +21,8 @@ _coverage_base_args := '''--ignore-filename-regex '(^|/)(benches|examples)/' \
   --verbose'''
 
 alias changelog-release := changelog-unreleased
+alias python-fixtures-check := python-check
+alias python-source-check := python-check
 alias update-python-deps := update-python-dependencies
 
 # Internal helpers: ensure external tooling is installed
@@ -33,6 +36,10 @@ action-lint:
     # actionlint 1.7.12 predates $/ syntax (upstream issue #711); ignore only this exact valid reference.
     {{ _tools }} files run --include '.github/workflows/*.yml' --include '.github/workflows/*.yaml' -- actionlint -ignore '^specifying action "\$/\.github/actions/setup-toolchain" in invalid format because ref is missing\.'
 
+# Validate exact external Action identities in workflows.
+actions-allowlist-check:
+    {{ _tools }} actions allowlist --policy tooling/selected-actions.json .github/workflows
+
 # Run deterministic cached-observable allocation assertions.
 allocation-check:
     {{ _run }} cargo bench --profile perf --bench allocation_profile
@@ -40,7 +47,7 @@ allocation-check:
 # Audit all maintained Rust and Python lockfiles through OSV.
 [group('security')]
 audit:
-    {{ _tools }} security osv uv.lock Cargo.lock
+    {{ _tools }} security osv uv.lock tooling/semgrep/uv.lock Cargo.lock
 
 # Run all Criterion benchmark workloads.
 bench:
@@ -123,7 +130,7 @@ check-fast:
     {{ _run }} cargo check
 
 # Run all GitHub-equivalent validators, tests, examples, and benchmark compilation.
-ci: justfile-fmt-check action-lint zizmor markdown-check spell-check performance-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check notebook-lint shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check bench-compile test-python test-rust-ci test-doc notebook-check allocation-check examples-validate
+ci: justfile-fmt-check action-lint actions-allowlist-check zizmor markdown-check spell-check performance-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check notebook-lint shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check bench-compile test-python test-rust-ci test-doc notebook-check allocation-check examples-validate
     @echo "🎯 CI checks complete!"
 
 # CI with performance baseline
@@ -224,7 +231,7 @@ justfile-fmt-check:
 lint-code: fmt-check clippy doc-check semgrep semgrep-test python-check shell-check
 
 # Configuration validation: JSON, TOML, YAML/CFF, GitHub Actions workflows
-lint-config: justfile-fmt-check validate-json toml-check yaml-check citation-check action-lint zizmor
+lint-config: justfile-fmt-check validate-json toml-check yaml-check citation-check action-lint actions-allowlist-check zizmor
 
 # Check Markdown, spelling, and retained performance reports.
 lint-docs: markdown-check spell-check performance-check
@@ -347,25 +354,12 @@ publish-check:
     {{ _run }} cargo publish --locked --allow-dirty --dry-run
 
 # Check all Python source and negative fixtures with Ruff and Ty.
-python-check: python-source-check python-fixtures-check
+python-check:
+    {{ _tools }} python check
 
 # Apply Ruff fixes and formatting to all Python files.
 python-fix:
-    {{ _tools }} files run --include '*.py' --include '*.pyi' -- ruff check --fix --no-force-exclude
-    {{ _tools }} files run --include '*.py' --include '*.pyi' -- ruff format --no-force-exclude
-
-# Apply the complete configured Python policy to negative fixtures as well.
-python-fixtures-check:
-    {{ _tools }} files run --include 'tests/semgrep/**/*.py' -- ruff check --no-fix --no-force-exclude
-    {{ _tools }} files run --include 'tests/semgrep/**/*.py' -- ruff format --check --no-force-exclude
-    {{ _tools }} files run --include 'tests/semgrep/**/*.py' -- ty check --no-force-exclude --error all
-
-# Check all consumer Python outside the deliberate negative fixtures.
-python-source-check:
-    {{ _tools }} toolchain python-check
-    {{ _tools }} files run --include '*.py' --include '*.pyi' --exclude 'tests/semgrep/**' -- ruff check --no-fix --no-force-exclude
-    {{ _tools }} files run --include '*.py' --include '*.pyi' --exclude 'tests/semgrep/**' -- ruff format --check --no-force-exclude
-    {{ _tools }} files run --include '*.py' --include '*.pyi' --exclude 'tests/semgrep/**' -- ty check --no-force-exclude --error all
+    {{ _tools }} python fix
 
 # Synchronize the locked development environment.
 python-sync:
@@ -373,7 +367,7 @@ python-sync:
 
 # Type-check all Python files with strict Ty diagnostics.
 python-typecheck:
-    {{ _tools }} files run --include '*.py' --include '*.pyi' -- ty check --no-force-exclude --error all
+    {{ _tools }} python typecheck
 
 # Validate release-version/date synchronization, concept DOI, and environment metadata.
 release-metadata-check:
@@ -426,14 +420,12 @@ security-secrets:
     {{ _tools }} security secrets
 
 # Repository-owned Semgrep rules for project-specific diagnostics.
-semgrep:
-    mkdir -p target/security
-    rm -f target/security/semgrep.sarif
-    {{ _tools }} files run --include '*.rs' --include '*.py' --include '*.yml' --include '*.yaml' --include '*.md' --include '*.sh' --include '*.ipynb' --exclude 'tests/semgrep/**' --exclude 'docs/archive/**' --exclude 'docs/archives/**' -- semgrep scan --config semgrep.yaml --metrics off --disable-version-check --strict --disable-nosem --no-rewrite-rule-ids --no-git-ignore --max-target-bytes 0 --timeout 30 --error --sarif --output target/security/semgrep.sarif
+semgrep output='target/security/semgrep':
+    {{ _scanner }} {{ _tools }} semgrep scan --include '*.rs' --include '*.py' --include '*.yml' --include '*.yaml' --include '*.md' --include '*.sh' --include '*.ipynb' --exclude 'tests/semgrep/**' --exclude 'docs/archive/**' --exclude 'docs/archives/**' --exclude .codecov.yml --exclude .coderabbit.yml --exclude .github/actions/setup-toolchain/action.yml --exclude .github/dependabot.yml --exclude semgrep.yaml --output "$1"
 
 # Validate annotated repository-owned Semgrep fixtures.
 semgrep-test:
-    {{ _tools }} semgrep check-fixtures
+    {{ _scanner }} {{ _tools }} semgrep check-fixtures
 
 # Development setup
 setup:
@@ -569,11 +561,9 @@ update-cargo-tools:
 # Advance Cargo and exact Python development requirements plus their lockfiles.
 update-dependencies: update-cargo-dependencies update-python-dependencies
 
-# Resolve latest exact Python development tools, retain ranged requirements, and sync.
+# Advance root dev pins, then refresh and sync the root and Semgrep environments.
 update-python-dependencies:
-    uv run --locked --only-group tooling --inexact research-repo-tools deps update-python
-    uv lock --upgrade
-    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain run -- uv sync --locked --managed-python --group dev
+    uv run --locked --only-group tooling --inexact research-repo-tools deps update-python --all-projects
 
 # Upgrade uv and managed tools before dependency changes.
 update-tools: update-uv update-cargo-tools setup

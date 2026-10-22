@@ -97,7 +97,7 @@ Regression tests capture specific previously observed bugs or blocking upstream 
 Location:
 
 ```text
-scripts/tests/
+tooling/tests/
 ```
 
 Python tests use **pytest** (never unittest). Run via:

@@ -24,11 +24,13 @@ changes.
 
 ### Git Operations
 
-- Do not run Git commands that modify version control state unless the user explicitly requests the relevant operation. An explicit request authorizes the
-  requested operations and necessary supporting steps, such as staging the intended changes and creating a branch, for that task.
+- **Git mutations are allowed with explicit user authorization.** Keep branch creation, staging, commits, pushes, tags, and other ref/index changes within
+  the authorized scope. An authorized operation includes necessary supporting steps, such as staging the intended changes and creating a branch.
+- Authorization remains valid for the authorized task; do not request it again unless the scope changes.
 - **ALLOWED**: read‑only git commands (`git --no-pager status`, `git --no-pager diff`, `git --no-pager log`, `git --no-pager show`, `git --no-pager blame`)
 - **ALWAYS** use `git --no-pager` when reading git output
 - When Git operations are not explicitly authorized, suggest the commands for the user to run manually
+- Preserve unrelated user changes; work around overlapping edits and do not revert unrelated work.
 - When suggesting branch names, prefer `{type}/{issue}-descriptor-or-two`, e.g. `fix/307-topology-validation`, `perf/315-bench-profile`, or
   `doc/329-branch-guidance`. If an environment requires an owner/tool prefix, keep this structure after the prefix, e.g. `codex/fix/307-topology-validation`.
 
@@ -148,7 +150,7 @@ When generating commit messages:
 2. Use conventional commits: `<type>: <summary>`
 3. Valid types: `feat`, `fix`, `refactor`, `perf`, `docs`, `test`, `chore`, `style`, `ci`, `build`
 4. Include bullet‑point body describing key changes
-5. Present inside a code block so the user can commit manually
+5. Unless committing is explicitly authorized, present inside a code block so the user can commit manually
 
 #### Changelog‑Aware Body Text
 
@@ -230,7 +232,7 @@ Key principle:
   Design documented in `docs/foliation.md`
 - **Ergodic moves**: `attempt_22_move`, `attempt_13_move`, `attempt_31_move`, `attempt_edge_flip` are Delaunay-backed, foliation-aware move kernels. They mutate
   through narrow CDT-owned edit operations, roll back failed finalized mutations, and preserve topology/foliation invariants
-- **Python tooling**: maintenance and performance evidence use the pinned `research-repo-tools` package. Consumer contracts in `scripts/tests/` run via
+- **Python tooling**: maintenance and performance evidence use the pinned `research-repo-tools` package. Consumer contracts in `tooling/tests/` run via
   pytest; scientific benchmark, example, and notebook workloads remain repository-owned
 - **When adding/removing files**: Update `docs/code-organization.md`
 
