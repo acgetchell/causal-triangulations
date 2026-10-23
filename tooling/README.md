@@ -2,7 +2,7 @@
 
 Generic maintenance uses the published `research-repo-tools==0.2.3` package.
 This directory contains CDT's tooling configuration and consumer integration tests under `tests/`; CDT maintains no local maintenance CLIs.
-The independent `semgrep/` project retains Python 3.14, the exact scanner pin, and its MCP security override while root tooling and notebooks use Python 3.15.
+The independent `semgrep/` project retains Python 3.14, the exact scanner pin, and its MCP/OpenTelemetry security overrides; root tooling uses Python 3.15.
 `selected-actions.json` declares exact approved workflow Action identities for the shared structured allowlist; Zizmor and Semgrep retain SHA and readable
 version-comment checks. See the [ownership catalog](../docs/dev/tooling-alignment.md#shared-tooling-retirement-catalog) for retained policy and upstream gaps.
 
@@ -15,7 +15,9 @@ just test-python
 ```
 
 The tests exercise CDT's configuration and command wiring: review/update/release recipes, Python fixture coverage, release metadata, and benchmark/example
-contracts. The report-to-README integration verifies absolute timings, confidence bounds, and relative changes together. They never contact CodeRabbit.
+contracts. `tests/test_release_benchmarks.py` runs workflow shell and installed release commands with local GitHub responses to protect the captured-target
+handoff, checkout checks and native baseline provenance; it neither creates releases nor measures scientific workloads.
+The report-to-README integration verifies absolute timings, confidence bounds, and relative changes together. Tests never contact CodeRabbit.
 
 Generic parser, renderer, subprocess, and notebook infrastructure tests belong to `research-repo-tools` and are not duplicated here.
 

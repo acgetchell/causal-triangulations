@@ -27,8 +27,11 @@ The broader `just bench` and `just bench-ci` recipes retain their CDT workloads.
 
 The next tagged release establishes the first new shared baseline. Create a draft GitHub Release for that tag, then dispatch
 `.github/workflows/release-benchmarks.yml` with its `release_tag`.
-The workflow validates the draft, measures the exact tag with read-only permissions and caches disabled, then attaches inert verified bytes in a separate
-writer job. It leaves the release as a draft for review. The new asset name is `causal-triangulations-TAG-cdt-baseline-v2.tar.gz`.
+The workflow captures the verified draft release identity and full tag commit before measurement. It checks out that commit with read-only permissions and
+caches disabled, then verifies native baseline provenance and attaches inert bytes to the original release ID in a separate registry-only writer job.
+The trusted target travels through preflight job outputs, separately from the measured checkout and baseline artifact. Changed identities or missing
+handoffs fail closed. See [release guidance](RELEASING.md#tag-attach-baseline-and-publish) for the handoff contract and explicit publication step.
+The release stays a draft for review. The new asset name is `causal-triangulations-TAG-cdt-baseline-v2.tar.gz`.
 
 To package an exact clean local tag with the same shared format:
 

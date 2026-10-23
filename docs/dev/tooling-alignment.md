@@ -7,6 +7,59 @@ supporting steps. Authorization persists for the task and requires clarification
 manual commands when authorization is absent. Commit-message guidance likewise defers to an explicitly authorized commit instead of always requiring a
 manual handoff. This documentation change grants no authorization to perform Git mutations itself.
 
+## October 2026 Nested Scanner Environment Selection
+
+The outer scanner `uv run` exports `VIRTUAL_ENV=tooling/semgrep/.venv`; the nested root tooling command correctly selects `.venv` but warns that it ignores
+the inherited scanner environment. Follow `mcmc-learned-proposals`: explicitly use `--no-active` for both uv calls and `--project .` for the inner root
+tooling command. Keep this launcher scoped to `semgrep` and `semgrep-test`; other tooling recipes, interpreter selectors, locks and scanner policy
+are unchanged.
+
+The outer call still supplies the isolated Python 3.14 scanner executable on PATH, while the shared CLI runs under the root Python 3.15 environment.
+Consumer probes execute the real nested launcher with root, scanner and unrelated inherited environments and verify executable ownership and warning-free
+selection. The existing native aggregate scan also rejects the mismatch warning. Validate the complete CI path to cover both production scans and fixtures.
+
+## October 2026 OpenTelemetry Security Override
+
+`just security` finds [GHSA-xcq7-p3pf-p88h](https://github.com/advisories/GHSA-xcq7-p3pf-p88h) in the isolated Semgrep lock: its
+`opentelemetry-api` 1.37.0 is affected by unbounded inbound tracestate parsing. The first patched version is 1.45.1. Published Semgrep 1.182.1 still
+restricts the API, SDK and HTTP exporter to 1.37, with instrumentation on 0.58b0; an ordinary lock refresh cannot select the fix.
+
+Mirror `mcmc-learned-proposals` and `markov-chain-monte-carlo`: override API, SDK and HTTP exporter to `>=1.45.1,<2`, and requests/threading instrumentation
+to `>=0.66b1,<1`. The resolver keeps their shared SDK/API/semantic-convention dependencies consistent. Retain Semgrep 1.182.1, the Python 3.14 environment,
+wheel-only scanner installation and patched MCP override. Only the scanner manifest and lock require dependency changes; ordinary updates preserve these
+overrides. The consumer contract checks both declarations and the resolved compatible telemetry set. Revalidate native Semgrep scans/fixtures, Python
+consumer checks and both security scanners before accepting the override. Remove it when a published Semgrep dependency set supports the patched family.
+
+Native validation on `aarch64-apple-darwin` resolves API/SDK/exporter 1.45.1 and instrumentation 0.66b1, retains Semgrep 1.182.1/MCP 1.30.0, and imports
+Semgrep telemetry successfully. `just security` reports zero findings for all three lockfiles, full Git history and the working tree. All 68 consumer tests,
+native Semgrep scans/fixtures, strict Python, TOML and documentation checks pass; both Python locks match their manifests. Logs are under
+`target/issue-309-security-*`. Rust sources and runtime policies are unchanged, so this focused follow-up does not repeat the earlier full CI gate.
+
+## Issue #309 Captured Benchmark Release Identity
+
+The installed registry package `research-repo-tools==0.2.3` already supplies the release-target handoff introduced by upstream #94 in v0.1.9.
+The existing workflow validates a draft before measurement but recaptures its identity during upload, leaving tag movement and release replacement across
+jobs unchecked. Adopt `release-draft --commit` and `release-upload --target` without a dependency upgrade or another measurement policy.
+
+Resolve the full tag commit through GitHub in the checkout-free preflight job and verify it with the published preflight command. Carry the captured JSON
+and commit through explicit job outputs. Check out that commit, verify HEAD and the local tag before running checkout-owned tooling, and require the native
+baseline's verified provenance to identify the captured commit and release. The writer reconstructs the target from preflight outputs outside the artifact
+directory; measured checkout code and transported artifacts cannot supply replacement target/runtime data. Missing or malformed handoffs fail closed.
+
+Retain registry-only writer jobs, exact published pins and cutoff, credential separation, disabled producer caches, existing permissions, non-canceling
+concurrency, complete baseline assets, correctness/freshness gates and workload/sample policy. Release publication remains a maintainer operation.
+Consumer regressions execute the workflow shell and installed CLI with local GitHub responses, including changed identities and missing handoffs;
+they create no release and run no scientific timing workloads. Native workflow/security checks and consumer validation cover this adoption separately
+from historical release measurements.
+
+Validation on 23 October 2026 uses published 0.2.3, source `4085125526e21b2855eb7c61a52ee312782ae31a`, with the unchanged registry identities recorded
+in the #299 adoption below. Both exact registry CLI help probes and the isolated Python baseline-reader import pass with the workflow's Python selector
+and cutoff. A read-only GitHub request confirms the encoded full-tag-ref commit endpoint. On `aarch64-apple-darwin`, all 20 focused handoff cases and
+the complete `just ci` gate pass: 68 consumer tests, 768 Rust tests, 333 doctests plus two additional rustdoc tests, notebook execution, allocation budgets,
+benchmark compilation and four example contracts. Actionlint, the Actions allowlist, online Zizmor, strict Python checks and documentation checks pass.
+Logs and source fingerprints are retained locally under `target/issue-309-*`. Hosted Linux/macOS/Windows results for a future PR head remain separate;
+these local checks create no release and establish no fresh scientific timing evidence.
+
 ## Issue #299 Published Tooling Adoption
 
 Adopt published `research-repo-tools` 0.2.3 through `shared-python-plan` and `shared-python-update`, including its Python 3.15 root/notebook baseline.

@@ -36,7 +36,7 @@ just update
 Review every resulting manifest, lockfile, and pin change before committing it.
 
 Python updates delegate to `deps update-python --all-projects`: the root uses Python 3.15, and `tooling/semgrep` retains its own Python 3.14 selector,
-exact scanner pin, wheel-only installation, and MCP security override. Both projects refresh their locks and synchronize their own environments.
+exact scanner pin, wheel-only installation, and MCP/OpenTelemetry security overrides. Both projects refresh their locks and synchronize their own environments.
 
 To adopt a newer published shared package and its Python baseline, preview `just shared-python-plan VERSION`, then apply the reviewed plan with
 `just shared-python-update VERSION`. Supply the package version, not a Python version. These commands run outside the old environment.

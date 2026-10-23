@@ -9,7 +9,7 @@ set positional-arguments
 _tools := "uv run --locked --group dev research-repo-tools"
 _run := _tools + " toolchain run --"
 _notebooks := "uv run --locked --group dev --group notebooks research-repo-tools"
-_scanner := "uv run --locked --managed-python --project tooling/semgrep"
+_scanner := "uv run --locked --no-active --managed-python --project tooling/semgrep uv run --locked --no-active --project . --group dev research-repo-tools"
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -421,11 +421,11 @@ security-secrets:
 
 # Repository-owned Semgrep rules for project-specific diagnostics.
 semgrep output='target/security/semgrep':
-    {{ _scanner }} {{ _tools }} semgrep scan --include '*.rs' --include '*.py' --include '*.yml' --include '*.yaml' --include '*.md' --include '*.sh' --include '*.ipynb' --exclude 'tests/semgrep/**' --exclude 'docs/archive/**' --exclude 'docs/archives/**' --exclude .codecov.yml --exclude .coderabbit.yml --exclude .github/actions/setup-toolchain/action.yml --exclude .github/dependabot.yml --exclude semgrep.yaml --output "$1"
+    {{ _scanner }} semgrep scan --include '*.rs' --include '*.py' --include '*.yml' --include '*.yaml' --include '*.md' --include '*.sh' --include '*.ipynb' --exclude 'tests/semgrep/**' --exclude 'docs/archive/**' --exclude 'docs/archives/**' --exclude .codecov.yml --exclude .coderabbit.yml --exclude .github/actions/setup-toolchain/action.yml --exclude .github/dependabot.yml --exclude semgrep.yaml --output "$1"
 
 # Validate annotated repository-owned Semgrep fixtures.
 semgrep-test:
-    {{ _scanner }} {{ _tools }} semgrep check-fixtures
+    {{ _scanner }} semgrep check-fixtures
 
 # Development setup
 setup:

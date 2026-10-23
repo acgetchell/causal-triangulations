@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from packaging.version import Version
 from research_repo_tools.cli import main
 from research_repo_tools.criterion import COMPARISON_SCHEMA, Estimate, Sample, compare_samples, serialize_comparison
 from research_repo_tools.evidence import Evidence, Provenance, publish_evidence
@@ -66,13 +67,44 @@ def test_independent_scanner_contract_and_update_inventory() -> None:
     assert (scanner / ".python-version").read_text(encoding="utf-8").strip() == "3.14"
     assert manifest["project"]["dependencies"] == ["semgrep==1.182.1"]
     assert manifest["tool"]["uv"]["no-build-package"] == ["semgrep"]
-    assert manifest["tool"]["uv"]["override-dependencies"] == ["mcp>=1.30.0,<2"]
+    assert manifest["tool"]["uv"]["override-dependencies"] == [
+        "mcp>=1.30.0,<2",
+        "opentelemetry-api>=1.45.1,<2",
+        "opentelemetry-sdk>=1.45.1,<2",
+        "opentelemetry-exporter-otlp-proto-http>=1.45.1,<2",
+        "opentelemetry-instrumentation-requests>=0.66b1,<1",
+        "opentelemetry-instrumentation-threading>=0.66b1,<1",
+    ]
+    lock = tomllib.loads((scanner / "uv.lock").read_text(encoding="utf-8"))
+    versions = {package["name"]: Version(package["version"]) for package in lock["package"]}
+    assert Version("1.45.1") <= versions["opentelemetry-api"] < Version("2")
+    assert versions["opentelemetry-api"] == versions["opentelemetry-sdk"] == versions["opentelemetry-exporter-otlp-proto-http"]
+    instrumentation = versions["opentelemetry-instrumentation-requests"]
+    assert Version("0.66b1") <= instrumentation < Version("1")
+    assert instrumentation == versions["opentelemetry-instrumentation-threading"] == versions["opentelemetry-semantic-conventions"]
     dependabot = yaml.safe_load((ROOT / ".github/dependabot.yml").read_text(encoding="utf-8"))
     updates = next(item for item in dependabot["updates"] if item["package-ecosystem"] == "uv")
     assert set(updates["directories"]) == {"/", "/tooling/semgrep"}
     for recipe in ("semgrep", "semgrep-test"):
         commands = dry_run(ROOT, recipe).stderr
-        assert "--project tooling/semgrep uv run --locked --group dev research-repo-tools" in commands
+        assert "--project tooling/semgrep uv run --locked --no-active --project . --group dev research-repo-tools" in commands
+        assert commands.count("--no-active") == 2
+
+
+@pytest.mark.parametrize("active", ["root", "scanner", "unrelated"])
+def test_scanner_launcher_selects_project_environments(active: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inherited activation cannot change either interpreter or produce an environment warning."""
+    environments = {"root": str(ROOT / ".venv"), "scanner": "tooling/semgrep/.venv", "unrelated": str(tmp_path / "unrelated-venv")}
+    monkeypatch.setenv("VIRTUAL_ENV", environments[active])
+    arguments = shlex.split(dry_run(ROOT, "semgrep-test").stderr.splitlines()[-1])
+    # Replace only the terminal command: both real uv project selections still run.
+    probe = 'import json, shutil, sys; print(json.dumps({"prefix": sys.prefix, "python": list(sys.version_info[:2]), "scanner": shutil.which("semgrep")}))'
+    result = run_safe_command(arguments[0], [*arguments[1 : arguments.index("research-repo-tools")], "python", "-c", probe], cwd=ROOT)
+    assert "does not match the project environment" not in result.stderr
+    selected = json.loads(result.stdout)
+    assert Path(selected["prefix"]).resolve() == (ROOT / ".venv").resolve()
+    assert selected["python"] == [3, 15]
+    assert Path(selected["scanner"]).resolve().parent.parent == (ROOT / "tooling/semgrep/.venv").resolve()
 
 
 def test_python_rules_cover_relocated_tooling_tests(tmp_path: Path) -> None:
@@ -134,7 +166,8 @@ def test_semgrep_aggregates_the_complete_eligible_inventory(tmp_path: Path) -> N
     names = select_files(ROOT, include=include, exclude=exclude)
     assert "tooling/tests/test_shared_tooling.py" in names
     reports = tmp_path / "reports"
-    run_safe_command("just", ["semgrep", str(reports)], cwd=ROOT, timeout=300)
+    result = run_safe_command("just", ["semgrep", str(reports)], cwd=ROOT, timeout=300)
+    assert "does not match the project environment" not in result.stderr
     data = json.loads((reports / "semgrep.json").read_text(encoding="utf-8"))
     assert len(data["batches"]) > 1, "The consumer regression must exercise aggregation."
     assert {Path(name).resolve() for name in data["paths"]["scanned"]} == {(ROOT / name).resolve() for name in names}

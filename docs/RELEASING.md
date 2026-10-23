@@ -5,7 +5,7 @@ Benchmark measurements are separate and are not idempotent.
 
 This guide uses published `research-repo-tools==0.2.3`. Root tooling and notebook kernels use Python 3.15; Semgrep retains its separately locked Python 3.14
 environment under `tooling/semgrep`, following la-stack. `just update` refreshes both declared Python projects while preserving scanner requirements and
-its MCP security override. Active documentation links stay on `main` and API links on `latest`; preserve immutable evidence and citation pins.
+its MCP/OpenTelemetry security overrides. Active documentation links stay on `main` and API links on `latest`; preserve immutable evidence and citation pins.
 
 ## Validated artifact promotion assessment
 
@@ -137,9 +137,15 @@ Dispatch the release-baseline workflow against the new tag:
 gh workflow run release-benchmarks.yml -f release_tag="$TAG"
 ```
 
-The workflow first validates a mutable draft, measures the exact tag with read-only permissions and caches disabled, then attaches
-`causal-triangulations-TAG-cdt-baseline-v2.tar.gz` from a separate writer job. Writer jobs install the exact published tooling package and never check out
-benchmark source. An identical attachment retry succeeds; different bytes fail rather than overwriting evidence. The release remains a draft.
+The checkout-free preflight resolves the full tag commit through GitHub and captures the verified repository, tag, release ID and commit with
+`performance release-draft --commit`. Trusted job outputs carry that target directly to the writer. The benchmark job checks out the captured commit,
+verifies HEAD and the local tag, then measures with read-only permissions and caches disabled. Its complete native asset remains
+`causal-triangulations-TAG-cdt-baseline-v2.tar.gz`.
+
+The separate writer installs the exact published tooling package and never checks out benchmark source. It verifies the native baseline's release and commit
+provenance, then passes the original target to `performance release-upload --target`. Target data and runtime stay outside the downloaded artifact directory.
+Missing or malformed handoffs, unexpected checkouts, moved tags, replaced release IDs and mismatched repository/tag/provenance fail before upload.
+An identical attachment retry succeeds; different bytes fail rather than overwriting evidence. The release remains a draft for explicit maintainer publication.
 
 Verify the baseline attachment and all release gates before publishing:
 
