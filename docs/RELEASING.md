@@ -3,9 +3,9 @@
 Release preparation uses the pinned shared CLI. Choose one stable tag, predecessor, and UTC date; reruns with those same inputs are deterministic.
 Benchmark measurements are separate and are not idempotent.
 
-This guide uses published `research-repo-tools==0.2.3`. Root tooling and notebook kernels use Python 3.15; Semgrep retains its separately locked Python 3.14
-environment under `tooling/semgrep`, following la-stack. `just update` refreshes both declared Python projects while preserving scanner requirements and
-its MCP/OpenTelemetry security overrides. Active documentation links stay on `main` and API links on `latest`; preserve immutable evidence and citation pins.
+This guide uses published `research-repo-tools==0.2.3`. Tooling, notebook kernels and Semgrep share the root Python 3.15 environment, following Delaunay.
+`just update` refreshes the root lockfile while preserving the scanner's MCP/OpenTelemetry and Windows wheel compatibility overrides.
+Active documentation links stay on `main` and API links on `latest`; preserve immutable evidence and citation pins.
 
 ## Validated artifact promotion assessment
 

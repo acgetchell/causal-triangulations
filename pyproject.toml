@@ -123,6 +123,18 @@ python_functions = [ "test_*" ]
 [tool.uv]
 package = false
 required-version = "==0.13.5"
+# Semgrep's sdist does not bundle its required native engine.
+no-build-package = [ "semgrep" ]
+# Follow Delaunay's patched Semgrep dependencies and Python 3.15 Windows wheels.
+override-dependencies = [
+    "mcp==1.30.0",
+    "opentelemetry-api==1.45.1",
+    "opentelemetry-sdk==1.45.1",
+    "opentelemetry-exporter-otlp-proto-http==1.45.1",
+    "opentelemetry-instrumentation-requests==0.66b1",
+    "opentelemetry-instrumentation-threading==0.66b1",
+    "pywin32==312; sys_platform == 'win32'",
+]
 
 [tool.uv.dependency-groups]
 tooling = { requires-python = ">=3.15" }
@@ -134,6 +146,7 @@ dev = [
     "actionlint-py==1.7.12.25",
     "pytest==9.1.1",
     "ruff==0.17.2",
+    "semgrep==1.182.1",
     "shellcheck-py==0.11.0.1",
     "shfmt-py==4.2.0",
     "ty==0.0.91",
@@ -155,9 +168,6 @@ formatter = "rumdl.toml"
 
 [tool.research-repo-tools.toolchain]
 inherit-python = true
-
-[tool.research-repo-tools.deps]
-python-projects = [ "tooling/semgrep" ]
 
 [tool.research-repo-tools.toolchain.binaries]
 gitleaks = "8.30.1"

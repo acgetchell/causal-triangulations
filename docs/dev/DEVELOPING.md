@@ -35,8 +35,8 @@ just update
 `pyproject.toml`. Use `update-tools` or `update-dependencies` for an independent scope, and `tools-check` for non-mutating installed-version verification.
 Review every resulting manifest, lockfile, and pin change before committing it.
 
-Python updates delegate to `deps update-python --all-projects`: the root uses Python 3.15, and `tooling/semgrep` retains its own Python 3.14 selector,
-exact scanner pin, wheel-only installation, and MCP/OpenTelemetry security overrides. Both projects refresh their locks and synchronize their own environments.
+Python updates delegate to `deps update-python --all-projects`: tooling, notebooks and Semgrep share the root Python 3.15 environment and lockfile.
+The root manifest retains the exact scanner pin, wheel-only installation, patched MCP/OpenTelemetry dependencies and Python 3.15 Windows wheel override.
 
 To adopt a newer published shared package and its Python baseline, preview `just shared-python-plan VERSION`, then apply the reviewed plan with
 `just shared-python-update VERSION`. Supply the package version, not a Python version. These commands run outside the old environment.
@@ -112,7 +112,7 @@ because nextest does not run rustdoc doctests.
 ## Dependency And Secret Scanning
 
 ```bash
-just audit             # OSV: Cargo.lock, uv.lock, and tooling/semgrep/uv.lock
+just audit             # OSV: Cargo.lock and uv.lock
 just security-secrets  # Gitleaks: all reachable history and current tracked/nonignored files
 just security          # Both scans
 ```
@@ -243,6 +243,9 @@ Commands:
 just semgrep       # Run repository-owned rules
 just semgrep-test  # Verify Semgrep rule fixtures
 ```
+
+Both commands use the root Python 3.15 development environment. On Linux, they and `just test-python` inherit a finite stack limit to work around
+[Semgrep's Python 3.15 resource-limit handling](https://github.com/semgrep/semgrep/issues/11979).
 
 ## Coverage
 

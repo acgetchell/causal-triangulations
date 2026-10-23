@@ -9,7 +9,11 @@ set positional-arguments
 _tools := "uv run --locked --group dev research-repo-tools"
 _run := _tools + " toolchain run --"
 _notebooks := "uv run --locked --group dev --group notebooks research-repo-tools"
-_scanner := "uv run --locked --no-active --managed-python --project tooling/semgrep uv run --locked --no-active --project . --group dev research-repo-tools"
+_scanner := "uv run --locked --no-active --group dev research-repo-tools"
+
+# Semgrep misreads Python 3.15's positive RLIM_INFINITY on Linux.
+# Keep its inherited stack finite until https://github.com/semgrep/semgrep/issues/11979 is fixed.
+_semgrep_stack_limit := if os() == "linux" { 'if [[ "$(ulimit -Hs)" == unlimited ]]; then ulimit -s 1048576; fi;' } else { "" }
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
@@ -47,7 +51,7 @@ allocation-check:
 # Audit all maintained Rust and Python lockfiles through OSV.
 [group('security')]
 audit:
-    {{ _tools }} security osv uv.lock tooling/semgrep/uv.lock Cargo.lock
+    {{ _tools }} security osv uv.lock Cargo.lock
 
 # Run all Criterion benchmark workloads.
 bench:
@@ -421,11 +425,11 @@ security-secrets:
 
 # Repository-owned Semgrep rules for project-specific diagnostics.
 semgrep output='target/security/semgrep':
-    {{ _scanner }} semgrep scan --include '*.rs' --include '*.py' --include '*.yml' --include '*.yaml' --include '*.md' --include '*.sh' --include '*.ipynb' --exclude 'tests/semgrep/**' --exclude 'docs/archive/**' --exclude 'docs/archives/**' --exclude .codecov.yml --exclude .coderabbit.yml --exclude .github/actions/setup-toolchain/action.yml --exclude .github/dependabot.yml --exclude semgrep.yaml --output "$1"
+    {{ _semgrep_stack_limit }} {{ _scanner }} semgrep scan --include '*.rs' --include '*.py' --include '*.yml' --include '*.yaml' --include '*.md' --include '*.sh' --include '*.ipynb' --exclude 'tests/semgrep/**' --exclude 'docs/archive/**' --exclude 'docs/archives/**' --exclude .codecov.yml --exclude .coderabbit.yml --exclude .github/actions/setup-toolchain/action.yml --exclude .github/dependabot.yml --exclude semgrep.yaml --output "$1"
 
 # Validate annotated repository-owned Semgrep fixtures.
 semgrep-test:
-    {{ _scanner }} semgrep check-fixtures
+    {{ _semgrep_stack_limit }} {{ _scanner }} semgrep check-fixtures
 
 # Development setup
 setup:
@@ -493,7 +497,7 @@ test-integration:
 
 # Run Python consumer integration tests.
 test-python:
-    {{ _run }} uv run --locked python -m pytest
+    {{ _semgrep_stack_limit }} {{ _run }} uv run --locked python -m pytest
 
 # Run release-mode Rust tests and doctests.
 test-release: test-rust-ci
@@ -561,7 +565,7 @@ update-cargo-tools:
 # Advance Cargo and exact Python development requirements plus their lockfiles.
 update-dependencies: update-cargo-dependencies update-python-dependencies
 
-# Advance root dev pins, then refresh and sync the root and Semgrep environments.
+# Advance root dev pins, then refresh and sync the unified Python environment.
 update-python-dependencies:
     uv run --locked --only-group tooling --inexact research-repo-tools deps update-python --all-projects
 
