@@ -1,5 +1,21 @@
 # Tooling Alignment
 
+## October 2026 Unified Python 3.15 Semgrep Environment
+
+Follow Delaunay's root Python 3.15 environment for Semgrep 1.182.1. Its Windows dependency override selects `pywin32` 312, which supplies Python 3.15
+wheels and removes the blocker that motivated CDT's separate Python 3.14 project. Move the scanner pin and patched MCP/OpenTelemetry dependencies into
+the root manifest and lock, retain wheel-only Semgrep installation, and remove the independent scanner manifest, lock and interpreter selector.
+
+Replace nested uv execution with one root development-environment invocation, retaining explicit `--no-active` selection for scanner commands. Port
+Delaunay's Linux-only inherited stack limit for Semgrep's Python 3.15 `RLIM_INFINITY` handling
+([semgrep#11979](https://github.com/semgrep/semgrep/issues/11979)); apply it to native scans, rule fixtures and the consumer test suite that invokes Semgrep.
+Keep rule IDs, file selection, strict failure handling, aggregate JSON/SARIF reports and workflow upload gates intact.
+
+Update the OSV inventory, declared Python update projects and Dependabot file inventories to match the single maintained Python lockfile. Dependabot keeps
+its existing schedules while upstream Python 3.15 support is pending; do not introduce a second dependency definition for it. Consumer tests must verify
+root interpreter/executable ownership, patched resolved dependencies and real scanner findings. Validate Python consumers, native scans/fixtures, notebooks,
+security scans and the affected configuration/documentation gates. The independent-environment records below describe the superseded setup.
+
 ## Git Authorization Alignment With la-stack
 
 Align `AGENTS.md` with la-stack's Git guidance: explicit user authorization permits scoped branch, index, commit, push, and tag operations, including necessary

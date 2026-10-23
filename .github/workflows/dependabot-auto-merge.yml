@@ -29,7 +29,7 @@ jobs:
         {"cargo": {
           "files": ["Cargo.toml", "Cargo.lock"]
         }, "uv": {
-          "files": ["pyproject.toml", "uv.lock", "tooling/semgrep/pyproject.toml", "tooling/semgrep/uv.lock"]
+          "files": ["pyproject.toml", "uv.lock"]
         }, "github_actions": {
           "files": [
             ".github/actions/setup-toolchain/action.yml",

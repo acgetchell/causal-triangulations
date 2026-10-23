@@ -39,7 +39,7 @@ def test_dependabot_caller_only_delegates_with_complete_cdt_file_policy() -> Non
     policy = json.loads(job["with"]["policy"])
     assert set(policy) == {"cargo", "uv", "github_actions"}
     assert set(policy["cargo"]["files"]) == {"Cargo.toml", "Cargo.lock"}
-    assert set(policy["uv"]["files"]) == {"pyproject.toml", "uv.lock", "tooling/semgrep/pyproject.toml", "tooling/semgrep/uv.lock"}
+    assert set(policy["uv"]["files"]) == {"pyproject.toml", "uv.lock"}
     action_files = {
         path.relative_to(ROOT).as_posix()
         for directory in (ROOT / ".github/workflows", ROOT / ".github/actions")
@@ -56,27 +56,16 @@ def test_published_tooling_pin_and_consumer_metadata() -> None:
     assert main(["--root", str(ROOT), "release", "check", "--final-release"]) == 0
 
 
-def test_independent_scanner_contract_and_update_inventory() -> None:
-    """Python adoption and ordinary updates preserve the scanner's supported environment."""
+def test_unified_scanner_contract_and_update_inventory() -> None:
+    """The root environment owns Semgrep and its patched cross-platform dependencies."""
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert project["tool"]["research-repo-tools"]["deps"]["python-projects"] == ["tooling/semgrep"]
-    assert all(not (isinstance(item, str) and item.startswith("semgrep")) for item in project["dependency-groups"]["dev"])
-    scanner = ROOT / "tooling/semgrep"
-    manifest = tomllib.loads((scanner / "pyproject.toml").read_text(encoding="utf-8"))
-    assert manifest["project"]["requires-python"] == ">=3.14,<3.15"
-    assert (scanner / ".python-version").read_text(encoding="utf-8").strip() == "3.14"
-    assert manifest["project"]["dependencies"] == ["semgrep==1.182.1"]
-    assert manifest["tool"]["uv"]["no-build-package"] == ["semgrep"]
-    assert manifest["tool"]["uv"]["override-dependencies"] == [
-        "mcp>=1.30.0,<2",
-        "opentelemetry-api>=1.45.1,<2",
-        "opentelemetry-sdk>=1.45.1,<2",
-        "opentelemetry-exporter-otlp-proto-http>=1.45.1,<2",
-        "opentelemetry-instrumentation-requests>=0.66b1,<1",
-        "opentelemetry-instrumentation-threading>=0.66b1,<1",
-    ]
-    lock = tomllib.loads((scanner / "uv.lock").read_text(encoding="utf-8"))
+    assert not project["tool"]["research-repo-tools"].get("deps", {}).get("python-projects", [])
+    assert f"semgrep=={version('semgrep')}" in project["dependency-groups"]["dev"]
+    assert project["tool"]["uv"]["no-build-package"] == ["semgrep"]
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
     versions = {package["name"]: Version(package["version"]) for package in lock["package"]}
+    assert Version("1.30.0") <= versions["mcp"] < Version("2")
+    assert versions["pywin32"] >= Version("312")
     assert Version("1.45.1") <= versions["opentelemetry-api"] < Version("2")
     assert versions["opentelemetry-api"] == versions["opentelemetry-sdk"] == versions["opentelemetry-exporter-otlp-proto-http"]
     instrumentation = versions["opentelemetry-instrumentation-requests"]
@@ -84,27 +73,28 @@ def test_independent_scanner_contract_and_update_inventory() -> None:
     assert instrumentation == versions["opentelemetry-instrumentation-threading"] == versions["opentelemetry-semantic-conventions"]
     dependabot = yaml.safe_load((ROOT / ".github/dependabot.yml").read_text(encoding="utf-8"))
     updates = next(item for item in dependabot["updates"] if item["package-ecosystem"] == "uv")
-    assert set(updates["directories"]) == {"/", "/tooling/semgrep"}
+    assert updates["directory"] == "/"
     for recipe in ("semgrep", "semgrep-test"):
         commands = dry_run(ROOT, recipe).stderr
-        assert "--project tooling/semgrep uv run --locked --no-active --project . --group dev research-repo-tools" in commands
-        assert commands.count("--no-active") == 2
+        assert "uv run --locked --no-active --group dev research-repo-tools semgrep" in commands
+        assert commands.count("uv run") == 1
 
 
-@pytest.mark.parametrize("active", ["root", "scanner", "unrelated"])
-def test_scanner_launcher_selects_project_environments(active: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Inherited activation cannot change either interpreter or produce an environment warning."""
-    environments = {"root": str(ROOT / ".venv"), "scanner": "tooling/semgrep/.venv", "unrelated": str(tmp_path / "unrelated-venv")}
+@pytest.mark.parametrize("active", ["root", "unrelated"])
+def test_scanner_launcher_selects_root_environment(active: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inherited activation cannot change the root interpreter or scanner executable."""
+    environments = {"root": str(ROOT / ".venv"), "unrelated": str(tmp_path / "unrelated-venv")}
     monkeypatch.setenv("VIRTUAL_ENV", environments[active])
-    arguments = shlex.split(dry_run(ROOT, "semgrep-test").stderr.splitlines()[-1])
-    # Replace only the terminal command: both real uv project selections still run.
+    command = dry_run(ROOT, "semgrep-test").stderr.splitlines()[-1]
+    arguments = shlex.split(command[command.index("uv run ") :])
+    # Keep the real root uv selection; the parent test recipe owns the Linux stack guard.
     probe = 'import json, shutil, sys; print(json.dumps({"prefix": sys.prefix, "python": list(sys.version_info[:2]), "scanner": shutil.which("semgrep")}))'
     result = run_safe_command(arguments[0], [*arguments[1 : arguments.index("research-repo-tools")], "python", "-c", probe], cwd=ROOT)
     assert "does not match the project environment" not in result.stderr
     selected = json.loads(result.stdout)
     assert Path(selected["prefix"]).resolve() == (ROOT / ".venv").resolve()
     assert selected["python"] == [3, 15]
-    assert Path(selected["scanner"]).resolve().parent.parent == (ROOT / "tooling/semgrep/.venv").resolve()
+    assert Path(selected["scanner"]).resolve().parent.parent == (ROOT / ".venv").resolve()
 
 
 def test_python_rules_cover_relocated_tooling_tests(tmp_path: Path) -> None:
@@ -129,9 +119,12 @@ def test_python_rules_cover_relocated_tooling_tests(tmp_path: Path) -> None:
         [
             "run",
             "--locked",
+            "--no-active",
             "--managed-python",
             "--project",
-            str(ROOT / "tooling/semgrep"),
+            str(ROOT),
+            "--group",
+            "dev",
             "semgrep",
             "scan",
             "--config",
@@ -412,7 +405,7 @@ def test_review_uses_consumer_instructions_and_propagates_failure(
 def test_security_covers_maintained_lockfiles_and_stays_opt_in() -> None:
     """New resolution roots must join the explicit consumer audit inventory."""
     files = run_safe_command("git", ["--no-pager", "ls-files", "--cached", "--others", "--exclude-standard"], cwd=ROOT).stdout.splitlines()
-    lockfiles = {name for name in files if Path(name).name in {"Cargo.lock", "uv.lock"}}
+    lockfiles = {name for name in files if Path(name).name in {"Cargo.lock", "uv.lock"} and (ROOT / name).is_file()}
     audit = dry_run(ROOT, "audit").stderr
     assert set(audit.split("security osv ", 1)[1].split()) == lockfiles
     security = dry_run(ROOT, "security").stderr

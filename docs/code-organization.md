@@ -159,10 +159,6 @@ causal-triangulations/
 │   ├── regressions.rs
 │   └── trait_bound_ergonomics.rs
 ├── tooling/
-│   ├── semgrep/
-│   │   ├── .python-version
-│   │   ├── pyproject.toml
-│   │   └── uv.lock
 │   ├── tests/
 │   │   ├── __init__.py
 │   │   ├── test_release_benchmarks.py
@@ -234,8 +230,8 @@ enforce this boundary against new CDT-local generic acceptance draws or manual a
 - `benches/` — Criterion benchmark harnesses and CI performance suites, with shared fail-fast fixture setup support under `benches/support/`.
 - `docs/` — user guides, architecture notes, development rules, and release/testing/performance documentation.
   [The documentation index](README.md) maps their owners; [documentation policy](dev/DEVELOPING.md#documentation-and-command-policy) defines guide naming.
-- `tooling/` — benchmark measurement, example validation, report, and README publication contracts, plus consumer integration tests under `tests/` and the
-  independent Python 3.14 Semgrep environment under `semgrep/`. Generic infrastructure and root Python 3.15 tooling use `research-repo-tools`.
+- `tooling/` — benchmark measurement, example validation, report, and README publication contracts, plus consumer integration tests under `tests/`.
+  Generic infrastructure uses `research-repo-tools`; tooling, notebooks and Semgrep share the root Python 3.15 environment.
 
 ## Key Modules
 

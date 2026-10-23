@@ -2,7 +2,8 @@
 
 Generic maintenance uses the published `research-repo-tools==0.2.3` package.
 This directory contains CDT's tooling configuration and consumer integration tests under `tests/`; CDT maintains no local maintenance CLIs.
-The independent `semgrep/` project retains Python 3.14, the exact scanner pin, and its MCP/OpenTelemetry security overrides; root tooling uses Python 3.15.
+Tooling, notebooks and Semgrep share the root Python 3.15 environment. The root manifest owns the exact scanner pin, wheel-only installation,
+MCP/OpenTelemetry security overrides and Python 3.15 Windows wheel compatibility override.
 `selected-actions.json` declares exact approved workflow Action identities for the shared structured allowlist; Zizmor and Semgrep retain SHA and readable
 version-comment checks. See the [ownership catalog](../docs/dev/tooling-alignment.md#shared-tooling-retirement-catalog) for retained policy and upstream gaps.
 
