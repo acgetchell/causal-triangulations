@@ -30,6 +30,9 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      target: ${{ steps.release-target.outputs.target }}
+      commit: ${{ steps.release-target.outputs.commit }}
     steps:
       - name: Install registry tooling runner
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
@@ -37,13 +40,20 @@ jobs:
           version: "0.13.5"
           enable-cache: false
 
-      - name: Validate draft GitHub Release
+      - name: Capture verified draft GitHub Release target
+        id: release-target
         env:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-10-22T08:29:37Z
-          --from research-repo-tools==0.2.3 research-repo-tools performance release-draft "$GH_REPO" "$RELEASE_TAG"
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          commit="$(gh api "repos/$GH_REPO/commits/refs%2Ftags%2F$RELEASE_TAG" --jq '.sha')"
+          [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
+          target="$(uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-10-22T08:29:37Z \
+            --from research-repo-tools==0.2.3 research-repo-tools performance release-draft "$GH_REPO" "$RELEASE_TAG" --commit "$commit")"
+          target="$(jq -ce . <<< "$target")"
+          printf 'target=%s\ncommit=%s\n' "$target" "$commit" >> "$GITHUB_OUTPUT"
 
   release-baseline:
     needs: validate-release
@@ -52,8 +62,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ inputs.release_tag }}
+          ref: ${{ needs.validate-release.outputs.commit }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Verify captured benchmark checkout
+        env:
+          RELEASE_COMMIT: ${{ needs.validate-release.outputs.commit }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git --no-pager rev-parse HEAD)" = "$RELEASE_COMMIT"
+          test "$(git --no-pager rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$RELEASE_COMMIT"
 
       - name: Set up declared toolchain
         uses: $/.github/actions/setup-toolchain
@@ -74,7 +94,7 @@ jobs:
           if-no-files-found: error
 
   publish-baseline:
-    needs: release-baseline
+    needs: [validate-release, release-baseline]
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -86,10 +106,38 @@ jobs:
           version: "0.13.5"
           enable-cache: false
 
+      - name: Restore trusted preflight target
+        env:
+          RELEASE_TARGET: ${{ needs.validate-release.outputs.target }}
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_TARGET"
+          printf '%s\n' "$RELEASE_TARGET" > "$RUNNER_TEMP/release-target.json"
+
       - name: Download release baseline
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: bench-baseline-${{ inputs.release_tag }}
+          path: ${{ runner.temp }}/baseline
+
+      - name: Verify native baseline provenance against captured target
+        env:
+          GH_REPO: ${{ github.repository }}
+        run: |
+          uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-10-22T08:29:37Z \
+            --from research-repo-tools==0.2.3 python -I - <<'PY'
+          import os
+          from pathlib import Path
+          from research_repo_tools.release_assets import parse_release_target, read_baseline
+
+          temporary = Path(os.environ["RUNNER_TEMP"])
+          target = parse_release_target((temporary / "release-target.json").read_bytes())
+          if (target.repository, target.tag) != (os.environ["GH_REPO"], os.environ["RELEASE_TAG"]):
+              raise ValueError("repository/tag differ from captured release target")
+          _, source = read_baseline(temporary / "baseline" / os.environ["RELEASE_ASSET"], expected_tag=target.tag)
+          if source.revision != target.commit:
+              raise ValueError("baseline provenance differs from captured release commit")
+          PY
 
       - name: Attach verified baseline to draft GitHub Release
         env:
@@ -97,4 +145,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: >-
           uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-10-22T08:29:37Z
-          --from research-repo-tools==0.2.3 research-repo-tools performance release-upload "$GH_REPO" "$RELEASE_TAG" "$RELEASE_ASSET"
+          --from research-repo-tools==0.2.3 research-repo-tools performance release-upload
+          "$GH_REPO" "$RELEASE_TAG" "$RUNNER_TEMP/baseline/$RELEASE_ASSET" --target "$RUNNER_TEMP/release-target.json"

@@ -9,4 +9,13 @@ package = false
 # Semgrep's sdist does not bundle its required native engine.
 no-build-package = [ "semgrep" ]
 # Retain the patched MCP 1.x API until Semgrep updates its vulnerable pin.
-override-dependencies = [ "mcp>=1.30.0,<2" ]
+override-dependencies = [
+    "mcp>=1.30.0,<2",
+    # GHSA-xcq7-p3pf-p88h fixes the API in 1.45.1. Keep SDK, exporter and
+    # instrumentation on its matching release family despite Semgrep's old pins.
+    "opentelemetry-api>=1.45.1,<2",
+    "opentelemetry-sdk>=1.45.1,<2",
+    "opentelemetry-exporter-otlp-proto-http>=1.45.1,<2",
+    "opentelemetry-instrumentation-requests>=0.66b1,<1",
+    "opentelemetry-instrumentation-threading>=0.66b1,<1",
+]
