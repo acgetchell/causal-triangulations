@@ -1,5 +1,43 @@
 # Tooling Alignment
 
+## October 2026 MCMC 0.5.2 And Rust 1.99.1
+
+Adopt the latest published, non-yanked `markov-chain-monte-carlo` 0.5.2 release, verified against Cargo's sparse registry index on 24 October 2026.
+Its published metadata requires Rust 1.99.1, matching the sibling MCMC checkout. Update the dependency requirement and targeted lock entry, and align
+`Cargo.toml`, `rust-toolchain.toml`, Clippy's MSRV and active user/contributor/agent guidance with that baseline. Preserve the existing staged lockfile
+updates and the completed Python test-layout migration. CI already reads the declared toolchain, so it needs no workflow-local version edit.
+
+The upstream release fixes subnormal binning midpoint precision and adopts deliberate fused arithmetic in adaptive warmup and normal quantiles. CDT uses
+the sampler backend through its existing adapter; retain the serde feature and geometry/MCMC ownership boundaries. Validate the published dependency on
+Rust 1.99.1 with the complete native CI gate, including seeded physics, checkpoint continuation, allocation, notebook and example contracts. This raises
+CDT's minimum compiler version; historical changelogs and prior performance evidence remain unchanged.
+
+## Issue #313 Python Tooling Test Layout
+
+Move CDT's consumer integration tests from `tooling/tests/` to `tests/tooling/`, matching the checked-out MCMC and Delaunay test layouts. Keep `tooling/`
+for consumer configuration and publication contracts; generic infrastructure tests remain owned by `research-repo-tools`.
+
+Update pytest discovery, Ruff source roots and precise test exceptions, CodeRabbit guidance, Semgrep path filters and the repository inventory together.
+The directory depth is unchanged, so both test modules retain their existing repository-root calculation. Preserve assertions, fixtures, release/security
+boundaries and command behavior; the scanner regression now probes the new path. Shared Python discovery and Just/CI commands already select the complete
+inventory, and Ty and Rust coverage have no old-path selection to migrate. Compare collected test identities before and after the move and run the Python,
+Semgrep fixture/production, configuration and documentation validators.
+
+Validation exposed an existing local downgrade to Semgrep 1.136.0, whose telemetry imports fail with the patched OpenTelemetry family and whose lock omits
+MCP. Follow MCMC's unified Python 3.15 setup: restore its Semgrep 1.182.1 pin in the root development group, retain the existing exact MCP/OpenTelemetry
+and Windows-wheel overrides, and refresh the root lock/environment. Keep the root scanner launcher and Linux stack guard; no separate scanner project,
+interpreter or lockfile is needed.
+
+## October 2026 Scientific Correctness And Regression Preservation
+
+Align `AGENTS.md` with Delaunay's explicit scientific-correctness rule: passing tests alone do not establish validity, and legitimate regression failures
+require production corrections that preserve the original inputs and intended behavior. Place the rule at the start of Core Rules so it governs repair
+decisions before validation procedures are selected.
+
+Reject weakened assertions, easier fixtures, reduced coverage, skipped tests, or accepted failures used only to make checks pass. A test-contract correction
+requires independent evidence that the mathematics, fixture, or expectation is wrong, an explanation of that evidence, and meaningful retained coverage.
+Typed errors and rollback remain safeguards; they do not replace supported successful behavior. This alignment changes agent guidance only.
+
 ## October 2026 Unified Python 3.15 Semgrep Environment
 
 Follow Delaunay's root Python 3.15 environment for Semgrep 1.182.1. Its Windows dependency override selects `pywin32` 312, which supplies Python 3.15
@@ -176,7 +214,7 @@ local wheel, editable dependency, production Python package, or local parser/ren
 | 13. Code review | Migrated: opt-in shared CodeRabbit commands. Retain `AGENTS.md`, `.coderabbit.yml` and scientific review policy; ordinary checks do not run a review. |
 | 14. CI/SARIF/coverage | Migrated: managed exports, shared coverage summary and paired aggregate Semgrep reports. Retain native matrix, Cargo flags, Clippy SARIF pipeline, uploads, category/failure conditions, cache policy and required checks. |
 | 15. Process/file infrastructure | Migrated: public process/evidence/publication APIs and Just inspection in consumer tests. No copied production executable discovery, subprocess engine, file transaction or batching implementation remains. |
-| 16. Tests/dependencies/guidance | Migrated: `tooling/tests/` exercises installed-package integration and CDT policy; generic infrastructure tests stay upstream. Retain scientific tests/notebooks and native evidence. Top-level `scripts/` and obsolete one-batch SARIF guard are removed. |
+| 16. Tests/dependencies/guidance | Migrated: `tests/tooling/` exercises installed-package integration and CDT policy; generic infrastructure tests stay upstream. Retain scientific tests/notebooks and native evidence. Top-level `scripts/` and obsolete one-batch SARIF guard are removed. |
 
 Native validators remain configured in `pyproject.toml`, `ty.toml`, `semgrep.yaml`, `rust-toolchain.toml`, `Cargo.toml`, formatter/spelling configuration and
 the Just graph. These declarations express consumer policy; shared ownership of invocation does not make them obsolete. The managed inventory includes

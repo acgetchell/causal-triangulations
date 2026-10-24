@@ -22,6 +22,16 @@ changes.
 
 ## Core Rules
 
+### Scientific Correctness
+
+- **Scientific correctness is the acceptance criterion.** A passing test suite does not by itself establish scientific validity.
+- When a legitimate regression test fails, agents MUST correct the production code while preserving the original inputs and intended behavior.
+- Never weaken assertions, substitute easier fixtures, reduce coverage, skip tests, or replace expected success with accepted failure merely to obtain a
+  green run.
+- Change a test's contract only when independent evidence demonstrates that its mathematics, fixture, or expectation is wrong; explain that evidence and
+  preserve meaningful regression coverage.
+- Typed errors and rollback are required safeguards, not substitutes for supported successful behavior.
+
 ### Git Operations
 
 - **Git mutations are allowed with explicit user authorization.** Keep branch creation, staging, commits, pushes, tags, and other ref/index changes within
@@ -217,7 +227,7 @@ Key principle:
 
 - **Language**: Rust
 - **Project**: {2,3,4}D Causal Dynamical Triangulations library
-- **MSRV**: 1.99.0
+- **MSRV**: 1.99.1
 - **Edition**: 2024
 - **Unsafe code**: forbidden (`#![forbid(unsafe_code)]`)
 - **Architecture**: `src/geometry/` is the backend interface layer for the `delaunay` crate; `src/cdt/` is the CDT domain layer. Direct `use delaunay::` imports
@@ -232,7 +242,7 @@ Key principle:
   Design documented in `docs/foliation.md`
 - **Ergodic moves**: `attempt_22_move`, `attempt_13_move`, `attempt_31_move`, `attempt_edge_flip` are Delaunay-backed, foliation-aware move kernels. They mutate
   through narrow CDT-owned edit operations, roll back failed finalized mutations, and preserve topology/foliation invariants
-- **Python tooling**: maintenance and performance evidence use the pinned `research-repo-tools` package. Consumer contracts in `tooling/tests/` run via
+- **Python tooling**: maintenance and performance evidence use the pinned `research-repo-tools` package. Consumer contracts in `tests/tooling/` run via
   pytest; scientific benchmark, example, and notebook workloads remain repository-owned
 - **When adding/removing files**: Update `docs/code-organization.md`
 

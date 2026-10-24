@@ -1237,7 +1237,7 @@ rules:
         while failing on Windows when benchmark output contains Unicode symbols.
     paths:
       include:
-        - "/tooling/tests/**/*.py"
+        - "/tests/tooling/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
     patterns:
       - pattern-either:
@@ -1265,6 +1265,7 @@ rules:
     paths:
       include:
         - "/tooling/**/*.py"
+        - "/tests/tooling/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
     pattern-regex: '^\s*except\s+Exception(?:\s+as\s+\w+)?\s*:'
 
@@ -1280,7 +1281,7 @@ rules:
         mocks stay aligned with production subprocess APIs.
     paths:
       include:
-        - "/tooling/tests/**/*.py"
+        - "/tests/tooling/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
     pattern-either:
       - patterns:
@@ -1363,5 +1364,5 @@ rules:
         - "/tooling/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
       exclude:
-        - "/tooling/tests/**/*.py"
+        - "/tests/tooling/**/*.py"
     pattern: subprocess.run(...)

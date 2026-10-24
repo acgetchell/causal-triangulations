@@ -1,6 +1,6 @@
 # ty.toml
 # Astral ty configuration for causal-triangulations
-# Python is auxiliary tooling only (tooling/), Rust is primary
+# Python is auxiliary tooling only (tests/tooling/), Rust is primary
 
 # Source inventory is supplied by research-repo-tools, including negative fixtures.
 # The Python baseline comes from pyproject.toml.

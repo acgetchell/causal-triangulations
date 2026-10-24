@@ -74,7 +74,7 @@ Structured results keep tests close to production behavior and give `ty` real at
 
 ## Test Helpers
 
-Put reusable typed test helpers near the top of the test module or in `tooling/tests/conftest.py` when they are shared. Prefer one helper that returns the real
+Put reusable typed test helpers near the top of the test module or in `tests/tooling/conftest.py` when they are shared. Prefer one helper that returns the real
 structured type over repeating partially configured mocks throughout a file.
 
 ## Parser and File-Format Contracts
