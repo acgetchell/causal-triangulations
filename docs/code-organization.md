@@ -147,6 +147,10 @@ causal-triangulations/
 │   │           ├── algebraic_float.rs
 │   │           ├── bench_example_usage.rs
 │   │           └── rust_style.rs
+│   ├── tooling/
+│   │   ├── __init__.py
+│   │   ├── test_release_benchmarks.py
+│   │   └── test_shared_tooling.py
 │   ├── cli.rs
 │   ├── error_diagnostics.rs
 │   ├── integration_tests.rs
@@ -159,10 +163,6 @@ causal-triangulations/
 │   ├── regressions.rs
 │   └── trait_bound_ergonomics.rs
 ├── tooling/
-│   ├── tests/
-│   │   ├── __init__.py
-│   │   ├── test_release_benchmarks.py
-│   │   └── test_shared_tooling.py
 │   ├── benchmark.toml
 │   ├── examples.toml
 │   ├── performance-interpretation.md
@@ -225,12 +225,12 @@ enforce this boundary against new CDT-local generic acceptance draws or manual a
 - `examples/` — runnable public API examples and shell workflows for simulation, observables, output, checkpoints, parameter sweeps, and performance checks.
 - `notebooks/` — notebook front ends and analysis consumers for CLI-generated artifacts such as trace CSV and JSON summary files. Notebook code may run the
   binary for tutorials, but simulation logic stays in Rust.
-- `tests/` — CLI, integration, physics, property-based, property-configuration, regression, slow-debug, and project-rule tests, with shared property-test
-  configuration under `tests/common/`.
+- `tests/` — CLI, integration, physics, property-based, property-configuration, regression, slow-debug, project-rule, and consumer tooling tests, with shared
+  property-test configuration under `tests/common/` and Python consumer contracts under `tests/tooling/`.
 - `benches/` — Criterion benchmark harnesses and CI performance suites, with shared fail-fast fixture setup support under `benches/support/`.
 - `docs/` — user guides, architecture notes, development rules, and release/testing/performance documentation.
   [The documentation index](README.md) maps their owners; [documentation policy](dev/DEVELOPING.md#documentation-and-command-policy) defines guide naming.
-- `tooling/` — benchmark measurement, example validation, report, and README publication contracts, plus consumer integration tests under `tests/`.
+- `tooling/` — benchmark measurement, example validation, report, and README publication contracts; consumer integration tests live under `tests/tooling/`.
   Generic infrastructure uses `research-repo-tools`; tooling, notebooks and Semgrep share the root Python 3.15 environment.
 
 ## Key Modules
@@ -442,5 +442,5 @@ Notebook files live in `notebooks/` and should wrap the CLI or consume generated
 
 - `delaunay` (v0.8.2) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
   `set_vertex_data_by_key` for O(1) label mutation)
-- `markov-chain-monte-carlo` (v0.5.1) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, invariant-bearing `Step<Info>` telemetry, `Target`)
+- `markov-chain-monte-carlo` (v0.5.2) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, invariant-bearing `Step<Info>` telemetry, `Target`)
 - `num-traits` — `ToPrimitive` and `NumCast` for checked or saturating numeric conversions

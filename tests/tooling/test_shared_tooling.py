@@ -99,7 +99,7 @@ def test_scanner_launcher_selects_root_environment(active: str, tmp_path: Path, 
 
 def test_python_rules_cover_relocated_tooling_tests(tmp_path: Path) -> None:
     """Actual scanner path filters still reject violations beside the relocated tests."""
-    directory = tmp_path / "tooling/tests"
+    directory = tmp_path / "tests/tooling"
     directory.mkdir(parents=True)
     (tmp_path / "semgrep.yaml").write_bytes((ROOT / "semgrep.yaml").read_bytes())
     (directory / "probe.py").write_text(
@@ -137,7 +137,7 @@ def test_python_rules_cover_relocated_tooling_tests(tmp_path: Path) -> None:
             "--disable-version-check",
             "--no-rewrite-rule-ids",
             "--no-git-ignore",
-            "tooling/tests/probe.py",
+            "tests/tooling/probe.py",
         ],
         cwd=tmp_path,
     )
@@ -157,7 +157,7 @@ def test_semgrep_aggregates_the_complete_eligible_inventory(tmp_path: Path) -> N
     include = tuple(arguments[index + 1] for index, item in enumerate(arguments) if item == "--include")
     exclude = tuple(arguments[index + 1] for index, item in enumerate(arguments) if item == "--exclude")
     names = select_files(ROOT, include=include, exclude=exclude)
-    assert "tooling/tests/test_shared_tooling.py" in names
+    assert "tests/tooling/test_shared_tooling.py" in names
     reports = tmp_path / "reports"
     result = run_safe_command("just", ["semgrep", str(reports)], cwd=ROOT, timeout=300)
     assert "does not match the project environment" not in result.stderr

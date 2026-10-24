@@ -610,7 +610,8 @@ just publish-check
 
 | Changed files | Command                                |
 | ------------- | -------------------------------------- |
-| `tests/`      | `just test-integration` (or `just ci`)       |
+| `tests/*.rs`  | `just test-integration` (or `just ci`)       |
+| `tests/tooling/` | `just python-check test-python`            |
 | `examples/`   | `just examples-validate`                     |
 | `benches/`    | `just bench-compile`                         |
 | `src/`        | `just test-unit test-doc` (or `just ci`)     |

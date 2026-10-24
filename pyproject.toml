@@ -7,7 +7,7 @@ dependencies = [  ]
 
 [tool.ruff]
 line-length = 160
-src = [ "tooling" ]
+src = [ "tests" ]
 
 [tool.ruff.lint]
 select = [
@@ -81,7 +81,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"**/tests/test_*.py" = [ "S101", "SLF001" ]
+"tests/tooling/test_*.py" = [ "S101", "SLF001" ]
 "tests/semgrep/scripts/tests/python_exceptions.py" = [
     "INP001", # Scanner input, not an importable package.
     "Q000", # Both quote styles exercise the encoding rule.
@@ -115,7 +115,7 @@ line-ending = "auto"
 [tool.pytest.ini_options]
 minversion = "9.0"
 addopts = [ "-ra", "--strict-markers", "--strict-config", "--color=yes" ]
-testpaths = [ "tooling/tests" ]
+testpaths = [ "tests/tooling" ]
 python_files = [ "test_*.py", "*_test.py" ]
 python_classes = [ "Test*" ]
 python_functions = [ "test_*" ]
