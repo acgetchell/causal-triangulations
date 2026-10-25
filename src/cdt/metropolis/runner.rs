@@ -835,6 +835,12 @@ where
     }
 
     fn initial_state(&self, triangulation: CdtTriangulation2D) -> CdtResult<MetropolisRunState> {
+        if let Some(fixing) = self.action_config.volume_fixing() {
+            fixing.ensure_ensemble(
+                triangulation.metadata().topology(),
+                triangulation.time_slices().get(),
+            )?;
+        }
         let current_action = action_for(&self.action_config, &triangulation);
         let mut measurements = Vec::new();
         if measurement_is_due(
@@ -842,7 +848,13 @@ where
             self.config.thermalization_steps(),
             self.config.measurement_frequency(),
         ) {
-            measurements.push(measurement_for(0, current_action, &triangulation)?);
+            measurements.push(
+                measurement_for(0, current_action, &triangulation)?.with_state_observables(
+                    &self.action_config,
+                    &triangulation,
+                    None,
+                )?,
+            );
         }
         let initial_slab_triangle_profile = triangulation.slab_triangle_profile()?;
 
@@ -1207,7 +1219,15 @@ fn record_planned_step_parts<P>(
         state.trace_seed,
     )?;
     let measurement =
-        staged_measurement_for_step(algorithm, step, trace_action, trace_triangulation)?;
+        staged_measurement_for_step(algorithm, step, trace_action, trace_triangulation)?
+            .map(|measurement| {
+                measurement.with_state_observables(
+                    &algorithm.action_config,
+                    trace_triangulation,
+                    state.measurements.last(),
+                )
+            })
+            .transpose()?;
     if attach_initial_slab_triangle_profile
         && let Some(initial_slab_triangle_profile) = state.initial_slab_triangle_profile.take()
     {
@@ -2235,6 +2255,10 @@ mod tests {
             to_value(-tampered_action).expect("log probability should serialize");
         payload["measurements"][1]["action"] =
             to_value(tampered_action).expect("action should serialize");
+        // Keep the new redundant action component consistent with the forged
+        // bare action so this still reaches the geometry/history boundary.
+        payload["measurements"][1]["physical_action"] =
+            to_value(tampered_action).expect("physical action should serialize");
 
         let Err(error) = from_str::<CdtMcmcCheckpoint>(&payload.to_string()) else {
             panic!("a self-consistent but detached checkpoint action history should be rejected");
@@ -3749,10 +3773,15 @@ mod tests {
         let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
         let mut rng = StdRng::seed_from_u64(7);
 
-        let plan = proposal
-            .propose_plan(&triangulation, &mut rng)
-            .expect("planning should not fail")
-            .expect("CDT proposals always select a move type");
+        // The documented Option permits ordinary no-plan self-loops. Keep the
+        // same state and RNG streams while requiring an actual scoreable plan.
+        let plan = (0..64)
+            .find_map(|_| {
+                proposal
+                    .propose_plan(&triangulation, &mut rng)
+                    .expect("planning should not fail")
+            })
+            .expect("the original fixture must yield a concrete proposal");
         let info = proposal.info(&plan);
         let proposed_log_prob = proposal
             .proposed_log_prob(&triangulation, &plan, &target)

@@ -35,7 +35,8 @@
 //! # Checkpointing
 //!
 //! Durable simulation continuation uses the versioned, CDT-owned
-//! [`CdtMcmcCheckpoint`] JSON format. Version 2 embeds Delaunay's exact Level 4
+//! [`CdtMcmcCheckpoint`] JSON format. Bare ensembles write version 2; explicit
+//! volume bias requires version 3. Both embed Delaunay's exact Level 4
 //! geometry snapshot alongside CDT chain accounting, telemetry, elapsed time, and
 //! both RNG streams. Restoration rebuilds transient caches and validates geometry
 //! and CDT invariants before use. Older checkpoint formats are unsupported.
@@ -53,7 +54,7 @@
 //!     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
 //!     let json = checkpoint.to_json()?;
 //!     let restored = CdtMcmcCheckpoint::from_json(&json)?;
-//!     assert_eq!(CdtMcmcCheckpoint::FORMAT_VERSION, 2);
+//!     assert_eq!(CdtMcmcCheckpoint::FORMAT_VERSION, 3);
 //!     assert_eq!(restored.current_step().get(), 1);
 //!     Ok(())
 //! }
@@ -127,6 +128,8 @@ pub mod geometry {
 pub mod cdt {
     /// Action calculation for CDT simulations.
     pub mod action;
+    /// Cadence-aligned CDT chain artifacts and dependence-aware diagnostics.
+    pub mod analysis;
     /// Ergodic moves for triangulation modifications.
     pub mod ergodic_moves;
     /// Foliation data structures (time labels, edge classification).
@@ -159,6 +162,11 @@ pub mod cdt {
             CdtProposal, CdtProposalError, CdtProposalInfo, CdtProposalPlan, CdtTarget,
         };
         pub use checkpoint::CdtMcmcCheckpoint;
+        pub(crate) use markov_chain_monte_carlo::{
+            Autocorrelation, BinningAnalysis, CombinedRhat, DiagnosticTiming, EssEstimate,
+            EssEstimator, FoldedRankNormalizedSplitRhat, IntegratedAutocorrelationTime, MeanMcse,
+            QuantileMcse, RankNormalizedSplitRhat, TailEss,
+        };
         pub use markov_chain_monte_carlo::{
             ChainId, StepOutcome, Trace, TraceError, TraceRecord, TraceStepOutcome,
         };
@@ -178,12 +186,21 @@ pub mod cdt {
     /// CDT triangulation state.
     #[path = "triangulation/state.rs"]
     pub mod triangulation;
+    /// Explicit modified-ensemble triangle-volume bias.
+    pub mod volume_fixing;
 }
 
 // Re-exports for convenience
 pub use cdt::action::{
     ActionConfig, CDT_1P1_CRITICAL_TRIANGLE_COSMOLOGICAL_CONSTANT,
     DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT, compute_regge_action,
+};
+pub use cdt::analysis::{
+    AnalysisArtifactOperation, CdtAnalysisError, CdtBinningLevel, CdtChainDependence,
+    CdtDiagnosticObservable, CdtDiagnosticPolicy, CdtDiagnosticReport, CdtDiagnosticSource,
+    CdtDiagnosticVerdict, CdtEssSummary, CdtMcseSummary, CdtQuantileDiagnostic, DiagnosticEstimate,
+    DiagnosticPolicyField, QuantileRequirement, VALIDATION_CHAIN_SCHEMA_VERSION, ValidationChain,
+    ValidationChainData, analyze_cdt_chains,
 };
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
 pub use cdt::foliation::{
@@ -196,8 +213,9 @@ pub use cdt::metropolis::{
     RejectedProposalStepTelemetry, StepOutcome,
 };
 pub use cdt::observables::{
-    average_dual_ball_volume_curve, average_dual_return_probability_curve,
+    SpatialLoopError, average_dual_ball_volume_curve, average_dual_return_probability_curve,
     estimate_all_scale_effective_hausdorff_slope, estimate_short_time_effective_spectral_dimension,
+    spatial_loop_lengths,
 };
 pub use cdt::proposal_policy::{
     CdtMoveFamilyDistribution, CdtMoveFamilyPolicy, CdtMoveFamilyPolicyError,
@@ -208,6 +226,7 @@ pub use cdt::results::{Measurement, SimulationEvent, SimulationHistory, Simulati
 pub use cdt::triangulation::{
     CdtMetadata, CdtSimplexCounts, CdtTriangulation, CdtTriangulation2D, CdtValidationProfile,
 };
+pub use cdt::volume_fixing::{VolumeFixing, VolumeFixingError};
 pub use config::{
     CdtConfig, CdtConfigOverrides, CdtTopology, DimensionOverride, ValidatedCdtConfig,
     ValidatedInitialSpatialVertices,
@@ -224,7 +243,9 @@ pub use errors::{
 };
 pub use geometry::traits::TriangulationQuery;
 pub use geometry::{SpacetimeCoordinate, SpacetimeCoordinateComponent, SpacetimeCoordinateError};
-pub use markov_chain_monte_carlo::{DiscreteProposalRatioError, McmcError};
+pub use markov_chain_monte_carlo::{
+    DiagnosticTiming, DiagnosticTimingError, DiscreteProposalRatioError, McmcError,
+};
 
 use crate::cdt::results::{SimulationResultsParts, ensure_parent_directory};
 use std::env;
@@ -366,6 +387,9 @@ pub mod prelude {
             TriangulationMetadataField,
         };
         pub use crate::geometry::SpacetimeCoordinateComponent;
+        pub use crate::{
+            CdtAnalysisError, DiagnosticPolicyField, SpatialLoopError, VolumeFixingError,
+        };
         pub use markov_chain_monte_carlo::{DiscreteProposalRatioError, McmcError};
     }
 
@@ -385,6 +409,7 @@ pub mod prelude {
             ActionConfig, CDT_1P1_CRITICAL_TRIANGLE_COSMOLOGICAL_CONSTANT,
             DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT, compute_regge_action,
         };
+        pub use crate::cdt::volume_fixing::{VolumeFixing, VolumeFixingError};
     }
 
     /// Focused exports for CDT triangulation construction, queries, and classification.
@@ -521,12 +546,18 @@ pub mod prelude {
     /// }
     /// ```
     pub mod observables {
+        pub use crate::cdt::analysis::{
+            CdtDiagnosticObservable, CdtDiagnosticPolicy, CdtDiagnosticReport,
+            CdtDiagnosticVerdict, DiagnosticEstimate, QuantileRequirement, ValidationChain,
+            ValidationChainData, analyze_cdt_chains,
+        };
         pub use crate::cdt::observables::{
-            average_dual_ball_volume_curve, average_dual_return_probability_curve,
-            estimate_all_scale_effective_hausdorff_slope,
-            estimate_short_time_effective_spectral_dimension,
+            SpatialLoopError, average_dual_ball_volume_curve,
+            average_dual_return_probability_curve, estimate_all_scale_effective_hausdorff_slope,
+            estimate_short_time_effective_spectral_dimension, spatial_loop_lengths,
         };
         pub use crate::{CdtTriangulation, CdtTriangulation2D};
+        pub use markov_chain_monte_carlo::{DiagnosticTiming, DiagnosticTimingError};
     }
 
     /// Focused exports for geometry backend construction and querying.
@@ -749,7 +780,8 @@ pub fn run_simulation(config: &ValidatedCdtConfig) -> CdtResult<SimulationResult
         );
 
         let measurement = Measurement::try_from_simplex_counts(0, initial_action, counts)?
-            .try_with_slab_triangle_profile(triangulation.slab_triangle_profile()?)?;
+            .try_with_slab_triangle_profile(triangulation.slab_triangle_profile()?)?
+            .with_state_observables(&action_config, &triangulation, None)?;
 
         SimulationResultsBackend::from_parts(SimulationResultsParts::new(
             config.to_metropolis_config(),
@@ -1243,6 +1275,7 @@ mod tests {
             coupling_2: 0.0,
             cosmological_constant: DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
             simulate: false,
+            volume_fixing: None,
             seed: Some(42),
             topology: CdtTopology::OpenBoundary,
             output_csv: None,
@@ -1946,6 +1979,7 @@ mod tests {
             coupling_2: 0.0,
             cosmological_constant: DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
             simulate: false,
+            volume_fixing: None,
             seed: None,
             topology: CdtTopology::Toroidal,
             output_csv: None,

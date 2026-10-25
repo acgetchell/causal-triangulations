@@ -209,21 +209,24 @@ pub fn proposed_delta_action(
         3.0,
         (-action_config.coupling_0()).mul_add(1.0, -(action_config.coupling_2() * 2.0)),
     );
-    let delta = match move_type {
-        MoveType::Move22 | MoveType::EdgeFlip => 0.0,
+    let (delta, triangle_change) = match move_type {
+        MoveType::Move22 | MoveType::EdgeFlip => (0.0, 0),
         MoveType::Move13Add => {
             before.vertices.checked_add(1)?;
             before.edges.checked_add(3)?;
             before.triangles.checked_add(2)?;
-            insertion_delta
+            (insertion_delta, 2)
         }
         MoveType::Move31Remove => {
             before.vertices.checked_sub(1)?;
             before.edges.checked_sub(3)?;
             before.triangles.checked_sub(2)?;
-            -insertion_delta
+            (-insertion_delta, -2)
         }
     };
+    let delta = action_config.volume_fixing().map_or(delta, |fixing| {
+        delta + fixing.delta(before.triangles, triangle_change)
+    });
     delta.is_finite().then_some(delta)
 }
 
@@ -247,9 +250,65 @@ pub fn action_delta_matches(action_before: f64, delta_action: f64, action_after:
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cdt::volume_fixing::VolumeFixing;
+    use approx::assert_relative_eq;
+
+    #[test]
+    fn fixing_delta_matches_independent_quadratic_differences_for_every_family() {
+        let physical = ActionConfig::new(0.5, 0.25, 0.125).expect("finite couplings");
+        let action = physical
+            .with_volume_fixing(Some(
+                VolumeFixing::quadratic_triangles(32, 0.25).expect("bias"),
+            ))
+            .expect("combined action");
+        for triangles in [28usize, 30, 32, 34, 36] {
+            let before = SimplexCounts {
+                vertices: triangles / 2,
+                edges: triangles * 3 / 2,
+                triangles,
+            };
+            for family in MoveType::REVERSIBLE_1P1 {
+                let change = match family {
+                    MoveType::Move13Add => 2,
+                    MoveType::Move31Remove => -2,
+                    MoveType::Move22 | MoveType::EdgeFlip => 0,
+                };
+                let after = i32::try_from(triangles).expect("small fixture") + change;
+                let distance_before = i32::try_from(triangles).expect("small fixture") - 32;
+                let distance_after = after - 32;
+                let physical_delta = -f64::from(5 * change) / 16.0;
+                let fixing_delta = f64::from(distance_after.pow(2) - distance_before.pow(2)) / 4.0;
+                assert_relative_eq!(
+                    proposed_delta_action(&action, before, family).expect("supported count delta"),
+                    physical_delta + fixing_delta,
+                    epsilon = 1e-14
+                );
+            }
+        }
+    }
 
     fn frequency(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).expect("test measurement frequency should be nonzero")
+    }
+
+    #[test]
+    fn disabled_fixing_preserves_ieee_signed_zero_actions_and_deltas() {
+        let action = ActionConfig::new(0.0, 0.0, -0.0).expect("finite signed-zero couplings");
+        assert_eq!(
+            action.calculate_action(16, 48, 32).to_bits(),
+            (-0.0_f64).to_bits()
+        );
+        let counts = SimplexCounts {
+            vertices: 16,
+            edges: 48,
+            triangles: 32,
+        };
+        assert_eq!(
+            proposed_delta_action(&action, counts, MoveType::Move13Add)
+                .expect("legal insertion counts")
+                .to_bits(),
+            (-0.0_f64).to_bits()
+        );
     }
 
     #[test]

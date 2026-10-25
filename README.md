@@ -72,7 +72,8 @@ The [API reference][api] describes the latest published crate; `just doc-check` 
 - Notebook-first quickstart for physicists, AI/ML users, and Rust contributors
 - Proposal-before-mutation Metropolis-Hastings simulation with rollback on failed accepted moves
 - Regge action calculation with configurable coupling constants
-- Spatial-vertex input profiles, slab-triangle output profiles, and explicitly finite-window effective dimensional observables
+- Spatial-vertex input profiles, circular spatial-loop measurements, slab-triangle profiles, and finite-window effective dimensional observables
+- Explicit quadratic triangle-volume fixing and upstream-backed dependence diagnostics; see [chain analysis][repo-docs-analyzing-md]
 - Trace CSV simulation output for external analysis workflows; JSON summary/metadata for CLI/config export
 - Versioned JSON checkpoints for exact MCMC continuation, using Delaunay's Level 4 snapshot with checked geometry and CDT state restoration;
   see the [checkpoint compatibility policy][checkpoint-policy]
@@ -222,6 +223,7 @@ This project is licensed under the [BSD 3-Clause License][repo-license].
 [api-action]: https://docs.rs/causal-triangulations/latest/causal_triangulations/prelude/action/
 [api-config]: https://docs.rs/causal-triangulations/latest/causal_triangulations/prelude/config/
 [api-observables]: https://docs.rs/causal-triangulations/latest/causal_triangulations/prelude/observables/
+[repo-docs-analyzing-md]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/ANALYZING.md
 [api-simulation]: https://docs.rs/causal-triangulations/latest/causal_triangulations/prelude/simulation/
 [api-triangulation]: https://docs.rs/causal-triangulations/latest/causal_triangulations/prelude/triangulation/
 [ci-badge]: https://github.com/acgetchell/causal-triangulations/actions/workflows/ci.yml/badge.svg

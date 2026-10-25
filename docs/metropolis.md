@@ -62,12 +62,11 @@ lambda_edge = (2 / 3) ln 2 ~= 0.46209812037329684
 ```
 
 With these defaults, toroidal 1+1 runs map the edge-count action convention to the standard critical triangle-volume coupling. Non-volume-fixed finite runs may
-still drift because the critical point is a continuum-limit statement and there is no volume-fixing penalty. The follow-up volume-fixing work in
-[`causal-triangulations#142`](https://github.com/acgetchell/causal-triangulations/issues/142) should add an explicit modified-action ensemble for production
-fixed-volume studies.
+still drift because the critical point is a continuum-limit statement. Explicit quadratic triangle-volume fixing adds a separate modified-ensemble action
+through upstream `AdditiveTarget`; the existing sampler retains the complete family/site Hastings ratio. See [chain analysis](ANALYZING.md).
 
 The calibration is based on Ambjørn and Loll's original 2D CDT construction and the Ambjørn, Görlich, Jurkiewicz, and Loll review. The
-volume-fixing follow-up should cite the higher-dimensional CDT simulation literature where quadratic fixing terms are added deliberately. See
+volume-fixing mode follows the higher-dimensional CDT simulation literature where quadratic fixing terms are added deliberately. See
 [REFERENCES.md](../REFERENCES.md) for the full citations.
 
 ## Chunked Sweeps
@@ -78,11 +77,13 @@ together between chunks.
 
 ### Serialized Checkpoint Compatibility
 
-`CdtMcmcCheckpoint::to_json()` writes the CDT-owned format named by `CdtMcmcCheckpoint::FORMAT_VERSION` (currently version 2), and `from_json()` reads and fully
-validates it. The top-level `format_version` tag is mandatory. Unknown tags return `CdtError::UnsupportedCheckpointVersion` with both the encountered and
+`CdtMcmcCheckpoint::to_json()` writes version 3 for explicitly biased ensembles, while bare ensembles retain version 2. `FORMAT_VERSION` names the latest
+supported envelope, and `from_json()` reads and fully validates both versions. Older binaries reject version 3 instead of ignoring a fixing term that is
+temporarily zero at the target volume. A version-2 document containing a bias is rejected. The top-level `format_version` tag is mandatory.
+Unknown tags return `CdtError::UnsupportedCheckpointVersion` with both the encountered and
 supported versions, allowing callers to distinguish an upgrade requirement from malformed state.
 
-Version 2 embeds Delaunay's exact Level 4 owner snapshot, including UUIDs, coordinate bits, connectivity, ordered neighbor slots, periodic offsets, topology
+Both envelopes embed Delaunay's exact Level 4 owner snapshot, including UUIDs, coordinate bits, connectivity, ordered neighbor slots, periodic offsets, topology
 context, validation policy, and payloads. Its geometry schema follows upstream's persistence contract. Accepted/rejected chain counters are CDT fields rather
 than a serialized
 `markov-chain-monte-carlo::ChainCheckpoint`. The record also preserves the Metropolis and action configurations, current action and step, move and proposal

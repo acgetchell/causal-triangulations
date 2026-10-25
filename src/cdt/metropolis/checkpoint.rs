@@ -33,7 +33,8 @@ use serde_json::Value;
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-const CHECKPOINT_FORMAT_VERSION: u32 = 2;
+const CHECKPOINT_FORMAT_VERSION: u32 = 3;
+const BARE_CHECKPOINT_FORMAT_VERSION: u32 = 2;
 
 pub(crate) struct CdtMcmcCheckpointParts {
     pub(crate) triangulation: CdtTriangulation2D,
@@ -104,8 +105,10 @@ impl CheckpointAction {
 ///
 /// # Serialization compatibility
 ///
-/// [`Self::to_json`] emits a tagged version 2 record with Delaunay's exact
-/// Level 4 owner snapshot. The geometry schema follows the upstream persistence
+/// [`Self::to_json`] emits version 3 for biased ensembles and retains version 2
+/// for bare ensembles, both with Delaunay's exact Level 4 owner snapshot.
+/// Version 3 prevents old readers from silently dropping a total-volume bias.
+/// The geometry schema follows the upstream persistence
 /// contract; chain fields remain independent of the MCMC crate's checkpoint
 /// representation. [`Self::from_json`] rejects other format versions with
 /// [`CdtError::UnsupportedCheckpointVersion`] and reports both versions.
@@ -152,7 +155,7 @@ pub struct CdtMcmcCheckpoint {
     pub(crate) ergodics: ErgodicsSystem,
 }
 
-/// Borrowed top-level record emitted for checkpoint format version 2.
+/// Borrowed top-level record shared by checkpoint envelopes 2 and 3.
 #[derive(Serialize)]
 struct CdtMcmcCheckpointWireV2Ref<'a> {
     format_version: u32,
@@ -173,7 +176,7 @@ struct CdtMcmcCheckpointWireV2Ref<'a> {
     ergodics: ErgodicsCheckpointWireV2Ref<'a>,
 }
 
-/// Owned top-level record accepted for checkpoint format version 2.
+/// Owned top-level record accepted for checkpoint envelopes 2 and 3.
 #[derive(Deserialize)]
 struct CdtMcmcCheckpointWireV2 {
     format_version: u32,
@@ -250,7 +253,9 @@ impl<'de> Deserialize<'de> for CdtMcmcCheckpoint {
 }
 
 impl CdtMcmcCheckpoint {
-    /// Current CDT-owned checkpoint wire-format version.
+    /// Latest CDT-owned checkpoint envelope version.
+    ///
+    /// Explicit biases require version 3; bare ensembles still write version 2.
     pub const FORMAT_VERSION: u32 = CHECKPOINT_FORMAT_VERSION;
 
     /// Serializes this checkpoint as a versioned CDT-owned JSON document.
@@ -273,7 +278,7 @@ impl CdtMcmcCheckpoint {
 
     /// Loads and fully validates a versioned CDT-owned JSON checkpoint.
     ///
-    /// Version 2 reconstructs checked Level 1–4 geometry, then validates CDT
+    /// Both formats reconstruct checked Level 1–4 geometry, then validate CDT
     /// topology, foliation, causality, chain accounting, telemetry, measurements,
     /// traces, action state, elapsed time, and both RNG streams before returning.
     /// Older and unversioned checkpoint JSON is rejected without migration.
@@ -281,7 +286,7 @@ impl CdtMcmcCheckpoint {
     /// # Errors
     ///
     /// Returns [`CdtError::UnsupportedCheckpointVersion`] when the envelope names
-    /// a version newer or older than [`Self::FORMAT_VERSION`]. Malformed JSON and
+    /// a version outside bare version 2 or biased version 3. Malformed JSON and
     /// missing or invalid version tags return
     /// [`CdtError::CheckpointSerializationFailed`]. Restored-state invariant
     /// failures retain their specific [`CdtError`] variants.
@@ -290,7 +295,9 @@ impl CdtMcmcCheckpoint {
             checkpoint_serialization_failed(CheckpointOperation::Deserialize, error.to_string())
         })?;
         let encountered = checkpoint_format_version(&value)?;
-        if encountered != u64::from(Self::FORMAT_VERSION) {
+        if encountered != u64::from(Self::FORMAT_VERSION)
+            && encountered != u64::from(BARE_CHECKPOINT_FORMAT_VERSION)
+        {
             return Err(CdtError::UnsupportedCheckpointVersion {
                 encountered,
                 supported: Self::FORMAT_VERSION,
@@ -302,7 +309,7 @@ impl CdtMcmcCheckpoint {
         Self::from_wire_v2(wire)
     }
 
-    /// Projects this checkpoint into the exact version 2 persistent record.
+    /// Projects this checkpoint into the shared record with version-2 geometry.
     fn wire_v2(&self) -> CdtResult<CdtMcmcCheckpointWireV2Ref<'_>> {
         let accepted = u64::try_from(self.chain.accepted()).map_err(|_| {
             checkpoint_serialization_failed(
@@ -318,7 +325,11 @@ impl CdtMcmcCheckpoint {
         })?;
 
         Ok(CdtMcmcCheckpointWireV2Ref {
-            format_version: Self::FORMAT_VERSION,
+            format_version: if self.action_config.volume_fixing().is_some() {
+                Self::FORMAT_VERSION
+            } else {
+                BARE_CHECKPOINT_FORMAT_VERSION
+            },
             triangulation: self.triangulation().checkpoint_wire_v2()?,
             accepted,
             rejected,
@@ -349,9 +360,11 @@ impl CdtMcmcCheckpoint {
         })
     }
 
-    /// Hydrates and validates the exact version 2 persistent record.
+    /// Hydrates a supported envelope and its exact version-2 geometry record.
     fn from_wire_v2(wire: CdtMcmcCheckpointWireV2) -> CdtResult<Self> {
-        if wire.format_version != Self::FORMAT_VERSION {
+        if wire.format_version != Self::FORMAT_VERSION
+            && wire.format_version != BARE_CHECKPOINT_FORMAT_VERSION
+        {
             return Err(CdtError::UnsupportedCheckpointVersion {
                 encountered: u64::from(wire.format_version),
                 supported: Self::FORMAT_VERSION,
@@ -375,6 +388,15 @@ impl CdtMcmcCheckpoint {
             MoveStatistics::from_wire(&wire.ergodics.stats)?,
             checkpoint_rng(wire.ergodics.rng, CheckpointRngStream::Proposal)?,
         );
+        let action_config: ActionConfig = wire.action_config.try_into()?;
+        if wire.format_version == BARE_CHECKPOINT_FORMAT_VERSION
+            && action_config.volume_fixing().is_some()
+        {
+            return Err(CdtError::UnsupportedCheckpointVersion {
+                encountered: u64::from(wire.format_version),
+                supported: Self::FORMAT_VERSION,
+            });
+        }
         let mut checkpoint = Self {
             chain: ChainCheckpoint::new(
                 CdtTriangulation2D::from_checkpoint_wire_v2(wire.triangulation)?,
@@ -382,7 +404,7 @@ impl CdtMcmcCheckpoint {
                 rejected,
             ),
             config: wire.config.try_into()?,
-            action_config: wire.action_config.try_into()?,
+            action_config,
             current_step,
             current_action,
             move_stats: MoveStatistics::from_wire(&wire.move_stats)?,
@@ -948,7 +970,7 @@ struct ResumeCompatibleActionConfig;
 
 impl ResumeCompatibleActionConfig {
     /// Parses two action configurations into resume-compatible physics evidence.
-    const fn new(requested: &ActionConfig, checkpointed: &ActionConfig) -> CdtResult<Self> {
+    fn new(requested: &ActionConfig, checkpointed: &ActionConfig) -> CdtResult<Self> {
         if action_configs_match(requested, checkpointed) {
             Ok(Self)
         } else {
@@ -960,10 +982,18 @@ impl ResumeCompatibleActionConfig {
 }
 
 /// Compares action couplings by exact value or one-ULP serde JSON round-trip drift.
-const fn action_configs_match(left: &ActionConfig, right: &ActionConfig) -> bool {
+fn action_configs_match(left: &ActionConfig, right: &ActionConfig) -> bool {
     resume_couplings_match(left.coupling_0(), right.coupling_0())
         && resume_couplings_match(left.coupling_2(), right.coupling_2())
         && resume_couplings_match(left.cosmological_constant(), right.cosmological_constant())
+        && match (left.volume_fixing(), right.volume_fixing()) {
+            (None, None) => true,
+            (Some(left), Some(right)) => {
+                left.target() == right.target()
+                    && left.strength().to_bits() == right.strength().to_bits()
+            }
+            _ => false,
+        }
 }
 
 /// Accepts exact couplings plus adjacent finite values introduced by JSON round trips.
@@ -1020,6 +1050,12 @@ pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> Cd
 fn validate_checkpoint_summary(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
     checkpoint.config.validate();
     checkpoint.action_config.validate();
+    if let Some(fixing) = checkpoint.action_config.volume_fixing() {
+        fixing.ensure_ensemble(
+            checkpoint.triangulation().metadata().topology(),
+            checkpoint.triangulation().time_slices().get(),
+        )?;
+    }
     validate_checkpoint_current_action(checkpoint)?;
 
     let (accepted, rejected) = chain_counters(&checkpoint.move_stats)?;
@@ -1706,7 +1742,7 @@ mod tests {
         let checkpoint = one_step_checkpoint();
         let mut payload = to_value(checkpoint.wire_v2().expect("wire projection should work"))
             .expect("wire should serialize");
-        payload["format_version"] = json!(3);
+        payload["format_version"] = json!(4);
 
         let Err(error) = CdtMcmcCheckpoint::from_json(&payload.to_string()) else {
             panic!("unsupported checkpoint version should be rejected");
@@ -1714,7 +1750,7 @@ mod tests {
         assert_matches!(
             error,
             CdtError::UnsupportedCheckpointVersion {
-                encountered: 3,
+                encountered: 4,
                 supported: CdtMcmcCheckpoint::FORMAT_VERSION,
             }
         );
@@ -1746,7 +1782,7 @@ mod tests {
     #[test]
     fn checkpoint_serde_rejects_unknown_version() {
         let mut payload = one_step_checkpoint_payload();
-        payload["format_version"] = json!(3);
+        payload["format_version"] = json!(4);
 
         let Err(error) = serde_json::from_value::<CdtMcmcCheckpoint>(payload) else {
             panic!("Serde entry point should enforce the wire version");
@@ -1755,7 +1791,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("Unsupported MCMC checkpoint format version 3")
+                .contains("Unsupported MCMC checkpoint format version 4")
         );
     }
 

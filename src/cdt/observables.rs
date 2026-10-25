@@ -6,6 +6,7 @@
 //! triangulations or simulation outputs without owning the simulation loop.
 
 use crate::cdt::triangulation::CdtTriangulation2D;
+use crate::config::CdtTopology;
 use crate::errors::{
     CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, ObservableQuantity,
 };
@@ -20,6 +21,77 @@ use std::num::NonZeroUsize;
 const MIN_SPECTRAL_DIFFUSION_STEP: usize = 2;
 const MAX_SPECTRAL_DIFFUSION_STEP: usize = 16;
 const SPECTRAL_SELF_LOOP_PROBABILITY: f64 = 0.5;
+
+/// Failure to measure a closed S¹ spatial-loop profile.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[non_exhaustive]
+pub enum SpatialLoopError {
+    /// Open intervals are not the closed-loop observable.
+    #[error("spatial loop lengths require circular slices and periodic time")]
+    UnsupportedTopology,
+    /// Missing or stale labels cannot establish a spatial loop.
+    #[error("spatial loop lengths require a current foliation")]
+    MissingFoliation,
+    /// A slice length cannot fit the public integer representation.
+    #[error("spatial loop length {length} at slice {slice} exceeds u32")]
+    CountOverflow {
+        /// Slice index.
+        slice: usize,
+        /// Rejected count.
+        length: usize,
+    },
+    /// A raw profile violates the closed periodic 1+1 count identity.
+    #[error("invalid loop profile for {triangles} triangles: {profile:?}")]
+    InvalidProfile {
+        /// Recorded profile.
+        profile: Vec<u32>,
+        /// Total triangle count.
+        triangles: u32,
+    },
+}
+
+/// Measures spacelike links per time slice for periodic 1+1 CDT with S¹ slices.
+///
+/// The domain foliation validator establishes one connected degree-two ring
+/// in each slice, hence its vertex and link counts agree. Open intervals and
+/// absent foliation return typed errors rather than another observable.
+///
+/// # Errors
+/// Returns a topology, foliation, or integer-range error.
+///
+/// # Examples
+///
+/// ```
+/// use causal_triangulations::prelude::observables::*;
+/// let state = CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&[3, 5, 4, 4])?;
+/// assert_eq!(spatial_loop_lengths(&state)?, vec![3, 5, 4, 4]);
+/// # Ok::<(), causal_triangulations::CdtError>(())
+/// ```
+pub fn spatial_loop_lengths(triangulation: &CdtTriangulation2D) -> CdtResult<Vec<u32>> {
+    if triangulation.metadata().topology() != CdtTopology::Toroidal {
+        return Err(SpatialLoopError::UnsupportedTopology.into());
+    }
+    if !triangulation.has_foliation() {
+        return Err(SpatialLoopError::MissingFoliation.into());
+    }
+    triangulation.validate_foliation()?;
+    loop_lengths_from_validated_slices(triangulation)
+}
+
+/// Uses the ring invariant already established by construction and finalized moves.
+pub(crate) fn loop_lengths_from_validated_slices(
+    triangulation: &CdtTriangulation2D,
+) -> CdtResult<Vec<u32>> {
+    triangulation
+        .slice_sizes()
+        .iter()
+        .enumerate()
+        .map(|(slice, &length)| {
+            u32::try_from(length)
+                .map_err(|_| SpatialLoopError::CountOverflow { slice, length }.into())
+        })
+        .collect()
+}
 
 /// Estimates an all-scale effective Hausdorff slope from dual-graph ball growth.
 ///
