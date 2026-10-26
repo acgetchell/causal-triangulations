@@ -811,22 +811,55 @@ where
         &self,
         checkpoint: CdtMcmcCheckpoint,
     ) -> CdtResult<CdtMcmcCheckpoint> {
+        self.resume_steps_to_checkpoint(checkpoint, self.config.steps)
+    }
+
+    /// Continues a checkpoint for an independently chosen, nonzero step count.
+    ///
+    /// The stored warmup and measurement cadence remain cumulative. A suffix
+    /// may be shorter than either and need not contain a measurement. This
+    /// algorithm must have the same physics and schedule as the checkpoint;
+    /// its configured fresh-run length is ignored. The bound policy is retained.
+    ///
+    /// # Errors
+    /// Returns the same compatibility, overflow, proposal and validation errors
+    /// as [`Self::resume_to_checkpoint`].
+    ///
+    /// # Examples
+    /// ```
+    /// use std::num::NonZeroU32;
+    /// use causal_triangulations::prelude::simulation::{
+    ///     ActionConfig, CdtTriangulation, MetropolisAlgorithm, MetropolisConfig,
+    /// };
+    /// let algorithm = MetropolisAlgorithm::new(
+    ///     MetropolisConfig::new(1.0, 4, 2, 2)?.with_seed(13), ActionConfig::default(),
+    /// );
+    /// let checkpoint = algorithm.run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
+    /// let checkpoint = algorithm.resume_steps_to_checkpoint(checkpoint, NonZeroU32::MIN)?;
+    /// assert_eq!(checkpoint.current_step().get(), 5);
+    /// # Ok::<(), causal_triangulations::CdtError>(())
+    /// ```
+    pub fn resume_steps_to_checkpoint(
+        &self,
+        checkpoint: CdtMcmcCheckpoint,
+        additional_steps: NonZeroU32,
+    ) -> CdtResult<CdtMcmcCheckpoint> {
         self.config.try_validate()?;
         self.action_config.validate();
         validate_resume_compatible(self, &checkpoint)?;
         let validated_prefix = checkpoint.validated_prefix()?;
 
-        let mut result_config = checkpoint.config.clone();
+        let mut result_config = checkpoint.config().clone();
         let steps = checkpoint
-            .current_step
+            .current_step()
             .get()
-            .checked_add(self.config.steps.get())
+            .checked_add(additional_steps.get())
             .ok_or_else(|| checkpoint_resume_failed(CheckpointResumeFailure::StepCountOverflow))?;
         result_config.steps = NonZeroU32::new(steps)
             .ok_or_else(|| checkpoint_resume_failed(CheckpointResumeFailure::StepCountOverflow))?;
 
         let state = MetropolisRunState::from_checkpoint(checkpoint)?;
-        let state = self.run_steps(state, self.config.steps)?;
+        let state = self.run_steps(state, additional_steps)?;
         state.into_checkpoint_after_validated_prefix(
             result_config,
             self.action_config.clone(),
@@ -953,10 +986,15 @@ where
 
         telemetry.acceptance_rng = acceptance_rng;
         telemetry.ergodics = proposal.into_ergodics();
-        telemetry.elapsed_time += start.elapsed();
         if let Some(error) = step_error {
             return Err(error);
         }
+        telemetry.elapsed_time = telemetry
+            .elapsed_time
+            .checked_add(start.elapsed())
+            .ok_or_else(|| {
+                checkpoint_resume_failed(CheckpointResumeFailure::ElapsedTimeOverflow)
+            })?;
         Ok(MetropolisRunState {
             triangulation,
             telemetry,
@@ -972,12 +1010,18 @@ impl MetropolisRunState {
     /// from the invariant-checked triangulation payload. The caller must fully
     /// validate the checkpoint before transferring it here.
     fn from_checkpoint(checkpoint: CdtMcmcCheckpoint) -> CdtResult<Self> {
-        let stored_action = checkpoint.current_action();
+        let checkpoint = checkpoint.into_parts();
+        let stored_action = checkpoint.current_action;
         let target = CdtTarget::new(
             checkpoint.action_config.clone(),
             checkpoint.config.temperature(),
         )?;
-        let triangulation = restore_checkpoint_state(checkpoint.chain, &target)?;
+        let chain = ChainCheckpoint::new(
+            checkpoint.triangulation,
+            checkpoint.accepted,
+            checkpoint.rejected,
+        );
+        let triangulation = restore_checkpoint_state(chain, &target)?;
         triangulation.validate_supported_state()?;
         let actual_action = action_for(&checkpoint.action_config, &triangulation);
         if !actions_match(actual_action, stored_action) {
@@ -1397,7 +1441,7 @@ mod tests {
         DelayedProposal, DiscreteProposalEndpoint, DiscreteProposalRatio, McmcError, Target,
     };
     use rand::{Rng, RngExt, rngs::StdRng};
-    use serde_json::{from_str, to_value};
+    use serde_json::{Value, from_str, to_value};
     use std::assert_matches;
     use std::error::Error;
     use std::num::NonZeroUsize;
@@ -2121,6 +2165,78 @@ mod tests {
     }
 
     #[test]
+    fn one_step_continuation_preserves_cumulative_schedule_and_rng() {
+        let action = ActionConfig::default();
+        let algorithm =
+            MetropolisAlgorithm::new(seeded_metropolis_config(1.0, 4, 2, 2, 19), action.clone());
+        let prefix = algorithm
+            .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3).unwrap())
+            .unwrap();
+        let continued = algorithm
+            .resume_steps_to_checkpoint(prefix, NonZeroU32::MIN)
+            .unwrap();
+        let uninterrupted =
+            MetropolisAlgorithm::new(seeded_metropolis_config(1.0, 5, 2, 2, 19), action)
+                .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3).unwrap())
+                .unwrap();
+        assert_eq!(continued.current_step().get(), 5);
+        assert_eq!(
+            continued
+                .measurements()
+                .iter()
+                .map(Measurement::step)
+                .collect::<Vec<_>>(),
+            vec![2, 4]
+        );
+        let continued_json: Value = serde_json::from_str(&continued.to_json().unwrap()).unwrap();
+        let uninterrupted_json: Value =
+            serde_json::from_str(&uninterrupted.to_json().unwrap()).unwrap();
+        for field in [
+            "steps",
+            "measurements",
+            "scalar_trace_rows",
+            "move_stats",
+            "proposal_stats",
+            "acceptance_rng",
+            "ergodics",
+        ] {
+            assert_eq!(continued_json[field], uninterrupted_json[field], "{field}");
+        }
+        assert_eq!(
+            continued.triangulation().slice_sizes(),
+            uninterrupted.triangulation().slice_sizes()
+        );
+    }
+
+    #[test]
+    fn in_memory_chunks_submit_only_new_telemetry_to_validation() {
+        use super::super::checkpoint::take_validation_step_inputs;
+        let algorithm = MetropolisAlgorithm::new(
+            seeded_metropolis_config(1.0, 4, 2, 2, 19),
+            ActionConfig::default(),
+        );
+        take_validation_step_inputs();
+        let mut checkpoint = algorithm
+            .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3).unwrap())
+            .unwrap();
+        assert_eq!(take_validation_step_inputs(), 4);
+        for _ in 0..10 {
+            checkpoint = algorithm
+                .resume_steps_to_checkpoint(checkpoint, NonZeroU32::MIN)
+                .unwrap();
+            assert_eq!(take_validation_step_inputs(), 1);
+        }
+        assert_eq!(checkpoint.current_step().get(), 14);
+        // Decoding remains an untrusted boundary and must replay the full history.
+        let restored = CdtMcmcCheckpoint::from_json(&checkpoint.to_json().unwrap()).unwrap();
+        assert_eq!(take_validation_step_inputs(), 14);
+        let _continued = algorithm
+            .resume_steps_to_checkpoint(restored, NonZeroU32::MIN)
+            .unwrap();
+        assert_eq!(take_validation_step_inputs(), 1);
+    }
+
+    #[test]
     fn serialized_chunked_checkpoint_resume_matches_one_shot_seeded_run() {
         let action_config = ActionConfig::default();
         let one_shot = MetropolisAlgorithm::new(
@@ -2545,10 +2661,11 @@ mod tests {
 
     #[test]
     fn resume_rejects_chain_step_mismatch() {
-        let mut checkpoint = short_checkpoint();
-        checkpoint.current_step = step_number(checkpoint.current_step.get() + 1);
-        let chain_steps = checkpoint.chain.total_steps();
-        let checkpoint_step = checkpoint.current_step.get();
+        let checkpoint = short_checkpoint().tamper_for_test(|parts| {
+            parts.current_step = step_number(parts.current_step.get() + 1);
+        });
+        let chain_steps = checkpoint.chain().total_steps();
+        let checkpoint_step = checkpoint.current_step().get();
         let algorithm = MetropolisAlgorithm::new(
             seeded_metropolis_config(1.0, 2, 0, 1, 999),
             ActionConfig::default(),
@@ -2572,8 +2689,9 @@ mod tests {
 
     #[test]
     fn resume_rejects_inconsistent_checkpoint_counters() {
-        let mut checkpoint = short_checkpoint();
-        checkpoint.move_stats.record_attempt(MoveType::Move22);
+        let checkpoint = short_checkpoint().tamper_for_test(|parts| {
+            parts.move_stats.record_attempt(MoveType::Move22);
+        });
         let algorithm = MetropolisAlgorithm::new(
             seeded_metropolis_config(1.0, 2, 0, 1, 999),
             ActionConfig::default(),
@@ -2593,8 +2711,9 @@ mod tests {
 
     #[test]
     fn resume_rejects_inconsistent_step_telemetry() {
-        let mut checkpoint = short_checkpoint();
-        checkpoint.steps.pop();
+        let checkpoint = short_checkpoint().tamper_for_test(|parts| {
+            parts.steps.pop();
+        });
         let algorithm = MetropolisAlgorithm::new(
             seeded_metropolis_config(1.0, 2, 0, 1, 999),
             ActionConfig::default(),
@@ -2614,10 +2733,11 @@ mod tests {
 
     #[test]
     fn resume_rejects_nonsequential_step_telemetry() {
-        let mut checkpoint = short_checkpoint();
-        let move_type = checkpoint.steps[0].move_type();
-        let action_before = checkpoint.steps[0].action_before();
-        checkpoint.steps[0] = no_proposal_step(2, move_type, action_before);
+        let checkpoint = short_checkpoint().tamper_for_test(|parts| {
+            let move_type = parts.steps[0].move_type();
+            let action_before = parts.steps[0].action_before();
+            parts.steps[0] = no_proposal_step(2, move_type, action_before);
+        });
         let algorithm = MetropolisAlgorithm::new(
             seeded_metropolis_config(1.0, 2, 0, 1, 999),
             ActionConfig::default(),
@@ -2637,13 +2757,10 @@ mod tests {
 
     #[test]
     fn resume_rejects_step_acceptance_counter_mismatch() {
-        let mut checkpoint = synthetic_one_step_checkpoint(true);
-        checkpoint.steps[0] = rejected_proposal_step(
-            1,
-            checkpoint.steps[0].move_type(),
-            checkpoint.current_action(),
-            None,
-        );
+        let checkpoint = synthetic_one_step_checkpoint(true).tamper_for_test(|parts| {
+            parts.steps[0] =
+                rejected_proposal_step(1, parts.steps[0].move_type(), parts.current_action, None);
+        });
         let algorithm = MetropolisAlgorithm::new(
             seeded_metropolis_config(1.0, 2, 0, 1, 999),
             ActionConfig::default(),
@@ -2663,9 +2780,10 @@ mod tests {
 
     #[test]
     fn resume_rejects_checkpoint_proposal_hard_failures() {
-        let mut checkpoint = synthetic_one_step_checkpoint(false);
-        checkpoint.proposal_stats =
-            ProposalStatistics::from_validated_parts(1, 1, 0, 0, 0, 0, 0, 0, 1);
+        let checkpoint = synthetic_one_step_checkpoint(false).tamper_for_test(|parts| {
+            parts.proposal_stats =
+                ProposalStatistics::from_validated_parts(1, 1, 0, 0, 0, 0, 0, 0, 1);
+        });
 
         assert_checkpoint_resume_failed(
             validate_checkpoint_counters(&checkpoint),
@@ -2681,9 +2799,10 @@ mod tests {
 
     #[test]
     fn resume_rejects_checkpoint_proposal_accepted_count_mismatch() {
-        let mut checkpoint = synthetic_one_step_checkpoint(true);
-        checkpoint.proposal_stats =
-            ProposalStatistics::from_validated_parts(1, 1, 1, 0, 0, 0, 0, 0, 0);
+        let checkpoint = synthetic_one_step_checkpoint(true).tamper_for_test(|parts| {
+            parts.proposal_stats =
+                ProposalStatistics::from_validated_parts(1, 1, 1, 0, 0, 0, 0, 0, 0);
+        });
 
         assert_checkpoint_resume_failed(
             validate_checkpoint_counters(&checkpoint),
@@ -2702,9 +2821,10 @@ mod tests {
 
     #[test]
     fn resume_rejects_checkpoint_proposal_rejected_count_mismatch() {
-        let mut checkpoint = synthetic_one_step_checkpoint(false);
-        checkpoint.proposal_stats =
-            ProposalStatistics::from_validated_parts(1, 0, 0, 0, 0, 0, 0, 0, 0);
+        let checkpoint = synthetic_one_step_checkpoint(false).tamper_for_test(|parts| {
+            parts.proposal_stats =
+                ProposalStatistics::from_validated_parts(1, 0, 0, 0, 0, 0, 0, 0, 0);
+        });
 
         assert_checkpoint_resume_failed(
             validate_checkpoint_counters(&checkpoint),
@@ -2781,8 +2901,9 @@ mod tests {
 
     #[test]
     fn resume_rejects_missing_scheduled_measurement() {
-        let mut checkpoint = short_checkpoint();
-        checkpoint.measurements.pop();
+        let checkpoint = short_checkpoint().tamper_for_test(|parts| {
+            parts.measurements.pop();
+        });
         let algorithm = MetropolisAlgorithm::new(
             seeded_metropolis_config(1.0, 2, 0, 1, 999),
             ActionConfig::default(),
@@ -2802,10 +2923,11 @@ mod tests {
 
     #[test]
     fn resume_rejects_measurement_step_mismatch() {
-        let mut checkpoint = synthetic_one_step_checkpoint(true);
-        checkpoint.measurements[1] =
-            Measurement::try_new(2, checkpoint.measurements[1].action(), 12, 26, 12)
-                .expect("replacement measurement should satisfy invariants");
+        let checkpoint = synthetic_one_step_checkpoint(true).tamper_for_test(|parts| {
+            parts.measurements[1] =
+                Measurement::try_new(2, parts.measurements[1].action(), 12, 26, 12)
+                    .expect("replacement measurement should satisfy invariants");
+        });
 
         assert_checkpoint_resume_failed(
             validate_checkpoint_counters(&checkpoint),
@@ -3795,6 +3917,42 @@ mod tests {
             epsilon = 1e-12
         );
         assert_relative_eq!(proposed_log_prob, -plan.action_after(), epsilon = 1e-12);
+    }
+
+    #[test]
+    fn concrete_plan_preserves_exactly_cancelling_action_delta() {
+        let coupling = 9_007_199_254_740_994.0; // exactly 2^53 + 2
+        let action = ActionConfig::new(coupling, coupling, coupling).expect("bounded action");
+        let triangulation =
+            CdtTriangulation::from_toroidal_cdt(4, 3).expect("toroidal CDT should build");
+        let mut moves = ErgodicsSystem::with_seed(19);
+        let mut stats = ProposalStatistics::new();
+        let ConcretePlanAttempt {
+            plan: Some(plan), ..
+        } = propose_concrete_plan(
+            &triangulation,
+            &mut moves,
+            &mut stats,
+            &action,
+            MoveType::Move13Add,
+            action_for(&action, &triangulation),
+        )
+        .expect("planning should not fail")
+        else {
+            panic!("the seeded fixture must yield an insertion plan");
+        };
+        // Exact integer identity: -a - 2a + 3a = 0; both toroidal actions vanish.
+        assert_relative_eq!(plan.action_before(), 0.0, epsilon = 0.0);
+        assert_relative_eq!(plan.action_after(), 0.0, epsilon = 0.0);
+        assert_relative_eq!(plan.delta_action(), 0.0, epsilon = 0.0);
+        assert_relative_eq!(
+            CdtProposal::new(action)
+                .info(&plan)
+                .delta_action
+                .expect("plan has an action delta"),
+            0.0,
+            epsilon = 0.0
+        );
     }
 
     #[test]

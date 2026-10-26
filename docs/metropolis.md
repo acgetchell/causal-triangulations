@@ -132,31 +132,32 @@ a fixed-volume constraint or reuse the initial simplex count as a fixed step bud
 
 ## Proposal-Ratio Correction
 
-The proposal-ratio correction is not computed from the number of moves accepted during a run. It is a property of the concrete proposal distribution at the
-current step:
+The Metropolis-Hastings proposal-ratio correction depends on transition probabilities at the current step:
 
 ```text
 q(current | proposed) / q(proposed | current)
 ```
 
-Under the default `UniformCdtMoveFamilyPolicy`, move families are selected with equal probability. Once a move family is selected, the kernel chooses uniformly
-among its offered local application sites. For a successful concrete proposal from `current` to `proposed`:
+The implementation computes a selected-family/site score. Under the default `UniformCdtMoveFamilyPolicy`, move families are selected with equal probability,
+then a site is chosen uniformly from that family's offered sites:
 
 ```text
-q(proposed | current) = P(forward move family) * 1 / N_forward
-q(current | proposed) = P(reverse move family) * 1 / N_reverse
+forward_atom_weight = P(forward move family) / N_forward
+assumed_reverse_atom_weight = P(reverse move family) / N_reverse
 ```
 
-For that default policy, the equal move-family probabilities cancel for inverse move pairs, leaving:
+The reverse weight assumes a matching atom that returns exactly to the source state. Positive reverse-family site counts do not establish that pairing;
+[#316](scientific-basis.md#move-and-sampler-contract) gives a coordinate-state counterexample. These weights therefore cannot currently be identified with
+the endpoint transition probabilities above. For the default policy, equal family weights cancel in the implemented score:
 
 ```text
-q(current | proposed) / q(proposed | current) = N_forward / N_reverse
+assumed_reverse_atom_weight / forward_atom_weight = N_forward / N_reverse
 log_q_ratio = log(N_forward) - log(N_reverse)
 ```
 
 `N_forward` is the number of offered local sites for the selected move type in the current triangulation. `N_reverse` is the number of offered local sites for
 the inverse move type in the proposed triangulation. For example, a `(1,3)` proposal counts offered `(1,3)` sites before the move and offered reverse `(3,1)`
-sites after the move. This corrects proposal asymmetry for detailed balance without adding volume fixing or changing the target action.
+sites after the move. This is family/site probability bookkeeping; a valid reverse-support derivation remains necessary for a detailed-balance claim.
 
 The proposal-site universe must be the same for sampling and counting. If the sampler can choose a site, that site belongs in the denominator used for the
 proposal probability, even if applying it later returns an ordinary geometric, causal, or backend rejection.
@@ -172,12 +173,13 @@ current state. These exact deterministic preflights come from
 [`delaunay#419`](https://github.com/acgetchell/delaunay/issues/419) and avoid clone-and-try scans. They do not replace CDT's causal or topology checks, nor do
 they promise that the later primitive in a composite foliated move or post-mutation CDT finalization cannot produce an ordinary self-loop rejection.
 
-This is the ordinary Metropolis-Hastings proposal-ratio correction: it uses the actual proposal kernel, not empirical acceptance counts from the run. Hastings'
-original Markov-chain sampling paper gives the general acceptance rule, and Brunekreef, Loll, and Görlich describe CDT Monte Carlo moves together with their
-detailed-balance equations. See [REFERENCES.md](../REFERENCES.md) for the full citations.
+Hastings' original Markov-chain sampling paper gives the acceptance rule for actual proposal probabilities, and Brunekreef, Loll, and Görlich describe CDT
+Monte Carlo moves together with their detailed-balance equations. Those derivations do not establish the missing reverse pairing for this implementation.
+See [REFERENCES.md](../REFERENCES.md) for the full citations.
 
-The integration test `test_toroidal_metropolis_accepts_periodic_moves_and_preserves_topology` covers this contract by running a seeded S¹×S¹ simulation,
-requiring at least one accepted periodic move, and checking final topology, foliation, causality, simplex classification, and Euler characteristic.
+The integration test `test_toroidal_metropolis_accepts_periodic_moves_and_preserves_topology` supplies structural evidence by running a seeded S¹×S¹ simulation,
+requiring at least one accepted periodic move, and checking final topology, foliation, causality, simplex classification, and Euler characteristic. It does
+not establish detailed balance or ensemble agreement.
 
 ## Proposal Sites
 
@@ -231,7 +233,12 @@ rejected without mutating the chain.
 
 Use `CdtProposal::new(action).with_seed(seed).with_policy(policy)` with an upstream delayed chain directly. The production facade binds the policy once through
 `MetropolisAlgorithm::with_policy()`, after which `run()`, `run_with_checkpoint()`, `run_to_checkpoint()`, `resume_from_checkpoint()`, and
-`resume_to_checkpoint()` all use that policy. CDT checkpoints preserve the proposal RNG stream but do not serialize external policy or model state; experiment
+`resume_to_checkpoint()` and `resume_steps_to_checkpoint()` all use that policy. The latter takes a separate nonzero additional-step count, allowing chunks
+shorter than the stored warmup or measurement cadence without changing either cumulative schedule. In-memory checkpoints retain sealed validation of their
+history, so continuation checks the appended telemetry; decoding still validates the entire history. This bounds telemetry validation inputs linearly in
+the total generated steps across chunks, without claiming a measured wall-clock speedup.
+
+CDT checkpoints preserve the proposal RNG stream but do not serialize external policy or model state; experiment
 code must persist and restore that state separately, then bind the restored policy to the runner used for continuation.
 
 The view exposes the selected and reverse families, CDT topology, invariant-bearing simplex counts, borrowed slice sizes, the offered-site count, and an
@@ -265,14 +272,14 @@ For state `x`, move family `m`, and a sampleable site set `S_m(x)`, one sampled 
 q_c(x -> y) = p(m | x) / |S_m(x)|
 ```
 
-The Metropolis-Hastings decision is conditioned on this selected atom instead of marginalizing it away before acceptance. The current canonical local-move
-representation pairs every successful forward atom with one reverse-family atom, so the implemented reverse component is:
+The implementation conditions its acceptance calculation on this selected atom and assumes one matching reverse-family atom. Under that assumption it uses:
 
 ```text
 q_reverse(c)(y -> x) = p(reverse(m) | y) / |S_reverse(m)(y)|
 ```
 
-The reverse probability is always evaluated from the realized planned state `y`; it is never copied from `x`. The resulting pathwise correction is:
+The reverse-family weight and offered-site count are evaluated from the realized planned state `y`. They do not independently establish that a reverse atom
+exists. The implemented correction is:
 
 ```text
 log_q_ratio =
@@ -286,11 +293,13 @@ For equal move-family weights, this reduces to the familiar site-count correctio
 log_q_ratio = log(|S_forward(x)|) - log(|S_reverse(y)|)
 ```
 
-Multiple auxiliary atoms may reach the same endpoint `y`, including the same flip exposed through the distinct `Move22` and `EdgeFlip` families. They remain
-separate mixture components: each paired forward/reverse path satisfies detailed balance independently, and summing those balanced accepted fluxes preserves
-detailed balance for the state transition. Their probabilities are therefore not aggregated into the per-plan correction. A future proposal workflow that
-marginalizes paths before acceptance, or that cannot pair each sampled atom with one reverse atom, would instead need the full endpoint probability summed
-over all contributing paths and explicit multiplicities.
+Multiple auxiliary atoms may reach the same endpoint `y`, including a flip exposed through both `Move22` and `EdgeFlip`. A proved involutive pairing with
+correct auxiliary probabilities would permit a pathwise balance argument; an endpoint-based kernel instead needs probabilities summed over all contributing
+atoms. The current per-plan correction does not perform that sum, and its assumed pairing is not established. In particular,
+[#316](https://github.com/acgetchell/causal-triangulations/issues/316) retains a removal whose represented source cannot be restored by any destination-face
+barycentric insertion, despite a positive reverse-family count. Ratio-algebra tests therefore do not prove detailed balance of actual transitions.
+Resolving this requires the intrinsic state/measure and reverse-support work described in [Scientific Basis](scientific-basis.md); neither a finite site count
+nor a citation to the Metropolis-Hastings rule discharges that obligation.
 
 ## Ordinary Rejections
 
@@ -328,12 +337,13 @@ in-memory proposal audit field.
 - successful committed transitions
 - hard failures
 
-These counters explain chain stickiness and backend behavior, but detailed balance is maintained by the proposal probability used at the current step, not by
-empirical frequencies accumulated earlier in the run.
+These counters explain chain stickiness and backend behavior. They do not establish detailed balance, which requires correct transition probabilities and
+reverse support at each step.
 
-`tests/proposal_policy.rs` independently reconstructs forward and reverse family/site probabilities for concrete uniform and unequal-weight transitions,
-checks the resulting Metropolis-Hastings flux equality, and compares a fixed-policy checkpoint/resume run with its uninterrupted seeded trajectory. These are
-pairwise kernel and same-build reproducibility checks; they do not by themselves establish ergodicity, mixing quality, or physical convergence.
+`tests/proposal_policy.rs` independently reconstructs forward and assumed reverse family/site weights for concrete uniform and unequal-weight transitions,
+checks the resulting flux algebra under a matching-reverse hypothesis, and compares a fixed-policy checkpoint/resume run with its uninterrupted seeded
+trajectory. These are score-algebra and same-build reproducibility checks. They do not settle #316 or establish detailed balance, ergodicity, mixing quality,
+or physical convergence.
 
 The explicit-site model avoids dry-run cloning every candidate during site counting. Planned Metropolis acceptance creates one proposed-state clone; direct
 move attempts create one rollback snapshot. Both paths pass caller-owned rollback into the primitive backend edits, so applying a selected site does not clone

@@ -1070,14 +1070,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
             let Some(max_label) = labeled_vertices.iter().map(|(_, label, _)| *label).max() else {
                 return Ok(None);
             };
-            let candidates: Vec<_> = if max_label.saturating_sub(min_label) > 1 {
-                labeled_vertices
-                    .iter()
-                    .filter(|(_, label, _)| *label == min_label || *label == max_label)
-                    .collect()
-            } else {
-                labeled_vertices.iter().collect()
-            };
+            let candidates = labeled_vertices.iter().filter(|(_, label, _)| {
+                max_label.saturating_sub(min_label) <= 1
+                    || *label == min_label
+                    || *label == max_label
+            });
             let label_priority = |label: u32| {
                 let count = labeled_vertices
                     .iter()
@@ -1852,7 +1849,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
 mod tests {
     use super::*;
     use crate::cdt::foliation::{EdgeType, SimplexType};
-    use crate::errors::TriangulationMetadataField;
+    use crate::errors::{DelaunayGenerationStage, TriangulationMetadataField};
     use crate::geometry::generators::build_delaunay2_from_simplices;
     use approx::assert_relative_eq;
     use std::assert_matches;
@@ -1983,7 +1980,7 @@ mod tests {
                 coordinate_range: (-1.0, 1.0),
                 attempt: 7,
                 failure: DelaunayGenerationFailure::Upstream {
-                    stage: crate::errors::DelaunayGenerationStage::TriangulationConstruction,
+                    stage: DelaunayGenerationStage::TriangulationConstruction,
                     detail: "builder failed".to_string(),
                 },
             },
@@ -2028,8 +2025,7 @@ mod tests {
                         (0.0, 3.0),
                         attempt,
                         DelaunayGenerationFailure::Upstream {
-                            stage:
-                                crate::errors::DelaunayGenerationStage::TriangulationConstruction,
+                            stage: DelaunayGenerationStage::TriangulationConstruction,
                             detail: format!("candidate {candidate} failed"),
                         },
                     ))
@@ -2055,7 +2051,7 @@ mod tests {
                     (0.0, 3.0),
                     attempt,
                     DelaunayGenerationFailure::Upstream {
-                        stage: crate::errors::DelaunayGenerationStage::TriangulationConstruction,
+                        stage: DelaunayGenerationStage::TriangulationConstruction,
                         detail: format!("candidate {candidate} failed"),
                     },
                 ))

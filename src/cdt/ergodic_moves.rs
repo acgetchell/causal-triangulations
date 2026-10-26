@@ -4,8 +4,9 @@
 //!
 //! This module implements the standard local moves used in 2D CDT:
 //! - (2,2) moves: flip the shared edge between two triangles
-//! - (1,3) moves: split a triangle by inserting a vertex
-//! - (3,1) moves: collapse a degree-3 vertex back to one triangle
+//! - Foliated volume addition: split a spacelike link using insertion plus a flip
+//! - Foliated volume removal: flip then collapse a degree-four vertex
+//! - Unfoliated experiments: bare triangle subdivision and degree-three collapse
 //! - edge flips: retained as an API-compatible alias for the 2D (2,2) move
 
 use crate::cdt::proposal_policy::{CdtMoveFamilyDistribution, CdtProposalPolicyView};
@@ -28,6 +29,7 @@ use std::array;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::mem;
+use std::slice;
 
 /// Types of ergodic moves available in 2D CDT.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -686,10 +688,30 @@ pub struct ErgodicsSystem {
     /// Move statistics
     stats: MoveStatistics,
     /// Random number generator
+    #[serde(deserialize_with = "deserialize_nonzero_rng")]
     rng: Xoshiro256PlusPlus,
     /// Authoritative cached local-site universes for proposal sampling.
     #[serde(skip)]
     site_cache: MoveSiteCache,
+}
+
+/// Preserves rand's serialized state exactly while excluding its absorbing zero state.
+fn deserialize_nonzero_rng<'de, D>(deserializer: D) -> Result<Xoshiro256PlusPlus, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Serialize, Deserialize)]
+    struct State {
+        s: [u64; 4],
+    }
+    let state = State::deserialize(deserializer)?;
+    if state.s == [0; 4] {
+        return Err(serde::de::Error::custom(
+            "proposal RNG state must be nonzero",
+        ));
+    }
+    let value = serde_json::to_value(state).map_err(serde::de::Error::custom)?;
+    serde_json::from_value(value).map_err(serde::de::Error::custom)
 }
 
 #[derive(Clone, Default)]
@@ -903,7 +925,7 @@ impl ProposalSite {
         &self,
         source: &CdtTriangulation2D,
         target: &CdtTriangulation2D,
-    ) -> Result<Self, crate::geometry::backends::delaunay::DelaunayError> {
+    ) -> Result<Self, DelaunayError> {
         let source_geometry = source.geometry();
         let target_geometry = target.geometry();
         match self {
@@ -1031,7 +1053,7 @@ impl ErgodicsSystem {
     /// of actual move execution while allowing proposal planning to roll back
     /// temporary counters after applying a candidate to a cloned state.
     pub(crate) const fn replace_stats(&mut self, stats: MoveStatistics) -> MoveStatistics {
-        std::mem::replace(&mut self.stats, stats)
+        mem::replace(&mut self.stats, stats)
     }
 
     /// Selects a random move type.
@@ -1147,7 +1169,7 @@ impl ErgodicsSystem {
         move_type: MoveType,
         site: ProposalSite,
     ) -> MoveResult {
-        let snapshot = triangulation.clone();
+        let snapshot = triangulation.rollback_snapshot();
         let result = self.apply_proposal_site_to_draft(triangulation, move_type, site);
         rollback_if_failed(triangulation, snapshot, result)
     }
@@ -1528,7 +1550,7 @@ impl ErgodicsSystem {
             Err(err) => return MoveResult::HardFailure(err),
         };
         if let Err(err) =
-            triangulation.record_locally_removed_faces(&mut baseline, std::slice::from_ref(&face))
+            triangulation.record_locally_removed_faces(&mut baseline, slice::from_ref(&face))
         {
             return MoveResult::HardFailure(err);
         }
@@ -1581,7 +1603,7 @@ impl ErgodicsSystem {
             Err(err) => return MoveResult::HardFailure(err),
         };
         if let Err(err) = triangulation
-            .record_locally_removed_faces(&mut baseline, std::slice::from_ref(&candidate.face))
+            .record_locally_removed_faces(&mut baseline, slice::from_ref(&candidate.face))
         {
             return MoveResult::HardFailure(err);
         }
@@ -2667,7 +2689,7 @@ mod tests {
     use crate::cdt::metropolis::helpers::{
         SimplexCounts, action_delta_matches, proposed_delta_action,
     };
-    use crate::errors::{CdtValidationCheck, CdtValidationFailure, DelaunayValidationLevel};
+    use crate::errors::DelaunayValidationLevel;
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::backends::delaunay::{
         DelaunayCandidateRejection, DelaunayFlipOutputFailure, DelaunayHandleKind,
@@ -2676,7 +2698,22 @@ mod tests {
     use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
     use approx::assert_relative_eq;
     use std::assert_matches;
-    use std::collections::HashSet;
+
+    #[test]
+    fn standalone_move_system_rejects_zero_rng_and_preserves_valid_sequence() {
+        let mut original = ErgodicsSystem::with_seed(1);
+        for _ in 0..17 {
+            let _ = original.select_random_move();
+        }
+        let mut wire = serde_json::to_value(&original).expect("serialize move system");
+        let mut restored: ErgodicsSystem =
+            serde_json::from_value(wire.clone()).expect("valid nonzero state");
+        for _ in 0..128 {
+            assert_eq!(original.select_random_move(), restored.select_random_move());
+        }
+        wire["rng"]["s"] = serde_json::json!([0, 0, 0, 0]);
+        assert!(serde_json::from_value::<ErgodicsSystem>(wire).is_err());
+    }
 
     /// Builds the minimal foliated triangle fixture used by `(1,3)` tests.
     fn single_triangle() -> CdtTriangulation2D {
@@ -3515,10 +3552,54 @@ mod tests {
         assert!(triangulation.has_foliation());
     }
 
+    fn assert_retained_geometry_handles(
+        triangulation: &CdtTriangulation2D,
+        snapshot: &CdtTriangulation2D,
+    ) {
+        assert_eq!(triangulation.instance_id(), snapshot.instance_id());
+        let vertices_before: Vec<_> = snapshot.geometry().vertices().collect();
+        let edges_before: Vec<_> = snapshot.geometry().edges().collect();
+        let faces_before: Vec<_> = snapshot.geometry().faces().collect();
+        assert_eq!(
+            triangulation.geometry().vertices().collect::<Vec<_>>(),
+            vertices_before
+        );
+        assert_eq!(
+            triangulation.geometry().edges().collect::<Vec<_>>(),
+            edges_before
+        );
+        assert_eq!(
+            triangulation.geometry().faces().collect::<Vec<_>>(),
+            faces_before
+        );
+        for vertex in &vertices_before {
+            triangulation
+                .geometry()
+                .vertex_coordinates(vertex)
+                .expect("retained vertex handle");
+        }
+        for edge in &edges_before {
+            triangulation
+                .geometry()
+                .edge_endpoints(edge)
+                .expect("retained edge handle");
+        }
+        for face in &faces_before {
+            assert_eq!(
+                triangulation
+                    .geometry()
+                    .face_vertices(face)
+                    .expect("retained face handle")
+                    .count(),
+                3
+            );
+        }
+    }
+
     #[test]
     fn rollback_restores_snapshot_on_hard_failure() {
         let mut triangulation = single_triangle();
-        let snapshot = triangulation.clone();
+        let snapshot = triangulation.rollback_snapshot();
         let serialized_before =
             serde_json::to_value(&triangulation).expect("fixture should serialize");
         let signature_before = canonical_signature(&triangulation);
@@ -3554,7 +3635,7 @@ mod tests {
 
         let result = rollback_if_failed(
             &mut triangulation,
-            snapshot,
+            snapshot.rollback_snapshot(),
             MoveResult::HardFailure(CdtError::ValidationFailed {
                 check: CdtValidationCheck::ErgodicMoveCandidateGeometry,
                 failure: CdtValidationFailure::ErgodicMoveCandidateGeometry {
@@ -3564,6 +3645,7 @@ mod tests {
         );
 
         assert_matches!(result, MoveResult::HardFailure(_));
+        assert_retained_geometry_handles(&triangulation, &snapshot);
         assert_eq!(
             (
                 triangulation.vertex_count(),
@@ -4248,6 +4330,14 @@ mod tests {
             triangulation.face_count(),
             triangulation.metadata().modification_count(),
         );
+        let vertices_before: Vec<_> = triangulation.geometry().vertices().collect();
+        let edges_before: Vec<_> = triangulation.geometry().edges().collect();
+        let faces_before: Vec<_> = triangulation.geometry().faces().collect();
+        let site_id = system
+            .proposal_policy_view(&triangulation, MoveType::Move13Add)
+            .offered_sites()
+            .next()
+            .expect("fixture must expose a public insertion ID");
 
         let insertion_selection = system.select_proposal_site(&triangulation, MoveType::Move13Add);
         let Some(insertion_site) = insertion_selection.site else {
@@ -4258,6 +4348,24 @@ mod tests {
             system.apply_proposal_site(&mut triangulation, MoveType::Move22, insertion_site);
 
         assert_eq!(result, MoveResult::GeometricViolation);
+        assert_eq!(
+            triangulation.geometry().vertices().collect::<Vec<_>>(),
+            vertices_before
+        );
+        assert_eq!(
+            triangulation.geometry().edges().collect::<Vec<_>>(),
+            edges_before
+        );
+        assert_eq!(
+            triangulation.geometry().faces().collect::<Vec<_>>(),
+            faces_before
+        );
+        assert_eq!(
+            system
+                .proposal_policy_view(&triangulation, MoveType::Move13Add)
+                .validate_site(site_id),
+            Ok(())
+        );
         assert_eq!(
             (
                 triangulation.vertex_count(),

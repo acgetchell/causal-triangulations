@@ -31,6 +31,7 @@ echo "Starting parameter sweep over ${#TEMPERATURES[@]} temperature values..."
 echo "Fixed parameters: $VERTICES_PER_SLICE vertices/slice, $TIMESLICES timeslices, $STEPS steps"
 echo
 
+failed=0
 for temp in "${TEMPERATURES[@]}"; do
 	echo "Running simulation at T = $temp"
 
@@ -55,6 +56,7 @@ for temp in "${TEMPERATURES[@]}"; do
 		echo "  ✓ T = $temp completed, saved to $output_file"
 	else
 		status=$?
+		failed=1
 		printf '%s\n' "$status" >"$status_file"
 		echo "  FAILED: T = $temp exited with status $status; see $output_file"
 	fi
@@ -90,3 +92,4 @@ echo "  - Plot acceptance rates vs temperature"
 echo "  - Compare action and volume diagnostics across temperatures"
 echo "  - Repeat with larger systems before drawing scaling conclusions"
 echo "  - Use data from $OUTPUT_DIR/ for further analysis"
+exit "$failed"

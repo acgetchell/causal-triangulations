@@ -9,8 +9,8 @@ use causal_triangulations::prelude::simulation::{
 };
 use causal_triangulations::{
     AnalysisArtifactOperation, CdtAnalysisError, CdtConfig, CdtError, CdtTopology,
-    CheckpointResumeFailure, DiagnosticPolicyField, SpatialLoopError, TriangulationQuery,
-    VALIDATION_CHAIN_SCHEMA_VERSION, ValidationChainData, run_simulation,
+    CheckpointResumeFailure, DiagnosticPolicyField, MeasurementCountField, SpatialLoopError,
+    TriangulationQuery, VALIDATION_CHAIN_SCHEMA_VERSION, ValidationChainData, run_simulation,
 };
 use markov_chain_monte_carlo::{
     DelayedProposal, DiagnosticTiming, EssEstimate, EssEstimator, Target,
@@ -114,6 +114,44 @@ fn synthetic_chain(seed: u64, lengths: &[u32]) -> ValidationChain {
         measurements,
     })
     .expect("complete synthetic chain")
+}
+
+#[test]
+fn chain_json_preserves_typed_measurement_failures() {
+    let chain = synthetic_chain(7, &[4, 4]);
+    let valid = serde_json::to_value(chain.data()).expect("valid transport");
+    for (key, expected_field) in [
+        ("vertices", MeasurementCountField::Vertices),
+        ("edges", MeasurementCountField::Edges),
+        ("triangles", MeasurementCountField::Triangles),
+    ] {
+        let mut invalid = valid.clone();
+        invalid["measurements"][0][key] = json!(0);
+        let bytes = serde_json::to_vec(&invalid).expect("syntactically valid JSON");
+        assert_matches!(
+            ValidationChain::read_json(bytes.as_slice()),
+            Err(CdtError::InvalidMeasurementCount { field, provided_value: 0 })
+                if field == expected_field
+        );
+    }
+    let mut invalid = valid;
+    invalid["measurements"][0]["slab_triangle_profile"] = json!([33, 0, 0, 0]);
+    let bytes = serde_json::to_vec(&invalid).expect("syntactically valid JSON");
+    assert_matches!(
+        ValidationChain::read_json(bytes.as_slice()),
+        Err(CdtError::InvalidMeasurementSlabTriangleProfile {
+            step: 1,
+            profile_total: 33,
+            triangles: 32,
+        })
+    );
+    assert_matches!(
+        ValidationChain::read_json(b"{\"measurements\":[".as_slice()),
+        Err(CdtError::Analysis(CdtAnalysisError::Serialization {
+            operation: AnalysisArtifactOperation::Read,
+            ..
+        }))
+    );
 }
 
 fn independent_lengths(seed: u64, count: usize) -> Vec<u32> {
@@ -262,6 +300,11 @@ fn fixing_configuration_rejects_open_and_unreachable_ensembles() {
             VolumeFixingError::TargetBelowMinimum { minimum: 24, .. }
         ))
     );
+}
+
+#[test]
+#[cfg(feature = "cli")]
+fn fixing_cli_requires_paired_parameters_and_preserves_target() {
     assert!(CdtConfig::try_from_args(["cdt", "--target-triangles", "32"]).is_err());
     assert!(CdtConfig::try_from_args(["cdt", "--volume-fixing-strength", "0.1"]).is_err());
     let config = CdtConfig::try_from_args([
@@ -370,7 +413,9 @@ fn fixed_action() -> ActionConfig {
 }
 
 #[test]
-fn biased_concrete_proposal_balances_full_physical_fixing_and_hastings_flux() {
+fn biased_concrete_proposal_preserves_physical_fixing_and_hastings_ratio_algebra() {
+    // This checks the declared ratio algebra, not independently enumerated reverse
+    // support. The original counterexample remains in tests/regressions.rs (#316).
     let state = CdtTriangulation::from_toroidal_cdt(4, 4).expect("periodic flux fixture");
     let action = ActionConfig::new(0.125, -0.0625, 0.25)
         .expect("binary-rational physical action")
@@ -395,7 +440,7 @@ fn biased_concrete_proposal_balances_full_physical_fixing_and_hastings_flux() {
             break;
         }
     }
-    let plan = selected.expect("fixture must offer a concrete reversible insertion");
+    let plan = selected.expect("fixture must offer a concrete insertion");
     assert!(plan.reverse_site_count() > 0);
     let forward = distribution.probability(MoveType::Move13Add)
         / f64::from(u32::try_from(plan.forward_site_count()).expect("bounded support"));
@@ -515,6 +560,8 @@ fn blocked_errors_and_mean_mcse_scale_in_original_units_and_exclude_incomplete_b
             .standard_error,
         epsilon = 1e-10
     );
+    assert_eq!(before.dependence.len(), 8, "one diagnostic per input chain");
+    assert_eq!(after.dependence.len(), 8, "one diagnostic per scaled chain");
     for (before, after) in before.dependence.iter().zip(&after.dependence) {
         let before = before
             .binning

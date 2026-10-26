@@ -38,7 +38,7 @@ use crate::cdt::metropolis::{
     FoldedRankNormalizedSplitRhat, IntegratedAutocorrelationTime, MeanMcse, QuantileMcse,
     RankNormalizedSplitRhat, TailEss,
 };
-use crate::cdt::results::{Measurement, SimulationResultsBackend};
+use crate::cdt::results::{Measurement, MeasurementWire, SimulationResultsBackend};
 use crate::config::{CdtConfig, CdtTopology, ValidatedCdtConfig};
 use crate::errors::{CdtError, CdtResult};
 use serde::{Deserialize, Serialize};
@@ -204,6 +204,45 @@ pub struct ValidationChainData {
     pub configuration: CdtConfig,
     /// Every post-warmup scheduled measurement, including repeated states.
     pub measurements: Vec<Measurement>,
+}
+
+/// Defers measurement validation until after JSON decoding to preserve typed errors.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ValidationChainWire {
+    schema_version: u32,
+    crate_version: String,
+    spatial_topology: String,
+    temporal_boundary: String,
+    minimum_loop_length: u32,
+    action_convention: String,
+    run_id: String,
+    chain_id: String,
+    configuration: CdtConfig,
+    measurements: Vec<MeasurementWire>,
+}
+
+impl TryFrom<ValidationChainWire> for ValidationChainData {
+    type Error = CdtError;
+
+    fn try_from(wire: ValidationChainWire) -> CdtResult<Self> {
+        Ok(Self {
+            schema_version: wire.schema_version,
+            crate_version: wire.crate_version,
+            spatial_topology: wire.spatial_topology,
+            temporal_boundary: wire.temporal_boundary,
+            minimum_loop_length: wire.minimum_loop_length,
+            action_convention: wire.action_convention,
+            run_id: wire.run_id,
+            chain_id: wire.chain_id,
+            configuration: wire.configuration,
+            measurements: wire
+                .measurements
+                .into_iter()
+                .map(Measurement::try_from)
+                .collect::<CdtResult<_>>()?,
+        })
+    }
 }
 
 /// Parsed periodic 1+1 chain with complete, uniform measurement cadence.
@@ -423,13 +462,15 @@ impl ValidationChain {
     ///
     /// # Errors
     /// Rejects malformed, incompatible, truncated, or invalid chain artifacts.
+    /// JSON and I/O failures use [`CdtAnalysisError::Serialization`]; invalid
+    /// measurement values retain their structured [`CdtError`] variants.
     pub fn read_json(reader: impl Read) -> CdtResult<Self> {
-        let data =
+        let wire: ValidationChainWire =
             serde_json::from_reader(reader).map_err(|error| CdtAnalysisError::Serialization {
                 operation: AnalysisArtifactOperation::Read,
                 detail: error.to_string(),
             })?;
-        Self::try_new(data)
+        Self::try_new(wire.try_into()?)
     }
 
     /// Selects exact target-volume observations offline, preserving original steps.
@@ -845,6 +886,47 @@ pub struct CdtDiagnosticSource {
 /// Rejects incompatible conditions, duplicate identity/seeds, invalid policy,
 /// single-chain requests, or invalid observable selections. Valid but unresolved
 /// estimators remain explicit report outcomes.
+///
+/// # Examples
+///
+/// This small interface example declares a policy before generating independent
+/// chains. Short traces may produce inconclusive diagnostics; neither an
+/// adequate-information verdict nor this example establishes ensemble validity.
+/// Release validation requires the larger predeclared chain matrix.
+///
+/// ```
+/// use causal_triangulations::prelude::config::{CdtConfig, CdtTopology};
+/// use causal_triangulations::prelude::observables::{
+///     analyze_cdt_chains, CdtDiagnosticObservable, CdtDiagnosticPolicy, ValidationChain,
+/// };
+/// use causal_triangulations::{CdtResult, run_simulation};
+///
+/// fn main() -> CdtResult<()> {
+///     let policy = CdtDiagnosticPolicy {
+///         maximum_lag: 8, minimum_completed_blocks: 4, stabilization_levels: 2,
+///         binning_relative_tolerance: 0.2, require_stable_binning: true,
+///         minimum_chains: 2, minimum_ess: 100.0, maximum_mean_mcse: 0.1,
+///         quantiles: Vec::new(),
+///     };
+///     let mut chains = Vec::new();
+///     for seed in [131, 132] {
+///         let config = CdtConfig {
+///             topology: CdtTopology::Toroidal, simulate: true, seed: Some(seed),
+///             steps: 32, thermalization_steps: 4, measurement_frequency: 1,
+///             ..CdtConfig::new(16, 4)
+///         }.into_validated()?;
+///         let results = run_simulation(&config)?;
+///         chains.push(ValidationChain::from_results(
+///             "analysis-example", &format!("chain-{seed}"), &config, &results,
+///         )?);
+///     }
+///     let report = analyze_cdt_chains(
+///         &chains, CdtDiagnosticObservable::LoopLength { slice: 0 }, &policy, None,
+///     )?;
+///     println!("{report:?}");
+///     Ok(())
+/// }
+/// ```
 pub fn analyze_cdt_chains(
     chains: &[ValidationChain],
     observable: CdtDiagnosticObservable,

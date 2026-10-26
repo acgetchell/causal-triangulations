@@ -178,7 +178,7 @@ The conventional sampler is declared analytically validated only when all of the
   is reported as inconclusive rather than passing when effective information is insufficient;
 - the 95% upper confidence bound on total-variation distance from the exact fixed-volume profile distribution is at most `0.05`;
 - calibrated multinomial or likelihood-ratio goodness-of-fit tests do not reject the exact distribution at familywise `alpha = 0.05`, with multiple conditions
-  corrected by the Holm procedure;
+  corrected by the [Holm procedure](../REFERENCES.md#multiple-testing);
 - spatial-volume means agree with the exact values within 1%, and nonzero variances and covariances agree within 5%, with simultaneous confidence intervals
   containing the exact values;
 - a deliberately biased synthetic sampler is rejected by the same harness, while exact synthetic draws pass at the calibrated rate; and

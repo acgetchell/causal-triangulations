@@ -13,9 +13,10 @@ use crate::cdt::observables::SpatialLoopError;
 use crate::cdt::proposal_policy::CdtMoveFamilyPolicyError;
 use crate::cdt::volume_fixing::VolumeFixingError;
 use crate::config::CdtTopology;
-use crate::geometry::backends::delaunay::DelaunayError;
+use crate::geometry::backends::delaunay::{DelaunayError, DelaunayHandleKind};
 use crate::geometry::{SpacetimeCoordinateComponent, SpacetimeCoordinateError};
 use markov_chain_monte_carlo::{DiscreteProposalRatioError, McmcError, StepOutcome};
+use std::collections::TryReserveError;
 use std::fmt;
 
 /// Highest cumulative upstream Delaunay validation level being enforced.
@@ -695,6 +696,34 @@ impl fmt::Display for CdtValidationCheck {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, thiserror::Error)]
 #[non_exhaustive]
 pub enum CdtValidationFailure {
+    /// A public geometry query received a handle from another owner.
+    #[error(
+        "{context} query failed: foreign {kind} handle: owner {handle_owner:032x} does not match backend {backend_owner:032x}"
+    )]
+    ForeignGeometryHandle {
+        /// Query that rejected the handle.
+        context: String,
+        /// Entity kind.
+        kind: DelaunayHandleKind,
+        /// Exact 128-bit UUID of the owner retained by the handle.
+        handle_owner: u128,
+        /// Exact 128-bit UUID of the owner receiving the query.
+        backend_owner: u128,
+    },
+    /// A public geometry query received a handle from an earlier topology generation.
+    #[error(
+        "{context} query failed: stale {kind} handle: generation {handle_generation} does not match current generation {current_generation}"
+    )]
+    StaleGeometryHandle {
+        /// Query that rejected the handle.
+        context: String,
+        /// Entity kind.
+        kind: DelaunayHandleKind,
+        /// Generation retained by the handle.
+        handle_generation: u64,
+        /// Current topology generation.
+        current_generation: u64,
+    },
     /// Generic backend geometry validation failed with an upstream diagnostic.
     #[error("{detail}")]
     BackendGeometry {
@@ -1097,6 +1126,9 @@ impl fmt::Display for SimplexCountField {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CheckpointResumeFailure {
+    /// Accumulating runtime into the persisted duration would overflow.
+    #[error("accumulated checkpoint elapsed time exceeds Duration::MAX")]
+    ElapsedTimeOverflow,
     /// The stored duration is not normalized into seconds and fractional nanoseconds.
     #[error("elapsed-time nanoseconds {nanos} must be less than 1000000000")]
     InvalidElapsedNanoseconds {
@@ -1803,12 +1835,15 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             | CdtError::VertexBuildFailed { .. }
             | CdtError::Mcmc(_)
             | CdtError::ObservableNumericConversionFailed { .. }
+            | CdtError::DiffusionHorizonTooLarge { .. }
+            | CdtError::DiffusionAllocationFailed { .. }
             | CdtError::OutputPreparationFailed { .. }
             | CdtError::OutputWriteFailed { .. }
             | CdtError::OutputRollbackFailed { .. }
             | CdtError::OutputPathResolutionFailed { .. }
             | CdtError::OutputPathConflict { .. }
             | CdtError::OutputPathBusy { .. }
+            | CdtError::OutputPathReserved { .. }
             | CdtError::OutputReadFailed { .. }
             | CdtError::CheckpointSerializationFailed { .. }
             | CdtError::InvalidCheckpointRngState { .. }
@@ -2202,6 +2237,21 @@ pub enum CdtError {
         /// Integer value that could not be represented.
         value: usize,
     },
+    /// The inclusive diffusion curve cannot have a representable allocation size.
+    #[error("diffusion horizon {max_step} is too large for an inclusive f64 curve")]
+    DiffusionHorizonTooLarge {
+        /// Requested final diffusion step.
+        max_step: usize,
+    },
+    /// Allocating the requested diffusion curve failed.
+    #[error("cannot allocate diffusion curve with {sample_count} samples: {source}")]
+    DiffusionAllocationFailed {
+        /// Inclusive number of requested samples.
+        sample_count: usize,
+        /// Allocator or capacity error.
+        #[source]
+        source: TryReserveError,
+    },
     /// Preparing in-memory data for CSV/JSON output failed before file I/O began.
     #[error("Failed to prepare {format} output for {path} during {stage}: {detail}")]
     OutputPreparationFailed {
@@ -2256,6 +2306,14 @@ pub enum CdtError {
         /// Resolved output path whose exclusive lock could not be acquired.
         path: String,
         /// Output format associated with the locked destination.
+        format: OutputFormat,
+    },
+    /// A requested output uses the namespace reserved for coordination or intermediate files.
+    #[error("{format} output path {path} uses the reserved output-coordination namespace")]
+    OutputPathReserved {
+        /// Rejected destination.
+        path: String,
+        /// Requested output format.
         format: OutputFormat,
     },
     /// Reading or decoding CSV/JSON simulation output failed.

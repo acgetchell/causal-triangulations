@@ -13,9 +13,11 @@ use crate::cdt::action::{ActionConfig, DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTAN
 use crate::cdt::metropolis::{CdtTarget, MetropolisConfig};
 use crate::cdt::volume_fixing::VolumeFixing;
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting, ExpectedConstraint, ObservedValue};
+#[cfg(feature = "cli")]
 use clap::{ArgGroup, Error as ClapError, Parser, ValueEnum, error::ErrorKind};
 use dirs::home_dir;
 use serde::{Deserialize, Deserializer, Serialize};
+#[cfg(feature = "cli")]
 use std::ffi::OsString;
 use std::fmt;
 use std::num::NonZeroU32;
@@ -30,7 +32,8 @@ use std::path::{Component, Path, PathBuf};
 /// Serde uses the same kebab-case vocabulary as the CLI (`open-boundary`,
 /// `toroidal`) so saved JSON configuration can round-trip through command-line
 /// overrides.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "cli", derive(ValueEnum))]
 #[serde(rename_all = "kebab-case")]
 pub enum CdtTopology {
     /// Finite connected planar strip with open boundaries (Euler characteristic χ = 1).
@@ -629,6 +632,7 @@ impl TryFrom<CdtConfig> for ValidatedCdtConfig {
 }
 
 /// Command-line arguments accepted by the `cdt` binary.
+#[cfg(feature = "cli")]
 #[derive(Parser)]
 #[command(
     author,
@@ -779,6 +783,7 @@ struct CdtCliArgs {
     output_json: Option<PathBuf>,
 }
 
+#[cfg(feature = "cli")]
 impl CdtCliArgs {
     /// Converts parsed CLI arguments into the canonical runtime configuration.
     fn into_config(self) -> Result<CdtConfig, ClapError> {
@@ -892,6 +897,11 @@ pub struct CdtConfigOverrides {
     /// `None` leaves the base profile unchanged, `Some(None)` clears it so
     /// regular equal-size slices are used, and `Some(Some(profile))` replaces it
     /// with explicit per-slice vertex counts.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_nullable_override",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[expect(
         clippy::option_option,
         reason = "None=no override, Some(None)=clear profile, Some(Some(v))=set profile"
@@ -918,7 +928,7 @@ pub struct CdtConfigOverrides {
     /// JSON represents these states as an omitted field, `null`, and a bias value.
     #[serde(
         default,
-        deserialize_with = "deserialize_volume_fixing_override",
+        deserialize_with = "deserialize_nullable_override",
         skip_serializing_if = "Option::is_none"
     )]
     #[expect(
@@ -929,6 +939,11 @@ pub struct CdtConfigOverrides {
     /// Optional override for the simulation flag.
     pub simulate: Option<bool>,
     /// Optional override for the RNG seed.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_nullable_override",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[expect(
         clippy::option_option,
         reason = "None=no override, Some(None)=clear seed, Some(Some(v))=set seed"
@@ -937,12 +952,22 @@ pub struct CdtConfigOverrides {
     /// Optional override for the topology.
     pub topology: Option<CdtTopology>,
     /// Optional override for CSV output path.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_nullable_override",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[expect(
         clippy::option_option,
         reason = "None=no override, Some(None)=clear output path, Some(Some(v))=set output path"
     )]
     pub output_csv: Option<Option<PathBuf>>,
     /// Optional override for JSON output path.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_nullable_override",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[expect(
         clippy::option_option,
         reason = "None=no override, Some(None)=clear output path, Some(Some(v))=set output path"
@@ -950,18 +975,17 @@ pub struct CdtConfigOverrides {
     pub output_json: Option<Option<PathBuf>>,
 }
 
-/// Preserves a present nullable bias override; missing fields use the field's default.
+/// Preserves a present nullable override; missing fields use the field's default.
 #[expect(
     clippy::option_option,
     reason = "Missing, null, and configured fields carry distinct override semantics"
 )]
-fn deserialize_volume_fixing_override<'de, D>(
-    deserializer: D,
-) -> Result<Option<Option<VolumeFixing>>, D::Error>
+fn deserialize_nullable_override<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
 where
     D: Deserializer<'de>,
+    T: Deserialize<'de>,
 {
-    Option::<VolumeFixing>::deserialize(deserializer).map(Some)
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 impl CdtConfig {
@@ -1268,6 +1292,7 @@ fn nonzero_config_count(setting: ConfigurationSetting, value: u32) -> CdtResult<
 }
 
 /// Parses a comma-separated spatial-vertex profile from the CLI.
+#[cfg(feature = "cli")]
 fn parse_spatial_vertex_profile(raw: &str) -> Result<Vec<u32>, String> {
     let mut profile = Vec::new();
 
@@ -1388,6 +1413,7 @@ impl CdtConfig {
     ///
     /// let _config = CdtConfig::from_args();
     /// ```
+    #[cfg(feature = "cli")]
     #[must_use]
     pub fn from_args() -> Self {
         CdtCliArgs::parse()
@@ -1428,6 +1454,7 @@ impl CdtConfig {
     ///     Ok(())
     /// }
     /// ```
+    #[cfg(feature = "cli")]
     pub fn try_from_args<I, T>(args: I) -> Result<Self, ClapError>
     where
         I: IntoIterator<Item = T>,
@@ -1802,7 +1829,7 @@ impl TestConfig {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
-    use serde_json::{from_str, from_value, json, to_string, to_value};
+    use serde_json::{Value, from_str, from_value, json, to_string, to_value};
     use std::assert_matches;
 
     #[test]
@@ -1817,6 +1844,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "cli")]
     fn try_from_args_parses_valid_cli_values() {
         let config = CdtConfig::try_from_args([
             "cdt",
@@ -1837,6 +1865,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "cli")]
     fn try_from_args_computes_total_vertices_from_vertices_per_slice() {
         let config = CdtConfig::try_from_args([
             "cdt",
@@ -1855,6 +1884,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "cli")]
     fn try_from_args_rejects_vertices_per_slice_overflow() {
         let vertices_per_slice = u32::MAX.to_string();
         let error = CdtConfig::try_from_args([
@@ -1876,6 +1906,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "cli")]
     fn try_from_args_returns_structured_error_without_exiting() {
         let error = CdtConfig::try_from_args([
             "cdt",
@@ -2502,6 +2533,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "cli")]
     fn test_try_from_args_derives_counts_from_spatial_vertex_profile() {
         let config = CdtConfig::try_from_args(["cdt", "--spatial-vertex-profile", "4, 6,5"])
             .expect("spatial-vertex profile CLI should derive counts");
@@ -2512,6 +2544,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "cli")]
     fn test_try_from_args_rejects_malformed_spatial_vertex_profile() {
         let error = CdtConfig::try_from_args(["cdt", "--spatial-vertex-profile", "4,,5"])
             .expect_err("empty profile entries should be rejected");
@@ -2721,6 +2754,52 @@ mod tests {
         assert_eq!(merged.spatial_vertex_profile, None);
         assert_eq!(merged.vertices, 15);
         assert_eq!(merged.timeslices, 3);
+    }
+
+    #[test]
+    fn nullable_overrides_preserve_absent_clear_and_replace_through_json() {
+        let base = CdtConfig {
+            seed: Some(11),
+            spatial_vertex_profile: Some(vec![4, 5, 6]),
+            output_csv: Some(PathBuf::from("old.csv")),
+            output_json: Some(PathBuf::from("old.json")),
+            simulate: true,
+            ..CdtConfig::new(15, 3)
+        };
+        for wire in [
+            json!({}),
+            json!({"seed": null, "spatial_vertex_profile": null, "output_csv": null, "output_json": null}),
+            json!({"seed": 23, "spatial_vertex_profile": [5, 5, 5], "output_csv": "new.csv", "output_json": "new.json"}),
+        ] {
+            let parsed: CdtConfigOverrides = from_value(wire.clone()).expect("parse overrides");
+            let encoded = to_value(&parsed).expect("encode overrides");
+            for key in [
+                "seed",
+                "spatial_vertex_profile",
+                "output_csv",
+                "output_json",
+            ] {
+                assert_eq!(encoded.get(key), wire.get(key), "tri-state field {key}");
+            }
+            let restored: CdtConfigOverrides = from_value(encoded).expect("decode overrides");
+            let merged = base.merge_with_override(&restored).expect("valid merge");
+            let result = to_value(merged.config()).expect("inspect merged configuration");
+            let original = to_value(&base).expect("inspect original configuration");
+            for key in [
+                "seed",
+                "spatial_vertex_profile",
+                "output_csv",
+                "output_json",
+            ] {
+                let expected = wire.get(key).unwrap_or_else(|| &original[key]);
+                // Optional config fields may serialize absence by omitting the key.
+                assert_eq!(
+                    result.get(key).unwrap_or(&Value::Null),
+                    expected,
+                    "merged {key}"
+                );
+            }
+        }
     }
 
     #[test]

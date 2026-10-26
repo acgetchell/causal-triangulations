@@ -1073,6 +1073,20 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
 }
 
 impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, SimplexData, D> {
+    /// Captures state for restoration to this same owner, never for an independent live clone.
+    pub(crate) fn rollback_snapshot(&self) -> Self
+    where
+        VertexData: Clone,
+        SimplexData: Clone,
+    {
+        Self {
+            dt: self.dt.clone(),
+            delaunay_check_policy: self.delaunay_check_policy,
+            interior_facets_by_edge: self.interior_facets_by_edge.clone(),
+            owner_id: self.owner_id,
+        }
+    }
+
     /// Returns the topology generation attached to newly issued handles.
     fn handle_generation(&self) -> u64 {
         self.dt.topology_generation()
@@ -2493,7 +2507,7 @@ pub(crate) mod tests {
     };
     use crate::{CdtTriangulation, CdtValidationProfile};
     use approx::assert_relative_eq;
-    use delaunay::prelude::construction::{ConstructionOptions, DelaunayTriangulationBuilder};
+    use delaunay::prelude::construction::ConstructionOptions;
     use delaunay::prelude::validation::{TopologyGuarantee, ValidationPolicy};
     use serde_json::{Error as JsonError, Value, error::Category, from_str, to_string, to_value};
     use slotmap::KeyData;
@@ -3678,22 +3692,21 @@ pub(crate) mod tests {
         let edge_count = backend.edge_count();
         let face_count = backend.face_count();
 
-        // Verify Euler characteristic for planar graphs
-        // For a triangulation without the outer infinite face: V - E + F = 1
-        // For a triangulation with the outer infinite face: V - E + F = 2
-        // Note: Random triangulations may occasionally have degeneracies that result in χ = 0
+        // This fixed nondegenerate Euclidean triangulation is a disk. The backend
+        // counts finite triangles, excluding the outer infinite face: V - E + F = 1.
         let euler = vertex_count as i128 - edge_count as i128 + face_count as i128;
-        assert!(
-            (0..=2).contains(&euler),
-            "Euler characteristic should be in range [0, 2] for planar triangulation, got {euler} (V={vertex_count}, E={edge_count}, F={face_count})"
+        assert_eq!(
+            euler, 1,
+            "Fixed disk triangulation must have χ=1 (V={vertex_count}, E={edge_count}, F={face_count})"
         );
 
         // Count edges through incident_edges (should match total edge count)
         let mut edge_set = HashSet::new();
         for vertex in backend.vertices() {
-            if let Ok(incident) = backend.incident_edges(&vertex) {
-                edge_set.extend(incident);
-            }
+            let incident = backend
+                .incident_edges(&vertex)
+                .expect("every vertex in the fixed disk must have queryable incident edges");
+            edge_set.extend(incident);
         }
         assert_eq!(
             edge_set.len(),
@@ -4260,9 +4273,8 @@ pub(crate) mod tests {
 
     fn assert_interior_facet_index_matches_rebuild(backend: &DelaunayBackend2D) {
         let rebuilt = DelaunayBackend2D::build_interior_facets_by_edge(&backend.dt);
-        let actual_edges: std::collections::HashSet<_> =
-            backend.interior_facets_by_edge.keys().copied().collect();
-        let rebuilt_edges: std::collections::HashSet<_> = rebuilt.keys().copied().collect();
+        let actual_edges: HashSet<_> = backend.interior_facets_by_edge.keys().copied().collect();
+        let rebuilt_edges: HashSet<_> = rebuilt.keys().copied().collect();
         assert_eq!(actual_edges, rebuilt_edges);
     }
 
