@@ -5,7 +5,7 @@ use causal_triangulations::prelude::action::{ActionConfig, VolumeFixing, VolumeF
 use causal_triangulations::prelude::observables::*;
 use causal_triangulations::prelude::simulation::{
     CdtMcmcCheckpoint, CdtMoveFamilyDistribution, CdtProposal, CdtTarget, Measurement,
-    MetropolisAlgorithm, MetropolisConfig, MoveType,
+    MetropolisAlgorithm, MetropolisConfig, MoveType, SimulationResultsBackend,
 };
 use causal_triangulations::{
     CdtAnalysisError, CdtConfig, CdtError, CdtTopology, CheckpointResumeFailure, SpatialLoopError,
@@ -722,6 +722,63 @@ fn fixed_checkpoint_rejects_changed_bias_and_forged_components() {
         CdtMcmcCheckpoint::from_json(&corrupted.to_string()).map(drop),
         Err(CdtError::InvalidMeasurementActionComponents { .. })
     );
+}
+
+#[test]
+fn review_regression_restore_rejects_forged_loops_through_unchanged_volume_spans() {
+    for steps in [4, 5] {
+        let state = CdtTriangulation::from_toroidal_cdt(4, 4).expect("flat torus");
+        let policy = CdtMoveFamilyDistribution::from_weights([1.0, 0.0, 0.0, 0.0])
+            .expect("edge flips preserve every slice size");
+        let checkpoint = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, steps, 0, 2)
+                .expect("step-zero and two-step measurement cadence")
+                .with_seed(7),
+            ActionConfig::default(),
+        )
+        .with_policy(policy)
+        .run_to_checkpoint(state)
+        .expect("volume-preserving chain");
+        assert_eq!(checkpoint.triangulation().slice_sizes(), &[4, 4, 4, 4]);
+        assert_eq!(
+            checkpoint
+                .measurements()
+                .iter()
+                .map(Measurement::step)
+                .collect::<Vec<_>>(),
+            [0, 2, 4]
+        );
+        let checkpoint_json: Value =
+            serde_json::from_str(&checkpoint.to_json().expect("checkpoint JSON"))
+                .expect("checkpoint transport");
+        CdtMcmcCheckpoint::from_json(&checkpoint_json.to_string())
+            .expect("valid profiles must round trip");
+        let results = checkpoint.into_results().expect("validated results");
+        let results_json = serde_json::to_value(&results).expect("results transport");
+        serde_json::from_value::<SimulationResultsBackend>(results_json.clone())
+            .expect("valid result profiles must round trip");
+
+        for index in 0..3 {
+            // Both profiles have N2=32 and slab counts [8, 8, 8, 8]. Only
+            // canonical slice sizes distinguish the forgery from [4, 4, 4, 4].
+            let mut forged_checkpoint = checkpoint_json.clone();
+            forged_checkpoint["measurements"][index]["spatial_loop_lengths"] = json!([3, 5, 3, 5]);
+            assert_matches!(
+                CdtMcmcCheckpoint::from_json(&forged_checkpoint.to_string()).map(drop),
+                Err(CdtError::SpatialLoop(SpatialLoopError::InvalidProfile { profile, triangles: 32 }))
+                    if profile == [3, 5, 3, 5]
+            );
+
+            let mut forged_results = results_json.clone();
+            forged_results["measurements"][index]["spatial_loop_lengths"] = json!([3, 5, 3, 5]);
+            let error = serde_json::from_value::<SimulationResultsBackend>(forged_results)
+                .expect_err("unchanged-volume measurements must match canonical slice sizes");
+            assert!(
+                error.to_string().contains("invalid loop profile"),
+                "unexpected result restore error: {error}"
+            );
+        }
+    }
 }
 
 #[test]

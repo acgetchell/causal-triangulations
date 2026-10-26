@@ -911,8 +911,15 @@ pub struct CdtConfigOverrides {
     pub coupling_2: Option<f64>,
     /// Optional override for the cosmological constant λ.
     pub cosmological_constant: Option<f64>,
-    /// Optional explicit replacement quadratic triangle-volume bias.
-    pub volume_fixing: Option<VolumeFixing>,
+    /// Optional override for the quadratic triangle-volume bias.
+    ///
+    /// `None` leaves the base value unchanged, `Some(None)` disables fixing,
+    /// and `Some(Some(fixing))` replaces it.
+    #[expect(
+        clippy::option_option,
+        reason = "None=no override, Some(None)=clear bias, Some(Some(v))=set bias"
+    )]
+    pub volume_fixing: Option<Option<VolumeFixing>>,
     /// Optional override for the simulation flag.
     pub simulate: Option<bool>,
     /// Optional override for the RNG seed.
@@ -1084,7 +1091,7 @@ impl CdtConfig {
             merged.cosmological_constant = cosmological_constant;
         }
         if let Some(fixing) = overrides.volume_fixing {
-            merged.volume_fixing = Some(fixing);
+            merged.volume_fixing = fixing;
         }
 
         if let Some(simulate) = overrides.simulate {
@@ -2607,6 +2614,34 @@ mod tests {
         let merged = merged.config();
 
         assert_eq!(merged.seed, None);
+    }
+
+    #[test]
+    fn review_regression_volume_fixing_overrides_preserve_clear_and_replace() {
+        let original = VolumeFixing::quadratic_triangles(32, 0.1).expect("original bias");
+        let replacement = VolumeFixing::quadratic_triangles(34, 0.2).expect("replacement bias");
+        for volume_fixing in [None, Some(original)] {
+            let base = CdtConfig {
+                topology: CdtTopology::Toroidal,
+                volume_fixing,
+                ..CdtConfig::new(16, 4)
+            };
+            for (supplied, expected) in [
+                (None, volume_fixing),
+                (Some(None), None),
+                (Some(Some(replacement)), Some(replacement)),
+            ] {
+                let merged = base
+                    .merge_with_override(&CdtConfigOverrides {
+                        volume_fixing: supplied,
+                        ..CdtConfigOverrides::default()
+                    })
+                    .expect("valid bias override");
+                assert_eq!(merged.config().volume_fixing, expected);
+                assert_eq!(merged.to_action_config().volume_fixing(), expected);
+                assert_eq!(base.volume_fixing, volume_fixing);
+            }
+        }
     }
 
     #[test]

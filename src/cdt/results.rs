@@ -1471,7 +1471,7 @@ pub(crate) fn validate_trajectory_observables(
     })?;
     let mut current = CdtTrajectorySnapshot::new(action_config, initial_counts);
     let final_step = steps.last().map_or(0, |step| step.step().get());
-    validate_final_spatial_profile(measurements, triangulation, final_step)?;
+    validate_terminal_spatial_profiles(measurements, triangulation, steps)?;
     if let Some(row) = scalar_trace_rows.first()
         && let Some(initial_slab_triangle_profile) = row.initial_slab_triangle_profile.as_deref()
     {
@@ -1564,26 +1564,44 @@ pub(crate) fn validate_trajectory_observables(
     Ok(())
 }
 
-/// Confirms the last measured ring profile against the final canonical state.
-fn validate_final_spatial_profile(
+/// Binds the terminal unchanged-volume span to the final canonical slice sizes.
+///
+/// Only accepted insertions and removals change slice lengths; rejected proposals
+/// and edge flips preserve them. Earlier spans can have different valid profiles.
+fn validate_terminal_spatial_profiles(
     measurements: &[Measurement],
     triangulation: &CdtTriangulation2D,
-    final_step: u32,
+    steps: &[MonteCarloStep],
 ) -> CdtResult<()> {
-    if let Some(measurement) = measurements
-        .last()
-        .filter(|measurement| measurement.step() == final_step)
-        && let Some(profile) = measurement.spatial_loop_lengths()
-        && !profile
-            .iter()
-            .zip(triangulation.slice_sizes())
-            .all(|(&left, &right)| usize::try_from(left) == Ok(right))
+    let last_volume_change = steps
+        .iter()
+        .rev()
+        .find(|step| {
+            step.accepted()
+                && matches!(
+                    step.move_type(),
+                    MoveType::Move13Add | MoveType::Move31Remove
+                )
+        })
+        .map_or(0, |step| step.step().get());
+    let canonical = triangulation.slice_sizes();
+    for measurement in measurements
+        .iter()
+        .filter(|measurement| measurement.step() >= last_volume_change)
     {
-        return Err(SpatialLoopError::InvalidProfile {
-            profile: profile.to_vec(),
-            triangles: measurement.triangles.get(),
+        if let Some(profile) = measurement.spatial_loop_lengths()
+            && (profile.len() != canonical.len()
+                || !profile
+                    .iter()
+                    .zip(canonical)
+                    .all(|(&left, &right)| usize::try_from(left) == Ok(right)))
+        {
+            return Err(SpatialLoopError::InvalidProfile {
+                profile: profile.to_vec(),
+                triangles: measurement.triangles.get(),
+            }
+            .into());
         }
-        .into());
     }
     Ok(())
 }
@@ -4684,6 +4702,61 @@ mod tests {
             ),
             "unexpected serde error: {error}"
         );
+    }
+
+    #[test]
+    fn terminal_spatial_profiles_start_at_the_last_accepted_volume_change() {
+        for (move_type, before_profile, after_profile, forged_profile) in [
+            (
+                MoveType::Move13Add,
+                [4, 4, 4, 4],
+                [5, 4, 4, 4],
+                [4, 5, 3, 5],
+            ),
+            (
+                MoveType::Move31Remove,
+                [5, 4, 4, 4],
+                [4, 4, 4, 4],
+                [3, 5, 3, 5],
+            ),
+        ] {
+            let before =
+                CdtTriangulation2D::from_toroidal_cdt_spatial_vertex_profile(&before_profile)
+                    .expect("initial torus");
+            let after =
+                CdtTriangulation2D::from_toroidal_cdt_spatial_vertex_profile(&after_profile)
+                    .expect("final torus");
+            let initial = state_measurement(0, 0.0, &before)
+                .try_with_spatial_loop_lengths(before_profile.to_vec())
+                .expect("initial ring lengths");
+            let at_change = state_measurement(1, 0.0, &after)
+                .try_with_spatial_loop_lengths(after_profile.to_vec())
+                .expect("post-change ring lengths");
+            let after_flip = state_measurement(2, 0.0, &after)
+                .try_with_spatial_loop_lengths(after_profile.to_vec())
+                .expect("edge flip preserves ring lengths");
+            let measurements = [initial, at_change, after_flip];
+            let steps = [
+                accepted_step(1, move_type, 0.0, 0.0),
+                accepted_step(2, MoveType::Move22, 0.0, 0.0),
+                rejected_proposal_step(3, MoveType::Move13Add, 0.0, Some(0.0)),
+            ];
+            validate_terminal_spatial_profiles(&measurements, &after, &steps)
+                .expect("the earlier profile may differ from final geometry");
+
+            for index in [1, 2] {
+                let mut forged = measurements.clone();
+                forged[index] = forged[index]
+                    .clone()
+                    .try_with_spatial_loop_lengths(forged_profile.to_vec())
+                    .expect("forged profile preserves total volume");
+                assert_matches!(
+                    validate_terminal_spatial_profiles(&forged, &after, &steps),
+                    Err(CdtError::SpatialLoop(SpatialLoopError::InvalidProfile { profile, .. }))
+                        if profile == forged_profile
+                );
+            }
+        }
     }
 
     #[test]
