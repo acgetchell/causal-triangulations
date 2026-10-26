@@ -147,12 +147,17 @@ asymptotic scaling regime, or that a chosen observable analysis supports a parti
 | Evidence level | Current boundary |
 | --- | --- |
 | Structural and proposal-bookkeeping checks | See [tests](testing.md), the [v0.1.1 checklist][claims], and [limits](#move-and-sampler-contract) |
-| Analytic ensemble validation | Planned [v0.2.0 quantitative gate](roadmap.md#primary-exact-benchmark); invariant checks do not establish the distribution |
+| Analytic ensemble validation | Planned [v0.2.1 quantitative gate](roadmap.md#primary-exact-benchmark); invariant checks do not establish the distribution |
 | Reference implementation comparison | A separate [follow-up][reference-validation], not existing Rust validation evidence |
 | Continuum interpretation | Requires downstream mixing, scaling, fit-window, and uncertainty analyses |
 
 [claims]: RELEASING.md#v011-scientific-claim-checklist
 [reference-validation]: roadmap.md#v02x-11-follow-up-and-brunekreef-reference-validation
+
+The [2d-cdt sphere audit](audits/2d-cdt_sphere/README.md) establishes a specific reference boundary: the pinned implementation retains a toroidal stored
+complex under `sphere=true` while modifying observable adjacency. Its advertised effective-sphere option is acknowledged but excluded from planned
+periodic 1+1 parity. That audit establishes neither full reference agreement nor comparative sampler correctness. The v0.2.0 release ships simulation,
+analysis, and tooling capabilities with the known #316 defect explicit; exact-ensemble validation remains deferred to v0.2.1.
 
 ## CDT++ Construction Lesson
 
@@ -196,6 +201,64 @@ barycentric insertion can restore, yet the planner reports positive Metropolis-H
 validation and family/site bookkeeping do not establish reversibility of the represented coordinate-bearing state. Correcting the CDT proposal requires an
 explicit state/measure contract and probabilities for the actual reverse transition; the generic MCMC acceptance formula remains unchanged. Treating
 coordinates as auxiliary requires a derivation showing that coordinate-dependent move feasibility does not bias the physical chain.
+
+### Correction Target For #316
+
+The correction must preserve the intended **combinatorial CDT distribution**. Repairing detailed balance for a counting measure over floating-point
+coordinate realizations would define a different ensemble and does not resolve the physical sampling claim. The target remains the finite periodic model
+specified by [#238](https://github.com/acgetchell/causal-triangulations/issues/238), with its explicit rooting, marking, time-origin, and symmetry mapping
+still required before analytic validation.
+
+Write `C` for an intrinsic causal triangle gluing with time labels and the chosen marking convention. Distinct edge occurrences must remain distinguishable
+even when they share endpoints. Backend handles, allocation order, UUIDs, drawing coordinates, and mutation history are not additional physical labels.
+If `mu(C)` denotes the reference weight derived for that convention, the desired target is
+
+```text
+pi(C) proportional to mu(C) exp(-S(C) / temperature).
+```
+
+Do not assume `mu(C) = 1` for the current backend's labeled records or silently absorb a state-dependent marking/symmetry factor into normalization.
+The existing count-based action alone does not establish that reference measure. This distinction follows the original model's sum over intrinsic
+triangulated geometries; see [Ambjørn and Loll, section 2](https://arxiv.org/pdf/hep-th/9805108) and the
+[bibliographic record](../REFERENCES.md#exact-11-cdt-benchmarks-and-coupling-calibration).
+
+For a finite offered-site kernel, let `p_m(C)` be the actual sampled family probability, `S_m(C)` its offered sites, and `F(C,m,s)` the complete realized
+outcome. The transition probability is the sum of all atoms producing the same intrinsic destination:
+
+```text
+q(D | C) = sum_m p_m(C) / |S_m(C)| * count{s in S_m(C): F(C,m,s) = D}.
+```
+
+An empty family contributes its mass to the self-loop, without division by zero. A failed realization also contributes to the self-loop. Denominators
+remain the offered-site counts; neither family nor site probabilities are renormalized after failure. Any stochastic auxiliary draw requires its own
+probability factor and a sum or integral over its outcomes. Duplicate removal paths and the two flip-family names must be included when they realize
+the same transition. The forward denominator and total reverse-family count alone are insufficient to determine either transition probability.
+
+For `q(D | C) > 0`, the upstream Metropolis-Hastings backend must receive the actual correction `log q(C | D) - log q(D | C)`. Absent reverse support means
+exactly negative infinity. Target scoring must also include the derived reference weight. These requirements do not change the generic acceptance formula.
+
+Coordinates can be generated for display after sampling. If coordinates `z` instead remain stochastic auxiliaries, a valid extension needs a specified
+reference measure `nu_C` and a conditional weight `rho(z | C)` satisfying
+
+```text
+integral rho(z | C) nu_C(dz) = 1
+pi_extended(C, z) = pi(C) rho(z | C).
+```
+
+Coordinate-dependent feasibility, proposal densities, dimension-changing transformations and any Jacobians must then enter the derivation. Merely assigning
+the same action to every valid embedding generally leaves an unknown, state-dependent embedding multiplicity or volume in the marginal over `C`.
+
+The preferred implementation boundary is coordinate-independent checked topology and local edits supplied by the geometry backend, with CDT owning
+foliation, markings, action and proposal probabilities. [Delaunay #667](https://github.com/acgetchell/delaunay/issues/667) requests that abstract capability,
+including parallel-edge identity and edits without mandatory Euclidean realization. Adopt a published API through `src/geometry/`; preserve existing
+realized-mesh validation and do not duplicate structural topology algorithms in `src/cdt/`. The parallel-edge representation gap and #316's reverse-support
+defect remain separate obligations: supplying the former does not automatically correct the latter.
+
+`tests/regressions.rs::issue_316_original_removal_has_no_periodic_barycentric_reverse` preserves the original 4×4 constructor, proposal seed 1, caller seed 17,
+deleted coordinate and both valid endpoints. Its independent integer-residue calculation excludes every periodic lift of every destination face. This is
+counterexample preservation, not a passing sampler-correction gate. Completion additionally requires actual transition probabilities in both directions,
+independent small-state enumeration including multiplicities and self-loops, successful volume changes, evolved/seam fixtures, and `just ci`. The #238
+preflight and analytic gates remain necessary before claiming the intended ensemble has been validated.
 
 For details, see:
 

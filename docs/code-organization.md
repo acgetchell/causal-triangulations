@@ -52,6 +52,44 @@ causal-triangulations/
 │   ├── assets/
 │   │   ├── cdt_spacetime.png
 │   │   └── cdt_spacetime.svg
+│   ├── audits/
+│   │   ├── 2d-cdt_sphere/
+│   │   │   ├── checks/
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── test_topology.py
+│   │   │   │   └── topology.py
+│   │   │   ├── evidence/
+│   │   │   │   ├── build.sha256
+│   │   │   │   ├── census.json
+│   │   │   │   ├── compiler.txt
+│   │   │   │   ├── false-evolved.dat
+│   │   │   │   ├── false-evolved.json
+│   │   │   │   ├── false-initial.dat
+│   │   │   │   ├── false-initial.json
+│   │   │   │   ├── gap-input.dat
+│   │   │   │   ├── history.json
+│   │   │   │   ├── import-false-initial.dat
+│   │   │   │   ├── import-false-initial.json
+│   │   │   │   ├── import-gap-initial.dat
+│   │   │   │   ├── import-gap-initial.json
+│   │   │   │   ├── import-true-initial.dat
+│   │   │   │   ├── import-true-initial.json
+│   │   │   │   ├── platform.txt
+│   │   │   │   ├── readme-history.json
+│   │   │   │   ├── releases.json
+│   │   │   │   ├── sphere-history.json
+│   │   │   │   ├── stdlib.txt
+│   │   │   │   ├── true-evolved.dat
+│   │   │   │   ├── true-evolved.json
+│   │   │   │   ├── true-initial.dat
+│   │   │   │   └── true-initial.json
+│   │   │   ├── config.json
+│   │   │   ├── harness.cpp
+│   │   │   ├── instrumentation.patch
+│   │   │   ├── README.md
+│   │   │   ├── SHA256SUMS
+│   │   │   └── source.tar.gz
+│   │   └── README.md
 │   ├── dev/
 │   │   ├── DEVELOPING.md
 │   │   ├── python.md

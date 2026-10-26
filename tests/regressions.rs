@@ -3,11 +3,115 @@
 //! Regression tests for previously observed CDT failures.
 
 use approx::assert_relative_eq;
-use causal_triangulations::{
-    ActionConfig, CdtTriangulation, ErgodicsSystem, MetropolisAlgorithm, MetropolisConfig,
-    MonteCarloStep, MoveResult, SimulationEvent,
+use causal_triangulations::prelude::simulation::{
+    CdtMoveFamilyDistribution, CdtProposal, DelayedProposal, MoveType,
 };
+use causal_triangulations::{
+    ActionConfig, CdtTriangulation, CdtTriangulation2D, ErgodicsSystem, MetropolisAlgorithm,
+    MetropolisConfig, MonteCarloStep, MoveResult, SimulationEvent, TriangulationQuery,
+};
+use rand::{SeedableRng, rngs::StdRng};
 use std::assert_matches;
+
+/// Captures coordinate bits without depending on backend handle identities.
+fn coordinate_bits(triangulation: &CdtTriangulation2D) -> Vec<[u64; 2]> {
+    triangulation
+        .geometry()
+        .vertices()
+        .map(|vertex| {
+            let coordinates = triangulation
+                .geometry()
+                .vertex_coordinates(&vertex)
+                .expect("fixture vertex coordinates should resolve");
+            [coordinates[0].to_bits(), coordinates[1].to_bits()]
+        })
+        .collect()
+}
+
+#[test]
+fn issue_316_original_removal_has_no_periodic_barycentric_reverse() {
+    // Preserve the original constructor, seeds, deleted coordinate and valid
+    // endpoints of #316. This is counterexample evidence, NOT a claim that the
+    // sampler is corrected: its family/site ratio currently misses this absent
+    // reverse transition. The combinatorial correction must retain this fixture
+    // and separately prove its state/measure and actual transition probabilities.
+    let before = CdtTriangulation2D::from_toroidal_cdt(4, 4).expect("original 4x4 torus");
+    before.validate().expect("valid source endpoint");
+    assert_eq!(before.slice_sizes(), &[4, 4, 4, 4]);
+    let mut proposal = CdtProposal::new(ActionConfig::default())
+        .with_seed(1)
+        .with_policy(
+            CdtMoveFamilyDistribution::from_weights([0.0, 1.0, 1.0, 0.0])
+                .expect("original reversible volume-family weights"),
+        );
+    let mut rng = StdRng::seed_from_u64(17);
+    let plan = proposal
+        .propose_plan(&before, &mut rng)
+        .expect("original removal should plan")
+        .expect("original removal has a valid destination");
+    assert_eq!(plan.move_type(), MoveType::Move31Remove);
+    assert_eq!(plan.forward_site_count(), 2);
+    assert_eq!(plan.reverse_site_count(), 15);
+
+    // Commit the draft directly to examine the geometric endpoint, independently
+    // of whether a corrected Metropolis rule accepts this represented transition.
+    let mut after = before.clone();
+    proposal
+        .commit(&mut after, plan, &mut rng)
+        .expect("original removal should realize successfully");
+    after.validate().expect("valid destination endpoint");
+    assert_eq!(after.slice_sizes(), &[4, 4, 3, 4]);
+    let before_coordinates = coordinate_bits(&before);
+    let after_coordinates = coordinate_bits(&after);
+    assert_eq!(before_coordinates.len(), after_coordinates.len() + 1);
+    assert!(
+        after_coordinates
+            .iter()
+            .all(|c| before_coordinates.contains(c))
+    );
+    let removed = before_coordinates
+        .iter()
+        .filter(|c| !after_coordinates.contains(c))
+        .collect::<Vec<_>>();
+    assert_eq!(removed.len(), 1);
+    let expected = [3.005_476_804_546_397_3_f64, 1.970_856_741_530_444_5_f64];
+    assert_eq!(*removed[0], expected.map(f64::to_bits));
+
+    // Independent necessary condition for ANY periodic lift of ANY destination
+    // face: 3*c[d] - sum(vertices[d]) = period[d]*k[d], k[d] an integer.
+    // Checking every face is stronger than inspecting only offered insertions;
+    // this calculation does not use the production barycenter or site visitor.
+    let minimum_residue = after
+        .geometry()
+        .faces()
+        .map(|face| {
+            let mut sum = [0.0; 2];
+            for vertex in after.geometry().face_vertices(&face).expect("live face") {
+                let coordinates = after
+                    .geometry()
+                    .vertex_coordinates(&vertex)
+                    .expect("live face vertex");
+                sum[0] += coordinates[0];
+                sum[1] += coordinates[1];
+            }
+            (0..2)
+                .map(|d| {
+                    #[expect(
+                        clippy::suboptimal_flops,
+                        reason = "preserve the original issue #316 probe's IEEE operation order"
+                    )]
+                    let quotient = (3.0 * expected[d] - sum[d]) / 4.0;
+                    (quotient - quotient.round()).abs()
+                })
+                .fold(0.0_f64, f64::max)
+        })
+        .fold(f64::INFINITY, f64::min);
+    assert_relative_eq!(minimum_residue, 0.013_167_135_089_362_29, epsilon = 1e-14);
+    assert!(
+        minimum_residue > 1e-10,
+        "rounding cannot restore reverse support"
+    );
+}
 
 #[test]
 fn toroidal_observables_run_accepts_periodic_moves_after_offset_support() {

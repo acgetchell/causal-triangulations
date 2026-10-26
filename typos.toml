@@ -16,6 +16,8 @@ extend-exclude = [
     "coverage/",
     ".git/",
     "CHANGELOG.md",
+    # Immutable upstream commit messages, including their original spelling.
+    "docs/audits/2d-cdt_sphere/evidence/history.json",
 ]
 
 [default.extend-words]

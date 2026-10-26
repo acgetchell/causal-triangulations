@@ -982,3 +982,20 @@ hashes and toolchain details made the table exceed the repository line-length li
 separate sections, uses compact metadata lists, and preserves multiline toolchain output in fenced text blocks. Its fixture asserts that regenerated reports
 contain both sections and the complete provenance without inline HTML. This keeps `performance-release`, render-only recovery, and the repository Markdown
 gate consistent from one retained bundle.
+
+## 26 October 2026 Sphere Audit Evidence
+
+Issue #258 adds an opt-in external scientific workload under `docs/audits/2d-cdt_sphere/`. The C++ harness executes the pinned reference kernels; a small
+independent Python census checks exported simplices. These domain algorithms belong to CDT, while the existing pinned `research-repo-tools` commands still
+own Python discovery, linting, typing, and test execution. No timing runner, publication engine, dependency pin, or CI benchmark job is added.
+
+Pytest discovery includes this audit's known-answer and retained-evidence tests alongside the existing tooling tests. Tests never download, compile, or run
+the reference simulator. The audit tests receive the same assertion-only Ruff exception as existing pytest files. Full Python lint/type discovery already
+covers the new package; no Python validator exclusion is added. Native regeneration remains an explicit command documented with its configuration and hashes.
+Ty receives the audit directory as an additional module root because `2d-cdt_sphere` is a repository identifier, not a Python package identifier. This
+resolves the checked `checks` package's relative imports without suppressing diagnostics or changing pytest's runtime import behavior.
+The spelling checker excludes only the retained upstream `history.json`: an original commit message misspells the build filename, and correcting that quotation
+would corrupt source evidence. Audit prose and all other new files remain checked.
+Semgrep's native reports exposed a coverage gap: the existing Python rules only selected tooling/test directories, so the strict shared wrapper rejected
+the unscanned audit inputs. The same applicable Python rules now include `docs/audits/**/*.py`, and audit text I/O explicitly uses UTF-8. This extends
+the existing policy to the new source owner instead of excluding those files or relaxing report-completeness checks.
