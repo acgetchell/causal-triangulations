@@ -69,6 +69,12 @@ empty-circumsphere predicate.
 After initialization, the simulation does not enforce the Delaunay condition as part of the Markov-chain state. The sampled ensemble is defined by CDT moves,
 foliation/topology/causality constraints, the configured action, and Metropolis-Hastings acceptance.
 
+The current simplicial backend identifies an edge by its endpoint pair. The original exact CDT transfer matrix also counts triangulations with distinct
+timelike edges joining the same vertices: of ten marked strips between two length-three loops, only seven have unique endpoint-pair edges. Restricting the
+minimum loop length to three therefore does not make the current representation match that finite-lattice ensemble.
+[Delaunay #667](https://github.com/acgetchell/delaunay/issues/667) tracks the required abstract triangle-gluing capability. Its adoption must preserve the
+existing simplicial validation contract and keep generic topology algorithms in the geometry backend.
+
 [`delaunay`](https://docs.rs/delaunay/latest/delaunay/) owns structural geometry algorithms; its
 [bibliography](https://github.com/acgetchell/delaunay/blob/main/REFERENCES.md) owns generic geometry attribution.
 [`markov-chain-monte-carlo`](https://docs.rs/markov-chain-monte-carlo/latest/markov_chain_monte_carlo/) owns acceptance decisions, chain counters, and
@@ -132,14 +138,15 @@ The validation contract is discrete and implementation-level. Constructors and s
 - adjacent-slice causality, including periodic time distance for toroidal runs;
 - strict Up/Down simplex classification in 1+1 dimensions;
 - rollback or rejection of local move candidates that would break CDT invariants;
-- proposal-before-mutation Metropolis ordering, with proposal asymmetry handled by the Hastings correction.
+- proposal-before-mutation Metropolis ordering and proposal-family/site probability bookkeeping; the
+  [remaining reverse-support limitation](#move-and-sampler-contract) prevents a complete reversibility claim.
 
 These checks make the implemented CDT state space and transition kernel explicit. They do not prove that a Markov chain has mixed, that a finite run is in an
 asymptotic scaling regime, or that a chosen observable analysis supports a particular physical interpretation.
 
 | Evidence level | Current boundary |
 | --- | --- |
-| Structural and transition-kernel checks | Implemented; see [test coverage](testing.md) and the [v0.1.1 checklist][claims] |
+| Structural and proposal-bookkeeping checks | See [tests](testing.md), the [v0.1.1 checklist][claims], and [limits](#move-and-sampler-contract) |
 | Analytic ensemble validation | Planned [v0.2.0 quantitative gate](roadmap.md#primary-exact-benchmark); invariant checks do not establish the distribution |
 | Reference implementation comparison | A separate [follow-up][reference-validation], not existing Rust validation evidence |
 | Continuum interpretation | Requires downstream mixing, scaling, fit-window, and uncertainty analyses |
@@ -182,6 +189,13 @@ The CDT move layer owns domain-specific proposal sites and invariant checks. The
 
 [Alexander/Pachner moves](../REFERENCES.md#ergodic-moves-and-alexander-moves) provide combinatorial background; they do not by themselves prove ergodicity of
 this causality-constrained move set. [Hastings](../REFERENCES.md#metropolis-hastings-algorithm-in-cdt) supplies the generic proposal-asymmetry correction.
+
+The current volume-changing proposal has a known reverse-support defect, tracked by
+[#316](https://github.com/acgetchell/causal-triangulations/issues/316). A validated removal from `from_toroidal_cdt(4, 4)` deletes a coordinate that no
+barycentric insertion can restore, yet the planner reports positive Metropolis-Hastings acceptance using the reverse family's total site count. Structural
+validation and family/site bookkeeping do not establish reversibility of the represented coordinate-bearing state. Correcting the CDT proposal requires an
+explicit state/measure contract and probabilities for the actual reverse transition; the generic MCMC acceptance formula remains unchanged. Treating
+coordinates as auxiliary requires a derivation showing that coordinate-dependent move feasibility does not bias the physical chain.
 
 For details, see:
 
