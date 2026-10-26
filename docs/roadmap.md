@@ -37,9 +37,10 @@ construction, nonuniform and minimum legal slice profiles, topology and foliatio
 full action-delta reconstruction, independent Metropolis-Hastings family/site accounting, deterministic checkpoint continuation, finite diagnostics, and
 release-performance provenance.
 
-This establishes that the implemented discrete states and transition bookkeeping satisfy their documented contracts. It does not establish chain mixing,
-continuum behavior, fixed-volume physics, finite-size scaling, or agreement with the exact transfer-matrix ensemble. The quantitative analytic ensemble gate
-remains [#238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.0.
+This evidence covers structural invariants and transition bookkeeping. The subsequent reverse-support counterexample in
+[#316](https://github.com/acgetchell/causal-triangulations/issues/316) prevents a complete coordinate-state reversibility claim. Chain mixing, continuum
+behavior, fixed-volume physics, finite-size scaling, and agreement with the exact transfer-matrix ensemble remain unestablished. The quantitative analytic
+ensemble gate remains [#238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.0.
 
 Completed maturity work includes:
 
@@ -75,6 +76,16 @@ The release gate is tracked by the exact transfer-matrix validation issue
 ([#166](https://github.com/acgetchell/causal-triangulations/issues/166)). Coupling-sensitive grand-canonical validation
 ([#143](https://github.com/acgetchell/causal-triangulations/issues/143)) and public topology/boundary API separation
 ([#236](https://github.com/acgetchell/causal-triangulations/issues/236)) are v0.2.x follow-ups.
+
+The analytic gate also depends on [Delaunay #667](https://github.com/acgetchell/delaunay/issues/667) for a parallel-edge triangle-gluing representation
+and [#316](https://github.com/acgetchell/causal-triangulations/issues/316) for correcting actual reverse-transition support.
+The [scientific contract](scientific-basis.md#geometry-backend-role) explains the representation mismatch, and the
+[sampler contract](scientific-basis.md#move-and-sampler-contract) records the reverse-support counterexample. These prerequisites leave #238 open and
+retain its original paper ensemble and statistical acceptance criteria.
+
+Upstream implementation, native validation and crates.io publication of the bounded capability must precede normal CDT adoption through `src/geometry/`.
+The upstream release does not depend on completing CDT's benchmark. After adopting the published API and correcting proposal support, rerun compatibility
+checks before the full analytic benchmark. Resolving these prerequisites alone does not establish the release's distributional claim.
 
 ### Validation hierarchy
 
