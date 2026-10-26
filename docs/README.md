@@ -22,6 +22,7 @@ Start with [the project README](../README.md) to choose a workflow and run a sma
 ## Scientific contracts
 
 - [Scientific basis](scientific-basis.md): model scope, shared conventions, methods, and evidence limits.
+- [Reference audits](audits/README.md): pinned external-source investigations and limits on parity claims.
 - [References](../REFERENCES.md): thematic bibliography and stable citation anchors.
 - [Foliation](foliation.md), [moves](moves.md), and [Metropolis sampling](metropolis.md): detailed domain contracts.
 - [Test coverage](testing.md): implementation evidence and remaining gaps.

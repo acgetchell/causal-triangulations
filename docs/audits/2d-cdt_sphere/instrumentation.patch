@@ -1,0 +1,16 @@
+--- a/vertex.hpp
++++ b/vertex.hpp
+@@ -6,4 +6,4 @@
+ class Vertex : public Pool<Vertex> {
+ public:
+-	static const unsigned pool_size = 10000000;
++	static const unsigned pool_size = 100000;
+ 	int time;  // Slice number
+--- a/link.hpp
++++ b/link.hpp
+@@ -9,4 +9,4 @@
+ class Link : public Pool<Link> {
+ public:
+-	static const unsigned pool_size = 10000000;
++	static const unsigned pool_size = 300000;
+ 

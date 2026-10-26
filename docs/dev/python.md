@@ -3,7 +3,7 @@
 Guidance for all repository-owned Python, including scripts, tests, and negative Semgrep fixtures.
 
 The Rust library is the primary product. Generic maintenance and performance evidence come from the pinned `research-repo-tools` package.
-CDT's Python files are consumer integration tests and deliberate static-analysis fixtures; keep both typed and predictable.
+CDT's Python files are consumer integration tests, independent scientific audits, and deliberate static-analysis fixtures; keep them typed and predictable.
 
 ---
 

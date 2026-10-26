@@ -40,7 +40,7 @@ release-performance provenance.
 This evidence covers structural invariants and transition bookkeeping. The subsequent reverse-support counterexample in
 [#316](https://github.com/acgetchell/causal-triangulations/issues/316) prevents a complete coordinate-state reversibility claim. Chain mixing, continuum
 behavior, fixed-volume physics, finite-size scaling, and agreement with the exact transfer-matrix ensemble remain unestablished. The quantitative analytic
-ensemble gate remains [#238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.0.
+ensemble gate remains [#238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.1.
 
 Completed maturity work includes:
 
@@ -54,10 +54,24 @@ Completed maturity work includes:
 - [x] Exact checkpoint restoration and deterministic continuation of triangulation state, RNG streams, counters, proposal telemetry, measurements, and traces.
 - [x] Fixed-triangle generator inputs, manual foliation assignment, typed release tooling, tutorial examples, and retained benchmark provenance.
 
-## v0.2.0 Validated 1+1 CDT Baseline
+<!-- Preserve the earlier release-plan deep link. -->
+<!-- rumdl-disable-next-line MD033 -->
+<a id="v020-validated-11-cdt-baseline"></a>
 
-The v0.2.0 objective is the lowest-dimensional nontrivial physics baseline: **validated 1+1 CDT with circular spatial topology (S¹)**. This replaces the
-previous plan to make 2+1 CDT with toroidal spatial slices the v0.2.0 target.
+## v0.2.0 Simulation And Analysis Foundation
+
+The v0.2.0 release delivers optional volume control, spatial-loop measurements, reproducible chain artifacts, dependence-aware diagnostics, and the current
+tooling standards on published Delaunay 0.8.3 and MCMC 0.5.2. The [#258 audit](audits/2d-cdt_sphere/README.md) records the scope of the external reference.
+Release preparation retains native/package checks and benchmark provenance. This release does not claim an analytically validated equilibrium ensemble,
+mixing, full Brunekreef parity, or a correction of [#316](https://github.com/acgetchell/causal-triangulations/issues/316).
+
+The exact gate, reverse-support correction, remaining #165/#166 benchmark evidence, and #276 external validation bundle are deferred to v0.2.1 with their
+acceptance criteria intact. Merged diagnostic implementations ship in v0.2.0 without implying those issues' remaining evidence is complete.
+
+## v0.2.1 Exact 1+1 Ensemble Validation
+
+The next scientific objective is **analytically validated 1+1 CDT with circular spatial topology (S¹)**. It requires the original finite-lattice oracle,
+the necessary representation and sampler corrections, and the statistical criteria below.
 
 Topology terminology is part of the scientific contract:
 
@@ -75,7 +89,7 @@ The release gate is tracked by the exact transfer-matrix validation issue
 ([#165](https://github.com/acgetchell/causal-triangulations/issues/165)), and ESS/R-hat diagnostics
 ([#166](https://github.com/acgetchell/causal-triangulations/issues/166)). Coupling-sensitive grand-canonical validation
 ([#143](https://github.com/acgetchell/causal-triangulations/issues/143)) and public topology/boundary API separation
-([#236](https://github.com/acgetchell/causal-triangulations/issues/236)) are v0.2.x follow-ups.
+([#236](https://github.com/acgetchell/causal-triangulations/issues/236)) are v0.2.1 follow-ups.
 
 The analytic gate also depends on [Delaunay #667](https://github.com/acgetchell/delaunay/issues/667) for a parallel-edge triangle-gluing representation
 and [#316](https://github.com/acgetchell/causal-triangulations/issues/316) for correcting actual reverse-transition support.
@@ -94,9 +108,9 @@ The project distinguishes four different claims:
 1. **Structural validation.** Existing validators and tests establish combinatorial, manifold, topology, foliation, causality, embedding, rollback, and
    geometric invariants. These checks prove that states are admissible CDT triangulations; they do not prove that the Markov chain samples the intended
    probability distribution.
-2. **Analytic physics validation — v0.2.0.** The conventional 1+1 sampler must reproduce an exact CDT distribution within predeclared statistical tolerances.
+2. **Analytic physics validation — v0.2.1.** The conventional 1+1 sampler must reproduce an exact CDT distribution within predeclared statistical tolerances.
    This is an implementation-independent test of the sampled ensemble.
-3. **1+1 follow-up validation — v0.2.x.** After the fixed-volume analytic result is established, validate the cosmological-coupling normalization in the
+3. **1+1 follow-up validation — v0.2.1.** After the fixed-volume analytic result is established, validate the cosmological-coupling normalization in the
    grand-canonical ensemble, separate public spatial-topology and temporal-boundary contracts, and compare the conventional sampler with Brunekreef's
    `2d-cdt`. This broadens the evidence without making the reference code the definition of the ensemble.
 4. **2+1 reference-implementation validation — v0.3.x.** Conventional simulations with S² spatial slices and periodic time must be compared with
@@ -131,7 +145,7 @@ include the exact critical vertex-order distribution `p(j) = (j - 3) / 2^(j - 2)
 “A new perspective on matter coupling in 2d quantum gravity,” Physical Review D 60 (1999),
 [doi:10.1103/PhysRevD.60.104035](https://doi.org/10.1103/PhysRevD.60.104035), after verifying that the observable and ensemble conventions match.
 Grand-canonical volume probabilities derived from the same transfer matrix provide a coupling-sensitive secondary benchmark.
-That comparison is tracked by [#143](https://github.com/acgetchell/causal-triangulations/issues/143) for v0.2.x because the fixed-volume primary distribution
+That comparison is tracked by [#143](https://github.com/acgetchell/causal-triangulations/issues/143) for v0.2.1 because the fixed-volume primary distribution
 cannot test an action contribution that is constant within each fixed-`N2` sector.
 
 ### Simulation and measurement contract
@@ -146,13 +160,16 @@ The reproducible benchmark should use:
 - an opt-in soft volume-fixing action where needed for efficient sampling, with samples conditioned offline on the target `N2`; the fixing term and the
   conditioning rule must be reported because volume fixing changes the marginal ensemble;
 - an explicit limitation stating that this fixed-volume gate does not validate the cosmological-coupling normalization, which is tested at multiple
-  supercritical couplings by [#143](https://github.com/acgetchell/causal-triangulations/issues/143) in v0.2.x; and
+  supercritical couplings by [#143](https://github.com/acgetchell/causal-triangulations/issues/143) in v0.2.1; and
 - machine-readable configuration, seed, starting profile, measurement, diagnostic, exact-oracle, and comparison artifacts.
 
 Measurement infrastructure must export the per-slice spatial loop lengths `l_t` at the measurement cadence, not infer them from slab-triangle counts. Exact
 enumeration and synthetic draws from the oracle must test the comparison harness independently of the CDT sampler.
 
-### v0.2.0 release criteria
+<!-- rumdl-disable-next-line MD033 -->
+<a id="v020-release-criteria"></a>
+
+### v0.2.1 analytic acceptance criteria
 
 The conventional sampler is declared analytically validated only when all of the following hold for the predeclared benchmark matrix:
 
@@ -171,13 +188,13 @@ Because the primary oracle is exact at the same finite `T`, `N2`, and minimum lo
 finite-size or discretization effect. Such effects are expected only when comparing to continuum-limit or large-volume asymptotics and must be reported
 separately.
 
-Passing structural tests, producing plausible plots, obtaining a high acceptance rate, or matching only one mean is not sufficient for v0.2.0. The release
+Passing structural tests, producing plausible plots, obtaining a high acceptance rate, or matching only one mean is not sufficient for analytic validation. The
 claim is that `causal-triangulations` samples the expected fixed-volume conditional 1+1 CDT ensemble at the declared finite conditions. The broader
-coupling-sensitive claim belongs to v0.2.x.
+coupling-sensitive claim is a subsequent v0.2.1 gate.
 
 ### Architecture path
 
-The v0.2.0 design should prepare the direct topology progression without prematurely implementing the complete 2+1 model:
+The design should prepare the direct topology progression without prematurely implementing the complete 2+1 model:
 
 ```text
 1+1: S¹ spatial slices
@@ -192,9 +209,12 @@ sets, and volume observables dimension-qualified. Prefer concrete per-dimension 
 higher-dimensional rewrite. Preserve the existing CDT-to-geometry backend boundary and delegate generic sampler mechanics and diagnostics to
 `markov-chain-monte-carlo`.
 
-## v0.2.x 1+1 Follow-Up And Brunekreef Reference Validation
+<!-- rumdl-disable-next-line MD033 -->
+<a id="v02x-11-follow-up-and-brunekreef-reference-validation"></a>
 
-The v0.2.x series broadens the 1+1 evidence and prepares the higher-dimensional topology API after the narrow v0.2.0 fixed-volume gate passes:
+## v0.2.1 Follow-Up And Brunekreef Reference Validation
+
+The v0.2.1 milestone broadens the 1+1 evidence and prepares the higher-dimensional topology API after the exact fixed-volume gate passes:
 
 - [#143](https://github.com/acgetchell/causal-triangulations/issues/143) validates the cosmological-coupling convention against exact grand-canonical volume
   probabilities at multiple supercritical couplings.
@@ -205,7 +225,10 @@ The v0.2.x series broadens the 1+1 evidence and prepares the higher-dimensional 
   S¹(time) × S¹(space).
 
 Issues #143 and #236 are blocked by [#238](https://github.com/acgetchell/causal-triangulations/issues/238). Both then block #240, making the Brunekreef
-comparison the v0.2.x validation capstone. Issue #236 also blocks the first 2+1 topology foundation in #241.
+comparison the v0.2.1 validation capstone. Issue #236 also blocks the first 2+1 topology foundation in #241.
+
+The [#258 audit](audits/2d-cdt_sphere/README.md) selects Outcome A: `2d-cdt`'s `sphere=true` option retains toroidal stored geometry and modifies observable
+graphs. The comparison uses `sphere=false`; neither compatibility with that option nor true spherical 1+1 support is included in this parity claim.
 
 Both implementations must pass the exact finite transfer-matrix oracle independently before pairwise agreement is interpreted. The reference comparison must
 also distinguish Brunekreef's unmodified return-to-target measurement protocol from an ensemble-safe, state-independent-cadence instrumentation path. The
@@ -252,7 +275,7 @@ their policy implementations, artifacts, orchestration, and analysis. The contin
 ### v0.3.x validation capstone
 
 The final feature in the series is [#239](https://github.com/acgetchell/causal-triangulations/issues/239), the quantitative comparison with Brunekreef's
-`3d-cdt`. It is blocked by the v0.2.x `2d-cdt` rehearsal and the 2+1 prerequisites above; it does not reimplement their scope.
+`3d-cdt`. It is blocked by the v0.2.1 `2d-cdt` rehearsal and the 2+1 prerequisites above; it does not reimplement their scope.
 
 The conventional Metropolis-Hastings comparison should match, as closely as practical:
 
@@ -270,7 +293,7 @@ convergence, and reproducibility evidence, not visual similarity. Its purpose is
 ## Alternative And Later Topology Tracks
 
 - Keep 2+1 CDT with toroidal T² spatial slices ([#144](https://github.com/acgetchell/causal-triangulations/issues/144)) as an optional later topology track.
-  It is scientifically valid, but it is not on the shortest validation path to Brunekreef's S² implementation and should not block v0.2.x or v0.3.x.
+  It is scientifically valid, but it is not on the shortest validation path to Brunekreef's S² implementation and should not block v0.2.1 or v0.3.x.
 - Advance to 3+1 CDT with S³ spatial slices only after the 2+1 S² reference comparison establishes the higher-dimensional architecture and validation
   workflow.
 - Treat toroidal T³ spatial slices and other boundary-condition families as separate tracks with their own topology, action, move-set, and validation

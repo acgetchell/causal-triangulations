@@ -20,6 +20,19 @@ package identity, immutable artifact IDs/ZIP digests, and signatures. Preserve c
 does not establish fresh scientific release measurements: correctness-gated baseline-v2 workloads still run against the release tag, and immutable assets
 are never replaced. Adoption of the helpers alone does not authorize publishing or change registry approval controls.
 
+## v0.2.0 scientific claim checklist
+
+This release ships the simulation and analysis foundation with current tooling: optional volume control, circular spatial-loop measurements, reproducible
+chain artifacts, and dependence-aware diagnostics. It uses published Delaunay 0.8.3 and MCMC 0.5.2. The [#258 audit](audits/2d-cdt_sphere/README.md) records
+why the planned `2d-cdt` comparison excludes `sphere=true` and closed simplicial S² claims.
+
+The [#316 reverse-support defect](scientific-basis.md#move-and-sampler-contract) remains unresolved. Do not claim complete reversibility, exact-paper
+ensemble agreement, mixing, continuum physics, or completed #165/#166/#238/#276 acceptance. Those scientific gates remain in v0.2.1 with unchanged
+acceptance criteria. The diagnostic implementations shipping here do not complete their benchmark-dependent validation.
+
+Release checks, Cargo package verification, exact-release benchmark provenance, and reviewed publication remain mandatory. Passing them establishes the
+engineering release evidence, not the deferred distributional claims. No additional Delaunay release is a v0.2.0 prerequisite.
+
 ## v0.1.1 scientific claim checklist
 
 The v0.1.1 release establishes the internal scientific correctness of the implemented 1+1 CDT foundation: validated open-time strips and periodic
@@ -42,9 +55,10 @@ The release evidence includes:
   and
 - benchmark correctness gates that identify the workload being measured.
 
-This is a structural and transition-kernel claim, not an analytic ensemble-validation claim. v0.1.1 does **not** establish ergodicity, mixing,
+This records historical structural and transition-bookkeeping evidence. The later #316 counterexample limits its reversibility claim; the listed
+family/site checks do not establish actual coordinate-state reverse support. v0.1.1 does **not** establish ergodicity, mixing,
 thermalization, continuum-limit behavior, finite-size scaling, fixed-volume production sampling, or agreement with the exact 1+1 transfer-matrix
-distribution. That stronger quantitative gate remains [issue #238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.0. Level 5
+distribution. That stronger quantitative gate remains [issue #238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.1. Level 5
 Delaunay validation is likewise not required after valid CDT evolution because Delaunayhood is not part of the sampled ensemble.
 
 Historical benchmark reports were deliberately retired in September 2026. New evidence uses the shared v2 workflow described below.

@@ -1,9 +1,13 @@
 # ty.toml
 # Astral ty configuration for causal-triangulations
-# Python is auxiliary tooling only (tests/tooling/), Rust is primary
+# Python supports tooling tests and independent scientific audits; Rust is primary.
 
 # Source inventory is supplied by research-repo-tools, including negative fixtures.
 # The Python baseline comes from pyproject.toml.
+
+[environment]
+# The repository-named audit directory is not itself a Python package.
+extra-paths = [ "docs/audits/2d-cdt_sphere" ]
 
 [terminal]
 # Keep output concise by default.

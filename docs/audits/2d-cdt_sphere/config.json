@@ -1,0 +1,19 @@
+{
+  "source_repository": "https://github.com/JorenB/2d-cdt",
+  "source_revision": "412d0b887532c46e4445581b1a2bd509f65aaaec",
+  "source_archive_sha256": "8e5a8593a58969298156a77e970abde2acb5d7a3367cb2de463acbc018ed4e3f",
+  "flags": ["-std=c++14", "-O3", "-Wno-format"],
+  "slices": 4,
+  "initial_width": 3,
+  "lambda": 0.693147,
+  "target_volume": 96,
+  "epsilon": 0.02,
+  "simulation_seed": 1,
+  "universe_seed": 0,
+  "move_frequencies": [1, 1],
+  "attempts": 4096,
+  "modes": [false, true],
+  "snapshots": ["initial", "evolved"],
+  "imports": ["false-evolved", "true-evolved", "true-initial-with-times-0-1-3-4"],
+  "measurement_protocol": "fixed attempt count; no thermalization or equilibrium inference"
+}

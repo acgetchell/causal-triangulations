@@ -1,0 +1,3 @@
+#define _LIBCPP_VERSION 220106
+#define __clang_version__ "21.0.0 (clang-2100.3.34.2)"
+#define __cplusplus 201402L

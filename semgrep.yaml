@@ -1237,6 +1237,7 @@ rules:
         while failing on Windows when benchmark output contains Unicode symbols.
     paths:
       include:
+        - "/docs/audits/**/*.py"
         - "/tests/tooling/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
     patterns:
@@ -1264,6 +1265,7 @@ rules:
         of swallowing unrelated errors.
     paths:
       include:
+        - "/docs/audits/**/*.py"
         - "/tooling/**/*.py"
         - "/tests/tooling/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
@@ -1281,6 +1283,7 @@ rules:
         mocks stay aligned with production subprocess APIs.
     paths:
       include:
+        - "/docs/audits/**/*.py"
         - "/tests/tooling/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
     pattern-either:
@@ -1361,6 +1364,7 @@ rules:
         for executable resolution, shell rejection, text output, and timeouts.
     paths:
       include:
+        - "/docs/audits/**/*.py"
         - "/tooling/**/*.py"
         - "/tests/semgrep/scripts/tests/**/*.py"
       exclude:
