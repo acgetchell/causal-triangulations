@@ -2668,7 +2668,14 @@ pub(crate) mod tests {
             })
         );
         assert_matches!(
-            backend.remove_vertex(vertex),
+            backend.remove_vertex(vertex.clone()),
+            Err(DelaunayError::UnsupportedTopology {
+                operation: DelaunayOperation::RemoveVertex,
+                topology: TopologyKind::Toroidal,
+            })
+        );
+        assert_matches!(
+            backend.remove_vertex_for_delaunay_construction(&vertex),
             Err(DelaunayError::UnsupportedTopology {
                 operation: DelaunayOperation::RemoveVertex,
                 topology: TopologyKind::Toroidal,
@@ -4328,5 +4335,28 @@ pub(crate) mod tests {
         let dt = random_delaunay2(5, (0.0, 10.0));
         let backend = validated_backend(dt);
         assert_send_sync(&backend);
+    }
+
+    #[test]
+    fn construction_rebuild_failure_preserves_geometry_handles_and_index() {
+        let mut backend = validated_backend(
+            build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 1)])
+                .expect("minimal triangle"),
+        );
+        let handles: Vec<_> = backend.vertices().collect();
+        let before = to_value(&backend).expect("exact owner snapshot");
+        let facets = backend.interior_facets_by_edge.clone();
+        assert_matches!(
+            backend.rebuild_without_vertex_for_delaunay_construction(handles[0].key),
+            Err(DelaunayError::RemovalFailed {
+                operation: DelaunayOperation::RemoveVertex, detail, ..
+            }) if !detail.is_empty()
+        );
+        assert_eq!(to_value(&backend).expect("unchanged owner"), before);
+        assert_eq!(backend.vertices().collect::<Vec<_>>(), handles);
+        assert_eq!(backend.interior_facets_by_edge, facets);
+        backend
+            .validate_delaunay()
+            .expect("original triangle remains certified");
     }
 }

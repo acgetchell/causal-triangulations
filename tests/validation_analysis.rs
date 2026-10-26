@@ -8,8 +8,9 @@ use causal_triangulations::prelude::simulation::{
     MetropolisAlgorithm, MetropolisConfig, MoveType, SimulationResultsBackend,
 };
 use causal_triangulations::{
-    CdtAnalysisError, CdtConfig, CdtError, CdtTopology, CheckpointResumeFailure, SpatialLoopError,
-    TriangulationQuery, VALIDATION_CHAIN_SCHEMA_VERSION, ValidationChainData, run_simulation,
+    AnalysisArtifactOperation, CdtAnalysisError, CdtConfig, CdtError, CdtTopology,
+    CheckpointResumeFailure, DiagnosticPolicyField, SpatialLoopError, TriangulationQuery,
+    VALIDATION_CHAIN_SCHEMA_VERSION, ValidationChainData, run_simulation,
 };
 use markov_chain_monte_carlo::{
     DelayedProposal, DiagnosticTiming, EssEstimate, EssEstimator, Target,
@@ -17,7 +18,25 @@ use markov_chain_monte_carlo::{
 use num_traits::ToPrimitive;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
 use serde_json::{Value, json};
-use std::{assert_matches, time::Duration};
+use std::{
+    assert_matches,
+    f64::consts::LN_2,
+    io::{self, Write},
+    time::Duration,
+};
+
+/// Models an output destination that refuses a write before a complete artifact exists.
+struct Unwritable;
+
+impl Write for Unwritable {
+    fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+        Err(io::ErrorKind::PermissionDenied.into())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
 fn policy() -> CdtDiagnosticPolicy {
     CdtDiagnosticPolicy {
@@ -799,6 +818,15 @@ fn released_shape_run_exports_complete_reproducible_chain_json() {
     let results = run_simulation(&config).expect("volume-fixed run");
     let chain = ValidationChain::from_results("fixture-run", "nonuniform-72", &config, &results)
         .expect("chain metadata and measurements");
+    let mut detached = config.config().clone();
+    detached.coupling_0 = 1.0;
+    assert_matches!(
+        ValidationChain::from_results(
+            "fixture-run", "detached", &detached.into_validated().expect("valid separate action"), &results,
+        ),
+        Err(CdtError::Analysis(CdtAnalysisError::IncompatibleCondition { chain }))
+            if chain == "detached"
+    );
     let mut bytes = Vec::new();
     chain.write_json(&mut bytes).expect("write stable JSON");
     let restored = ValidationChain::read_json(bytes.as_slice()).expect("external JSON consumer");
@@ -1096,4 +1124,448 @@ fn metadata_policy_and_timing_do_not_silently_change_the_workload() {
     )
     .expect("explicit unavailable timing");
     assert!(report.mean_ess_per_second.value().is_none());
+}
+
+#[test]
+fn artifact_metadata_and_serde_conversions_preserve_the_validated_boundary() {
+    let chain = synthetic_chain(17, &[4, 5, 4, 5]);
+    let expected = serde_json::to_value(chain.data()).expect("raw transport");
+    let decoded: ValidationChain = serde_json::from_value(
+        serde_json::to_value(&chain).expect("validated chain serialization"),
+    )
+    .expect("validated chain deserialization");
+    let transported: ValidationChainData = decoded.into();
+    assert_eq!(
+        serde_json::to_value(&transported).expect("transport"),
+        expected
+    );
+    ValidationChain::try_from(transported).expect("raw conversion reparses invariants");
+
+    for field in ["run_id", "chain_id", "crate_version", "seed"] {
+        let mut bad = expected.clone();
+        if field == "seed" {
+            bad["configuration"][field] = Value::Null;
+        } else {
+            bad[field] = json!("");
+        }
+        let data = serde_json::from_value(bad.clone()).expect("raw metadata transport");
+        assert_matches!(
+            ValidationChain::try_new(data),
+            Err(CdtError::Analysis(CdtAnalysisError::MissingIdentity))
+        );
+        serde_json::from_value::<ValidationChain>(bad)
+            .expect_err("Serde must not bypass identity validation");
+    }
+    for (field, value) in [
+        ("spatial_topology", json!("S2")),
+        ("temporal_boundary", json!("open")),
+        ("minimum_loop_length", json!(2)),
+        ("action_convention", json!("lambda*N2")),
+    ] {
+        let mut bad = expected.clone();
+        bad[field] = value;
+        assert_matches!(
+            ValidationChain::try_new(serde_json::from_value(bad).expect("raw conventions")),
+            Err(CdtError::Analysis(CdtAnalysisError::IncompatibleCondition { chain }))
+                if chain == "chain-17"
+        );
+    }
+    let mut open = chain.data().clone();
+    open.configuration.topology = CdtTopology::OpenBoundary;
+    assert_matches!(
+        ValidationChain::try_new(open),
+        Err(CdtError::Analysis(CdtAnalysisError::UnsupportedTopology))
+    );
+}
+
+#[test]
+fn artifact_rows_reject_detached_counts_profiles_and_action_conventions() {
+    let chain = synthetic_chain(17, &[4, 5, 4, 5]);
+    let transport = serde_json::to_value(chain.data()).expect("raw transport");
+    for (field, value, vertices, edges) in [("vertices", 17, 17, 48), ("edges", 49, 16, 49)] {
+        let mut bad = transport.clone();
+        bad["measurements"][0][field] = json!(value);
+        assert_matches!(
+            ValidationChain::try_new(serde_json::from_value(bad).expect("raw counts")),
+            Err(CdtError::Analysis(CdtAnalysisError::Counts {
+                chain, row: 0, vertices: actual_vertices, edges: actual_edges, triangles: 32,
+            })) if chain == "chain-17" && actual_vertices == vertices && actual_edges == edges
+        );
+    }
+    for (field, value) in [
+        ("spatial_loop_lengths", Value::Null),
+        ("spatial_loop_lengths", json!([3, 3, 3, 3, 4])),
+        ("slab_triangle_profile", json!([8, 8, 8])),
+        ("slab_triangle_profile", json!([7, 9, 8, 8])),
+    ] {
+        let mut bad = transport.clone();
+        bad["measurements"][0][field] = value;
+        assert_matches!(
+            ValidationChain::try_new(serde_json::from_value(bad).expect("raw profile")),
+            Err(CdtError::Analysis(CdtAnalysisError::Profile { chain, row: 0 }))
+                if chain == "chain-17"
+        );
+    }
+    let mut different_action = chain.data().clone();
+    different_action.configuration.cosmological_constant = 0.25;
+    assert_matches!(
+        ValidationChain::try_new(different_action),
+        Err(CdtError::Analysis(CdtAnalysisError::IncompatibleCondition { chain }))
+            if chain == "chain-17"
+    );
+}
+
+#[test]
+fn diagnostic_policy_rejects_invalid_fields_before_analyzing_samples() {
+    let chains = [
+        synthetic_chain(1, &[4, 5, 4, 5]),
+        synthetic_chain(2, &[5, 4, 5, 4]),
+    ];
+    let check = |invalid: CdtDiagnosticPolicy, expected| {
+        assert_matches!(
+            analyze_cdt_chains(&chains, CdtDiagnosticObservable::Triangles, &invalid, None),
+            Err(CdtError::Analysis(CdtAnalysisError::Policy { field })) if field == expected
+        );
+    };
+    check(
+        CdtDiagnosticPolicy {
+            maximum_lag: 0,
+            ..policy()
+        },
+        DiagnosticPolicyField::MaximumLag,
+    );
+    check(
+        CdtDiagnosticPolicy {
+            minimum_completed_blocks: 1,
+            ..policy()
+        },
+        DiagnosticPolicyField::MinimumCompletedBlocks,
+    );
+    check(
+        CdtDiagnosticPolicy {
+            stabilization_levels: 1,
+            ..policy()
+        },
+        DiagnosticPolicyField::StabilizationLevels,
+    );
+    check(
+        CdtDiagnosticPolicy {
+            minimum_chains: 1,
+            ..policy()
+        },
+        DiagnosticPolicyField::MinimumChains,
+    );
+    for value in [f64::NAN, f64::INFINITY, -1.0] {
+        check(
+            CdtDiagnosticPolicy {
+                binning_relative_tolerance: value,
+                ..policy()
+            },
+            DiagnosticPolicyField::BinningRelativeTolerance,
+        );
+    }
+    for value in [f64::NAN, f64::INFINITY, -1.0, 0.0] {
+        check(
+            CdtDiagnosticPolicy {
+                minimum_ess: value,
+                ..policy()
+            },
+            DiagnosticPolicyField::MinimumEss,
+        );
+        check(
+            CdtDiagnosticPolicy {
+                maximum_mean_mcse: value,
+                ..policy()
+            },
+            DiagnosticPolicyField::MaximumMeanMcse,
+        );
+        check(
+            CdtDiagnosticPolicy {
+                quantiles: vec![QuantileRequirement {
+                    probability: 0.5,
+                    maximum_mcse: value,
+                }],
+                ..policy()
+            },
+            DiagnosticPolicyField::Quantiles,
+        );
+    }
+    for probability in [f64::NAN, f64::INFINITY, -0.1, 0.0, 1.0] {
+        check(
+            CdtDiagnosticPolicy {
+                quantiles: vec![QuantileRequirement {
+                    probability,
+                    maximum_mcse: 1.0,
+                }],
+                ..policy()
+            },
+            DiagnosticPolicyField::Quantiles,
+        );
+    }
+    let exact_plateau = CdtDiagnosticPolicy {
+        binning_relative_tolerance: 0.0,
+        quantiles: Vec::new(),
+        ..policy()
+    };
+    analyze_cdt_chains(
+        &chains,
+        CdtDiagnosticObservable::Triangles,
+        &exact_plateau,
+        None,
+    )
+    .expect("zero plateau tolerance and supplementary quantiles are valid declarations");
+}
+
+#[test]
+fn observable_selection_preserves_values_and_original_units() {
+    let chains: Vec<_> = (1..=2)
+        .map(|seed| {
+            let mut data = synthetic_chain(seed, &[3, 4, 5, 6]).data().clone();
+            data.configuration.volume_fixing =
+                Some(VolumeFixing::quadratic_triangles(32, 0.5).expect("explicit bias"));
+            data.measurements = [3_u32, 4, 5, 6]
+                .into_iter()
+                .enumerate()
+                .map(|(row, length)| {
+                    let vertices = length + 12;
+                    let triangles = 2 * vertices;
+                    let physical = f64::from(triangles) * LN_2;
+                    let difference = f64::from(triangles) - 32.0;
+                    let fixing = 0.5 * difference * difference;
+                    Measurement::try_new(
+                        u32::try_from(row + 1).expect("bounded row"),
+                        physical + fixing,
+                        vertices,
+                        3 * vertices,
+                        triangles,
+                    )
+                    .expect("known counts and action")
+                    .try_with_action_components(physical, fixing)
+                    .expect("separate terms")
+                    .try_with_spatial_loop_lengths(vec![length, 4, 4, 4])
+                    .expect("ring lengths")
+                    .try_with_slab_triangle_profile(vec![length + 4, 8, 8, length + 4])
+                    .expect("slab counts")
+                })
+                .collect();
+            ValidationChain::try_new(data).expect("known biased fixture")
+        })
+        .collect();
+    let physical_mean = 33.0 * LN_2;
+    for (observable, units, expected) in [
+        (
+            CdtDiagnosticObservable::CombinedAction,
+            "action",
+            physical_mean + 3.0,
+        ),
+        (
+            CdtDiagnosticObservable::PhysicalAction,
+            "action",
+            physical_mean,
+        ),
+        (CdtDiagnosticObservable::FixingAction, "action", 3.0),
+        (
+            CdtDiagnosticObservable::MaximumLoopLength,
+            "spacelike-links",
+            4.75,
+        ),
+        (
+            CdtDiagnosticObservable::LoopProduct { left: 0, right: 1 },
+            "spacelike-links-squared",
+            18.0,
+        ),
+        (
+            CdtDiagnosticObservable::ProfileIndicator {
+                profile: vec![3, 4, 4, 4],
+            },
+            "indicator",
+            0.25,
+        ),
+        (
+            CdtDiagnosticObservable::TargetVolumeIndicator { target: 30 },
+            "indicator",
+            0.25,
+        ),
+    ] {
+        let report =
+            analyze_cdt_chains(&chains, observable, &policy(), None).expect("observable analysis");
+        assert_eq!(report.observable_units, units);
+        for dependence in &report.dependence {
+            assert_relative_eq!(
+                dependence.binning.value().expect("completed blocks")[0].mean,
+                expected,
+                epsilon = 1e-12
+            );
+        }
+    }
+    for observable in [
+        CdtDiagnosticObservable::LoopLength { slice: 4 },
+        CdtDiagnosticObservable::LoopProduct { left: 0, right: 4 },
+        CdtDiagnosticObservable::ProfileIndicator {
+            profile: vec![3, 4, 4],
+        },
+        CdtDiagnosticObservable::ProfileIndicator {
+            profile: vec![2, 4, 4, 4],
+        },
+        CdtDiagnosticObservable::TargetProfileIndicator {
+            target: 32,
+            profile: vec![3, 4, 4, 4],
+        },
+    ] {
+        assert_matches!(
+            analyze_cdt_chains(&chains, observable, &policy(), None),
+            Err(CdtError::Analysis(CdtAnalysisError::Observable))
+        );
+    }
+}
+
+#[test]
+fn artifact_output_failures_keep_the_write_operation_and_error() {
+    let chains = [
+        synthetic_chain(1, &[4, 5, 4, 5]),
+        synthetic_chain(2, &[5, 4, 5, 4]),
+    ];
+    let report = analyze_cdt_chains(&chains, CdtDiagnosticObservable::Triangles, &policy(), None)
+        .expect("diagnostic report");
+    for result in [
+        chains[0].write_json(Unwritable),
+        report.write_json(Unwritable),
+    ] {
+        assert_matches!(
+            result,
+            Err(CdtError::Analysis(CdtAnalysisError::Serialization {
+                operation: AnalysisArtifactOperation::Write, detail,
+            })) if !detail.is_empty()
+        );
+    }
+}
+
+#[test]
+fn overflowing_second_moments_remain_unavailable_instead_of_passing_diagnostics() {
+    let chains: Vec<_> = (1..=2)
+        .map(|seed| {
+            let mut transport =
+                serde_json::to_value(synthetic_chain(seed, &[3, 4, 5, 6, 3, 4, 5, 6]).data())
+                    .expect("raw chain");
+            transport["configuration"]["cosmological_constant"] = json!(1e200);
+            for measurement in transport["measurements"].as_array_mut().expect("rows") {
+                let edges = measurement["edges"].as_u64().expect("small integer count");
+                let action = edges.to_f64().expect("exact count conversion") * 1e200;
+                measurement["action"] = json!(action);
+                measurement["physical_action"] = json!(action);
+            }
+            ValidationChain::try_new(serde_json::from_value(transport).expect("finite transport"))
+                .expect("finite actions remain valid even when their second moments overflow")
+        })
+        .collect();
+    let report = analyze_cdt_chains(
+        &chains,
+        CdtDiagnosticObservable::PhysicalAction,
+        &policy(),
+        None,
+    )
+    .expect("estimator failure remains a report outcome");
+    for dependence in &report.dependence {
+        assert_matches!(&dependence.binning, DiagnosticEstimate::Unavailable { reason } if !reason.is_empty());
+        assert_matches!(&dependence.selected_binning_level, DiagnosticEstimate::Unavailable { reason } if !reason.is_empty());
+    }
+    assert_eq!(report.verdict, CdtDiagnosticVerdict::Inconclusive);
+    report
+        .write_json(Vec::new())
+        .expect("unavailable estimates remain serializable");
+}
+
+#[test]
+fn measurement_builders_reject_invalid_ring_profiles_and_detached_bare_action() {
+    let measurement = Measurement::try_new(7, 12.0, 16, 48, 32).expect("measurement");
+    assert_matches!(
+        measurement.clone().try_with_action_components(11.0, 0.0),
+        Err(CdtError::CheckpointResumeFailed {
+            failure: CheckpointResumeFailure::MeasurementActionStateMismatch { step: 7, .. }
+        })
+    );
+    for profile in [vec![], vec![8, 8], vec![2, 5, 4, 5], vec![4, 4, 4, 5]] {
+        assert_matches!(
+            measurement.clone().try_with_spatial_loop_lengths(profile.clone()),
+            Err(CdtError::SpatialLoop(SpatialLoopError::InvalidProfile { profile: actual, triangles: 32 }))
+                if actual == profile
+        );
+        let mut encoded = serde_json::to_value(&measurement).expect("measurement transport");
+        encoded["spatial_loop_lengths"] = json!(profile);
+        serde_json::from_value::<Measurement>(encoded)
+            .expect_err("deserialization must revalidate the ring profile");
+    }
+}
+
+#[test]
+fn combined_action_range_rejects_individually_finite_but_overflowing_terms() {
+    let maximum_count = usize::MAX.to_f64().expect("representable count bound");
+    let extent = maximum_count + 32.0;
+    let physical = ActionConfig::new(0.0, 0.0, (0.75 * f64::MAX) / maximum_count)
+        .expect("finite physical range");
+    let fixing = VolumeFixing::quadratic_triangles(32, ((0.75 * f64::MAX) / extent) / extent)
+        .expect("finite bias range");
+    assert!(physical.calculate_action(0, usize::MAX, 0).is_finite());
+    assert!(fixing.action(usize::MAX).is_finite());
+    assert_matches!(
+        physical.with_volume_fixing(Some(fixing)),
+        Err(CdtError::VolumeFixing(
+            VolumeFixingError::CombinedActionOverflow
+        ))
+    );
+}
+
+#[test]
+fn volume_fixing_runner_and_checkpoint_restore_enforce_ensemble_boundaries() {
+    let schedule = MetropolisConfig::new(1.0, 1, 0, 1)
+        .expect("one-step schedule")
+        .with_seed(7);
+    let fixing = VolumeFixing::quadratic_triangles(32, 0.0).expect("zero-strength explicit bias");
+    let action = ActionConfig::default()
+        .with_volume_fixing(Some(fixing))
+        .expect("finite action");
+    let open = CdtTriangulation::from_cdt_strip(4, 4).expect("open fixture");
+    assert_matches!(
+        MetropolisAlgorithm::new(schedule.clone(), action)
+            .run(open.clone())
+            .map(drop),
+        Err(CdtError::VolumeFixing(
+            VolumeFixingError::UnsupportedTopology {
+                topology: CdtTopology::OpenBoundary,
+            }
+        ))
+    );
+    let unreachable = ActionConfig::default()
+        .with_volume_fixing(Some(
+            VolumeFixing::quadratic_triangles(22, 0.0).expect("even target"),
+        ))
+        .expect("finite action");
+    assert_matches!(
+        MetropolisAlgorithm::new(schedule.clone(), unreachable)
+            .run(CdtTriangulation::from_toroidal_cdt(4, 4).expect("torus"))
+            .map(drop),
+        Err(CdtError::VolumeFixing(
+            VolumeFixingError::TargetBelowMinimum {
+                target: 22,
+                minimum: 24
+            }
+        ))
+    );
+
+    let bare = MetropolisAlgorithm::new(schedule, ActionConfig::default())
+        .run_to_checkpoint(open)
+        .expect("bare open chains remain supported");
+    let mut encoded: Value =
+        serde_json::from_str(&bare.to_json().expect("checkpoint")).expect("transport");
+    encoded["format_version"] = json!(3);
+    encoded["action_config"]["volume_fixing"] =
+        serde_json::to_value(fixing).expect("bias transport");
+    assert_matches!(
+        CdtMcmcCheckpoint::from_json(&encoded.to_string()).map(drop),
+        Err(CdtError::VolumeFixing(
+            VolumeFixingError::UnsupportedTopology {
+                topology: CdtTopology::OpenBoundary,
+            }
+        ))
+    );
 }

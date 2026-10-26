@@ -15,7 +15,7 @@ use crate::cdt::volume_fixing::VolumeFixing;
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting, ExpectedConstraint, ObservedValue};
 use clap::{ArgGroup, Error as ClapError, Parser, ValueEnum, error::ErrorKind};
 use dirs::home_dir;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::ffi::OsString;
 use std::fmt;
 use std::num::NonZeroU32;
@@ -915,6 +915,12 @@ pub struct CdtConfigOverrides {
     ///
     /// `None` leaves the base value unchanged, `Some(None)` disables fixing,
     /// and `Some(Some(fixing))` replaces it.
+    /// JSON represents these states as an omitted field, `null`, and a bias value.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_volume_fixing_override",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[expect(
         clippy::option_option,
         reason = "None=no override, Some(None)=clear bias, Some(Some(v))=set bias"
@@ -942,6 +948,20 @@ pub struct CdtConfigOverrides {
         reason = "None=no override, Some(None)=clear output path, Some(Some(v))=set output path"
     )]
     pub output_json: Option<Option<PathBuf>>,
+}
+
+/// Preserves a present nullable bias override; missing fields use the field's default.
+#[expect(
+    clippy::option_option,
+    reason = "Missing, null, and configured fields carry distinct override semantics"
+)]
+fn deserialize_volume_fixing_override<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<VolumeFixing>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<VolumeFixing>::deserialize(deserializer).map(Some)
 }
 
 impl CdtConfig {
@@ -1782,7 +1802,7 @@ impl TestConfig {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
-    use serde_json::{from_str, to_string};
+    use serde_json::{from_str, from_value, json, to_string, to_value};
     use std::assert_matches;
 
     #[test]
@@ -2641,6 +2661,42 @@ mod tests {
                 assert_eq!(merged.to_action_config().volume_fixing(), expected);
                 assert_eq!(base.volume_fixing, volume_fixing);
             }
+        }
+    }
+
+    #[test]
+    fn volume_fixing_override_json_preserves_absent_clear_and_replace_states() {
+        let original = VolumeFixing::quadratic_triangles(32, 0.1).expect("original bias");
+        let replacement = VolumeFixing::quadratic_triangles(34, 0.2).expect("replacement bias");
+        let base = CdtConfig {
+            topology: CdtTopology::Toroidal,
+            volume_fixing: Some(original),
+            ..CdtConfig::new(16, 4)
+        };
+        for (wire, expected_override, expected_bias) in [
+            (json!({"volume_fixing": null}), Some(None), None),
+            (json!({}), None, Some(original)),
+            (
+                json!({"volume_fixing": replacement}),
+                Some(Some(replacement)),
+                Some(replacement),
+            ),
+        ] {
+            let parsed: CdtConfigOverrides = from_value(wire.clone()).expect("JSON override");
+            assert_eq!(parsed.volume_fixing, expected_override);
+            let encoded = to_value(&parsed).expect("serialized override");
+            assert_eq!(encoded.get("volume_fixing"), wire.get("volume_fixing"));
+            let restored: CdtConfigOverrides = from_value(encoded).expect("round-trip override");
+            assert_eq!(restored.volume_fixing, expected_override);
+            let merged = base.merge_with_override(&restored).expect("valid merge");
+            assert_eq!(merged.to_action_config().volume_fixing(), expected_bias);
+        }
+        for invalid in [
+            json!({"volume_fixing": {"mode": "quadratic-triangles", "target": 31, "strength": 0.1}}),
+            json!({"volume_fixing": {"mode": "quadratic-triangles", "target": 32, "strength": -0.1}}),
+        ] {
+            from_value::<CdtConfigOverrides>(invalid)
+                .expect_err("configured overrides must still validate the bias");
         }
     }
 

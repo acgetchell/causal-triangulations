@@ -5709,4 +5709,34 @@ mod tests {
                 .is_none()
         );
     }
+
+    #[test]
+    fn measurement_components_and_loop_adjacency_must_match_the_trajectory() {
+        let triangulation = CdtTriangulation2D::from_toroidal_cdt(4, 4).expect("flat torus");
+        let mut results = valid_rejected_result(triangulation);
+        let action = results.measurements[0].action();
+        results.measurements[0] = results.measurements[0]
+            .clone()
+            .try_with_action_components(action - 1.0, 1.0)
+            .expect("components sum to the recorded action");
+        assert_matches!(
+            validate_trajectory_observables(
+                &results.action_config,
+                &results.steps,
+                &results.measurements,
+                &results.scalar_trace_rows,
+                &results.triangulation,
+            ),
+            Err(CdtError::InvalidMeasurementActionComponents { step: 0, .. })
+        );
+
+        let measurement = measurement(0, 0.0, 16, 48, 32)
+            .try_with_spatial_loop_lengths(vec![4, 4, 4, 4])
+            .expect("closed ring profile");
+        assert_matches!(
+            validate_measurement_profile_matches(&measurement, &[7, 9, 8, 8]),
+            Err(CdtError::SpatialLoop(SpatialLoopError::InvalidProfile { profile, triangles: 32 }))
+                if profile == [4, 4, 4, 4]
+        );
+    }
 }
