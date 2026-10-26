@@ -8,7 +8,7 @@ use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayError, DelaunayFaceHandle, DelaunayRemovalResult,
     DelaunayVertexHandle,
 };
-use crate::geometry::traits::{FlipResult, SubdivisionResult, TriangulationMut};
+use crate::geometry::traits::{FlipResult, SubdivisionResult};
 
 impl CdtTriangulation<DelaunayBackend2D> {
     /// Flips an edge when the caller owns rollback for the enclosing CDT edit.
@@ -34,16 +34,6 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(result)
     }
 
-    /// Removes a vertex and marks CDT-derived state stale when the backend mutation succeeds.
-    pub(crate) fn remove_vertex(
-        &mut self,
-        vertex: DelaunayVertexHandle,
-    ) -> Result<(), DelaunayError> {
-        self.geometry.remove_vertex(vertex)?;
-        self.bump_modification_count();
-        Ok(())
-    }
-
     /// Removes a vertex when the caller owns rollback for the enclosing CDT edit.
     pub(crate) fn remove_vertex_in_caller_transaction(
         &mut self,
@@ -52,6 +42,17 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let result = self.geometry.remove_vertex_in_caller_transaction(vertex)?;
         self.bump_modification_count();
         Ok(result)
+    }
+
+    /// Removes a construction point and invalidates CDT-derived state on success.
+    pub(super) fn remove_vertex_for_delaunay_construction(
+        &mut self,
+        vertex: &DelaunayVertexHandle,
+    ) -> Result<(), DelaunayError> {
+        self.geometry
+            .remove_vertex_for_delaunay_construction(vertex)?;
+        self.bump_modification_count();
+        Ok(())
     }
 
     /// Restores Delaunay connectivity between initial point-filtering passes.
@@ -79,7 +80,7 @@ mod tests {
     use super::*;
     use crate::cdt::triangulation::CdtTriangulation2D;
     use crate::geometry::generators::build_delaunay2_from_simplices;
-    use crate::geometry::traits::TriangulationQuery;
+    use crate::geometry::traits::{TriangulationMut, TriangulationQuery};
 
     /// Computes the centroid of a live triangular face.
     fn face_centroid(triangulation: &CdtTriangulation<DelaunayBackend2D>) -> Vec<f64> {
@@ -182,7 +183,7 @@ mod tests {
         let after_subdivision_count = tri.metadata().modification_count;
 
         let (): () = tri
-            .remove_vertex(subdivision.new_vertex.clone())
+            .remove_vertex_for_delaunay_construction(&subdivision.new_vertex)
             .expect("new subdivision vertex should be removable");
 
         assert_eq!(tri.vertex_count(), initial_vertices);

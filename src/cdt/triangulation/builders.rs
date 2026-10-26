@@ -999,10 +999,12 @@ impl CdtTriangulation<DelaunayBackend2D> {
         Ok(tri)
     }
 
-    /// Selects a removable vertex from the first non-strict CDT simplex.
+    /// Selects a removable vertex across all non-strict CDT simplices.
     ///
-    /// The selector prefers extreme time labels on acausal faces and never
-    /// removes the last vertex above the caller's per-slice minimum. It is the
+    /// The selector prefers extreme time labels on acausal faces, then the
+    /// largest displacement from the labeled time coordinate. This preserves
+    /// the layered core when surplus vertices carry inconsistent time labels.
+    /// It never removes a vertex at the caller's per-slice minimum. It is the
     /// local policy behind [`Self::from_filtered_delaunay_strip`]'s convergence
     /// loop, not a general move proposal for simulation.
     ///
@@ -1019,11 +1021,14 @@ impl CdtTriangulation<DelaunayBackend2D> {
         coordinate_max: f64,
     ) -> CdtResult<Option<DelaunayVertexHandle>> {
         let slice_sizes = self.slice_sizes();
+        let mut preferred: Option<(DelaunayVertexHandle, f64, (usize, u32))> = None;
+        let mut first_invalid_face = None;
 
         for face in self.geometry.faces() {
             if self.simplex_type(&face)?.is_some() {
                 continue;
             }
+            first_invalid_face.get_or_insert_with(|| format!("{:?}", face.simplex_key()));
 
             let vertices =
                 self.geometry
@@ -1046,46 +1051,69 @@ impl CdtTriangulation<DelaunayBackend2D> {
                             vertex: format!("{:?}", vertex.vertex_key()),
                         },
                     })?;
-                labeled_vertices.push((vertex, label));
+                let coordinates = self.geometry.vertex_coordinates(&vertex).map_err(|err| {
+                    CdtError::ValidationFailed {
+                        check: CdtValidationCheck::SimplexClassification,
+                        failure: CdtValidationFailure::VertexCoordinateReadFailed {
+                            vertex: format!("{:?}", vertex.vertex_key()),
+                            detail: err.to_string(),
+                        },
+                    }
+                })?;
+                let displacement = (coordinates[1] - f64::from(label)).abs();
+                labeled_vertices.push((vertex, label, displacement));
             }
 
-            let Some(min_label) = labeled_vertices.iter().map(|(_, label)| *label).min() else {
+            let Some(min_label) = labeled_vertices.iter().map(|(_, label, _)| *label).min() else {
                 return Ok(None);
             };
-            let Some(max_label) = labeled_vertices.iter().map(|(_, label)| *label).max() else {
+            let Some(max_label) = labeled_vertices.iter().map(|(_, label, _)| *label).max() else {
                 return Ok(None);
             };
-            let mut candidates: Vec<_> = if max_label.saturating_sub(min_label) > 1 {
+            let candidates: Vec<_> = if max_label.saturating_sub(min_label) > 1 {
                 labeled_vertices
                     .iter()
-                    .filter(|(_, label)| *label == min_label || *label == max_label)
+                    .filter(|(_, label, _)| *label == min_label || *label == max_label)
                     .collect()
             } else {
                 labeled_vertices.iter().collect()
             };
-            candidates.sort_by_key(|(_, label)| {
+            let label_priority = |label: u32| {
                 let count = labeled_vertices
                     .iter()
-                    .filter(|(_, other)| *other == *label)
+                    .filter(|(_, other, _)| *other == label)
                     .count();
-                (count, *label)
-            });
-
-            for (vertex, label) in candidates {
+                (count, label)
+            };
+            for (vertex, label, displacement) in candidates {
                 let Some(&slice_size) = slice_sizes.get(*label as usize) else {
                     continue;
                 };
                 if slice_size > minimum_slice_size {
-                    return Ok(Some((*vertex).clone()));
+                    let priority = label_priority(*label);
+                    if preferred
+                        .as_ref()
+                        .is_none_or(|(_, best_displacement, best_priority)| {
+                            displacement.total_cmp(best_displacement).is_gt()
+                                || (displacement.total_cmp(best_displacement).is_eq()
+                                    && priority < *best_priority)
+                        })
+                    {
+                        preferred = Some(((*vertex).clone(), *displacement, priority));
+                    }
                 }
             }
-
+        }
+        if let Some((vertex, _, _)) = preferred {
+            return Ok(Some(vertex));
+        }
+        if let Some(face) = first_invalid_face {
             return Err(CdtError::DelaunayGenerationFailed {
                 vertex_count: total_vertices,
                 coordinate_range: (0.0, coordinate_max),
                 attempt: 1,
                 failure: DelaunayGenerationFailure::MinimumSliceSizeReached {
-                    face: format!("{:?}", face.simplex_key()),
+                    face,
                     minimum_slice_size,
                 },
             });
@@ -1150,7 +1178,7 @@ impl CdtTriangulation<DelaunayBackend2D> {
             };
 
             let target = format!("vertex {:?}", vertex.vertex_key());
-            self.remove_vertex(vertex)
+            self.remove_vertex_for_delaunay_construction(&vertex)
                 .map_err(|err| CdtError::BackendMutationFailed {
                     operation: BackendMutationOperation::RemoveVertex,
                     target,
@@ -1180,6 +1208,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Delaunay connectivity before the next filtering pass, and returns only
     /// after the violation count reaches zero and the full initial CDT validation
     /// contract passes.
+    /// If local cavity deletion fails, the geometry adapter reconstructs the
+    /// unchanged surviving vertices through Delaunay's point-set builder.
     ///
     /// # Errors
     ///
@@ -1826,6 +1856,8 @@ mod tests {
     use crate::geometry::generators::build_delaunay2_from_simplices;
     use approx::assert_relative_eq;
     use std::assert_matches;
+    use std::collections::BTreeMap;
+    use std::num::NonZeroUsize;
 
     fn coordinate_signature(triangulation: &CdtTriangulation<DelaunayBackend2D>) -> Vec<Vec<u64>> {
         let mut coordinates = triangulation
@@ -1861,6 +1893,23 @@ mod tests {
                 f64::from(label).to_bits(),
                 "strip time coordinates must exactly match their slice labels"
             );
+        }
+    }
+
+    /// Checks the declared perturbation bound of the preserved layered core.
+    fn assert_filtered_core_time_labels(tri: &CdtTriangulation<DelaunayBackend2D>) {
+        // Core perturbations are bounded by 1e-9; surplus points are displaced
+        // from their declared temporal boundary by at least 1.9 time units.
+        for vertex in tri.geometry().vertices() {
+            let coordinates = tri
+                .geometry()
+                .vertex_coordinates(&vertex)
+                .expect("live vertex");
+            let label = tri
+                .geometry()
+                .vertex_data_by_key(vertex.vertex_key())
+                .expect("time label");
+            assert!((coordinates[1] - f64::from(label)).abs() < 1e-9);
         }
     }
 
@@ -2482,6 +2531,7 @@ mod tests {
 
         assert_eq!(tri.vertex_count(), 12);
         assert_eq!(tri.slice_sizes(), &[4, 4, 4]);
+        assert_filtered_core_time_labels(&tri);
         assert!(tri.has_foliation());
         assert!(tri.geometry().validate_delaunay().is_ok());
         assert!(tri.validate_topology().is_ok());
@@ -2493,6 +2543,83 @@ mod tests {
                 .expect("filtered strip should expose a current strict-causality count"),
             0
         );
+    }
+
+    #[test]
+    fn filtered_strips_preserve_the_requested_core_across_slice_shapes() {
+        for (vertices_per_slice, timeslices) in [(4, 4), (4, 5), (5, 3), (5, 4), (6, 3)] {
+            let tri =
+                CdtTriangulation::from_filtered_delaunay_strip(vertices_per_slice, timeslices)
+                    .unwrap_or_else(|error| panic!("supported filtered strip {vertices_per_slice}x{timeslices} must construct: {error}"));
+            assert_eq!(
+                tri.vertex_count(),
+                (vertices_per_slice * timeslices) as usize
+            );
+            assert_eq!(
+                tri.slice_sizes(),
+                vec![vertices_per_slice as usize; timeslices as usize]
+            );
+            assert_filtered_core_time_labels(&tri);
+            assert_eq!(
+                tri.strict_causal_simplex_violation_count()
+                    .expect("current foliation"),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn filtered_construction_rebuild_preserves_surviving_vertex_identity_and_policy() {
+        let mut specs = open_profile_vertices(&[5, 5, 5], 15, 1e-9).expect("layered core");
+        specs.extend([([0.5, 1.9], 0), ([0.5, 0.1], 2)]);
+        let mut backend = validated_backend(build_delaunay2_with_data(&specs).expect("point set"))
+            .expect("overcomplete geometry");
+        backend.set_delaunay_check_interval(NonZeroUsize::new(7));
+        let policy = backend.triangulation().validation_policy();
+        let vertex = backend
+            .vertices()
+            .find(|vertex| {
+                backend.vertex_data_by_key(vertex.vertex_key()) == Some(0)
+                    && backend
+                        .vertex_coordinates(vertex)
+                        .is_ok_and(|coordinates| coordinates[1].to_bits() == 1.9_f64.to_bits())
+            })
+            .expect("mislabeled surplus point");
+        let removed_id = backend
+            .vertex_export_id(&vertex)
+            .expect("stable vertex identity");
+        let signature = |backend: &DelaunayBackend2D| {
+            backend
+                .vertices()
+                .map(|vertex| {
+                    (
+                        backend.vertex_export_id(&vertex).expect("UUID"),
+                        (
+                            backend
+                                .vertex_coordinates(&vertex)
+                                .expect("coordinates")
+                                .iter()
+                                .copied()
+                                .map(f64::to_bits)
+                                .collect::<Vec<_>>(),
+                            backend.vertex_data_by_key(vertex.vertex_key()),
+                        ),
+                    )
+                })
+                .collect::<BTreeMap<_, _>>()
+        };
+        let mut expected = signature(&backend);
+        assert!(expected.remove(&removed_id).is_some());
+        backend
+            .remove_vertex_for_delaunay_construction(&vertex)
+            .expect("constructor deletion must succeed");
+        assert_eq!(signature(&backend), expected);
+        assert_eq!(backend.triangulation().validation_policy(), policy);
+        assert!(!backend.should_check_delaunay_after(6));
+        assert!(backend.should_check_delaunay_after(7));
+        backend
+            .validate_delaunay()
+            .expect("upstream Levels 1-5 certification");
     }
 
     #[test]

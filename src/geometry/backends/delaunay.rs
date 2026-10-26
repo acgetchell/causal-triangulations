@@ -22,10 +22,10 @@ use delaunay::prelude::{DataSerialize, DataType};
 use delaunay::tds::{EdgeKey, EdgeKeyError, FacetHandle, SimplexKey, Vertex, VertexKey};
 use delaunay::topology::traits::{GlobalTopology, TopologyKind};
 use delaunay::{
-    DelaunayCheckPolicy, DelaunayRefinementBuilder, DelaunayTriangulation, InsertionError,
-    InsertionTopologyValidationContext, SimplexBarycenterError, Triangulation,
-    TriangulationEditError, TriangulationRealizationValidationError, TriangulationSnapshot,
-    TriangulationValidationError,
+    DelaunayCheckPolicy, DelaunayRefinementBuilder, DelaunayTriangulation,
+    DelaunayTriangulationBuilder, InsertionError, InsertionTopologyValidationContext,
+    SimplexBarycenterError, Triangulation, TriangulationEditError,
+    TriangulationRealizationValidationError, TriangulationSnapshot, TriangulationValidationError,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use std::collections::HashMap;
@@ -1551,7 +1551,7 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
     /// underlying triangulation.
     ///
     /// This exposes the [`GlobalTopology`] metadata attached by
-    /// [`DelaunayTriangulationBuilder`](delaunay::prelude::construction::DelaunayTriangulationBuilder)
+    /// [`DelaunayTriangulationBuilder`]
     /// at construction time.
     ///
     /// # Examples
@@ -2125,6 +2125,48 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
             })?;
         self.dt = refined.triangulation.into_triangulation();
         self.rebuild_interior_facet_index();
+        Ok(())
+    }
+
+    /// Removes a construction point, rebuilding survivors when local cavity filling fails.
+    ///
+    /// The fallback keeps every surviving coordinate, UUID, and vertex payload,
+    /// then delegates fresh connectivity and Levels 1–5 certification upstream.
+    /// Simplex payloads are rebuilt by the caller's construction finalization.
+    /// This initialization-only operation never repairs a simulation proposal.
+    pub(crate) fn remove_vertex_for_delaunay_construction(
+        &mut self,
+        vertex: &DelaunayVertexHandle,
+    ) -> Result<(), DelaunayError>
+    where
+        DelaunayKernel: ExactPredicates<D>,
+    {
+        let vertex_key = self.validate_vertex_handle(vertex)?;
+        match self.remove_vertex_with_rollback(vertex, MutationRollback::Backend) {
+            Ok(_) => return Ok(()),
+            Err(DelaunayError::RemovalFailed { .. }) => {}
+            Err(error) => return Err(error),
+        }
+        let survivors: Vec<_> = self
+            .dt
+            .vertices()
+            .filter(|(key, _)| *key != vertex_key)
+            .map(|(_, vertex)| *vertex)
+            .collect();
+        let rebuilt = DelaunayTriangulationBuilder::new(&survivors)
+            .simplex_data_type::<SimplexData>()
+            .topology_guarantee(self.dt.topology_guarantee())
+            .global_topology(self.dt.global_topology())
+            .validation_policy(self.dt.validation_policy())
+            .build()
+            .map_err(|error| DelaunayError::RemovalFailed {
+                operation: DelaunayOperation::RemoveVertex,
+                target: format!("construction vertex {vertex_key:?}"),
+                detail: error.to_string(),
+            })?;
+        let mut replacement = Self::from_triangulation(rebuilt)?;
+        replacement.delaunay_check_policy = self.delaunay_check_policy;
+        *self = replacement;
         Ok(())
     }
 
