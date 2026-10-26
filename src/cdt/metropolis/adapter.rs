@@ -14,13 +14,14 @@ use crate::cdt::proposal_policy::{
     CdtProposalPolicyView, UniformCdtMoveFamilyPolicy,
 };
 use crate::cdt::triangulation::CdtTriangulation2D;
+use crate::config::CdtTopology;
 use crate::errors::{
     CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, ConfigurationSetting,
     ExpectedConstraint, MetropolisMoveApplicationFailure,
 };
 use markov_chain_monte_carlo::{
-    Chain, ChainCheckpoint, DelayedProposal, DiscreteProposalEndpoint, DiscreteProposalRatio,
-    DiscreteProposalRatioError, McmcError, Target,
+    AdditiveTarget, Chain, ChainCheckpoint, DelayedProposal, DiscreteProposalEndpoint,
+    DiscreteProposalRatio, DiscreteProposalRatioError, McmcError, Target,
 };
 use rand::Rng;
 use std::error::Error;
@@ -77,11 +78,56 @@ impl CdtTarget {
 
 impl Target<CdtTriangulation2D> for CdtTarget {
     fn log_prob(&self, state: &CdtTriangulation2D) -> f64 {
+        if self.action_config.volume_fixing().is_some()
+            && state.metadata().topology() != CdtTopology::Toroidal
+        {
+            return f64::NEG_INFINITY;
+        }
+        if self.action_config.volume_fixing().is_some() {
+            return AdditiveTarget::new(
+                CdtPhysicalLogWeight {
+                    config: &self.action_config,
+                    temperature: self.temperature,
+                },
+                CdtFixingLogWeight {
+                    config: &self.action_config,
+                    temperature: self.temperature,
+                },
+            )
+            .log_prob(state);
+        }
         let counts = simplex_counts(state);
         let action =
             self.action_config
                 .calculate_action(counts.vertices, counts.edges, counts.triangles);
         -action / self.temperature
+    }
+}
+
+/// Thin physical-action component for the upstream additive-target owner.
+struct CdtPhysicalLogWeight<'a> {
+    config: &'a ActionConfig,
+    temperature: f64,
+}
+
+impl Target<CdtTriangulation2D> for CdtPhysicalLogWeight<'_> {
+    fn log_prob(&self, state: &CdtTriangulation2D) -> f64 {
+        -self
+            .config
+            .physical_action(state.vertex_count(), state.edge_count(), state.face_count())
+            / self.temperature
+    }
+}
+
+/// Thin volume-bias component; upstream still owns generic target composition.
+struct CdtFixingLogWeight<'a> {
+    config: &'a ActionConfig,
+    temperature: f64,
+}
+
+impl Target<CdtTriangulation2D> for CdtFixingLogWeight<'_> {
+    fn log_prob(&self, state: &CdtTriangulation2D) -> f64 {
+        -self.config.fixing_action(state.face_count()) / self.temperature
     }
 }
 

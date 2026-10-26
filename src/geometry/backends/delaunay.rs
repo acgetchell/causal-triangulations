@@ -22,10 +22,10 @@ use delaunay::prelude::{DataSerialize, DataType};
 use delaunay::tds::{EdgeKey, EdgeKeyError, FacetHandle, SimplexKey, Vertex, VertexKey};
 use delaunay::topology::traits::{GlobalTopology, TopologyKind};
 use delaunay::{
-    DelaunayCheckPolicy, DelaunayRefinementBuilder, DelaunayTriangulation, InsertionError,
-    InsertionTopologyValidationContext, SimplexBarycenterError, Triangulation,
-    TriangulationEditError, TriangulationRealizationValidationError, TriangulationSnapshot,
-    TriangulationValidationError,
+    DelaunayCheckPolicy, DelaunayRefinementBuilder, DelaunayTriangulation,
+    DelaunayTriangulationBuilder, InsertionError, InsertionTopologyValidationContext,
+    SimplexBarycenterError, Triangulation, TriangulationEditError,
+    TriangulationRealizationValidationError, TriangulationSnapshot, TriangulationValidationError,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
 use std::collections::HashMap;
@@ -1551,7 +1551,7 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
     /// underlying triangulation.
     ///
     /// This exposes the [`GlobalTopology`] metadata attached by
-    /// [`DelaunayTriangulationBuilder`](delaunay::prelude::construction::DelaunayTriangulationBuilder)
+    /// [`DelaunayTriangulationBuilder`]
     /// at construction time.
     ///
     /// # Examples
@@ -2128,6 +2128,63 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
         Ok(())
     }
 
+    /// Removes a construction point, rebuilding survivors when local cavity filling fails.
+    ///
+    /// The fallback keeps every surviving coordinate, UUID, and vertex payload,
+    /// then delegates fresh connectivity and Levels 1–5 certification upstream.
+    /// Simplex payloads are rebuilt by the caller's construction finalization.
+    /// This initialization-only operation never repairs a simulation proposal.
+    pub(crate) fn remove_vertex_for_delaunay_construction(
+        &mut self,
+        vertex: &DelaunayVertexHandle,
+    ) -> Result<(), DelaunayError>
+    where
+        DelaunayKernel: ExactPredicates<D>,
+    {
+        let vertex_key = self.validate_vertex_handle(vertex)?;
+        match self.remove_vertex_with_rollback(vertex, MutationRollback::Backend) {
+            Ok(_) => return Ok(()),
+            Err(DelaunayError::RemovalFailed { .. }) => {}
+            Err(error) => return Err(error),
+        }
+        self.rebuild_without_vertex_for_delaunay_construction(vertex_key)
+    }
+
+    /// Rebuilds construction survivors and replaces the owner only after certification.
+    ///
+    /// The caller supplies a live, validated vertex key after any failed local edit
+    /// has rolled back. Keeping this separate makes fallback coverage independent
+    /// of which cavities upstream can delete locally.
+    fn rebuild_without_vertex_for_delaunay_construction(
+        &mut self,
+        vertex_key: VertexKey,
+    ) -> Result<(), DelaunayError>
+    where
+        DelaunayKernel: ExactPredicates<D>,
+    {
+        let survivors: Vec<_> = self
+            .dt
+            .vertices()
+            .filter(|(key, _)| *key != vertex_key)
+            .map(|(_, vertex)| *vertex)
+            .collect();
+        let rebuilt = DelaunayTriangulationBuilder::new(&survivors)
+            .simplex_data_type::<SimplexData>()
+            .topology_guarantee(self.dt.topology_guarantee())
+            .global_topology(self.dt.global_topology())
+            .validation_policy(self.dt.validation_policy())
+            .build()
+            .map_err(|error| DelaunayError::RemovalFailed {
+                operation: DelaunayOperation::RemoveVertex,
+                target: format!("construction vertex {vertex_key:?}"),
+                detail: error.to_string(),
+            })?;
+        let mut replacement = Self::from_triangulation(rebuilt)?;
+        replacement.delaunay_check_policy = self.delaunay_check_policy;
+        *self = replacement;
+        Ok(())
+    }
+
     /// Flips one edge with either backend- or caller-owned rollback.
     fn flip_edge_with_rollback(
         &mut self,
@@ -2437,6 +2494,7 @@ pub(crate) mod tests {
     use crate::{CdtTriangulation, CdtValidationProfile};
     use approx::assert_relative_eq;
     use delaunay::prelude::construction::{ConstructionOptions, DelaunayTriangulationBuilder};
+    use delaunay::prelude::validation::{TopologyGuarantee, ValidationPolicy};
     use serde_json::{Error as JsonError, Value, error::Category, from_str, to_string, to_value};
     use slotmap::KeyData;
     use std::assert_matches;
@@ -2610,7 +2668,14 @@ pub(crate) mod tests {
             })
         );
         assert_matches!(
-            backend.remove_vertex(vertex),
+            backend.remove_vertex(vertex.clone()),
+            Err(DelaunayError::UnsupportedTopology {
+                operation: DelaunayOperation::RemoveVertex,
+                topology: TopologyKind::Toroidal,
+            })
+        );
+        assert_matches!(
+            backend.remove_vertex_for_delaunay_construction(&vertex),
             Err(DelaunayError::UnsupportedTopology {
                 operation: DelaunayOperation::RemoveVertex,
                 topology: TopologyKind::Toroidal,
@@ -3997,6 +4062,81 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn construction_rebuild_preserves_survivors_and_policies() {
+        let dt = build_delaunay2_with_data(&[
+            ([0.0, 0.0], 0),
+            ([2.0, 0.0], 1),
+            ([2.0, 1.0], 2),
+            ([0.0, 2.0], 3),
+            ([0.75, 0.5], 4),
+        ])
+        .expect("construction rebuild fixture should build");
+        let mut backend = validated_backend(dt);
+        backend
+            .dt
+            .try_set_topology_guarantee(TopologyGuarantee::Pseudomanifold)
+            .expect("fixture supports the nondefault topology guarantee");
+        backend
+            .dt
+            .try_set_validation_policy(ValidationPolicy::Always)
+            .expect("fixture supports the nondefault validation policy");
+        backend.set_delaunay_check_interval(NonZeroUsize::new(7));
+        let topology = backend.dt.global_topology();
+        let vertex = backend
+            .vertices()
+            .find(|vertex| backend.vertex_data_by_key(vertex.key) == Some(4))
+            .expect("interior construction point");
+        let signature = |backend: &DelaunayBackend2D| {
+            backend
+                .vertices()
+                .map(|vertex| {
+                    (
+                        backend.vertex_export_id(&vertex).expect("UUID"),
+                        (
+                            backend
+                                .vertex_coordinates(&vertex)
+                                .expect("coordinates")
+                                .iter()
+                                .copied()
+                                .map(f64::to_bits)
+                                .collect::<Vec<_>>(),
+                            backend.vertex_data_by_key(vertex.key),
+                        ),
+                    )
+                })
+                .collect::<HashMap<_, _>>()
+        };
+        let mut expected = signature(&backend);
+        let removed_id = backend.vertex_export_id(&vertex).expect("removed UUID");
+        assert!(expected.remove(&removed_id).is_some());
+
+        // Exercise rebuilding directly, regardless of upstream local-deletion support.
+        backend
+            .rebuild_without_vertex_for_delaunay_construction(vertex.key)
+            .expect("construction rebuild should succeed");
+
+        assert_eq!(signature(&backend), expected);
+        assert_eq!(backend.vertex_count(), 4);
+        assert_eq!(backend.face_count(), 2);
+        assert_eq!(backend.dt.global_topology(), topology);
+        assert_eq!(
+            backend.dt.topology_guarantee(),
+            TopologyGuarantee::Pseudomanifold
+        );
+        assert_eq!(backend.dt.validation_policy(), ValidationPolicy::Always);
+        assert!(!backend.should_check_delaunay_after(6));
+        assert!(backend.should_check_delaunay_after(7));
+        assert_matches!(
+            backend.vertex_coordinates(&vertex),
+            Err(DelaunayError::ForeignHandle { .. })
+        );
+        assert_interior_facet_index_matches_rebuild(&backend);
+        backend
+            .validate_delaunay()
+            .expect("rebuilt connectivity must pass Levels 1-5");
+    }
+
+    #[test]
     fn backend_deserialization_preserves_vertices_without_payloads() {
         let vertices = [
             Vertex::<u32, 2>::try_new([0.0, 0.0]).expect("valid vertex"),
@@ -4195,5 +4335,28 @@ pub(crate) mod tests {
         let dt = random_delaunay2(5, (0.0, 10.0));
         let backend = validated_backend(dt);
         assert_send_sync(&backend);
+    }
+
+    #[test]
+    fn construction_rebuild_failure_preserves_geometry_handles_and_index() {
+        let mut backend = validated_backend(
+            build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 1)])
+                .expect("minimal triangle"),
+        );
+        let handles: Vec<_> = backend.vertices().collect();
+        let before = to_value(&backend).expect("exact owner snapshot");
+        let facets = backend.interior_facets_by_edge.clone();
+        assert_matches!(
+            backend.rebuild_without_vertex_for_delaunay_construction(handles[0].key),
+            Err(DelaunayError::RemovalFailed {
+                operation: DelaunayOperation::RemoveVertex, detail, ..
+            }) if !detail.is_empty()
+        );
+        assert_eq!(to_value(&backend).expect("unchanged owner"), before);
+        assert_eq!(backend.vertices().collect::<Vec<_>>(), handles);
+        assert_eq!(backend.interior_facets_by_edge, facets);
+        backend
+            .validate_delaunay()
+            .expect("original triangle remains certified");
     }
 }

@@ -24,3 +24,9 @@ name = "output_and_checkpoint"
 command = [ "target/release/examples/output_and_checkpoint" ]
 expect = [ "Trace CSV rows", "JSON summary measurements", "Resumed MCMC checkpoint steps", "Output and checkpoint example completed successfully" ]
 timeout = 600
+
+[[checks]]
+name = "validation_diagnostics"
+command = [ "target/release/examples/validation_diagnostics" ]
+expect = [ "Cadence-aligned chain artifacts", "Diagnostic information verdict", "Raw chains and diagnostics" ]
+timeout = 600

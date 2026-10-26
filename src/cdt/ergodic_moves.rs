@@ -778,6 +778,10 @@ impl MoveSiteCache {
         let mut sites = Vec::new();
         let geometric_candidate_seen =
             visit_proposal_sites(triangulation, move_type, |site| sites.push(site));
+        // Exact checkpoints preserve vertex data but rebuild incidence tables.
+        // Give each site a stable ordinal without changing the offered universe
+        // or its uniform sampling probabilities.
+        sites.sort_by_cached_key(|site| site.ordering_key(triangulation));
         MoveFamilySites {
             instance_id: Some(instance_id),
             modification_count: Some(modification_count),
@@ -838,6 +842,58 @@ pub(crate) enum ProposalSite {
 }
 
 impl ProposalSite {
+    /// Orders local sites by labeled coordinates preserved by geometry snapshots.
+    ///
+    /// Runtime owner IDs and incidence iteration order cannot identify a site's
+    /// random ordinal across checkpoint hydration. Invalid handles retain a
+    /// place in the universe and are rejected by the existing planning checks.
+    fn ordering_key(
+        &self,
+        triangulation: &CdtTriangulation2D,
+    ) -> Option<[(Option<u32>, [u64; 2]); 3]> {
+        let geometry = triangulation.geometry();
+        let vertex_key = |vertex: &DelaunayVertexHandle| {
+            let coordinates = geometry.vertex_coordinates(vertex).ok()?;
+            let [x, y] = coordinates else { return None };
+            Some((
+                geometry.vertex_data_by_key(vertex.vertex_key()),
+                [x.to_bits(), y.to_bits()],
+            ))
+        };
+        let edge_keys = |edge: &DelaunayEdgeHandle| {
+            let (left, right) = geometry.edge_endpoints(edge).ok()?;
+            let mut keys = [vertex_key(&left)?, vertex_key(&right)?];
+            keys.sort_unstable();
+            Some(keys)
+        };
+        let empty = (None, [0, 0]);
+        match self {
+            Self::EdgeFlip(edge) => {
+                let [left, right] = edge_keys(edge)?;
+                Some([left, right, empty])
+            }
+            Self::FoliatedInsertion(candidate) => {
+                let [left, right] = edge_keys(&candidate.edge)?;
+                Some([left, right, empty])
+            }
+            Self::VertexRemoval(vertex) => Some([vertex_key(vertex)?, empty, empty]),
+            Self::FoliatedRemoval(candidate) => {
+                let [left, right] = edge_keys(&candidate.flip_edge)?;
+                Some([vertex_key(&candidate.vertex)?, left, right])
+            }
+            Self::FaceSubdivision { face, .. } => {
+                let mut vertices = geometry.face_vertices(face).ok()?;
+                let mut keys = [
+                    vertex_key(&vertices.next()?)?,
+                    vertex_key(&vertices.next()?)?,
+                    vertex_key(&vertices.next()?)?,
+                ];
+                keys.sort_unstable();
+                Some(keys)
+            }
+        }
+    }
+
     /// Rebinds a sampled site to a cloned triangulation through stable entity IDs.
     ///
     /// Raw backend keys are owner-local. This explicit conversion is the only

@@ -5,6 +5,7 @@
 //! This module implements the discrete Einstein-Hilbert action used in CDT,
 //! which is based on the Regge calculus formulation of general relativity.
 
+use crate::cdt::volume_fixing::{VolumeFixing, VolumeFixingError};
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting, ExpectedConstraint, ObservedValue};
 use num_traits::cast::NumCast;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -98,6 +99,9 @@ fn compute_regge_action_unchecked(
 /// that stronger arithmetic invariant before storage.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ActionConfig {
+    /// Optional explicitly modified total-volume ensemble.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    volume_fixing: Option<VolumeFixing>,
     /// Coupling constant for vertices (κ₀)
     coupling_0: f64,
     /// Coupling constant for triangles (κ₂)
@@ -108,6 +112,8 @@ pub struct ActionConfig {
 
 #[derive(Deserialize)]
 pub(crate) struct ActionConfigWire {
+    #[serde(default)]
+    volume_fixing: Option<VolumeFixing>,
     coupling_0: f64,
     coupling_2: f64,
     cosmological_constant: f64,
@@ -128,7 +134,8 @@ impl TryFrom<ActionConfigWire> for ActionConfig {
     type Error = CdtError;
 
     fn try_from(wire: ActionConfigWire) -> CdtResult<Self> {
-        Self::new(wire.coupling_0, wire.coupling_2, wire.cosmological_constant)
+        Self::new(wire.coupling_0, wire.coupling_2, wire.cosmological_constant)?
+            .with_volume_fixing(wire.volume_fixing)
     }
 }
 
@@ -188,10 +195,20 @@ impl ActionConfig {
         cosmological_constant: f64,
     ) -> Self {
         Self {
+            volume_fixing: None,
             coupling_0,
             coupling_2,
             cosmological_constant,
         }
+    }
+
+    /// Retains the bias already range-checked by `ValidatedCdtConfig`.
+    pub(crate) const fn with_validated_volume_fixing(
+        mut self,
+        fixing: Option<VolumeFixing>,
+    ) -> Self {
+        self.volume_fixing = fixing;
+        self
     }
 
     /// Returns the vertex coupling (κ₀).
@@ -290,6 +307,14 @@ impl ActionConfig {
     /// ```
     #[must_use]
     pub fn calculate_action(&self, vertices: usize, edges: usize, triangles: usize) -> f64 {
+        let physical = self.physical_action(vertices, edges, triangles);
+        self.volume_fixing
+            .map_or(physical, |fixing| physical + fixing.action(triangles))
+    }
+
+    /// Evaluates only the physical Regge action, excluding any explicit bias.
+    #[must_use]
+    pub fn physical_action(&self, vertices: usize, edges: usize, triangles: usize) -> f64 {
         let action = compute_regge_action_unchecked(
             vertices,
             edges,
@@ -307,6 +332,42 @@ impl ActionConfig {
     pub(crate) fn maximum_action_magnitude(&self) -> f64 {
         maximum_action_magnitude(self.coupling_0, self.coupling_2, self.cosmological_constant)
             .expect("validated action couplings must retain a finite magnitude bound")
+            + self.volume_fixing.map_or(0.0, VolumeFixing::maximum_action)
+    }
+
+    /// Returns the optional explicit total-triangle bias.
+    #[must_use]
+    pub const fn volume_fixing(&self) -> Option<VolumeFixing> {
+        self.volume_fixing
+    }
+
+    /// Evaluates only the fixing action, or zero in the default bare ensemble.
+    #[must_use]
+    pub fn fixing_action(&self, triangles: usize) -> f64 {
+        self.volume_fixing
+            .map_or(0.0, |fixing| fixing.action(triangles))
+    }
+
+    /// Returns a configuration with an explicit bias after checking combined range.
+    ///
+    /// # Errors
+    /// Returns a typed overflow error if the combined action range is not finite.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::action::{ActionConfig, VolumeFixing};
+    /// let action = ActionConfig::default()
+    ///     .with_volume_fixing(Some(VolumeFixing::quadratic_triangles(32, 0.1)?))?;
+    /// assert_eq!(action.volume_fixing().map(|fixing| fixing.target().get()), Some(32));
+    /// # Ok::<(), causal_triangulations::CdtError>(())
+    /// ```
+    pub fn with_volume_fixing(mut self, fixing: Option<VolumeFixing>) -> CdtResult<Self> {
+        self.volume_fixing = fixing;
+        if !self.maximum_action_magnitude().is_finite() {
+            return Err(VolumeFixingError::CombinedActionOverflow.into());
+        }
+        Ok(self)
     }
 }
 

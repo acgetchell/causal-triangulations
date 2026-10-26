@@ -58,6 +58,7 @@ causal-triangulations/
 │   │   ├── rust.md
 │   │   ├── testing.md
 │   │   └── tooling-alignment.md
+│   ├── ANALYZING.md
 │   ├── BENCHMARKING.md
 │   ├── code-organization.md
 │   ├── error-diagnostics.md
@@ -80,7 +81,8 @@ causal-triangulations/
 │   ├── basic_cdt.rs
 │   ├── find_good_seeds.rs
 │   ├── observables.rs
-│   └── output_and_checkpoint.rs
+│   ├── output_and_checkpoint.rs
+│   └── validation_diagnostics.rs
 ├── notebooks/
 │   ├── 00_quickstart.ipynb
 │   ├── 01_spacetime_visualization.ipynb
@@ -103,11 +105,13 @@ causal-triangulations/
 │   │   │   ├── state.rs
 │   │   │   └── validation.rs
 │   │   ├── action.rs
+│   │   ├── analysis.rs
 │   │   ├── ergodic_moves.rs
 │   │   ├── foliation.rs
 │   │   ├── observables.rs
 │   │   ├── proposal_policy.rs
-│   │   └── results.rs
+│   │   ├── results.rs
+│   │   └── volume_fixing.rs
 │   ├── geometry/
 │   │   ├── backends/
 │   │   │   ├── delaunay.rs
@@ -161,7 +165,8 @@ causal-triangulations/
 │   ├── proptest_foliation.rs
 │   ├── proptest_metropolis.rs
 │   ├── regressions.rs
-│   └── trait_bound_ergonomics.rs
+│   ├── trait_bound_ergonomics.rs
+│   └── validation_analysis.rs
 ├── tooling/
 │   ├── benchmark.toml
 │   ├── examples.toml
@@ -310,7 +315,8 @@ for `markov-chain-monte-carlo` proposal and target traits. `runner.rs` owns `Met
 continuation view, delegates generic acceptance, proposal-ratio application, chain counters, and planned-proposal commit ordering to the upstream MCMC crate,
 then consumes the chain state back into the CDT result without cloning topology per step or per chunk. CDT-owned telemetry and RNG state travel beside that
 single canonical triangulation owner. `checkpoint.rs` owns resumable state, the versioned CDT-owned JSON envelope, dependency-neutral RNG/duration adapters,
-and resume validation. Format version 2 delegates exact geometry persistence to Delaunay's Level 4 owner snapshot. `telemetry.rs` owns public step/proposal
+and resume validation. Bare version 2 and biased version 3 delegate exact geometry persistence to Delaunay's Level 4 owner snapshot.
+Version 3 prevents older readers from ignoring an explicit bias. `telemetry.rs` owns public step/proposal
 telemetry, and `helpers.rs` holds shared CDT-domain calculations.
 
 Checkpoint JSON first decodes raw CDT records, then runs the same typed constructors used by standalone configuration and telemetry APIs. Domain errors retain
@@ -321,7 +327,7 @@ See `docs/metropolis.md` for the current planned-proposal ordering and enforced 
 
 ### `cdt/results.rs` — Simulation outputs
 
-- `Measurement` records per-step action, simplex counts, and optional per-slab triangle profiles `N₂(t)`.
+- `Measurement` records combined/physical/fixing actions, simplex counts, optional slab-triangle profiles, and optional circular spatial-loop profiles.
 - Measurements and scalar trace rows share immutable profile snapshots with the current geometry; unchanged local edits preserve sharing. Public profile
   accessors and serialized numeric arrays retain their existing shape, and deserialization shares equal adjacent snapshots after trajectory validation.
 - `SimulationEvent` is the public value type for reconstructed history entries.
@@ -360,8 +366,23 @@ See `docs/metropolis.md` for the current planned-proposal ordering and enforced 
   choose and report fit windows instead of relying only on scalar summaries
 - `CdtTriangulation::slab_triangle_profile` measures per-slab triangle counts on a triangulation; `SimulationResultsBackend` provides aggregate slab-profile
   summaries for simulation outputs
+- `spatial_loop_lengths` uses the existing foliation ring validator before measuring circular S¹ slices; open intervals cannot be mislabeled as loops.
 - Import triangulation-focused analysis APIs through `prelude::observables`; use `prelude::simulation` when constructing or inspecting simulation result
   containers
+
+### `cdt/analysis.rs` And `cdt/volume_fixing.rs` — Validation Inputs And Diagnostics
+
+`VolumeFixing` owns validated opt-in quadratic triangle targets and strengths. `ActionConfig` keeps the physical and fixing terms separately inspectable;
+the target adapter composes them through upstream `AdditiveTarget`. Count-level proposal deltas include the same bias without subtracting extensive actions.
+
+`ValidationChain` reparses versioned JSON configuration, identity, complete measurement cadence, action components, and closed-periodic profile/count
+identities. The analysis adapter delegates ACF, integrated time, binning, mean/bulk/tail ESS, MCSE, and combined R-hat to published MCMC APIs. Reports retain
+estimator identities, original units, sample/split counts, block-selection policy, and explicit unavailable outcomes without duplicating raw histories.
+`prelude::observables` owns this analysis API; simulation telemetry remains in `prelude::simulation`.
+
+`examples/validation_diagnostics.rs` demonstrates raw chain round trips and report export. `tests/validation_analysis.rs` covers independent edge-incidence
+measurements, fixed/bare production fixtures, checkpoint continuation, transport failures, and synthetic dependence/convergence controls.
+The complete exact-oracle matrix and external bundle freeze remain separate follow-up work; see [chain analysis](ANALYZING.md).
 
 ### `geometry/traits.rs` — Backend-neutral interface
 
@@ -440,7 +461,7 @@ Notebook files live in `notebooks/` and should wrap the CLI or consume generated
 
 ## Key Dependencies
 
-- `delaunay` (v0.8.2) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
+- `delaunay` (v0.8.3) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
   `set_vertex_data_by_key` for O(1) label mutation)
 - `markov-chain-monte-carlo` (v0.5.2) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, invariant-bearing `Step<Info>` telemetry, `Target`)
 - `num-traits` — `ToPrimitive` and `NumCast` for checked or saturating numeric conversions

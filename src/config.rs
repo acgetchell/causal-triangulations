@@ -11,10 +11,11 @@
 
 use crate::cdt::action::{ActionConfig, DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT};
 use crate::cdt::metropolis::{CdtTarget, MetropolisConfig};
+use crate::cdt::volume_fixing::VolumeFixing;
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting, ExpectedConstraint, ObservedValue};
 use clap::{ArgGroup, Error as ClapError, Parser, ValueEnum, error::ErrorKind};
 use dirs::home_dir;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::ffi::OsString;
 use std::fmt;
 use std::num::NonZeroU32;
@@ -104,10 +105,14 @@ pub struct CdtConfig {
 
     /// Cosmological constant λ in the action.
     ///
-    /// Current simulations do not apply volume fixing. In the unfixed-volume
-    /// ensemble this coupling controls volume growth or shrinkage through the
-    /// ordinary action difference.
+    /// In the default unfixed-volume ensemble this coupling controls volume
+    /// growth or shrinkage. Explicit [`Self::volume_fixing`] adds a separate
+    /// modified-ensemble bias without changing this physical coupling.
     pub cosmological_constant: f64,
+
+    /// Explicit quadratic triangle-volume bias; absent for the bare ensemble.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub volume_fixing: Option<VolumeFixing>,
 
     /// Run the full CDT Metropolis simulation after constructing the initial triangulation.
     pub simulate: bool,
@@ -611,6 +616,7 @@ impl ValidatedCdtConfig {
             self.config.coupling_2,
             self.config.cosmological_constant,
         )
+        .with_validated_volume_fixing(self.config.volume_fixing)
     }
 }
 
@@ -726,6 +732,20 @@ struct CdtCliArgs {
 
     #[arg(
         long,
+        requires = "volume_fixing_strength",
+        help = "Target triangle count for explicit quadratic volume fixing"
+    )]
+    target_triangles: Option<u32>,
+
+    #[arg(
+        long,
+        requires = "target_triangles",
+        help = "Quadratic triangle-volume fixing coefficient (modified ensemble)"
+    )]
+    volume_fixing_strength: Option<f64>,
+
+    #[arg(
+        long,
         default_value_t = false,
         help = "Run the Metropolis move loop after constructing the initial triangulation"
     )]
@@ -831,6 +851,12 @@ impl CdtCliArgs {
             coupling_0: self.coupling_0,
             coupling_2: self.coupling_2,
             cosmological_constant: self.cosmological_constant,
+            volume_fixing: self
+                .target_triangles
+                .zip(self.volume_fixing_strength)
+                .map(|(target, strength)| VolumeFixing::quadratic_triangles(target, strength))
+                .transpose()
+                .map_err(|error| ClapError::raw(ErrorKind::ValueValidation, error.to_string()))?,
             simulate: self.simulate,
             seed: self.seed,
             topology: self.topology,
@@ -885,6 +911,21 @@ pub struct CdtConfigOverrides {
     pub coupling_2: Option<f64>,
     /// Optional override for the cosmological constant λ.
     pub cosmological_constant: Option<f64>,
+    /// Optional override for the quadratic triangle-volume bias.
+    ///
+    /// `None` leaves the base value unchanged, `Some(None)` disables fixing,
+    /// and `Some(Some(fixing))` replaces it.
+    /// JSON represents these states as an omitted field, `null`, and a bias value.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_volume_fixing_override",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[expect(
+        clippy::option_option,
+        reason = "None=no override, Some(None)=clear bias, Some(Some(v))=set bias"
+    )]
+    pub volume_fixing: Option<Option<VolumeFixing>>,
     /// Optional override for the simulation flag.
     pub simulate: Option<bool>,
     /// Optional override for the RNG seed.
@@ -907,6 +948,20 @@ pub struct CdtConfigOverrides {
         reason = "None=no override, Some(None)=clear output path, Some(Some(v))=set output path"
     )]
     pub output_json: Option<Option<PathBuf>>,
+}
+
+/// Preserves a present nullable bias override; missing fields use the field's default.
+#[expect(
+    clippy::option_option,
+    reason = "Missing, null, and configured fields carry distinct override semantics"
+)]
+fn deserialize_volume_fixing_override<'de, D>(
+    deserializer: D,
+) -> Result<Option<Option<VolumeFixing>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<VolumeFixing>::deserialize(deserializer).map(Some)
 }
 
 impl CdtConfig {
@@ -1054,6 +1109,9 @@ impl CdtConfig {
 
         if let Some(cosmological_constant) = overrides.cosmological_constant {
             merged.cosmological_constant = cosmological_constant;
+        }
+        if let Some(fixing) = overrides.volume_fixing {
+            merged.volume_fixing = fixing;
         }
 
         if let Some(simulate) = overrides.simulate {
@@ -1408,6 +1466,7 @@ impl CdtConfig {
             coupling_0: 0.0,
             coupling_2: 0.0,
             cosmological_constant: DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
+            volume_fixing: None,
             simulate: false,
             seed: None,
             topology: CdtTopology::OpenBoundary,
@@ -1487,7 +1546,11 @@ impl CdtConfig {
         }
 
         let action_config =
-            ActionConfig::new(self.coupling_0, self.coupling_2, self.cosmological_constant)?;
+            ActionConfig::new(self.coupling_0, self.coupling_2, self.cosmological_constant)?
+                .with_volume_fixing(self.volume_fixing)?;
+        if let Some(fixing) = self.volume_fixing {
+            fixing.ensure_ensemble(self.topology, self.timeslices)?;
+        }
 
         self.validate_spatial_vertex_constraints()?;
 
@@ -1660,6 +1723,7 @@ impl TestConfig {
             coupling_2: 0.0,
             cosmological_constant: DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
             simulate: false,
+            volume_fixing: None,
             seed: None,
             topology: CdtTopology::OpenBoundary,
             output_csv: None,
@@ -1692,6 +1756,7 @@ impl TestConfig {
             coupling_2: 0.0,
             cosmological_constant: DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
             simulate: false,
+            volume_fixing: None,
             seed: None,
             topology: CdtTopology::OpenBoundary,
             output_csv: None,
@@ -1724,6 +1789,7 @@ impl TestConfig {
             coupling_2: 0.0,
             cosmological_constant: DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT,
             simulate: false,
+            volume_fixing: None,
             seed: None,
             topology: CdtTopology::OpenBoundary,
             output_csv: None,
@@ -1736,7 +1802,7 @@ impl TestConfig {
 mod tests {
     use super::*;
     use approx::assert_relative_eq;
-    use serde_json::{from_str, to_string};
+    use serde_json::{from_str, from_value, json, to_string, to_value};
     use std::assert_matches;
 
     #[test]
@@ -2568,6 +2634,70 @@ mod tests {
         let merged = merged.config();
 
         assert_eq!(merged.seed, None);
+    }
+
+    #[test]
+    fn review_regression_volume_fixing_overrides_preserve_clear_and_replace() {
+        let original = VolumeFixing::quadratic_triangles(32, 0.1).expect("original bias");
+        let replacement = VolumeFixing::quadratic_triangles(34, 0.2).expect("replacement bias");
+        for volume_fixing in [None, Some(original)] {
+            let base = CdtConfig {
+                topology: CdtTopology::Toroidal,
+                volume_fixing,
+                ..CdtConfig::new(16, 4)
+            };
+            for (supplied, expected) in [
+                (None, volume_fixing),
+                (Some(None), None),
+                (Some(Some(replacement)), Some(replacement)),
+            ] {
+                let merged = base
+                    .merge_with_override(&CdtConfigOverrides {
+                        volume_fixing: supplied,
+                        ..CdtConfigOverrides::default()
+                    })
+                    .expect("valid bias override");
+                assert_eq!(merged.config().volume_fixing, expected);
+                assert_eq!(merged.to_action_config().volume_fixing(), expected);
+                assert_eq!(base.volume_fixing, volume_fixing);
+            }
+        }
+    }
+
+    #[test]
+    fn volume_fixing_override_json_preserves_absent_clear_and_replace_states() {
+        let original = VolumeFixing::quadratic_triangles(32, 0.1).expect("original bias");
+        let replacement = VolumeFixing::quadratic_triangles(34, 0.2).expect("replacement bias");
+        let base = CdtConfig {
+            topology: CdtTopology::Toroidal,
+            volume_fixing: Some(original),
+            ..CdtConfig::new(16, 4)
+        };
+        for (wire, expected_override, expected_bias) in [
+            (json!({"volume_fixing": null}), Some(None), None),
+            (json!({}), None, Some(original)),
+            (
+                json!({"volume_fixing": replacement}),
+                Some(Some(replacement)),
+                Some(replacement),
+            ),
+        ] {
+            let parsed: CdtConfigOverrides = from_value(wire.clone()).expect("JSON override");
+            assert_eq!(parsed.volume_fixing, expected_override);
+            let encoded = to_value(&parsed).expect("serialized override");
+            assert_eq!(encoded.get("volume_fixing"), wire.get("volume_fixing"));
+            let restored: CdtConfigOverrides = from_value(encoded).expect("round-trip override");
+            assert_eq!(restored.volume_fixing, expected_override);
+            let merged = base.merge_with_override(&restored).expect("valid merge");
+            assert_eq!(merged.to_action_config().volume_fixing(), expected_bias);
+        }
+        for invalid in [
+            json!({"volume_fixing": {"mode": "quadratic-triangles", "target": 31, "strength": 0.1}}),
+            json!({"volume_fixing": {"mode": "quadratic-triangles", "target": 32, "strength": -0.1}}),
+        ] {
+            from_value::<CdtConfigOverrides>(invalid)
+                .expect_err("configured overrides must still validate the bias");
+        }
     }
 
     #[test]

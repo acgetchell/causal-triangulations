@@ -6,9 +6,12 @@ mod diagnostics;
 
 pub use diagnostics::{ExpectedConstraint, ObservedValue};
 
+use crate::cdt::analysis::CdtAnalysisError;
 use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::foliation::FoliationError;
+use crate::cdt::observables::SpatialLoopError;
 use crate::cdt::proposal_policy::CdtMoveFamilyPolicyError;
+use crate::cdt::volume_fixing::VolumeFixingError;
 use crate::config::CdtTopology;
 use crate::geometry::backends::delaunay::DelaunayError;
 use crate::geometry::{SpacetimeCoordinateComponent, SpacetimeCoordinateError};
@@ -1705,6 +1708,10 @@ pub enum MetropolisMoveApplicationFailure {
 }
 
 impl From<CdtError> for MetropolisMoveApplicationFailure {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Exhaustive translation preserves the typed source boundary for every crate error"
+    )]
     fn from(error: CdtError) -> Self {
         match error {
             CdtError::BackendEditFailed {
@@ -1769,11 +1776,15 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             | CdtError::MetropolisProposalApplicationFailed { source, .. }
             | CdtError::ProposalApplicationFailed { source, .. } => source,
             unexpected @ (CdtError::UnsupportedDimension(_)
+            | CdtError::VolumeFixing(_)
+            | CdtError::SpatialLoop(_)
+            | CdtError::Analysis(_)
             | CdtError::DelaunayGenerationFailed { .. }
             | CdtError::InvalidGenerationParameters { .. }
             | CdtError::InvalidConfiguration { .. }
             | CdtError::InvalidSimplexCount { .. }
             | CdtError::InvalidMeasurementAction { .. }
+            | CdtError::InvalidMeasurementActionComponents { .. }
             | CdtError::InvalidMeasurementCount { .. }
             | CdtError::InvalidMeasurementSlabTriangleProfile { .. }
             | CdtError::InvalidScalarTraceCount { .. }
@@ -1813,6 +1824,29 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CdtError {
+    /// Invalid cadence-aligned chain or diagnostic analysis contract.
+    #[error(transparent)]
+    Analysis(#[from] CdtAnalysisError),
+    /// Measured physical/fixing terms do not reconstruct the combined action.
+    #[error(
+        "invalid action components at step {step}: physical={physical}, fixing={fixing}, combined={combined}"
+    )]
+    InvalidMeasurementActionComponents {
+        /// Measurement step.
+        step: u32,
+        /// Physical term.
+        physical: f64,
+        /// Explicit volume bias.
+        fixing: f64,
+        /// Recorded combined action.
+        combined: f64,
+    },
+    /// Invalid or incompatible explicit volume-fixing configuration.
+    #[error(transparent)]
+    VolumeFixing(#[from] VolumeFixingError),
+    /// Unsupported or inconsistent spatial-loop measurement.
+    #[error(transparent)]
+    SpatialLoop(#[from] SpatialLoopError),
     /// A local geometry edit failed with its adapter-owned error preserved.
     #[error("Backend edit failed [{operation}] on {target}: {source}")]
     BackendEditFailed {

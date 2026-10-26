@@ -17,6 +17,7 @@ Start with [the project README](../README.md) to choose a workflow and run a sma
 - [Visualization notebook](../notebooks/01_spacetime_visualization.ipynb): exported triangulation geometry.
 - [Typed error diagnostics](error-diagnostics.md): structured matching, human-readable output, and migration from string payloads.
 - [Analysis notebook](../notebooks/02_analysis_caches.ipynb): Polars caches and exploratory diagnostics.
+- [Chain analysis](ANALYZING.md): explicit volume fixing, circular-loop artifacts, and dependence-aware diagnostics.
 
 ## Scientific contracts
 

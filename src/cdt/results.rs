@@ -17,7 +17,8 @@ use crate::cdt::metropolis::{
     },
 };
 use crate::cdt::observables::{
-    estimate_all_scale_effective_hausdorff_slope, estimate_short_time_effective_spectral_dimension,
+    SpatialLoopError, estimate_all_scale_effective_hausdorff_slope,
+    estimate_short_time_effective_spectral_dimension, loop_lengths_from_validated_slices,
 };
 use crate::cdt::triangulation::{CdtSimplexCounts, CdtTriangulation2D, SlabTriangleProfile};
 use crate::config::{CdtConfig, CdtTopology, ValidatedCdtConfig};
@@ -37,6 +38,7 @@ use std::io::{BufWriter, Write};
 use std::iter::FusedIterator;
 use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Scalar measurement data collected during simulation.
@@ -67,6 +69,13 @@ pub struct Measurement {
     /// the vector is empty when the measured triangulation has no current
     /// foliation.
     slab_triangle_profile: SlabTriangleProfile,
+    /// Cadence-aligned S¹ loop lengths; absent for open or unfoliated data.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spatial_loop_lengths: Option<Arc<[u32]>>,
+    /// Physical action, before the optional total-volume bias.
+    physical_action: f64,
+    /// Explicit quadratic total-volume bias, in action units.
+    fixing_action: f64,
 }
 
 /// Event reconstructed from canonical CDT result or checkpoint telemetry.
@@ -586,12 +595,16 @@ impl CdtScalarTraceRow {
     }
 
     /// Returns observable values in scalar trace observable order.
-    fn observable_values(&self, slab_triangle_profile_len: usize) -> Vec<f64> {
+    fn observable_values(
+        &self,
+        slab_triangle_profile_len: usize,
+        action_config: &ActionConfig,
+    ) -> Vec<f64> {
         let (seed_low, seed_high, seed_present) = seed_observables(self.seed);
         let delta_action = self.payload.delta_action();
         let action_after = self.payload.action_after();
         let mut values =
-            Vec::with_capacity(SCALAR_TRACE_BASE_OBSERVABLES.len() + slab_triangle_profile_len);
+            Vec::with_capacity(SCALAR_TRACE_BASE_OBSERVABLES.len() + slab_triangle_profile_len + 2);
         values.extend([
             self.action,
             f64::from(self.vertices.get()),
@@ -612,11 +625,136 @@ impl CdtScalarTraceRow {
                 .get(index)
                 .map_or(0.0, |&volume| f64::from(volume))
         }));
+        values.push(action_config.physical_action(
+            self.vertices.get() as usize,
+            self.edges.get() as usize,
+            self.triangles.get() as usize,
+        ));
+        values.push(action_config.fixing_action(self.triangles.get() as usize));
         values
     }
 }
 
 impl Measurement {
+    /// Returns circular spatial loop lengths, distinct from slab-triangle counts.
+    #[must_use]
+    pub fn spatial_loop_lengths(&self) -> Option<&[u32]> {
+        self.spatial_loop_lengths.as_deref()
+    }
+
+    /// Returns the physical action in the same units as the combined action.
+    #[must_use]
+    pub const fn physical_action(&self) -> f64 {
+        self.physical_action
+    }
+
+    /// Returns the explicit fixing bias in action units.
+    #[must_use]
+    pub const fn fixing_action(&self) -> f64 {
+        self.fixing_action
+    }
+
+    /// Attaches independently inspectable physical and fixing action terms.
+    ///
+    /// # Errors
+    /// Rejects nonfinite terms, a negative bias, or disagreement with combined action.
+    pub fn try_with_action_components(mut self, physical: f64, fixing: f64) -> CdtResult<Self> {
+        if physical.is_finite() && fixing == 0.0 && !actions_match(self.action, physical) {
+            return Err(checkpoint_resume_failed(
+                CheckpointResumeFailure::MeasurementActionStateMismatch {
+                    step: self.step,
+                    actual: self.action,
+                    expected: physical,
+                },
+            ));
+        }
+        if !physical.is_finite()
+            || !fixing.is_finite()
+            || fixing < 0.0
+            || !actions_match(self.action, physical + fixing)
+        {
+            return Err(CdtError::InvalidMeasurementActionComponents {
+                step: self.step,
+                physical,
+                fixing,
+                combined: self.action,
+            });
+        }
+        self.physical_action = physical;
+        self.fixing_action = fixing;
+        Ok(self)
+    }
+
+    /// Attaches a closed periodic 1+1 spatial-loop profile.
+    ///
+    /// # Errors
+    /// Rejects slices shorter than three or a violation of `2 sum(l_t) = N2`.
+    pub fn try_with_spatial_loop_lengths(self, profile: Vec<u32>) -> CdtResult<Self> {
+        self.try_with_optional_loop_lengths(Some(Arc::from(profile)))
+    }
+
+    /// Parses optional compact profile storage without trusting its count identity.
+    fn try_with_optional_loop_lengths(mut self, profile: Option<Arc<[u32]>>) -> CdtResult<Self> {
+        if let Some(profile) = &profile {
+            let total = profile
+                .iter()
+                .try_fold(0u64, |total, &length| total.checked_add(u64::from(length)));
+            if profile.len() < 3
+                || profile.iter().any(|&length| length < 3)
+                || total.and_then(|total| total.checked_mul(2))
+                    != Some(u64::from(self.triangles.get()))
+            {
+                return Err(SpatialLoopError::InvalidProfile {
+                    profile: profile.to_vec(),
+                    triangles: self.triangles.get(),
+                }
+                .into());
+            }
+        }
+        self.spatial_loop_lengths = profile;
+        Ok(self)
+    }
+
+    /// Captures action components and trusted ring lengths, reusing unchanged snapshots.
+    pub(crate) fn with_state_observables(
+        self,
+        config: &ActionConfig,
+        triangulation: &CdtTriangulation2D,
+        previous: Option<&Self>,
+    ) -> CdtResult<Self> {
+        let physical = if config.volume_fixing().is_some() {
+            config.physical_action(
+                triangulation.vertex_count(),
+                triangulation.edge_count(),
+                triangulation.face_count(),
+            )
+        } else {
+            // Bare telemetry forwards the accepted action. The owning result
+            // boundary checks it against geometry, preserving error priority.
+            self.action
+        };
+        let measurement = self.try_with_action_components(
+            physical,
+            config.fixing_action(triangulation.face_count()),
+        )?;
+        if triangulation.metadata().topology() != CdtTopology::Toroidal
+            || !triangulation.has_foliation()
+        {
+            return Ok(measurement);
+        }
+        let previous = previous.and_then(|measurement| measurement.spatial_loop_lengths.as_ref());
+        let profile = match previous.filter(|profile| {
+            profile.len() == triangulation.slice_sizes().len()
+                && profile
+                    .iter()
+                    .zip(triangulation.slice_sizes())
+                    .all(|(&left, &right)| usize::try_from(left) == Ok(right))
+        }) {
+            Some(profile) => Arc::clone(profile),
+            None => Arc::from(loop_lengths_from_validated_slices(triangulation)?),
+        };
+        measurement.try_with_optional_loop_lengths(Some(profile))
+    }
     /// Creates a measurement with an empty slab-triangle profile from validated counts.
     ///
     /// This constructor records scalar simulation counts. Attach per-slice
@@ -658,6 +796,9 @@ impl Measurement {
             edges,
             triangles,
             slab_triangle_profile: SlabTriangleProfile::default(),
+            spatial_loop_lengths: None,
+            physical_action: action,
+            fixing_action: 0.0,
         })
     }
 
@@ -882,6 +1023,12 @@ pub(crate) struct MeasurementWire {
     edges: u32,
     triangles: u32,
     slab_triangle_profile: Vec<u32>,
+    #[serde(default)]
+    spatial_loop_lengths: Option<Vec<u32>>,
+    #[serde(default)]
+    physical_action: Option<f64>,
+    #[serde(default)]
+    fixing_action: f64,
 }
 
 impl TryFrom<MeasurementWire> for Measurement {
@@ -895,7 +1042,12 @@ impl TryFrom<MeasurementWire> for Measurement {
             wire.edges,
             wire.triangles,
         )?
-        .try_with_slab_triangle_profile(wire.slab_triangle_profile)
+        .try_with_slab_triangle_profile(wire.slab_triangle_profile)?
+        .try_with_action_components(
+            wire.physical_action.unwrap_or(wire.action),
+            wire.fixing_action,
+        )?
+        .try_with_optional_loop_lengths(wire.spatial_loop_lengths.map(Arc::from))
     }
 }
 
@@ -1133,6 +1285,14 @@ pub(crate) fn share_restored_profile_snapshots(
     rows: &mut [CdtScalarTraceRow],
     measurements: &mut [Measurement],
 ) -> CdtResult<()> {
+    let mut previous: Option<Arc<[u32]>> = None;
+    for measurement in measurements.iter_mut() {
+        if measurement.spatial_loop_lengths == previous {
+            measurement.spatial_loop_lengths.clone_from(&previous);
+        } else {
+            previous.clone_from(&measurement.spatial_loop_lengths);
+        }
+    }
     let mut current = triangulation.slab_triangle_profile_snapshot()?;
     let mut measurements = measurements.iter_mut().rev().peekable();
     for row in rows.iter_mut().rev() {
@@ -1270,12 +1430,20 @@ const fn is_initial_construction_snapshot(
 struct CdtTrajectorySnapshot {
     counts: CdtSimplexCounts,
     action: f64,
+    physical_action: f64,
+    fixing_action: f64,
 }
 
 impl CdtTrajectorySnapshot {
     /// Derives the action from the same count snapshot retained for observable checks.
     fn new(action_config: &ActionConfig, counts: CdtSimplexCounts) -> Self {
         Self {
+            physical_action: action_config.physical_action(
+                counts.vertex_count(),
+                counts.edge_count(),
+                counts.triangle_count(),
+            ),
+            fixing_action: action_config.fixing_action(counts.triangle_count()),
             action: action_config.calculate_action(
                 counts.vertex_count(),
                 counts.edge_count(),
@@ -1303,6 +1471,7 @@ pub(crate) fn validate_trajectory_observables(
     })?;
     let mut current = CdtTrajectorySnapshot::new(action_config, initial_counts);
     let final_step = steps.last().map_or(0, |step| step.step().get());
+    validate_terminal_spatial_profiles(measurements, triangulation, steps)?;
     if let Some(row) = scalar_trace_rows.first()
         && let Some(initial_slab_triangle_profile) = row.initial_slab_triangle_profile.as_deref()
     {
@@ -1391,6 +1560,48 @@ pub(crate) fn validate_trajectory_observables(
                 expected: final_slab_triangle_profile,
             },
         ));
+    }
+    Ok(())
+}
+
+/// Binds the terminal unchanged-volume span to the final canonical slice sizes.
+///
+/// Only accepted insertions and removals change slice lengths; rejected proposals
+/// and edge flips preserve them. Earlier spans can have different valid profiles.
+fn validate_terminal_spatial_profiles(
+    measurements: &[Measurement],
+    triangulation: &CdtTriangulation2D,
+    steps: &[MonteCarloStep],
+) -> CdtResult<()> {
+    let last_volume_change = steps
+        .iter()
+        .rev()
+        .find(|step| {
+            step.accepted()
+                && matches!(
+                    step.move_type(),
+                    MoveType::Move13Add | MoveType::Move31Remove
+                )
+        })
+        .map_or(0, |step| step.step().get());
+    let canonical = triangulation.slice_sizes();
+    for measurement in measurements
+        .iter()
+        .filter(|measurement| measurement.step() >= last_volume_change)
+    {
+        if let Some(profile) = measurement.spatial_loop_lengths()
+            && (profile.len() != canonical.len()
+                || !profile
+                    .iter()
+                    .zip(canonical)
+                    .all(|(&left, &right)| usize::try_from(left) == Ok(right)))
+        {
+            return Err(SpatialLoopError::InvalidProfile {
+                profile: profile.to_vec(),
+                triangles: measurement.triangles.get(),
+            }
+            .into());
+        }
     }
     Ok(())
 }
@@ -1572,6 +1783,16 @@ fn validate_measurement_snapshot(
             },
         ));
     }
+    if !actions_match(measurement.physical_action, snapshot.physical_action)
+        || !actions_match(measurement.fixing_action, snapshot.fixing_action)
+    {
+        return Err(CdtError::InvalidMeasurementActionComponents {
+            step: measurement.step,
+            physical: measurement.physical_action,
+            fixing: measurement.fixing_action,
+            combined: snapshot.action,
+        });
+    }
     validate_measurement_count(
         measurement.step(),
         MeasurementCountField::Vertices,
@@ -1617,6 +1838,19 @@ fn validate_measurement_profile_matches(
     measurement: &Measurement,
     expected: &[u32],
 ) -> CdtResult<()> {
+    if let Some(profile) = measurement.spatial_loop_lengths()
+        && (profile.len() != expected.len()
+            || profile.iter().enumerate().any(|(slice, &length)| {
+                u64::from(length) + u64::from(profile[(slice + 1) % profile.len()])
+                    != u64::from(expected[slice])
+            }))
+    {
+        return Err(SpatialLoopError::InvalidProfile {
+            profile: profile.to_vec(),
+            triangles: measurement.triangles.get(),
+        }
+        .into());
+    }
     if measurement.slab_triangle_profile() == expected {
         return Ok(());
     }
@@ -2414,6 +2648,7 @@ impl SimulationResultsBackend {
         observable_names.extend(
             (0..slab_triangle_profile_len).map(|index| format!("slab_triangle_profile_{index}")),
         );
+        observable_names.extend(["physical_action".to_owned(), "fixing_action".to_owned()]);
 
         let mut trace = Trace::new(observable_names)?;
         for row in &self.scalar_trace_rows {
@@ -2422,7 +2657,7 @@ impl SimulationResultsBackend {
                 step_to_trace_index(row.step),
                 row.outcome(),
                 row.log_prob,
-                row.observable_values(slab_triangle_profile_len),
+                row.observable_values(slab_triangle_profile_len, &self.action_config),
             ))?;
         }
         Ok(trace)
@@ -4111,17 +4346,36 @@ mod tests {
                 "seed_present",
                 "slab_triangle_profile_0",
                 "slab_triangle_profile_1",
+                "physical_action",
+                "fixing_action",
             ]
         );
         let record = &trace.records()[0];
         assert_eq!(record.outcome(), TraceStepOutcome::rejected_proposal());
         assert_relative_eq!(record.log_prob(), -4.0);
-        assert_eq!(
-            record.observable_values(),
-            &[
-                4.0, 12.0, 23.0, 12.0, 22.0, 0.5, 1.0, 4.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 4.0,
-            ]
-        );
+        let expected = [
+            4.0,
+            12.0,
+            23.0,
+            12.0,
+            22.0,
+            0.5,
+            1.0,
+            4.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            2.0,
+            4.0,
+            23.0 * ActionConfig::default().cosmological_constant(),
+            0.0,
+        ];
+        assert_eq!(record.observable_values().len(), expected.len());
+        for (&actual, expected) in record.observable_values().iter().zip(expected) {
+            assert_relative_eq!(actual, expected, epsilon = 0.0, max_relative = 0.0);
+        }
     }
 
     #[test]
@@ -4393,6 +4647,10 @@ mod tests {
                 .expect("log probability should serialize");
         payload["measurements"][1]["action"] =
             to_value(tampered_action).expect("action should serialize");
+        // Keep the new redundant action component consistent with the forged
+        // bare action so this still reaches the geometry/history boundary.
+        payload["measurements"][1]["physical_action"] =
+            to_value(tampered_action).expect("physical action should serialize");
 
         let error = from_str::<SimulationResultsBackend>(&payload.to_string())
             .expect_err("a self-consistent but detached action history should be rejected");
@@ -4444,6 +4702,61 @@ mod tests {
             ),
             "unexpected serde error: {error}"
         );
+    }
+
+    #[test]
+    fn terminal_spatial_profiles_start_at_the_last_accepted_volume_change() {
+        for (move_type, before_profile, after_profile, forged_profile) in [
+            (
+                MoveType::Move13Add,
+                [4, 4, 4, 4],
+                [5, 4, 4, 4],
+                [4, 5, 3, 5],
+            ),
+            (
+                MoveType::Move31Remove,
+                [5, 4, 4, 4],
+                [4, 4, 4, 4],
+                [3, 5, 3, 5],
+            ),
+        ] {
+            let before =
+                CdtTriangulation2D::from_toroidal_cdt_spatial_vertex_profile(&before_profile)
+                    .expect("initial torus");
+            let after =
+                CdtTriangulation2D::from_toroidal_cdt_spatial_vertex_profile(&after_profile)
+                    .expect("final torus");
+            let initial = state_measurement(0, 0.0, &before)
+                .try_with_spatial_loop_lengths(before_profile.to_vec())
+                .expect("initial ring lengths");
+            let at_change = state_measurement(1, 0.0, &after)
+                .try_with_spatial_loop_lengths(after_profile.to_vec())
+                .expect("post-change ring lengths");
+            let after_flip = state_measurement(2, 0.0, &after)
+                .try_with_spatial_loop_lengths(after_profile.to_vec())
+                .expect("edge flip preserves ring lengths");
+            let measurements = [initial, at_change, after_flip];
+            let steps = [
+                accepted_step(1, move_type, 0.0, 0.0),
+                accepted_step(2, MoveType::Move22, 0.0, 0.0),
+                rejected_proposal_step(3, MoveType::Move13Add, 0.0, Some(0.0)),
+            ];
+            validate_terminal_spatial_profiles(&measurements, &after, &steps)
+                .expect("the earlier profile may differ from final geometry");
+
+            for index in [1, 2] {
+                let mut forged = measurements.clone();
+                forged[index] = forged[index]
+                    .clone()
+                    .try_with_spatial_loop_lengths(forged_profile.to_vec())
+                    .expect("forged profile preserves total volume");
+                assert_matches!(
+                    validate_terminal_spatial_profiles(&forged, &after, &steps),
+                    Err(CdtError::SpatialLoop(SpatialLoopError::InvalidProfile { profile, .. }))
+                        if profile == forged_profile
+                );
+            }
+        }
     }
 
     #[test]
@@ -4656,9 +4969,66 @@ mod tests {
             "fixture setup should expose an inverse removal site"
         );
         let config = seeded_metropolis_config(1.0, 1, 0, 1, 13);
-        let results = MetropolisAlgorithm::new(config, ActionConfig::default())
-            .run(triangulation)
-            .expect("one-step removal run should succeed");
+        let action_config = ActionConfig::default();
+        let action_before = action_config.calculate_action(
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+        );
+        let initial_measurement = state_measurement(0, action_before, &triangulation);
+        let initial_profile = triangulation
+            .slab_triangle_profile()
+            .expect("initial profile");
+        // This tests trajectory reconstruction, not a seed-specific acceptance
+        // draw. Realize an actual inverse on the original geometry; the sampler
+        // contract does not promise a particular first proposal is accepted.
+        assert!((0..64).any(|_| {
+            let result = moves.attempt_31_move(&mut triangulation);
+            assert!(
+                !matches!(result, MoveResult::HardFailure(_)),
+                "inverse removal failed: {result:?}"
+            );
+            result == MoveResult::Success
+        }));
+        let action_after = action_config.calculate_action(
+            triangulation.vertex_count(),
+            triangulation.edge_count(),
+            triangulation.face_count(),
+        );
+        let step = accepted_step(1, MoveType::Move31Remove, action_before, action_after);
+        let row = CdtScalarTraceRow::new(
+            step_number(1),
+            CdtScalarTraceOutcome::Accepted,
+            -action_after / config.temperature(),
+            action_after,
+            &triangulation,
+            step.move_type(),
+            step.delta_action(),
+            action_before,
+            Some(action_after),
+            config.seed(),
+        )
+        .expect("real removal trace")
+        .with_initial_slab_triangle_profile(initial_profile);
+        let measurements = vec![
+            initial_measurement,
+            state_measurement(1, action_after, &triangulation),
+        ];
+        let mut move_stats = MoveStatistics::new();
+        move_stats.record_attempt(MoveType::Move31Remove);
+        move_stats.record_success(MoveType::Move31Remove);
+        let results = SimulationResultsBackend::new(
+            config,
+            action_config,
+            move_stats,
+            ProposalStatistics::from_validated_parts(1, 1, 0, 0, 0, 0, 0, 1, 0),
+            vec![step],
+            measurements,
+            vec![row],
+            Duration::ZERO,
+            triangulation,
+        )
+        .expect("one-step real-removal trajectory should validate");
 
         assert!(results.steps()[0].accepted());
         assert_eq!(results.steps()[0].move_type(), MoveType::Move31Remove);
@@ -5337,6 +5707,36 @@ mod tests {
                 .short_time_effective_spectral_dimension()
                 .expect("tiny triangulation adjacency should be readable")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn measurement_components_and_loop_adjacency_must_match_the_trajectory() {
+        let triangulation = CdtTriangulation2D::from_toroidal_cdt(4, 4).expect("flat torus");
+        let mut results = valid_rejected_result(triangulation);
+        let action = results.measurements[0].action();
+        results.measurements[0] = results.measurements[0]
+            .clone()
+            .try_with_action_components(action - 1.0, 1.0)
+            .expect("components sum to the recorded action");
+        assert_matches!(
+            validate_trajectory_observables(
+                &results.action_config,
+                &results.steps,
+                &results.measurements,
+                &results.scalar_trace_rows,
+                &results.triangulation,
+            ),
+            Err(CdtError::InvalidMeasurementActionComponents { step: 0, .. })
+        );
+
+        let measurement = measurement(0, 0.0, 16, 48, 32)
+            .try_with_spatial_loop_lengths(vec![4, 4, 4, 4])
+            .expect("closed ring profile");
+        assert_matches!(
+            validate_measurement_profile_matches(&measurement, &[7, 9, 8, 8]),
+            Err(CdtError::SpatialLoop(SpatialLoopError::InvalidProfile { profile, triangles: 32 }))
+                if profile == [4, 4, 4, 4]
         );
     }
 }

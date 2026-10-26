@@ -104,8 +104,8 @@ cdt \
   --output-json profile-summary.json
 ```
 
-Use `--spatial-vertex-profile` for explicit initial slice vertex counts `N₀(t)`. The run remains an unfixed-volume run unless a future volume-fixing
-action term is added explicitly.
+Use `--spatial-vertex-profile` for explicit initial slice vertex counts `N₀(t)`. The run remains unfixed unless both `--target-triangles` and
+`--volume-fixing-strength` explicitly enable the quadratic modified-ensemble action. See [chain analysis](ANALYZING.md) for the conditioning contract.
 
 ## Output Patterns
 

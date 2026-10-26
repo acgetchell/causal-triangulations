@@ -488,9 +488,9 @@ dependencies = [
 
 [[package]]
 name = "delaunay"
-version = "0.8.2"
+version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bb387551b41120eccf071993df3304208a0c788452ddadc9f238abfd2e4f049"
+checksum = "4ac38ad63b4faa2c39a52d78467f501175826be1c239f69e4ed5c9a884c459aa"
 dependencies = [
  "ciborium",
  "la-stack",
@@ -811,9 +811,9 @@ dependencies = [
 
 [[package]]
 name = "la-stack"
-version = "0.4.6"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d17df4007d0188f1939ff20185a293ef740d269106bae3c72ed54171c24f00b1"
+checksum = "71e981f48c626c4273cf74a6008d4638b0e68caaa2d4291c876b2372119cf428"
 dependencies = [
  "num-bigint",
  "num-rational",

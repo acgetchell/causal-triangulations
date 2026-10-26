@@ -43,7 +43,8 @@ The simulation dimension is `2` (1+1 spacetime). Open strips have open space and
 least two slices. Toroidal initial data are periodic in both directions, χ = 0, with at least three vertices per slice and three slices. The input size is
 an initial count, not a fixed-volume constraint.
 
-Higher-dimensional CDT, production volume fixing, automated λ scans, and full ensemble-analysis tooling are outside the current scope. Mesh export and
+Higher-dimensional CDT, automated λ scans, and the exact analytic ensemble-validation claim remain outside the current scope. Explicit volume fixing and
+dependence-aware chain diagnostics are available through the [chain-analysis workflow](ANALYZING.md). Mesh export and
 example notebook visualization already exist; further visualization workflows remain on the [roadmap](roadmap.md).
 
 ## API Selection
@@ -99,7 +100,7 @@ deliberate retuning if the same target ensemble is intended.
 
 ## Ensemble And Volume Behavior
 
-Current simulations do not apply volume fixing. Volume-changing moves may change the total number of vertices and simplices during a run, so the sampled
+Default simulations do not apply volume fixing. Volume-changing moves may change the total number of vertices and simplices during a run, so the default
 ensemble is the grand-canonical, unfixed-volume ensemble defined by the configured CDT action and Metropolis-Hastings proposal rules.
 
 This is intentional for now: in 1+1 CDT, unfixed-volume simulations controlled by the cosmological constant are a standard toy-model setting, as in Israel and
@@ -194,7 +195,9 @@ Higher-dimensional CDT studies often use explicit approximate volume fixing for 
 volume fixing in [The Semiclassical Limit of Causal Dynamical Triangulations](https://arxiv.org/abs/1102.3929), and the toroidal phase-structure study uses
 quadratic volume fixing in [The phase structure of Causal Dynamical Triangulations with toroidal spatial topology](https://arxiv.org/abs/1802.10434).
 
-This crate may add such a mode later, but it should be opt-in because it samples a modified action rather than the current bare unfixed-volume ensemble.
+The explicit quadratic triangle-volume mode is opt-in and samples a modified action. Physical and fixing action terms remain separately inspectable.
+At an exact fixed N2, a total-volume-only bias is constant and cancels in the conditional profile distribution. Samples must be selected offline from
+state-independent measurement cadence, with dependence-aware uncertainty. See [chain analysis](ANALYZING.md) for the contract and evidence limits.
 
 ## User Responsibilities
 
