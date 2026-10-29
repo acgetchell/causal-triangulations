@@ -7,10 +7,12 @@ Neighbor pointers and observable lists are checked against the resulting complex
 import argparse
 import json
 from collections import Counter, defaultdict
+from contextlib import ExitStack
 from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict, cast
+from tempfile import NamedTemporaryFile
+from typing import TYPE_CHECKING, TypedDict
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -63,7 +65,62 @@ def read_export(path: Path) -> Complex:
             raise ValueError(message)
         faces.append((a, b, c))
         neighbors.append((left, right, center))
-    return Complex(tokens[1 : n0 + 1], faces, neighbors)
+    times = tokens[1 : n0 + 1]
+    if any(time < 0 for time in times):
+        message = "negative time label"
+        raise ValueError(message)
+    return Complex(times, faces, neighbors)
+
+
+def integer_list(value: object, name: str) -> list[int]:
+    """Parse integer arrays without accepting booleans as simplex labels."""
+    if not isinstance(value, list) or any(type(item) is not int or item < 0 for item in value):
+        message = f"{name} must be a list of nonnegative integers"
+        raise ValueError(message)
+    return [int(item) for item in value]
+
+
+def label_rows(value: object, name: str, bound: int) -> list[list[int]]:
+    """Parse bounded adjacency or link labels; preserve duplicates for the census."""
+    if not isinstance(value, list):
+        message = f"{name} must be a list of label rows"
+        raise TypeError(message)
+    rows = [integer_list(row, name) for row in value]
+    if any(label >= bound for row in rows for label in row):
+        message = f"{name} has an out-of-range label"
+        raise ValueError(message)
+    return rows
+
+
+def read_observation(path: Path, raw: Complex) -> Observation:
+    """Establish the sidecar shape and its time-profile agreement with the export."""
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(value, dict) or type(value.get("sphere")) is not bool:
+        message = "sidecar sphere must be a boolean"
+        raise ValueError(message)
+    counts = integer_list(value.get("move_counts_reject_add_delete_flip"), "move counts")
+    if len(counts) != 4:
+        message = "move counts must contain reject/add/delete/flip counts"
+        raise ValueError(message)
+    slices = integer_list(value.get("slice_sizes"), "slice sizes")
+    actual = Counter(raw.times)
+    if len(slices) != max(raw.times) + 1 or any(size != actual[time] for time, size in enumerate(slices)):
+        message = "slice sizes disagree with exported time labels"
+        raise ValueError(message)
+    vertices = label_rows(value.get("vertex_neighbors"), "vertex neighbors", len(raw.times))
+    triangles = label_rows(value.get("triangle_neighbors"), "triangle neighbors", len(raw.faces))
+    links = label_rows(value.get("links"), "links", len(raw.times))
+    if len(vertices) != len(raw.times) or len(triangles) != len(raw.faces) or any(len(pair) != 2 for pair in links):
+        message = "sidecar row count or link-pair shape mismatch"
+        raise ValueError(message)
+    return Observation(
+        sphere=value["sphere"],
+        move_counts_reject_add_delete_flip=counts,
+        slice_sizes=slices,
+        vertex_neighbors=vertices,
+        triangle_neighbors=triangles,
+        links=links,
+    )
 
 
 def edge(a: int, b: int) -> Edge:
@@ -214,7 +271,7 @@ def adjacency_census(rows: list[list[int]], expected: Graph) -> dict[str, object
 def audit(path: Path) -> dict[str, object]:
     """Census one snapshot and compare independent edges with all helper lists."""
     raw = read_export(path)
-    observed = cast("Observation", json.loads(path.with_suffix(".json").read_text(encoding="utf-8")))
+    observed = read_observation(path.with_suffix(".json"), raw)
     edges = incidence(raw.faces)
     dual = graph(range(len(raw.faces)), (pair for incident in edges.values() for pair in combinations(incident, 2)))
     pointer_errors: list[list[int]] = []
@@ -238,18 +295,34 @@ def audit(path: Path) -> dict[str, object]:
     }
 
 
+def write_report(directory: Path, output: Path) -> None:
+    """Publish a complete report atomically, without replacing any snapshot input."""
+    paths = sorted(directory.glob("*-initial.dat")) + sorted(directory.glob("*-evolved.dat"))
+    if not paths:
+        message = "no audit snapshots found"
+        raise ValueError(message)
+    for path in paths:
+        for source in (path, path.with_suffix(".json")):
+            if output.resolve() == source.resolve() or (output.exists() and output.samefile(source)):
+                message = "report output aliases a snapshot input"
+                raise ValueError(message)
+    results = {path.stem: audit(path) for path in paths}
+    text = json.dumps(results, indent=2, sort_keys=True) + "\n"
+    with ExitStack() as cleanup:
+        with NamedTemporaryFile(mode="w", encoding="utf-8", newline="\n", dir=output.parent, prefix=f".{output.name}.", delete=False) as stream:
+            temporary = Path(stream.name)
+            cleanup.callback(temporary.unlink, missing_ok=True)
+            stream.write(text)
+        temporary.replace(output)
+
+
 def main() -> None:
     """Recompute a report from retained exports without running another chain."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("directory", type=Path)
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
-    paths = sorted(args.directory.glob("*-initial.dat")) + sorted(args.directory.glob("*-evolved.dat"))
-    if not paths:
-        message = "no audit snapshots found"
-        raise ValueError(message)
-    results = {path.stem: audit(path) for path in paths}
-    args.output.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_report(args.directory, args.output)
 
 
 if __name__ == "__main__":

@@ -88,13 +88,34 @@ where
     B: TriangulationQuery + ?Sized,
     B::VertexHandle: Clone + Eq + Hash,
 {
+    boundary_facets_with_policy(tri, QueryFailurePolicy::BestEffort).unwrap_or_default()
+}
+
+#[derive(Clone, Copy)]
+enum QueryFailurePolicy {
+    BestEffort,
+    Propagate,
+}
+
+fn boundary_facets_with_policy<B>(
+    tri: &B,
+    policy: QueryFailurePolicy,
+) -> Result<Vec<Vec<B::VertexHandle>>, B::Error>
+where
+    B: TriangulationQuery + ?Sized,
+    B::VertexHandle: Clone + Eq + Hash,
+{
     // Map: facet key -> occurrence count. The key retains the representative vertices.
     type FacetCounts<V> = HashMap<UnorderedSet<V>, usize>;
     let mut facet_counts: FacetCounts<B::VertexHandle> = HashMap::new();
 
     for face in tri.faces() {
-        let Ok(vertices) = tri.face_vertices(&face) else {
-            continue;
+        let vertices = match tri.face_vertices(&face) {
+            Ok(vertices) => vertices,
+            Err(error) => match policy {
+                QueryFailurePolicy::BestEffort => continue,
+                QueryFailurePolicy::Propagate => return Err(error),
+            },
         };
         let vertices: Vec<_> = vertices.collect();
 
@@ -115,10 +136,10 @@ where
         }
     }
 
-    facet_counts
+    Ok(facet_counts
         .into_iter()
         .filter_map(|(facet, count)| (count == 1).then_some(facet.0))
-        .collect()
+        .collect())
 }
 
 /// Common utility operations for triangulations.
@@ -144,6 +165,9 @@ pub trait TriangulationOps: TriangulationQuery {
     /// Compute the convex hull of the triangulation.
     ///
     /// Returns the set of vertices that lie on the boundary (convex hull) of the triangulation.
+    /// This legacy best-effort operation skips failed face queries, so incomplete
+    /// results do not establish the hull of the full complex. Use [`Self::try_convex_hull`]
+    /// to propagate query failures.
     ///
     /// # Notes
     /// - For 2D triangulations, these are the vertices incident to at least one boundary edge.
@@ -174,10 +198,40 @@ pub trait TriangulationOps: TriangulationQuery {
         hull_vertices.into_iter().collect()
     }
 
+    /// Computes boundary vertices only when every face query succeeds.
+    ///
+    /// The order is unspecified. For a valid simplicial complex, facets with one
+    /// incident face determine the boundary; this operation does not validate the
+    /// entire complex or assert convexity of a nonconvex input.
+    ///
+    /// # Errors
+    /// Returns the original backend error on the first failed face query.
+    ///
+    /// # Examples
+    /// ```
+    /// use causal_triangulations::prelude::testing::*;
+    /// let backend = MockBackend::create_triangle();
+    /// assert_eq!(backend.try_convex_hull()?.len(), 3);
+    /// # Ok::<(), causal_triangulations::geometry::backends::mock::MockError>(())
+    /// ```
+    fn try_convex_hull(&self) -> Result<Vec<Self::VertexHandle>, Self::Error>
+    where
+        Self::VertexHandle: Clone + Eq + Hash,
+    {
+        let mut vertices = HashSet::new();
+        for facet in boundary_facets_with_policy(self, QueryFailurePolicy::Propagate)? {
+            vertices.extend(facet);
+        }
+        Ok(vertices.into_iter().collect())
+    }
+
     /// Find all boundary edges of the triangulation.
     ///
     /// In 2D, these are the edges that are incident to exactly one face (triangle).
     /// In higher dimensions, these are the edges that appear in at least one boundary facet.
+    /// This legacy best-effort operation skips failed face and endpoint queries.
+    /// Its partial answer may misclassify interior edges as boundary; use
+    /// [`Self::try_boundary_edges`] when complete incidence information is required.
     ///
     /// # Notes
     /// - The returned edge order is **unspecified**.
@@ -227,6 +281,46 @@ pub trait TriangulationOps: TriangulationQuery {
         }
 
         boundary.into_iter().collect()
+    }
+
+    /// Computes boundary edges while propagating all face and endpoint query errors.
+    ///
+    /// The input must be a valid simplicial complex, and returned order is unspecified.
+    ///
+    /// # Errors
+    /// Returns the original backend error before publishing a partial answer.
+    ///
+    /// # Examples
+    /// ```
+    /// use causal_triangulations::prelude::testing::*;
+    /// let backend = MockBackend::create_triangle();
+    /// assert_eq!(backend.try_boundary_edges()?.len(), 3);
+    /// # Ok::<(), causal_triangulations::geometry::backends::mock::MockError>(())
+    /// ```
+    fn try_boundary_edges(&self) -> Result<Vec<Self::EdgeHandle>, Self::Error>
+    where
+        Self::VertexHandle: Clone + Eq + Hash,
+        Self::EdgeHandle: Clone + Eq + Hash,
+    {
+        let facets = boundary_facets_with_policy(self, QueryFailurePolicy::Propagate)?;
+        let mut by_vertices = HashMap::new();
+        for edge in self.edges() {
+            let (a, b) = self.edge_endpoints(&edge)?;
+            by_vertices.insert(UnorderedPair(a, b), edge);
+        }
+        let mut boundary = HashSet::new();
+        for facet in facets {
+            for i in 0..facet.len() {
+                for j in (i + 1)..facet.len() {
+                    if let Some(edge) =
+                        by_vertices.get(&UnorderedPair(facet[i].clone(), facet[j].clone()))
+                    {
+                        boundary.insert(edge.clone());
+                    }
+                }
+            }
+        }
+        Ok(boundary.into_iter().collect())
     }
 }
 
@@ -413,6 +507,34 @@ mod tests {
         let hull: HashSet<_> = backend.convex_hull().into_iter().collect();
         assert_eq!(hull, HashSet::from([0, 2]));
         assert_eq!(backend.boundary_edges(), [] as [usize; 0]);
+    }
+
+    #[test]
+    fn checked_boundaries_reject_failed_incidence_and_endpoint_queries() {
+        // ABC and BCD share BC: its incidence is two, never one.
+        let mut backend = FixtureBackend {
+            vertices: vec![0, 1, 2, 3],
+            edges: vec![
+                (0, Some((0, 1))),
+                (1, Some((1, 2))),
+                (2, Some((2, 0))),
+                (3, Some((1, 3))),
+                (4, Some((3, 2))),
+            ],
+            faces: vec![(0, Some(vec![0, 1, 2])), (1, Some(vec![1, 2, 3]))],
+        };
+        let boundary: HashSet<_> = backend
+            .try_boundary_edges()
+            .expect("complete incidence")
+            .into_iter()
+            .collect();
+        assert_eq!(boundary, HashSet::from([0, 2, 3, 4]));
+        backend.faces[1].1 = None;
+        assert_eq!(backend.try_boundary_edges(), Err(FixtureError::Face));
+        assert_eq!(backend.try_convex_hull(), Err(FixtureError::Face));
+        backend.faces[1].1 = Some(vec![1, 2, 3]);
+        backend.edges[0].1 = None;
+        assert_eq!(backend.try_boundary_edges(), Err(FixtureError::Edge));
     }
 
     #[test]

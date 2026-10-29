@@ -126,6 +126,10 @@ cdt \
 The CSV trace records one row per completed Metropolis step. The JSON file records configuration, summary statistics, move/proposal statistics, scheduled
 measurements, and the final triangulation state.
 
+Hidden filenames ending in `.causal-triangulations.lock`, `.causal-triangulations.tmp`, or `.causal-triangulations.backup` are reserved for output
+coordination, staging, and recovery. These suffixes are matched without ASCII case sensitivity, including on case-insensitive filesystems; configured
+destinations using them are rejected before creating directories or acquiring locks.
+
 #### Final Mesh Interchange
 
 `final_triangulation.mesh` is Delaunay's stable simplicial-complex export, not a CDT-specific compact-index schema. External tools should first require
@@ -199,8 +203,9 @@ Parameter validation errors
 
 Unexpected volume growth or shrinkage
 
-: Current simulations are grand-canonical, unfixed-volume runs. Adjust `--cosmological-constant`, reduce the run length, or start from a smaller initial
-  volume while tuning.
+: Volume fixing is disabled by default. Adjust `--cosmological-constant`, reduce the run length, or start from a smaller initial volume while tuning.
+  For toroidal 1+1 runs, paired `--target-triangles` and `--volume-fixing-strength` options enable a quadratic soft bias; volume still fluctuates.
+  See the [ensemble and evidence limits](scientific-basis.md) before interpreting either mode statistically.
 
 Slow runs
 

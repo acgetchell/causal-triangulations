@@ -136,6 +136,11 @@ These references provide the algorithmic foundations for Monte Carlo simulations
 - Brunekreef, J., Loll, R., and Görlich, A. "Simulating CDT quantum gravity." _Computer Physics Communications_ 300 (2024): 109170. DOI:
   [10.1016/j.cpc.2024.109170](https://doi.org/10.1016/j.cpc.2024.109170). arXiv: [2310.16744](https://arxiv.org/abs/2310.16744)
 
+- Brunekreef, J., Görlich, A., and van der Feltz, W. "JorenB/2d-cdt: First release." Version 1.0.0. Zenodo, 2021. DOI:
+  [10.5281/zenodo.5572409](https://doi.org/10.5281/zenodo.5572409). This software release archives tag commit
+  `b5f64c7ce8c7ca63d2654a3902d3f66bb9db986a`; the [reference audit](docs/audits/2d-cdt_sphere/README.md) instead pins
+  `412d0b887532c46e4445581b1a2bd509f65aaaec` and retains that distinct source archive.
+
 - Israel, N. S., and Lindner, J. F. "Quantum gravity on a laptop: 1+1 Dimensional Causal Dynamical Triangulation simulation." _Results in Physics_ 2 (2012):
   164-169. DOI: [10.1016/j.rinp.2012.10.001](https://doi.org/10.1016/j.rinp.2012.10.001)
 
@@ -176,6 +181,12 @@ See also Ambjørn and Loll (1998) under [Metropolis-Hastings Algorithm in CDT](#
 [Comprehensive Reviews](#comprehensive-reviews). The conversion from their triangle-volume coupling to this crate's edge-count action, including the
 temperature and boundary qualifications, is documented under [Action Calibration](docs/scientific-basis.md#action-calibration).
 
+### Multiple Testing
+
+- Holm, S. "A Simple Sequentially Rejective Multiple Test Procedure." _Scandinavian Journal of Statistics_ 6, no. 2 (1979): 65–70.
+  Primary record: [JSTOR 4615733](https://www.jstor.org/stable/4615733). The step-down procedure compares ordered p-values against
+  `alpha / (m - i + 1)` and stops at the first non-rejection; it controls familywise error for the declared family of `m` tests.
+
 ### Regge Calculus and Discrete Action
 
 - Hamber, H. W. "Quantum Gravitation: The Feynman Path Integral Approach." Berlin: Springer-Verlag, 2009 (published online 2008). DOI:
@@ -185,6 +196,10 @@ temperature and boundary qualifications, is documented under [Action Calibration
   [10.1007/BF02733251](https://doi.org/10.1007/BF02733251)
 
 ## Numerical Methods and Performance
+
+- Shewchuk, J. R. "Adaptive Precision Floating-Point Arithmetic and Fast Robust Geometric Predicates." _Discrete & Computational Geometry_ **18**, 305–363
+  (1997). [Author's paper and implementation](https://www.cs.cmu.edu/~quake/robust.html). The action accumulator uses Two-Sum and Grow-Expansion to retain
+  cancellation residuals; it uses FMA to recover each product residual.
 
 ### Formal Verification in Scientific Computing
 

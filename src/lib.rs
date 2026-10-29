@@ -823,6 +823,10 @@ impl OutputPathLocks {
         }
         destinations.sort_unstable_by_key(|(path, _)| *path);
 
+        // Validate the whole set before creating a parent or acquiring any lock.
+        for &(path, format) in &destinations {
+            validate_output_namespace(path, format)?;
+        }
         let mut files = Vec::with_capacity(destinations.len());
         for (path, format) in destinations {
             ensure_parent_directory(path, format)?;
@@ -857,6 +861,32 @@ impl OutputPathLocks {
 
         Ok(Self { _files: files })
     }
+}
+
+/// Keeps coordination, staging, and recovery files out of configured destinations.
+fn validate_output_namespace(path: &Path, format: OutputFormat) -> CdtResult<()> {
+    if path.file_name().is_some_and(|name| {
+        let bytes = name.as_encoded_bytes();
+        bytes.starts_with(b".")
+            && [
+                ".causal-triangulations.lock",
+                ".causal-triangulations.tmp",
+                ".causal-triangulations.backup",
+            ]
+            .iter()
+            .any(|suffix| {
+                bytes
+                    .len()
+                    .checked_sub(suffix.len())
+                    .is_some_and(|start| bytes[start..].eq_ignore_ascii_case(suffix.as_bytes()))
+            })
+    }) {
+        return Err(CdtError::OutputPathReserved {
+            path: path.display().to_string(),
+            format,
+        });
+    }
+    Ok(())
 }
 
 /// Resolves configured output paths before expensive triangulation or sampling work begins.
@@ -1185,7 +1215,7 @@ fn sibling_temp_output_path(path: &Path, format: OutputFormat) -> PathBuf {
         .file_name()
         .map_or_else(|| "output".into(), |name| name.to_string_lossy());
     path.with_file_name(format!(
-        ".{file_name}.{}.{}.{}.tmp",
+        ".{file_name}.{}.{}.{}.causal-triangulations.tmp",
         process::id(),
         token,
         suffix
@@ -1203,7 +1233,7 @@ fn sibling_backup_output_path(path: &Path, format: OutputFormat) -> PathBuf {
         .file_name()
         .map_or_else(|| "output".into(), |name| name.to_string_lossy());
     path.with_file_name(format!(
-        ".{file_name}.{}.{}.{}.backup",
+        ".{file_name}.{}.{}.{}.causal-triangulations.backup",
         process::id(),
         token,
         suffix
@@ -1254,7 +1284,6 @@ fn output_write_failed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cdt::action::DEFAULT_CDT_1P1_EDGE_COSMOLOGICAL_CONSTANT;
     use serde_json::{Value, from_str, to_string};
     use std::assert_matches;
     use std::collections::HashSet;
@@ -1586,6 +1615,107 @@ mod tests {
         drop(reacquired);
         remove_output_lock(&csv_path);
         fs::remove_dir(&directory).expect("output lock fixture directory should be removable");
+    }
+
+    #[test]
+    fn output_cannot_replace_a_held_coordination_lock() {
+        let directory = temp_output_path("reserved-output-lock");
+        let csv = directory.join("trace.csv");
+        let destinations = ResolvedOutputPaths {
+            csv: Some(csv.clone()),
+            json: None,
+        };
+        let held = OutputPathLocks::acquire(&destinations).expect("hold original lock");
+        let lock_path = sibling_output_lock_path(&csv);
+        for reserved in [
+            lock_path,
+            directory.join(".trace.csv.CAUSAL-TRIANGULATIONS.LOCK"),
+            directory.join(".trace.csv.Causal-Triangulations.Lock"),
+        ] {
+            let hostile = ResolvedOutputPaths {
+                csv: None,
+                json: Some(reserved.clone()),
+            };
+            assert_matches!(
+                OutputPathLocks::acquire(&hostile).err(),
+                Some(CdtError::OutputPathReserved {
+                    format: OutputFormat::Json,
+                    ..
+                })
+            );
+            assert_matches!(
+                OutputPathLocks::acquire(&destinations).err(),
+                Some(CdtError::OutputPathBusy { .. })
+            );
+            assert!(!sibling_output_lock_path(&reserved).exists());
+        }
+        drop(held);
+        drop(OutputPathLocks::acquire(&destinations).expect("original lock remains usable"));
+        remove_output_lock(&csv);
+        fs::remove_dir(&directory).expect("remove fixture directory");
+    }
+
+    #[test]
+    fn output_cannot_replace_staged_or_recovery_contents() {
+        let directory = temp_output_path("reserved-output-intermediates");
+        let csv = directory.join("trace.csv");
+        let destinations = ResolvedOutputPaths {
+            csv: Some(csv.clone()),
+            json: None,
+        };
+        let held = OutputPathLocks::acquire(&destinations).expect("hold output lock");
+        fs::write(&csv, "original").expect("original output");
+        let mut output = StagedOutput::new(&csv, OutputFormat::Csv);
+        fs::write(&output.temp_path, "replacement").expect("stage new output");
+        output
+            .back_up_existing()
+            .expect("retain original for rollback");
+
+        for reserved in [&output.temp_path, &output.backup_path] {
+            let hostile = ResolvedOutputPaths {
+                csv: None,
+                json: Some(reserved.clone()),
+            };
+            assert_matches!(
+                OutputPathLocks::acquire(&hostile).err(),
+                Some(CdtError::OutputPathReserved { .. })
+            );
+            assert!(!sibling_output_lock_path(reserved).exists());
+        }
+        assert_eq!(
+            fs::read_to_string(&output.temp_path).unwrap(),
+            "replacement"
+        );
+        assert_eq!(fs::read_to_string(&output.backup_path).unwrap(), "original");
+        output.persist().expect("publish own staged contents");
+        assert_eq!(fs::read_to_string(&csv).unwrap(), "replacement");
+        assert_eq!(output.rollback(), Vec::<OutputRollbackFailure>::new());
+        assert_eq!(fs::read_to_string(&csv).unwrap(), "original");
+        output.cleanup();
+        drop(held);
+        remove_output_lock(&csv);
+        fs::remove_file(&csv).expect("remove restored output");
+        fs::remove_dir(&directory).expect("remove fixture directory");
+    }
+
+    #[test]
+    fn reserved_output_aliases_are_rejected_before_creating_parents() {
+        let directory = temp_output_path("reserved-output-preflight");
+        for name in [
+            ".trace.csv.CAUSAL-TRIANGULATIONS.LOCK",
+            ".trace.csv.Causal-Triangulations.Tmp",
+            ".trace.csv.CAUSAL-TRIANGULATIONS.BACKUP",
+        ] {
+            let destinations = ResolvedOutputPaths {
+                csv: Some(directory.join("a-trace.csv")),
+                json: Some(directory.join(name)),
+            };
+            assert_matches!(
+                OutputPathLocks::acquire(&destinations).err(),
+                Some(CdtError::OutputPathReserved { .. })
+            );
+            assert!(!directory.exists());
+        }
     }
 
     #[test]

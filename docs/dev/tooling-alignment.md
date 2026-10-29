@@ -999,3 +999,11 @@ would corrupt source evidence. Audit prose and all other new files remain checke
 Semgrep's native reports exposed a coverage gap: the existing Python rules only selected tooling/test directories, so the strict shared wrapper rejected
 the unscanned audit inputs. The same applicable Python rules now include `docs/audits/**/*.py`, and audit text I/O explicitly uses UTF-8. This extends
 the existing policy to the new source owner instead of excluding those files or relaxing report-completeness checks.
+
+## 26 October 2026 Library and CLI Feature Boundary
+
+The repository review found that library-only consumers still compiled Clap and the binary logger. A default-enabled `cli` feature now owns those optional
+dependencies, command-line parsing methods and the `cdt` binary. Existing default builds and documented commands remain compatible. Library consumers can
+select `default-features = false` while retaining configuration, simulation, checkpoint and analysis APIs. The example logger is also a development dependency
+so library examples remain runnable without enabling the companion CLI. CLI tests are feature-gated; scientific configuration tests remain unconditional.
+Validation must cover library-only compilation and tests, default/all-feature CLI behavior, and an external library consumer without default features.

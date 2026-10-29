@@ -83,6 +83,10 @@ non-goals.
 
 ## 🚀 Quickstart
 
+For Rust library use, add `causal-triangulations = { version = "0.1.1", default-features = false }` to Cargo dependencies. This retains simulation and analysis
+APIs without Clap or the CLI logger. The default-enabled `cli` feature provides the `cdt` binary and `CdtConfig::{from_args, try_from_args}`; normal repository
+commands below enable it automatically.
+
 From a repository checkout, follow [prerequisite setup][repo-contributing-mdgetting-started], then run a small seeded simulation:
 
 ```bash

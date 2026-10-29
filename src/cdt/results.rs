@@ -3060,8 +3060,8 @@ impl SimulationResultsBackend {
     /// triangulation counts, Delaunay mesh entity ids/connectivity, CDT foliation
     /// labels, Monte Carlo step telemetry, and
     /// all measurements. The aggregate `average_action` is computed from
-    /// [`Self::post_thermalization_measurements`] so it excludes the initial snapshot and
-    /// thermalization window.
+    /// [`Self::post_thermalization_measurements`]: measurements at or after the
+    /// thermalization boundary, including the initial snapshot when that boundary is zero.
     ///
     /// Pass the same [`ValidatedCdtConfig`] used to create the run so the
     /// serialized summary cannot pair accepted telemetry with an invalid or
@@ -3226,7 +3226,6 @@ mod tests {
     use crate::cdt::proposal_policy::CdtMoveFamilyDistribution;
     use crate::cdt::triangulation::CdtTriangulation;
     use crate::errors::{ConfigurationSetting, ExpectedConstraint, ObservedValue};
-    use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
     use serde_json::{Value, from_str, from_value, json, to_string, to_value};
     use std::assert_matches;
@@ -3255,7 +3254,7 @@ mod tests {
             .triangulation()
             .slab_triangle_profile_snapshot()
             .expect("profile");
-        for row in &restored.scalar_trace_rows {
+        for row in restored.scalar_trace_rows_for_test() {
             assert_eq!(row.slab_triangle_profile.as_ptr(), profile.as_ptr());
         }
         for measurement in restored.measurements() {

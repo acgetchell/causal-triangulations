@@ -24,6 +24,10 @@ cargo build --release
 echo "✓ Binary built successfully"
 echo
 
+# Bash's elapsed-time formatter works on both macOS and Linux; BSD date does
+# not implement the GNU %N nanosecond conversion.
+TIMEFORMAT='%R'
+
 # Run performance tests
 echo "Running performance tests..."
 echo
@@ -42,21 +46,17 @@ for i in "${!TEST_CONFIGS[@]}"; do
 
 	echo "Testing $size_name configuration: $vertices_per_slice vertices/slice, $slices slices, $steps steps"
 
-	# Measure execution time and memory usage
-	start_time=$(date +%s.%N)
-
 	# Run simulation with minimal logging to reduce I/O overhead
-	RUST_LOG=error ./target/release/cdt \
-		--vertices-per-slice "$vertices_per_slice" \
-		--timeslices "$slices" \
-		--steps "$steps" \
-		--thermalization-steps $((steps / 10)) \
-		--measurement-frequency $((steps / 50)) \
-		--simulate \
-		>/dev/null 2>&1
-
-	end_time=$(date +%s.%N)
-	runtime=$(echo "$end_time - $start_time" | bc -l)
+	runtime=$(
+		{ time RUST_LOG=error ./target/release/cdt \
+			--vertices-per-slice "$vertices_per_slice" \
+			--timeslices "$slices" \
+			--steps "$steps" \
+			--thermalization-steps $((steps / 10)) \
+			--measurement-frequency $((steps / 50)) \
+			--simulate \
+			>/dev/null 2>&1; } 2>&1
+	)
 
 	# Format runtime to 2 decimal places
 	runtime_formatted=$(printf "%.2f" "$runtime")
@@ -93,7 +93,7 @@ for config_line in "${TEST_CONFIGS[@]}"; do
 		printf "%-14s | %11s | %17s\n" "$size_name" "$runtime" "N/A"
 	fi
 
-	((i++))
+	i=$((i + 1))
 done
 
 echo

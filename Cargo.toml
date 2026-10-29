@@ -19,12 +19,17 @@ repository = "https://github.com/acgetchell/causal-triangulations"
 rust-version = "1.99.1"
 description = "Validated 1+1 Causal Dynamical Triangulations for quantum gravity"
 
-# Features removed - backend system is now internal implementation detail
-# Both delaunay and mock backends are always compiled
+# Both geometry backends are always compiled; CLI dependencies are optional.
 
 [[bin]]
 name = "cdt"
 path = "src/main.rs"
+required-features = [ "cli" ]
+
+[[test]]
+name = "cli"
+path = "tests/cli.rs"
+required-features = [ "cli" ]
 
 [[bench]]
 name = "cdt_benchmarks"
@@ -39,6 +44,8 @@ name = "allocation_profile"
 harness = false
 
 [features]
+default = [ "cli" ]
+cli = [ "dep:clap", "dep:env_logger" ]
 slow-tests = [  ]
 
 [package.metadata.docs.rs]
@@ -53,11 +60,11 @@ debug = "line-tables-only"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "4.6.7", features = [ "derive" ] }
+clap = { version = "4.6.7", features = [ "derive" ], optional = true }
 delaunay = "0.8.3"
 markov-chain-monte-carlo = { version = "0.5.2", features = [ "serde" ] }
 dirs = "7.0.0"
-env_logger = "0.11.11"
+env_logger = { version = "0.11.11", optional = true }
 log = "0.4.34"
 num-traits = "0.2.19"
 rand = { version = "0.10.3", features = [ "serde" ] }
@@ -66,6 +73,7 @@ serde_json = { version = "1.0.154", features = [ "float_roundtrip" ] }
 thiserror = "2.0.21"
 
 [dev-dependencies]
+env_logger = "0.11.11"
 approx = "0.5.1"
 slotmap = "1.1.1"
 assert_cmd = "2.2.2"

@@ -31,7 +31,9 @@ ensemble agreement, mixing, continuum physics, or completed #165/#166/#238/#276 
 acceptance criteria. The diagnostic implementations shipping here do not complete their benchmark-dependent validation.
 
 Release checks, Cargo package verification, exact-release benchmark provenance, and reviewed publication remain mandatory. Passing them establishes the
-engineering release evidence, not the deferred distributional claims. No additional Delaunay release is a v0.2.0 prerequisite.
+engineering release evidence, not the deferred distributional claims. The separate
+[Delaunay periodic-realization regression](audits/delaunay-periodic-realization.md) currently blocks release readiness: the unchanged seed-3291 fixture must
+pass complete validation with a corrected published dependency. This geometry requirement is independent of the deferred #316 ensemble-validation work.
 
 ## v0.1.1 scientific claim checklist
 
@@ -117,7 +119,8 @@ just performance-release "$TAG" "$PREVIOUS_TAG"
 ```
 
 This user-invoked command creates temporary Git worktrees, runs the configured correctness gate and measurements, and promotes shared evidence and reports.
-Agents must respect this repository's prohibition on Git mutations. Review host, source, dependency, and harness provenance before accepting a comparison.
+Agents need explicit user authorization for these Git mutations under [AGENTS.md](../AGENTS.md#git-operations).
+Review host, source, dependency, and harness provenance before accepting a comparison.
 
 For README publication, prepare the independently pinned configuration from `tooling/performance-readme.example.toml` and run:
 

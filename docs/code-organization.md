@@ -201,6 +201,7 @@ causal-triangulations/
 │   ├── proposal_policy.rs
 │   ├── proptest_config.rs
 │   ├── proptest_foliation.rs
+│   ├── proptest_metropolis.proptest-regressions
 │   ├── proptest_metropolis.rs
 │   ├── regressions.rs
 │   ├── trait_bound_ergonomics.rs
@@ -268,6 +269,7 @@ enforce this boundary against new CDT-local generic acceptance draws or manual a
 - `examples/` — runnable public API examples and shell workflows for simulation, observables, output, checkpoints, parameter sweeps, and performance checks.
 - `notebooks/` — notebook front ends and analysis consumers for CLI-generated artifacts such as trace CSV and JSON summary files. Notebook code may run the
   binary for tutorials, but simulation logic stays in Rust.
+- `docs/audits/delaunay-periodic-realization.md` — minimized geometry-validator failure, independent exact-rational witness, and upstream repair boundary.
 - `tests/` — CLI, integration, physics, property-based, property-configuration, regression, slow-debug, project-rule, and consumer tooling tests, with shared
   property-test configuration under `tests/common/` and Python consumer contracts under `tests/tooling/`.
 - `benches/` — Criterion benchmark harnesses and CI performance suites, with shared fail-fast fixture setup support under `benches/support/`.

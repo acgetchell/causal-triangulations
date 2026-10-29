@@ -561,6 +561,19 @@ impl<'de> Deserialize<'de> for CdtTriangulation<DelaunayBackend2D> {
 }
 
 impl CdtTriangulation<DelaunayBackend2D> {
+    /// Captures rollback state without changing the identity of pre-existing handles or sites.
+    /// This snapshot must only restore its original owner; public Clone remains independent.
+    pub(crate) fn rollback_snapshot(&self) -> Self {
+        Self {
+            instance_id: self.instance_id,
+            geometry: self.geometry.rollback_snapshot(),
+            metadata: self.metadata.clone(),
+            cache: self.cache.clone(),
+            foliation: self.foliation.clone(),
+            foliation_synced_at_modification: self.foliation_synced_at_modification,
+        }
+    }
+
     /// Projects the live triangulation into the v2 checkpoint record.
     pub(crate) fn checkpoint_wire_v2(&self) -> CdtResult<CdtTriangulationCheckpointWireV2Ref<'_>> {
         let initial_vertex_count =

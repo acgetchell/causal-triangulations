@@ -22,6 +22,60 @@ from research_repo_tools.selection import select_files
 ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture
+def shell_workflow_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Execute the real workflows with cheap, deterministic process boundaries."""
+    commands = tmp_path / "commands"
+    commands.mkdir()
+    for name, body in {
+        "cargo": "exit 0",
+        "date": "echo 100.000000000",
+        "bc": "cat >/dev/null; echo 1",
+    }.items():
+        command = commands / name
+        command.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+        command.chmod(0o700)
+    binary = tmp_path / "target/release/cdt"
+    binary.parent.mkdir(parents=True)
+    binary.write_text(
+        "#!/bin/bash\n"
+        'if [[ "${SWEEP_FAILURE:-none}" == "all" ]]; then exit 7; fi\n'
+        "while (($#)); do\n"
+        '  if [[ "$1" == "--temperature" && "$2" == "1.0" && "${SWEEP_FAILURE:-none}" == "mixed" ]]; then exit 7; fi\n'
+        "  shift\n"
+        "done\n",
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    monkeypatch.setenv("PATH", str(commands) + os.pathsep + os.environ["PATH"])
+    return tmp_path
+
+
+def test_performance_script_completes_every_summary_row(shell_workflow_workspace: Path) -> None:
+    """The summary increment must not turn a successful workload into failure."""
+    result = run_safe_command("bash", [str(ROOT / "examples/scripts/performance_test.sh")], cwd=shell_workflow_workspace, check=False)
+    assert result.returncode == 0, result.stdout
+    summary = result.stdout.split("=== Performance Summary ===", 1)[1]
+    for name in ("Small", "Medium", "Large", "Extra Large"):
+        assert re.search(rf"^{name}\s+\|", summary, re.MULTILINE)
+    assert "Results saved to: performance_results.txt" in summary
+    assert "=== Performance Analysis ===" in summary
+
+
+@pytest.mark.parametrize(("failure", "failed_count"), [("none", 0), ("mixed", 1), ("all", 8)])
+def test_parameter_sweep_reports_aggregate_failure(failure: str, failed_count: int, shell_workflow_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Independent points continue while the final exit status retains failures."""
+    monkeypatch.setenv("SWEEP_FAILURE", failure)
+    result = run_safe_command("bash", [str(ROOT / "examples/scripts/parameter_sweep.sh")], cwd=shell_workflow_workspace, check=False)
+    assert result.returncode == (1 if failed_count else 0)
+    statuses = list((shell_workflow_workspace / "sweep_results").glob("*.status"))
+    assert len(statuses) == 8
+    assert sum(path.read_text(encoding="utf-8").strip() == "7" for path in statuses) == failed_count
+    summary = result.stdout.split("=== Summary ===", 1)[1]
+    assert summary.count("FAILED (7)") == failed_count
+    assert summary.count("SUCCESS") == 8 - failed_count
+
+
 def test_dependabot_caller_only_delegates_with_complete_cdt_file_policy() -> None:
     """The privileged trigger delegates only to the pinned, token-free shared workflow."""
     workflow = yaml.safe_load((ROOT / ".github/workflows/dependabot-auto-merge.yml").read_text(encoding="utf-8"))
