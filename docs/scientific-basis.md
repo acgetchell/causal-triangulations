@@ -147,7 +147,7 @@ asymptotic scaling regime, or that a chosen observable analysis supports a parti
 | Evidence level | Current boundary |
 | --- | --- |
 | Structural and proposal-bookkeeping checks | See [tests](testing.md), the [v0.1.1 checklist][claims], and [limits](#move-and-sampler-contract) |
-| Whole-embedding validation | Delaunay 0.8.4 corrects the [seed-3291 periodic regression](audits/delaunay-periodic-realization.md); original fixtures pass |
+| Whole-embedding validation | The [published correction](audits/delaunay-periodic-realization.md#published-correction) links passing source and native CI evidence |
 | Analytic ensemble validation | Required [v0.2.0 quantitative gate](roadmap.md#primary-exact-benchmark); invariant checks do not establish the distribution |
 | Reference implementation comparison | A separate [follow-up][reference-validation], not existing Rust validation evidence |
 | Continuum interpretation | Requires downstream mixing, scaling, fit-window, and uncertainty analyses |

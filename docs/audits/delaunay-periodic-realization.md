@@ -7,6 +7,12 @@ the seed-3291 five-move regression and the random-move invariant property test r
 The diagnosis below records the original 0.8.3 failure and exact arithmetic evidence. The separate #316 proposal-support and upstream #667 abstract-gluing
 obligations remain unresolved; this correction does not establish exact-ensemble sampling.
 
+The passing source is [CDT revision `2d03f2d`](https://github.com/acgetchell/causal-triangulations/commit/2d03f2d66c0e6ef09d245847b704f2262bd84d8a), whose
+committed Cargo lock resolves Delaunay 0.8.4. Its
+[native Ubuntu CI log](https://github.com/acgetchell/causal-triangulations/actions/runs/41685072601/job/126088548106)
+records both `toroidal_seed_3291_preserves_embedding_after_five_moves` and `random_move_sequences_preserve_cdt_invariants` passing and completes full CI.
+That successful run supersedes the older failing validation record for the correction claim; the historical failure remains evidence below.
+
 ## Status and Reproduction
 
 The repository review on 26 October 2026 found a blocking discrepancy in the pinned Delaunay 0.8.3 realization validator. This is separate from the
@@ -14,10 +20,25 @@ read-only `2d-cdt` reference audit and from the ensemble/reverse-support limitat
 
 The existing property test minimized the failure to `seed = 3291`, `attempts = 5`, `toroidal = true`, starting from `from_toroidal_cdt(4, 3)`.
 The retained Proptest regression and `tests/regressions.rs::toroidal_seed_3291_preserves_embedding_after_five_moves` preserve those inputs and the requirement
-that successful moves pass complete evolved-state validation. Reproduce with:
+that successful moves pass complete evolved-state validation. The following opt-in commands create separate historical worktrees and use their committed
+lockfiles and declared Rust toolchain. They leave the current checkout intact.
+
+To reproduce the expected **0.8.3 failure**, use
+[CDT revision `1af313b`](https://github.com/acgetchell/causal-triangulations/commit/1af313bdaa8a5c7c9176a99784e580fd95f22c12):
 
 ```bash
-uv run --locked --group dev research-repo-tools toolchain run -- cargo test --release --test regressions toroidal_seed_3291 -- --nocapture
+CDT_083_CHECKOUT="$(mktemp -d "${TMPDIR:-/tmp}/cdt-seed3291-083.XXXXXX")"
+git worktree add --detach "$CDT_083_CHECKOUT" 1af313bdaa8a5c7c9176a99784e580fd95f22c12
+(cd "$CDT_083_CHECKOUT" && cargo test --locked --release --test regressions toroidal_seed_3291 -- --nocapture)
+```
+
+To validate the **0.8.4 correction** independently, use the passing revision cited above:
+
+```bash
+CDT_084_CHECKOUT="$(mktemp -d "${TMPDIR:-/tmp}/cdt-seed3291-084.XXXXXX")"
+git worktree add --detach "$CDT_084_CHECKOUT" 2d03f2d66c0e6ef09d245847b704f2262bd84d8a
+(cd "$CDT_084_CHECKOUT" && cargo test --locked --release --test regressions toroidal_seed_3291 -- --nocapture)
+(cd "$CDT_084_CHECKOUT" && cargo test --locked --release --test proptest_metropolis random_move_sequences_preserve_cdt_invariants -- --nocapture)
 ```
 
 The sequence is successful `Move22`, successful `Move22`, successful `Move31Remove`, rejected `Move31Remove` (`GeometricViolation`), then successful `Move22`.
