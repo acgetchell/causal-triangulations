@@ -147,8 +147,8 @@ asymptotic scaling regime, or that a chosen observable analysis supports a parti
 | Evidence level | Current boundary |
 | --- | --- |
 | Structural and proposal-bookkeeping checks | See [tests](testing.md), the [v0.1.1 checklist][claims], and [limits](#move-and-sampler-contract) |
-| Whole-embedding validation | [Seed-3291 periodic regression](audits/delaunay-periodic-realization.md) remains an unresolved release blocker |
-| Analytic ensemble validation | Planned [v0.2.1 quantitative gate](roadmap.md#primary-exact-benchmark); invariant checks do not establish the distribution |
+| Whole-embedding validation | Delaunay 0.8.4 corrects the [seed-3291 periodic regression](audits/delaunay-periodic-realization.md); original fixtures pass |
+| Analytic ensemble validation | Required [v0.2.0 quantitative gate](roadmap.md#primary-exact-benchmark); invariant checks do not establish the distribution |
 | Reference implementation comparison | A separate [follow-up][reference-validation], not existing Rust validation evidence |
 | Continuum interpretation | Requires downstream mixing, scaling, fit-window, and uncertainty analyses |
 
@@ -157,8 +157,8 @@ asymptotic scaling regime, or that a chosen observable analysis supports a parti
 
 The [2d-cdt sphere audit](audits/2d-cdt_sphere/README.md) establishes a specific reference boundary: the pinned implementation retains a toroidal stored
 complex under `sphere=true` while modifying observable adjacency. Its advertised effective-sphere option is acknowledged but excluded from planned
-periodic 1+1 parity. That audit establishes neither full reference agreement nor comparative sampler correctness. The v0.2.0 release ships simulation,
-analysis, and tooling capabilities with the known #316 defect explicit; exact-ensemble validation remains deferred to v0.2.1.
+periodic 1+1 parity. That audit establishes neither full reference agreement nor comparative sampler correctness. The planned scientifically validated
+v0.2.0 release requires correction of #316, adoption of Delaunay #667, and completion of the exact-ensemble and external validation gates.
 
 ## CDT++ Construction Lesson
 

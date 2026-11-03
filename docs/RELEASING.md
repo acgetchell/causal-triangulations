@@ -3,7 +3,7 @@
 Release preparation uses the pinned shared CLI. Choose one stable tag, predecessor, and UTC date; reruns with those same inputs are deterministic.
 Benchmark measurements are separate and are not idempotent.
 
-This guide uses published `research-repo-tools==0.2.3`. Tooling, notebook kernels and Semgrep share the root Python 3.15 environment, following Delaunay.
+This guide uses published `research-repo-tools==0.2.5`. Tooling, notebook kernels and Semgrep share the root Python 3.15 environment, following Delaunay.
 `just update` refreshes the root lockfile while preserving the scanner's MCP/OpenTelemetry and Windows wheel compatibility overrides.
 Active documentation links stay on `main` and API links on `latest`; preserve immutable evidence and citation pins.
 
@@ -22,18 +22,19 @@ are never replaced. Adoption of the helpers alone does not authorize publishing 
 
 ## v0.2.0 scientific claim checklist
 
-This release ships the simulation and analysis foundation with current tooling: optional volume control, circular spatial-loop measurements, reproducible
-chain artifacts, and dependence-aware diagnostics. It uses published Delaunay 0.8.3 and MCMC 0.5.2. The [#258 audit](audits/2d-cdt_sphere/README.md) records
+The implementation provides the simulation and analysis foundation: optional volume control, circular spatial-loop measurements, reproducible
+chain artifacts, and dependence-aware diagnostics. It uses published Delaunay 0.8.4 and MCMC 0.5.2. The [#258 audit](audits/2d-cdt_sphere/README.md) records
 why the planned `2d-cdt` comparison excludes `sphere=true` and closed simplicial S² claims.
 
 The [#316 reverse-support defect](scientific-basis.md#move-and-sampler-contract) remains unresolved. Do not claim complete reversibility, exact-paper
-ensemble agreement, mixing, continuum physics, or completed #165/#166/#238/#276 acceptance. Those scientific gates remain in v0.2.1 with unchanged
-acceptance criteria. The diagnostic implementations shipping here do not complete their benchmark-dependent validation.
+ensemble agreement, mixing, continuum physics, or completed #165/#166/#238/#276 acceptance. The scientifically validated v0.2.0 release requires those
+issues' unchanged acceptance criteria and adoption of the published abstract-gluing capability in Delaunay #667, scheduled for v0.8.5.
+The current diagnostic implementations do not complete their benchmark-dependent validation. Completing review PR #319 alone does not make v0.2.0 ready.
 
 Release checks, Cargo package verification, exact-release benchmark provenance, and reviewed publication remain mandatory. Passing them establishes the
-engineering release evidence, not the deferred distributional claims. The separate
-[Delaunay periodic-realization regression](audits/delaunay-periodic-realization.md) currently blocks release readiness: the unchanged seed-3291 fixture must
-pass complete validation with a corrected published dependency. This geometry requirement is independent of the deferred #316 ensemble-validation work.
+engineering release evidence; distributional claims additionally require the analytic gate above. Delaunay 0.8.4 corrects the
+[periodic-realization regression](audits/delaunay-periodic-realization.md): the unchanged seed-3291 fixture now passes complete validation.
+This correction is independent of the unresolved #316 ensemble-validation work and upstream #667 abstract-gluing capability, scheduled for Delaunay 0.8.5.
 
 ## v0.1.1 scientific claim checklist
 
@@ -60,7 +61,7 @@ The release evidence includes:
 This records historical structural and transition-bookkeeping evidence. The later #316 counterexample limits its reversibility claim; the listed
 family/site checks do not establish actual coordinate-state reverse support. v0.1.1 does **not** establish ergodicity, mixing,
 thermalization, continuum-limit behavior, finite-size scaling, fixed-volume production sampling, or agreement with the exact 1+1 transfer-matrix
-distribution. That stronger quantitative gate remains [issue #238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.1. Level 5
+distribution. That stronger quantitative gate remains [issue #238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.0. Level 5
 Delaunay validation is likewise not required after valid CDT evolution because Delaunayhood is not part of the sampled ensemble.
 
 Historical benchmark reports were deliberately retired in September 2026. New evidence uses the shared v2 workflow described below.

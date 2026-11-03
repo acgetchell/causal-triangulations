@@ -40,7 +40,7 @@ release-performance provenance.
 This evidence covers structural invariants and transition bookkeeping. The subsequent reverse-support counterexample in
 [#316](https://github.com/acgetchell/causal-triangulations/issues/316) prevents a complete coordinate-state reversibility claim. Chain mixing, continuum
 behavior, fixed-volume physics, finite-size scaling, and agreement with the exact transfer-matrix ensemble remain unestablished. The quantitative analytic
-ensemble gate remains [#238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.1.
+ensemble gate remains [#238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.0.
 
 Completed maturity work includes:
 
@@ -60,15 +60,20 @@ Completed maturity work includes:
 
 ## v0.2.0 Simulation And Analysis Foundation
 
-The v0.2.0 release delivers optional volume control, spatial-loop measurements, reproducible chain artifacts, dependence-aware diagnostics, and the current
-tooling standards on published Delaunay 0.8.3 and MCMC 0.5.2. The [#258 audit](audits/2d-cdt_sphere/README.md) records the scope of the external reference.
-Release preparation retains native/package checks and benchmark provenance. This release does not claim an analytically validated equilibrium ensemble,
-mixing, full Brunekreef parity, or a correction of [#316](https://github.com/acgetchell/causal-triangulations/issues/316).
+The implementation provides optional volume control, spatial-loop measurements, reproducible chain artifacts, dependence-aware diagnostics, and the current
+tooling standards on published Delaunay 0.8.4 and MCMC 0.5.2. The [#258 audit](audits/2d-cdt_sphere/README.md) records the scope of the external reference.
+Release preparation retains native/package checks and benchmark provenance. Current engineering checks do not establish an analytically validated
+equilibrium ensemble, mixing, full Brunekreef parity, or a correction of [#316](https://github.com/acgetchell/causal-triangulations/issues/316).
 
-The exact gate, reverse-support correction, remaining #165/#166 benchmark evidence, and #276 external validation bundle are deferred to v0.2.1 with their
-acceptance criteria intact. Merged diagnostic implementations ship in v0.2.0 without implying those issues' remaining evidence is complete.
+The scientifically validated v0.2.0 release requires the exact gate, reverse-support correction, remaining #165/#166 benchmark evidence, and #276 external
+validation bundle, with their acceptance criteria intact. It also requires adopting the published Delaunay #667 capability, now scheduled for v0.8.5.
+The merged diagnostics and review PR #319 do not complete those release gates.
 
-## v0.2.1 Exact 1+1 Ensemble Validation
+<!-- Preserve the earlier exact-validation release-plan deep link. -->
+<!-- rumdl-disable-next-line MD033 -->
+<a id="v021-exact-11-ensemble-validation"></a>
+
+## v0.2.0 Exact 1+1 Ensemble Validation
 
 The next scientific objective is **analytically validated 1+1 CDT with circular spatial topology (S¹)**. It requires the original finite-lattice oracle,
 the necessary representation and sampler corrections, and the statistical criteria below.
@@ -108,7 +113,7 @@ The project distinguishes four different claims:
 1. **Structural validation.** Existing validators and tests establish combinatorial, manifold, topology, foliation, causality, embedding, rollback, and
    geometric invariants. These checks prove that states are admissible CDT triangulations; they do not prove that the Markov chain samples the intended
    probability distribution.
-2. **Analytic physics validation — v0.2.1.** The conventional 1+1 sampler must reproduce an exact CDT distribution within predeclared statistical tolerances.
+2. **Analytic physics validation — v0.2.0.** The conventional 1+1 sampler must reproduce an exact CDT distribution within predeclared statistical tolerances.
    This is an implementation-independent test of the sampled ensemble.
 3. **1+1 follow-up validation — v0.2.1.** After the fixed-volume analytic result is established, validate the cosmological-coupling normalization in the
    grand-canonical ensemble, separate public spatial-topology and temporal-boundary contracts, and compare the conventional sampler with Brunekreef's
@@ -169,7 +174,11 @@ enumeration and synthetic draws from the oracle must test the comparison harness
 <!-- rumdl-disable-next-line MD033 -->
 <a id="v020-release-criteria"></a>
 
-### v0.2.1 analytic acceptance criteria
+<!-- Preserve the earlier acceptance-criteria deep link. -->
+<!-- rumdl-disable-next-line MD033 -->
+<a id="v021-analytic-acceptance-criteria"></a>
+
+### v0.2.0 analytic acceptance criteria
 
 The conventional sampler is declared analytically validated only when all of the following hold for the predeclared benchmark matrix:
 

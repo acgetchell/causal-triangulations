@@ -232,8 +232,9 @@ zero reverse-family probability or zero reverse offered-site count is valid inpu
 rejected without mutating the chain.
 
 Use `CdtProposal::new(action).with_seed(seed).with_policy(policy)` with an upstream delayed chain directly. The production facade binds the policy once through
-`MetropolisAlgorithm::with_policy()`, after which `run()`, `run_with_checkpoint()`, `run_to_checkpoint()`, `resume_from_checkpoint()`, and
-`resume_to_checkpoint()` and `resume_steps_to_checkpoint()` all use that policy. The latter takes a separate nonzero additional-step count, allowing chunks
+`MetropolisAlgorithm::with_policy()`, after which `run()`, `run_with_checkpoint()`, `run_to_checkpoint()`, `resume_from_checkpoint()`,
+`resume_to_checkpoint()`, and `resume_steps_to_checkpoint()` all use that policy. `resume_steps_to_checkpoint()` takes a separate nonzero additional-step count,
+allowing chunks
 shorter than the stored warmup or measurement cadence without changing either cumulative schedule. In-memory checkpoints retain sealed validation of their
 history, so continuation checks the appended telemetry; decoding still validates the entire history. This bounds telemetry validation inputs linearly in
 the total generated steps across chunks, without claiming a measured wall-clock speedup.

@@ -1,6 +1,6 @@
 # Tooling configuration
 
-Generic maintenance uses the published `research-repo-tools==0.2.3` package.
+Generic maintenance uses the published `research-repo-tools==0.2.5` package.
 This directory contains CDT's tooling configuration. Consumer integration tests live under [`tests/tooling/`](../tests/tooling/);
 CDT maintains no local maintenance CLIs.
 Tooling, notebooks and Semgrep share the root Python 3.15 environment. The root manifest owns the exact scanner pin, wheel-only installation,

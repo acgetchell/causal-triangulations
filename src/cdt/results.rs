@@ -5326,7 +5326,12 @@ mod tests {
             .validate()
             .expect("summary mesh should satisfy Delaunay's export invariants");
         assert_eq!(mesh_export.metadata.schema, "delaunay.simplicial_complex");
-        assert_eq!(mesh_export.metadata.schema_version, 1);
+        // Published Delaunay 0.8.4 emits schema v2; the fixture remains unchanged.
+        assert_eq!(mesh_export.metadata.schema_version, 2);
+        assert!(
+            mesh_export.periodic.is_none(),
+            "the original fixture is an open strip"
+        );
         assert_eq!(mesh_export.metadata.producer, env!("CARGO_PKG_NAME"));
         assert_eq!(mesh_export.metadata.dimension, 2);
         assert_eq!(mesh_export.metadata.vertex_count, 12);

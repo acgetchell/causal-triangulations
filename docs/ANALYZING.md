@@ -143,7 +143,7 @@ The full four-condition, eight-chain-per-condition benchmark, calibrated conditi
 issues #165 and #166 remain in #238's follow-up PR. This implementation does not claim the exact ensemble gate has passed. See the
 [roadmap](roadmap.md#v020-validated-11-cdt-baseline) and [scientific basis](scientific-basis.md).
 
-The implementation baseline adopts published Delaunay 0.8.3 and its la-stack 0.5.1 numerical kernels. Periodic containment, local edits, realization
+The implementation baseline adopts published Delaunay 0.8.4 and its la-stack 0.5.2 numerical kernels. Periodic containment, local edits, realization
 validation, and exact snapshot restoration remain delegated through the geometry adapter. Raw TDS Delaunay reports are Euclidean; periodic Level 5
 checks retain the topology-aware upstream promotion path. Preserve the resolved Cargo lockfile with validation evidence.
 

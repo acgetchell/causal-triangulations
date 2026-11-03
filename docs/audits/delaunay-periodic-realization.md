@@ -1,5 +1,12 @@
 # Delaunay Periodic Realization Diagnostic
 
+## Published Correction
+
+Delaunay 0.8.4 supplies the upstream #668 correction. On 3 November 2026, both original consumer regressions pass after adopting that published dependency:
+the seed-3291 five-move regression and the random-move invariant property test retain their original inputs, successful outcomes and complete validation.
+The diagnosis below records the original 0.8.3 failure and exact arithmetic evidence. The separate #316 proposal-support and upstream #667 abstract-gluing
+obligations remain unresolved; this correction does not establish exact-ensemble sampling.
+
 ## Status and Reproduction
 
 The repository review on 26 October 2026 found a blocking discrepancy in the pinned Delaunay 0.8.3 realization validator. This is separate from the
@@ -74,4 +81,4 @@ A repair belongs in Delaunay's periodic realization representation/predicates: p
 construction or equivalent exact arithmetic, make equivalent lifted identities agree, and retain rejection of actual overlapping controls. Verify both
 local and global validation against the unchanged fixture and publish the corrected dependency before normal adoption here.
 CDT must not copy the intersection algorithm, change these coordinates to an easier fixture, skip full validation, or turn the supported successful move
-into an accepted failure to obtain a green suite. The regression remains blocking until the geometry owner resolves the discrepancy.
+into an accepted failure to obtain a green suite. The published 0.8.4 correction resolves this discrepancy; the retained regressions guard its adoption.
