@@ -7,7 +7,7 @@ in `docs/dev/testing.md` and `docs/dev/DEVELOPING.md`.
 
 - **Library unit tests**: `cargo test --lib` currently runs the core Rust test suite across CDT, geometry, configuration, and utility modules.
 - **Integration tests**: `tests/integration_tests.rs`, `tests/cli.rs`, `tests/proposal_policy.rs`, `tests/proptest_foliation.rs`,
-  `tests/proptest_metropolis.rs`, and `tests/proptest_config.rs` cover public workflows, CLI validation, independent proposal-flux reconstruction, foliation
+  `tests/proptest_metropolis.rs`, and `tests/proptest_config.rs` cover public workflows, CLI validation, independent family/site score reconstruction, foliation
   invariants, Metropolis scoring, and property-test configuration precedence.
 - **Python tooling tests**: `tests/tooling/` covers the installed shared tooling and CDT configuration, including benchmark, example, notebook, and
   release contracts.
@@ -24,8 +24,10 @@ split into equal-size spatial slices.
 
 The v0.1.1 capstone evidence includes focused spatial- and temporal-seam applications for both k=2 identifiers, exact `(1,3)`/`(3,1)` seam-local round trips,
 full action recomputation for every successful move family under ordinary and extreme finite couplings, serialization-equivalent rollback evidence including
-derived profiles and action, and independent pairwise flux checks for uniform, unequal fixed, and state-dependent family policies. The fixed-mixture tests
-exercise `Move22` and `EdgeFlip` as distinct proposal components even though both currently realize the same geometric k=2 edit.
+derived profiles and action, and independent family/site score algebra for uniform, unequal fixed, and state-dependent family policies. Those algebra checks
+assume matching reverse proposal atoms; they do not establish endpoint return support or detailed balance. The
+[#316 counterexample](scientific-basis.md#move-and-sampler-contract) remains unresolved. The fixed-mixture tests exercise `Move22` and `EdgeFlip` as distinct
+proposal components even though both currently realize the same geometric k=2 edit.
 
 ## Property-Test Case Controls
 

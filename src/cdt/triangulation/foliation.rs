@@ -2013,11 +2013,34 @@ const fn slab_triangle_profile_count_overflow(slice: u32, value: u64) -> CdtErro
 const OPEN_BOUNDARY_TIME_COORDINATE_EPSILON: f64 = 1e-9;
 
 fn geometry_query_error(context: &str, error: &DelaunayError) -> CdtError {
-    CdtError::ValidationFailed {
-        check: CdtValidationCheck::Geometry,
-        failure: CdtValidationFailure::BackendGeometry {
+    let failure = match error {
+        DelaunayError::ForeignHandle {
+            kind,
+            handle_owner,
+            backend_owner,
+        } => CdtValidationFailure::ForeignGeometryHandle {
+            context: context.to_string(),
+            kind: *kind,
+            handle_owner: handle_owner.as_u128(),
+            backend_owner: backend_owner.as_u128(),
+        },
+        DelaunayError::StaleHandle {
+            kind,
+            handle_generation,
+            current_generation,
+        } => CdtValidationFailure::StaleGeometryHandle {
+            context: context.to_string(),
+            kind: *kind,
+            handle_generation: *handle_generation,
+            current_generation: *current_generation,
+        },
+        _ => CdtValidationFailure::BackendGeometry {
             detail: format!("{context} query failed: {error}"),
         },
+    };
+    CdtError::ValidationFailed {
+        check: CdtValidationCheck::Geometry,
+        failure,
     }
 }
 
@@ -2136,6 +2159,7 @@ fn open_slab_edge_label(edge: &SlabEdge) -> String {
 mod tests {
     use super::*;
     use crate::errors::ObservedValue;
+    use crate::geometry::backends::delaunay::DelaunayHandleKind;
     use crate::geometry::generators::build_delaunay2_with_data;
     use std::assert_matches;
     use std::time::Duration;
@@ -2677,54 +2701,90 @@ mod tests {
         let errors = [
             (
                 "time label",
-                "vertex",
+                DelaunayHandleKind::Vertex,
                 foreign
                     .time_label(&vertex)
                     .expect_err("a clone must reject the source owner's vertex handle"),
             ),
             (
                 "edge classification",
-                "edge",
+                DelaunayHandleKind::Edge,
                 foreign
                     .edge_type(&edge)
                     .expect_err("a clone must reject the source owner's edge handle"),
             ),
             (
                 "simplex classification",
-                "face",
+                DelaunayHandleKind::Face,
                 foreign
                     .simplex_type(&face)
                     .expect_err("a clone must reject the source owner's face handle"),
             ),
             (
                 "stored simplex classification",
-                "face",
+                DelaunayHandleKind::Face,
                 foreign
                     .simplex_type_from_data(&face)
                     .expect_err("a clone must reject the source owner's face payload handle"),
             ),
             (
                 "face edge classification",
-                "face",
+                DelaunayHandleKind::Face,
                 foreign
                     .face_edge_types(&face)
                     .expect_err("a clone must reject the source owner's face handle"),
             ),
         ];
 
+        let mut owners = None;
         for (context, kind, error) in errors {
             let CdtError::ValidationFailed { check, failure } = error else {
                 panic!("expected a geometry validation error, received {error:?}");
             };
             assert_eq!(check, CdtValidationCheck::Geometry);
-            let CdtValidationFailure::BackendGeometry { detail } = failure else {
-                panic!("expected a backend geometry failure, received {failure:?}");
+            let CdtValidationFailure::ForeignGeometryHandle {
+                context: actual_context,
+                kind: actual_kind,
+                handle_owner,
+                backend_owner,
+            } = failure
+            else {
+                panic!("expected structured foreign handle failure, received {failure:?}");
             };
-            assert!(
-                detail.contains(&format!("{context} query failed: foreign {kind} handle")),
-                "query error did not preserve its operation and handle kind: {detail}"
+            assert_eq!(actual_context, context);
+            assert_eq!(actual_kind, kind);
+            assert_ne!(handle_owner, backend_owner);
+            let pair = (handle_owner, backend_owner);
+            assert_eq!(
+                *owners.get_or_insert(pair),
+                pair,
+                "all handles retain the same source and destination owners"
             );
         }
+    }
+
+    #[test]
+    fn query_error_retains_stale_generation_fields() {
+        let error = geometry_query_error(
+            "time label",
+            &DelaunayError::StaleHandle {
+                kind: DelaunayHandleKind::Vertex,
+                handle_generation: 7,
+                current_generation: 11,
+            },
+        );
+        assert_matches!(
+            error,
+            CdtError::ValidationFailed {
+                check: CdtValidationCheck::Geometry,
+                failure: CdtValidationFailure::StaleGeometryHandle {
+                    kind: DelaunayHandleKind::Vertex,
+                    handle_generation: 7,
+                    current_generation: 11,
+                    ..
+                }
+            }
+        );
     }
 
     #[test]

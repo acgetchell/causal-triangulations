@@ -1,5 +1,26 @@
 # Tooling Alignment
 
+## November 2026 Published Dependency Adoption For PR #319
+
+Adopt the published `research-repo-tools` 0.2.5 and `delaunay` 0.8.4 releases through normal registry resolution. Preserve Python 3.15, Rust 1.99.1,
+the existing scanner security overrides, native platform coverage, scientific fixtures, and geometry ownership boundaries. Delaunay 0.8.4 supplies the
+periodic-coordinate correction tracked by upstream #668; abstract triangle-gluing support in upstream #667 remains assigned to v0.8.5 and is not supplied
+by this dependency update. The exact-ensemble and proposal-support release obligations remain separate from completing this review PR.
+
+Reconcile the uv pin with the installed stable 0.13.7 before previewing the shared Python adoption plan. Update both tooling/notebook package pins and
+registry-only benchmark workflow invocations together, retaining checkout-free write jobs and a reviewed registry cutoff after the 0.2.5 artifacts were
+uploaded on 2 November 2026. Keep consumer tool pins and native recipes unless the published interface requires an integration change. Validate the actual
+installed package, preserved seed-3291 regressions, full local CI, and the required hosted platform checks for the updated PR head.
+
+The geometry adapter retains the upstream dimension and periodic displacement in edge handles, facet indexes and clone-remapping identities. Defaulting
+the handle dimension to two preserves existing 1+1 caller spelling. Resolve facet edges from simplex occurrences and match remapped edges by both endpoint
+UUIDs and directed displacement; endpoint-only lookup can be ambiguous. Reversing endpoint order also reverses displacement. A periodic consumer fixture
+checks every torus edge, nonzero seam displacements, reversed identities and rejection of absent lattice classes.
+
+Delaunay 0.8.4 emits visualization schema v2 with periodic realization data. Update the summary schema assertion to that published contract while preserving
+its original open-strip inputs and all other assertions. The visualization notebook accepts nonperiodic v1/v2 data and retains its open-topology guard;
+explicit controls cover both supported versions and reject unknown or noninteger versions. Upstream exact checkpoint schema v1 remains unchanged.
+
 ## October 2026 MCMC 0.5.2 And Rust 1.99.1
 
 Adopt the latest published, non-yanked `markov-chain-monte-carlo` 0.5.2 release, verified against Cargo's sparse registry index on 24 October 2026.
@@ -999,3 +1020,11 @@ would corrupt source evidence. Audit prose and all other new files remain checke
 Semgrep's native reports exposed a coverage gap: the existing Python rules only selected tooling/test directories, so the strict shared wrapper rejected
 the unscanned audit inputs. The same applicable Python rules now include `docs/audits/**/*.py`, and audit text I/O explicitly uses UTF-8. This extends
 the existing policy to the new source owner instead of excluding those files or relaxing report-completeness checks.
+
+## 26 October 2026 Library and CLI Feature Boundary
+
+The repository review found that library-only consumers still compiled Clap and the binary logger. A default-enabled `cli` feature now owns those optional
+dependencies, command-line parsing methods and the `cdt` binary. Existing default builds and documented commands remain compatible. Library consumers can
+select `default-features = false` while retaining configuration, simulation, checkpoint and analysis APIs. The example logger is also a development dependency
+so library examples remain runnable without enabling the companion CLI. CLI tests are feature-gated; scientific configuration tests remain unconditional.
+Validation must cover library-only compilation and tests, default/all-feature CLI behavior, and an external library consumer without default features.

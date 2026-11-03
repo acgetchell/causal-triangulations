@@ -173,11 +173,12 @@ Structural checks:
    single connected cycle
 6. For toroidal topology, timelike edges connect each slice to both neighboring time slices modulo `T`
 
-Foliated ergodic moves resynchronize foliation bookkeeping from live vertex labels after mutation, then finalize through the `Evolved` profile. The upstream
-bistellar-edit transaction validates the affected result against the Level 1-4 realization contract before it returns success, so move finalization carries
-that internal embedding evidence into the profile instead of repeating the same global scan. It still checks topology, foliation, causality, and strict simplex
-classification before recording success; failures are rolled back. Explicit `validate()` calls, configured cadence checks, and final result construction have
-no mutation-boundary evidence, so they run the complete `Evolved` profile and recheck the whole embedding.
+Foliated ergodic moves finalize incrementally from a validated pre-state. They apply a local foliation delta, update touched degrees, classify new faces,
+refresh profile totals, and invalidate affected caches. The upstream bistellar-edit transaction supplies Level 1-4 realization evidence. These local checks
+and the trusted pre-state justify carrying unchanged invariants forward; finalization does not globally rebuild foliation or rescan every slice after each
+move. Failures are rolled back. Debug finalization rescans CDT-owned topology, foliation, causality, and simplex classification while retaining the backend
+transaction's embedding evidence. Explicit `validate()` calls, configured cadence checks, and final result construction also request whole-embedding
+validation. The [periodic realization audit](audits/delaunay-periodic-realization.md) records an unresolved discrepancy between local and global evidence.
 
 Unfoliated geometry experiments use a separate internal geometry/topology contract for mutation, checkpoint, and result integrity. That compatibility path is
 not a CDT validation profile and makes no causal-validity claim.

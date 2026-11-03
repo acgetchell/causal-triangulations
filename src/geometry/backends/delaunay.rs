@@ -78,7 +78,7 @@ pub struct DelaunayBackend<VertexData, SimplexData, const D: usize> {
     /// Cadence for optional Level 5 checks over accepted CDT mutations.
     delaunay_check_policy: DelaunayCheckPolicy,
     /// Interior 2D edge to one incident facet suitable for k=2 local queries.
-    interior_facets_by_edge: HashMap<EdgeKey, FacetHandle>,
+    interior_facets_by_edge: HashMap<EdgeKey<D>, FacetHandle>,
     /// Runtime identity used to reject handles from a different backend owner.
     owner_id: Uuid,
 }
@@ -93,7 +93,7 @@ struct DelaunayMutation<'a, VertexData: DataType, SimplexData: DataType, const D
     backend: &'a mut DelaunayBackend<VertexData, SimplexData, D>,
     snapshot: Option<(
         RawTriangulation<VertexData, SimplexData, D>,
-        HashMap<EdgeKey, FacetHandle>,
+        HashMap<EdgeKey<D>, FacetHandle>,
     )>,
 }
 
@@ -273,9 +273,11 @@ impl DelaunayVertexHandle {
 /// Equality and hashing include owner and generation provenance. The handle is
 /// intended for transient maps and sets, not persistence across mutation,
 /// cloning, or serialization.
+/// The default dimension preserves the common 2D CDT handle spelling; each key
+/// also retains its periodic lattice displacement.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DelaunayEdgeHandle {
-    key: EdgeKey,
+pub struct DelaunayEdgeHandle<const D: usize = 2> {
+    key: EdgeKey<D>,
     owner_id: Uuid,
     generation: u64,
 }
@@ -304,9 +306,10 @@ pub(crate) struct DelaunayVertexStableId(Uuid);
 
 /// Stable edge identity used only to remap a proposal into a cloned owner.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) struct DelaunayEdgeStableId {
+pub(crate) struct DelaunayEdgeStableId<const D: usize = 2> {
     v0: Uuid,
     v1: Uuid,
+    displacement: [i16; D],
 }
 
 /// Stable face identity used only to remap a proposal into a cloned owner.
@@ -788,14 +791,14 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     }
 
     /// Finds the 2D facet handle corresponding to a live interior edge.
-    fn interior_facet_for_edge(&self, edge: EdgeKey) -> Option<FacetHandle> {
+    fn interior_facet_for_edge(&self, edge: EdgeKey<D>) -> Option<FacetHandle> {
         self.interior_facets_by_edge.get(&edge).copied()
     }
 
     /// Builds the 2D interior edge-facet lookup from current simplex adjacency.
     fn build_interior_facets_by_edge(
         dt: &RawTriangulation<VertexData, SimplexData, D>,
-    ) -> HashMap<EdgeKey, FacetHandle> {
+    ) -> HashMap<EdgeKey<D>, FacetHandle> {
         let mut facets_by_edge = HashMap::new();
         Self::populate_interior_facets_by_edge(dt, &mut facets_by_edge);
         facets_by_edge
@@ -804,7 +807,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// Populates a caller-owned interior-facet map without replacing its allocation.
     fn populate_interior_facets_by_edge(
         dt: &RawTriangulation<VertexData, SimplexData, D>,
-        facets_by_edge: &mut HashMap<EdgeKey, FacetHandle>,
+        facets_by_edge: &mut HashMap<EdgeKey<D>, FacetHandle>,
     ) {
         if D != 2 {
             return;
@@ -820,10 +823,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
                     continue;
                 }
 
-                let mut facet_vertices = vertices
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(idx, &key)| (idx != facet_index).then_some(key));
+                let mut facet_vertices = (0..vertices.len()).filter(|&idx| idx != facet_index);
                 let Some(v0) = facet_vertices.next() else {
                     continue;
                 };
@@ -832,7 +832,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
                 };
                 if facet_vertices.next().is_none()
                     && let Ok(facet_index) = u8::try_from(facet_index)
-                    && let Ok(edge) = dt.edge_key(v0, v1)
+                    && let Ok(edge) = dt.edge_key_from_simplex(simplex_key, [v0, v1])
                     && let Ok(facet) = dt.facet_handle(simplex_key, facet_index)
                 {
                     facets_by_edge.entry(edge).or_insert(facet);
@@ -852,7 +852,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
         &self,
         simplices: &[SimplexKey],
         operation: DelaunayOperation,
-    ) -> Result<Vec<EdgeKey>, DelaunayError> {
+    ) -> Result<Vec<EdgeKey<D>>, DelaunayError> {
         if D != 2 {
             return Ok(Vec::new());
         }
@@ -869,7 +869,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
                 for second in (first + 1)..vertices.len() {
                     let edge = self
                         .dt
-                        .edge_key(vertices[first], vertices[second])
+                        .edge_key_from_simplex(simplex_key, [first, second])
                         .map_err(|err| DelaunayError::InteriorFacetIndexUpdateFailed {
                             operation,
                             detail: err.to_string(),
@@ -910,7 +910,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// Applies the facet-index delta described by one realized local edit.
     fn update_interior_facet_index(
         &mut self,
-        removed_edges: &[EdgeKey],
+        removed_edges: &[EdgeKey<D>],
         new_simplices: &[SimplexKey],
         operation: DelaunayOperation,
     ) -> Result<(), DelaunayError> {
@@ -935,10 +935,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
                 if neighbor.is_none() {
                     continue;
                 }
-                let mut facet_vertices = vertices
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(index, &vertex)| (index != facet_index).then_some(vertex));
+                let mut facet_vertices = (0..vertices.len()).filter(|&index| index != facet_index);
                 let (Some(first), Some(second), None) = (
                     facet_vertices.next(),
                     facet_vertices.next(),
@@ -946,12 +943,13 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
                 ) else {
                     continue;
                 };
-                let edge = self.dt.edge_key(first, second).map_err(|err| {
-                    DelaunayError::InteriorFacetIndexUpdateFailed {
+                let edge = self
+                    .dt
+                    .edge_key_from_simplex(simplex_key, [first, second])
+                    .map_err(|err| DelaunayError::InteriorFacetIndexUpdateFailed {
                         operation,
                         detail: err.to_string(),
-                    }
-                })?;
+                    })?;
                 let facet_index = u8::try_from(facet_index).map_err(|err| {
                     DelaunayError::InteriorFacetIndexUpdateFailed {
                         operation,
@@ -976,7 +974,11 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// The upstream flip mutates the triangulation before returning its result metadata. If
     /// that metadata does not identify a live replacement edge, the whole backend mutation
     /// must be rolled back rather than publishing the changed triangulation with an error.
-    fn replacement_edge_key(&self, v0: VertexKey, v1: VertexKey) -> Result<EdgeKey, DelaunayError> {
+    fn replacement_edge_key(
+        &self,
+        v0: VertexKey,
+        v1: VertexKey,
+    ) -> Result<EdgeKey<D>, DelaunayError> {
         self.dt
             .edge_key(v0, v1)
             .map_err(|err| DelaunayError::UnexpectedFlipOutput {
@@ -989,7 +991,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     }
 
     /// Returns whether the keyed edge is present in the triangulation.
-    fn edge_exists(&self, edge: EdgeKey) -> bool {
+    fn edge_exists(&self, edge: EdgeKey<D>) -> bool {
         let v0 = edge.v0();
         let v1 = edge.v1();
         self.dt.contains_vertex_key(v0)
@@ -1073,6 +1075,20 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
 }
 
 impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, SimplexData, D> {
+    /// Captures state for restoration to this same owner, never for an independent live clone.
+    pub(crate) fn rollback_snapshot(&self) -> Self
+    where
+        VertexData: Clone,
+        SimplexData: Clone,
+    {
+        Self {
+            dt: self.dt.clone(),
+            delaunay_check_policy: self.delaunay_check_policy,
+            interior_facets_by_edge: self.interior_facets_by_edge.clone(),
+            owner_id: self.owner_id,
+        }
+    }
+
     /// Returns the topology generation attached to newly issued handles.
     fn handle_generation(&self) -> u64 {
         self.dt.topology_generation()
@@ -1088,7 +1104,7 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
     }
 
     /// Creates an edge handle scoped to this owner and generation.
-    fn edge_handle(&self, key: EdgeKey) -> DelaunayEdgeHandle {
+    fn edge_handle(&self, key: EdgeKey<D>) -> DelaunayEdgeHandle<D> {
         DelaunayEdgeHandle {
             key,
             owner_id: self.owner_id,
@@ -1144,7 +1160,10 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
             .ok_or(DelaunayError::InvalidVertex { key: vertex.key })
     }
 
-    fn validate_edge_handle(&self, edge: &DelaunayEdgeHandle) -> Result<EdgeKey, DelaunayError> {
+    fn validate_edge_handle(
+        &self,
+        edge: &DelaunayEdgeHandle<D>,
+    ) -> Result<EdgeKey<D>, DelaunayError> {
         self.validate_handle_provenance(DelaunayHandleKind::Edge, edge.owner_id, edge.generation)?;
         self.dt
             .edge_view(edge.key)
@@ -1240,11 +1259,11 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
             .map(|key| self.face_handle(key))
     }
 
-    /// Converts an owner-bound edge handle into stable endpoint identity.
+    /// Retains endpoint UUIDs and lattice displacement when remapping an edge.
     pub(crate) fn stable_edge_id(
         &self,
-        edge: &DelaunayEdgeHandle,
-    ) -> Result<DelaunayEdgeStableId, DelaunayError> {
+        edge: &DelaunayEdgeHandle<D>,
+    ) -> Result<DelaunayEdgeStableId<D>, DelaunayError> {
         let key = self.validate_edge_handle(edge)?;
         let (v0, v1) = key.endpoints();
         let v0 = self
@@ -1255,14 +1274,18 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
             .dt
             .vertex_uuid_from_key(v1)
             .ok_or(DelaunayError::InvalidVertex { key: v1 })?;
-        Ok(DelaunayEdgeStableId { v0, v1 })
+        Ok(DelaunayEdgeStableId {
+            v0,
+            v1,
+            displacement: key.displacement(),
+        })
     }
 
     /// Resolves stable edge identity into a current owner-bound handle.
     pub(crate) fn resolve_edge_id(
         &self,
-        stable_id: DelaunayEdgeStableId,
-    ) -> Result<DelaunayEdgeHandle, DelaunayError> {
+        stable_id: DelaunayEdgeStableId<D>,
+    ) -> Result<DelaunayEdgeHandle<D>, DelaunayError> {
         let v0 = self.dt.vertex_key_from_uuid(&stable_id.v0).ok_or_else(|| {
             DelaunayError::ValidationFailed {
                 level: DelaunayValidationLevel::Two,
@@ -1281,9 +1304,20 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
                 ),
             }
         })?;
+        // Canonical endpoint order may change after owner reconstruction. Match
+        // the displacement in its original direction, reversing it with the endpoints.
+        let key = self
+            .dt
+            .incident_edges(v0)
+            .find(|key| {
+                (key.endpoints() == (v0, v1) && key.displacement() == stable_id.displacement)
+                    || (key.endpoints() == (v1, v0)
+                        && key.displacement() == stable_id.displacement.map(|offset| -offset))
+            })
+            .ok_or(DelaunayError::InvalidEdge { v0, v1 })?;
         self.dt
-            .edge_key(v0, v1)
-            .map(|key| self.edge_handle(key))
+            .edge_view(key)
+            .map(|view| self.edge_handle(view.key()))
             .map_err(|_| DelaunayError::InvalidEdge { v0, v1 })
     }
 
@@ -1844,7 +1878,7 @@ impl<VertexData, SimplexData, const D: usize> GeometryBackend
 {
     type Coordinate = f64;
     type VertexHandle = DelaunayVertexHandle;
-    type EdgeHandle = DelaunayEdgeHandle;
+    type EdgeHandle = DelaunayEdgeHandle<D>;
     type FaceHandle = DelaunayFaceHandle;
     type Error = DelaunayError;
 
@@ -2188,9 +2222,9 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// Flips one edge with either backend- or caller-owned rollback.
     fn flip_edge_with_rollback(
         &mut self,
-        edge: &DelaunayEdgeHandle,
+        edge: &DelaunayEdgeHandle<D>,
         rollback: MutationRollback,
-    ) -> Result<FlipResult<DelaunayEdgeHandle, DelaunayFaceHandle>, DelaunayError> {
+    ) -> Result<FlipResult<DelaunayEdgeHandle<D>, DelaunayFaceHandle>, DelaunayError> {
         let edge_key = self.validate_edge_handle(edge)?;
         let facet = if self.edge_exists(edge_key) {
             self.interior_facet_for_edge(edge_key).ok_or_else(|| {
@@ -2376,8 +2410,8 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
     /// Flips an edge inside an enclosing rollback or discard boundary.
     pub(crate) fn flip_edge_in_caller_transaction(
         &mut self,
-        edge: &DelaunayEdgeHandle,
-    ) -> Result<FlipResult<DelaunayEdgeHandle, DelaunayFaceHandle>, DelaunayError> {
+        edge: &DelaunayEdgeHandle<D>,
+    ) -> Result<FlipResult<DelaunayEdgeHandle<D>, DelaunayFaceHandle>, DelaunayError> {
         self.flip_edge_with_rollback(edge, MutationRollback::Caller)
     }
 
@@ -2493,13 +2527,53 @@ pub(crate) mod tests {
     };
     use crate::{CdtTriangulation, CdtValidationProfile};
     use approx::assert_relative_eq;
-    use delaunay::prelude::construction::{ConstructionOptions, DelaunayTriangulationBuilder};
+    use delaunay::prelude::construction::ConstructionOptions;
     use delaunay::prelude::validation::{TopologyGuarantee, ValidationPolicy};
     use serde_json::{Error as JsonError, Value, error::Category, from_str, to_string, to_value};
     use slotmap::KeyData;
     use std::assert_matches;
     use std::collections::HashSet;
     use std::num::NonZeroU32;
+
+    #[test]
+    fn periodic_edge_remapping_preserves_displacement_and_facet_identity() {
+        let torus = CdtTriangulation::from_toroidal_cdt(4, 3).expect("original periodic fixture");
+        let backend = torus.geometry();
+        let cloned = backend.clone();
+        let mut saw_seam = false;
+        let mut checked = 0;
+        for edge in backend.edges() {
+            let stable = backend.stable_edge_id(&edge).expect("live edge identity");
+            saw_seam |= stable.displacement != [0; 2];
+            let remapped = cloned
+                .resolve_edge_id(stable)
+                .expect("same lifted edge class");
+            assert_eq!(cloned.stable_edge_id(&remapped).unwrap(), stable);
+            assert_ne!(remapped.owner_id, edge.owner_id);
+            assert!(backend.interior_facet_for_edge(edge.key).is_some());
+
+            let reversed = DelaunayEdgeStableId {
+                v0: stable.v1,
+                v1: stable.v0,
+                displacement: stable.displacement.map(|offset| -offset),
+            };
+            assert_eq!(cloned.resolve_edge_id(reversed).unwrap(), remapped);
+            let absent = DelaunayEdgeStableId {
+                displacement: [i16::MAX; 2],
+                ..stable
+            };
+            assert_matches!(
+                cloned.resolve_edge_id(absent),
+                Err(DelaunayError::InvalidEdge { .. })
+            );
+            checked += 1;
+        }
+        assert_eq!(checked, 36, "all edges of the closed 12-vertex torus");
+        assert!(
+            saw_seam,
+            "the fixture must exercise nonzero lattice displacement"
+        );
+    }
 
     #[test]
     fn flip_error_distinguishes_candidate_geometry_from_internal_context_failures() {
@@ -3678,22 +3752,21 @@ pub(crate) mod tests {
         let edge_count = backend.edge_count();
         let face_count = backend.face_count();
 
-        // Verify Euler characteristic for planar graphs
-        // For a triangulation without the outer infinite face: V - E + F = 1
-        // For a triangulation with the outer infinite face: V - E + F = 2
-        // Note: Random triangulations may occasionally have degeneracies that result in χ = 0
+        // This fixed nondegenerate Euclidean triangulation is a disk. The backend
+        // counts finite triangles, excluding the outer infinite face: V - E + F = 1.
         let euler = vertex_count as i128 - edge_count as i128 + face_count as i128;
-        assert!(
-            (0..=2).contains(&euler),
-            "Euler characteristic should be in range [0, 2] for planar triangulation, got {euler} (V={vertex_count}, E={edge_count}, F={face_count})"
+        assert_eq!(
+            euler, 1,
+            "Fixed disk triangulation must have χ=1 (V={vertex_count}, E={edge_count}, F={face_count})"
         );
 
         // Count edges through incident_edges (should match total edge count)
         let mut edge_set = HashSet::new();
         for vertex in backend.vertices() {
-            if let Ok(incident) = backend.incident_edges(&vertex) {
-                edge_set.extend(incident);
-            }
+            let incident = backend
+                .incident_edges(&vertex)
+                .expect("every vertex in the fixed disk must have queryable incident edges");
+            edge_set.extend(incident);
         }
         assert_eq!(
             edge_set.len(),
@@ -4260,9 +4333,8 @@ pub(crate) mod tests {
 
     fn assert_interior_facet_index_matches_rebuild(backend: &DelaunayBackend2D) {
         let rebuilt = DelaunayBackend2D::build_interior_facets_by_edge(&backend.dt);
-        let actual_edges: std::collections::HashSet<_> =
-            backend.interior_facets_by_edge.keys().copied().collect();
-        let rebuilt_edges: std::collections::HashSet<_> = rebuilt.keys().copied().collect();
+        let actual_edges: HashSet<_> = backend.interior_facets_by_edge.keys().copied().collect();
+        let rebuilt_edges: HashSet<_> = rebuilt.keys().copied().collect();
         assert_eq!(actual_edges, rebuilt_edges);
     }
 

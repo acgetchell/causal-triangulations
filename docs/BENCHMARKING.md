@@ -52,7 +52,7 @@ For a prospective release, the explicit comparison recipe creates temporary Git 
 just performance-release "$TAG" "$PREVIOUS_TAG"
 ```
 
-Agents following this repository's Git restrictions must leave that mutating worktree command to the user. It is outside normal validation.
+This recipe mutates Git worktrees and requires explicit user authorization under [AGENTS.md](../AGENTS.md#git-operations). It is outside normal validation.
 Measurements capture source/harness fingerprints, host identity, Rust, Criterion, Delaunay, la-stack, and MCMC versions.
 Matching known host OS, architecture, and CPU are required for local pairs. Review dependency and workload changes before interpreting any ratio.
 

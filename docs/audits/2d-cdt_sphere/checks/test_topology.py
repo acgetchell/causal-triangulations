@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from .topology import adjacency_census, audit, census, graph, read_export
+from .topology import adjacency_census, audit, census, graph, read_export, write_report
 
 if TYPE_CHECKING:
     from .topology import Face
@@ -102,6 +102,111 @@ def test_export_parser_rejects_truncation(tmp_path: Path) -> None:
     path.write_text((EVIDENCE / "true-initial.dat").read_text(encoding="utf-8").rsplit("\n", 2)[0], encoding="utf-8")
     with pytest.raises(ValueError, match="triangle records"):
         read_export(path)
+
+
+def copy_snapshot(directory: Path) -> Path:
+    """Copy retained inputs so negative controls cannot modify the evidence."""
+    path = directory / "true-initial.dat"
+    for suffix in (".dat", ".json"):
+        path.with_suffix(suffix).write_bytes((EVIDENCE / f"true-initial{suffix}").read_bytes())
+    return path
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("sphere", "false", "sphere must be a boolean"),
+        ("move_counts_reject_add_delete_flip", [0, -1, 0, 0], "nonnegative integers"),
+        ("move_counts_reject_add_delete_flip", [0, 0, 0], "reject/add/delete/flip"),
+        ("slice_sizes", [999, 3, 3, 3], "disagree"),
+        ("slice_sizes", [True, 3, 3, 3], "nonnegative integers"),
+        ("vertex_neighbors", [[False]], "nonnegative integers"),
+        ("triangle_neighbors", [[999]], "out-of-range"),
+        ("links", [[0, 1, 2]], "link-pair shape"),
+    ],
+)
+def test_sidecar_rejects_invalid_metadata(tmp_path: Path, field: str, value: object, message: str) -> None:
+    path = copy_snapshot(tmp_path)
+    sidecar = path.with_suffix(".json")
+    data = json.loads(sidecar.read_text(encoding="utf-8"))
+    data[field] = value
+    sidecar.write_text(json.dumps(data), encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        audit(path)
+
+
+def test_export_parser_rejects_negative_time_labels(tmp_path: Path) -> None:
+    path = copy_snapshot(tmp_path)
+    tokens = path.read_text(encoding="utf-8").split()
+    vertices = int(tokens[0])
+    tokens[1 : vertices + 1] = ["-1"] * vertices
+    path.write_text("\n".join(tokens), encoding="utf-8")
+    with pytest.raises(ValueError, match="negative time label"):
+        audit(path)
+
+
+def test_stored_pointer_negative_control_preserves_independent_census(tmp_path: Path) -> None:
+    path = copy_snapshot(tmp_path)
+    expected = audit(path)
+    tokens = path.read_text(encoding="utf-8").split()
+    tokens[int(tokens[0]) + 6] = "0"  # Triangle zero cannot neighbor itself across its first edge.
+    path.write_text("\n".join(tokens), encoding="utf-8")
+    expected["stored_pointer_errors"] = [[0, 0]]
+    assert audit(path) == expected
+
+
+def test_reconstructed_link_negative_control_preserves_independent_census(tmp_path: Path) -> None:
+    path = copy_snapshot(tmp_path)
+    expected = audit(path)
+    sidecar = path.with_suffix(".json")
+    data = json.loads(sidecar.read_text(encoding="utf-8"))
+    data["links"].pop()
+    sidecar.write_text(json.dumps(data), encoding="utf-8")
+    expected["reconstructed_links_match"] = False
+    assert audit(path) == expected
+
+
+@pytest.mark.parametrize("kind", ["direct", "symlink", "hardlink"])
+@pytest.mark.parametrize("suffix", [".dat", ".json"])
+def test_report_rejects_input_aliases(tmp_path: Path, kind: str, suffix: str) -> None:
+    path = copy_snapshot(tmp_path).with_suffix(suffix)
+    original = path.read_bytes()
+    output = tmp_path / "report.json"
+    if kind == "symlink":
+        output.symlink_to(path)
+    elif kind == "hardlink":
+        output.hardlink_to(path)
+    else:
+        output = path
+    with pytest.raises(ValueError, match="aliases a snapshot input"):
+        write_report(tmp_path, output)
+    assert path.read_bytes() == original
+
+
+def test_report_replacement_failure_preserves_prior_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    copy_snapshot(tmp_path)
+    output = tmp_path / "report.json"
+    output.write_bytes(b"prior complete report\n")
+    before = {path.name: path.read_bytes() for path in tmp_path.iterdir()}
+
+    def fail_replace(_source: Path, _destination: Path) -> None:
+        message = "injected replacement failure"
+        raise OSError(message)
+
+    monkeypatch.setattr(Path, "replace", fail_replace)
+    with pytest.raises(OSError, match="injected replacement failure"):
+        write_report(tmp_path, output)
+    assert {path.name: path.read_bytes() for path in tmp_path.iterdir()} == before
+
+
+def test_report_publishes_complete_utf8_json(tmp_path: Path) -> None:
+    path = copy_snapshot(tmp_path)
+    output = tmp_path / "report.json"
+    write_report(tmp_path, output)
+    assert output.read_bytes().endswith(b"\n")
+    assert b"\r" not in output.read_bytes()
+    assert json.loads(output.read_text(encoding="utf-8")) == {path.stem: audit(path)}
+    assert not list(tmp_path.glob(".report.json.*"))
 
 
 def test_retained_census_and_round_trips() -> None:

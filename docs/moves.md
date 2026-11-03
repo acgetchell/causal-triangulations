@@ -61,11 +61,12 @@ Owns a `MoveStatistics` instance and a serializable seeded RNG stream. Public AP
 - `attempt_edge_flip(&mut CdtTriangulation2D) -> MoveResult`
 - `attempt_random_move(&mut CdtTriangulation2D) -> MoveResult` — delegates to one of the above
 
-Accepted moves mutate the triangulation through narrow CDT-owned edit operations, then rebuild CDT foliation bookkeeping from live vertex labels and refresh
-simplex classifications. Foliated move finalization uses the evolved CDT validation profile, carrying forward the backend transaction's successful embedding
-check while rechecking CDT-domain invariants. On toroidal triangulations, it also rechecks χ = 0 and the closed-S¹ per-slice foliation invariant before
-recording success. Unfoliated geometry experiments retain a separate geometry/topology-only finalization contract and do not claim CDT causal validity. The raw
-mutable backend is not exposed as part of the CDT API.
+Accepted moves mutate the triangulation through narrow CDT-owned edit operations. Given a validated pre-state, finalization applies the local foliation
+delta, refreshes touched vertex degrees and new-face classifications, and updates profile totals and caches. It combines those local checks with the
+backend transaction's embedding evidence; it does not rebuild or globally rescan every slice after each move. Debug finalization rescans CDT-owned invariants
+using that embedding evidence. Configured validation cadence, explicit validation, and final result construction also request whole-embedding validation;
+see the unresolved [periodic realization discrepancy](audits/delaunay-periodic-realization.md). Unfoliated geometry experiments retain a separate
+geometry/topology-only finalization contract and do not claim CDT causal validity. The raw mutable backend is not exposed as part of the CDT API.
 
 ## Architecture
 
@@ -109,7 +110,8 @@ maps Delaunay's local edit primitives into foliation-preserving CDT proposals:
 - `Move22` / `EdgeFlip` use the k=2 edge flip only when the replacement diagonal preserves adjacent-slice causality and simplex classification.
 - Foliated `Move13Add` is realized as a spacelike-link split: subdivide an adjacent face, label the new vertex on the link's slice, then flip the original
   spacelike link away. Open-boundary sites require both adjacent time slabs; toroidal sites wrap time.
-- Foliated `Move31Remove` uses the exact inverse flip-then-collapse configuration and preserves open-path or closed-S¹ slice minima as appropriate.
+- Foliated `Move31Remove` uses a flip-then-collapse configuration and preserves open-path or closed-S¹ slice minima as appropriate. This local combinatorial
+  pattern does not establish exact reverse proposal support; see the [known #316 limitation](scientific-basis.md#move-and-sampler-contract).
 - Unfoliated geometry experiments use the bare k=1 insertion and degree-3 removal primitives without claiming a CDT causal transition.
 - Toroidal `Move31Remove` uses the inverse flip-then-collapse path for degree-4 configurations produced by the spacelike-link split.
 
@@ -134,9 +136,11 @@ guard.
 
 ## Ensemble And Volume Fixing
 
-Current CDT simulations do not add a volume-fixing term. The `(1,3)` and `(3,1)` kernels are genuine volume-changing proposals, so accepted moves may change
-the total number of vertices and simplices over time. The resulting Markov chain should therefore be interpreted as sampling the grand-canonical,
-unfixed-volume ensemble specified by the configured action, cosmological term, proposal probabilities, and Metropolis-Hastings acceptance rule.
+Volume fixing is disabled by default. The `(1,3)` and `(3,1)` kernels change volume, so accepted moves may change vertex and simplex counts. The default target
+is the grand-canonical, unfixed-volume ensemble specified by the action. Opt-in quadratic triangle-volume fixing is available for toroidal 1+1 CDT through
+`VolumeFixing::quadratic_triangles` or the paired `--target-triangles` and `--volume-fixing-strength` CLI options. It adds `epsilon * (N2 - target)^2` to the
+action; it is a soft bias, not a clamp or a fixed-volume transition kernel. The [scientific evidence limits](scientific-basis.md) apply to both targets: current
+proposal implementation does not yet establish exact ensemble sampling.
 
 This is a valid 1+1 CDT setting rather than an implementation accident. Israel and Lindner use a 1+1 CDT Monte Carlo model where add/remove moves satisfy
 detailed balance and the cosmological constant controls whether the universe size is stable, shrinking, or diverging:
@@ -155,8 +159,8 @@ Approximate volume fixing is also standard in higher-dimensional CDT when the sc
 case the fixing term is part of the sampled action, for example a quadratic penalty around a target volume, and detailed balance is with respect to the
 modified ensemble. See Ambjørn et al.,
 [The Semiclassical Limit of Causal Dynamical Triangulations](https://arxiv.org/abs/1102.3929), and the toroidal topology study,
-[The phase structure of Causal Dynamical Triangulations with toroidal spatial topology](https://arxiv.org/abs/1802.10434). This crate does not implement volume
-fixing yet; if added, it should be explicit and opt-in.
+[The phase structure of Causal Dynamical Triangulations with toroidal spatial topology](https://arxiv.org/abs/1802.10434). The implemented 1+1 bias is explicit
+and opt-in; these higher-dimensional references do not validate this crate's sampler.
 
 ## Planned Work
 

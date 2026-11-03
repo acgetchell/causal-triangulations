@@ -205,10 +205,9 @@ pub fn proposed_delta_action(
     before: SimplexCounts,
     move_type: MoveType,
 ) -> Option<f64> {
-    let insertion_delta = action_config.cosmological_constant().mul_add(
-        3.0,
-        (-action_config.coupling_0()).mul_add(1.0, -(action_config.coupling_2() * 2.0)),
-    );
+    // Use the same compensated sum as the full action: rounding a partial
+    // -k0 - 2*k2 sum can destroy cancellation against 3*lambda.
+    let insertion_delta = action_config.physical_action(1, 3, 2);
     let (delta, triangle_change) = match move_type {
         MoveType::Move22 | MoveType::EdgeFlip => (0.0, 0),
         MoveType::Move13Add => {
@@ -252,6 +251,36 @@ mod tests {
     use super::*;
     use crate::cdt::volume_fixing::VolumeFixing;
     use approx::assert_relative_eq;
+
+    #[test]
+    fn physical_move_deltas_match_exact_integer_cancellation() {
+        let a = 9_007_199_254_740_994_i128;
+        let counts = SimplexCounts {
+            vertices: 16,
+            edges: 48,
+            triangles: 32,
+        };
+        for (k0, k2, lambda) in [(a, a, a), (a + 2, a - 2, a), (-a, -a, -a)] {
+            let action = ActionConfig::new(
+                <f64 as num_traits::NumCast>::from(k0).expect("finite coupling"),
+                <f64 as num_traits::NumCast>::from(k2).expect("finite coupling"),
+                <f64 as num_traits::NumCast>::from(lambda).expect("finite coupling"),
+            )
+            .expect("bounded action");
+            let exact = -k0 - 2 * k2 + 3 * lambda;
+            for (family, expected) in [
+                (MoveType::Move13Add, exact),
+                (MoveType::Move31Remove, -exact),
+            ] {
+                assert_relative_eq!(
+                    proposed_delta_action(&action, counts, family).expect("valid move counts"),
+                    <f64 as num_traits::NumCast>::from(expected).expect("exact small delta"),
+                    epsilon = 0.0,
+                    max_relative = 0.0
+                );
+            }
+        }
+    }
 
     #[test]
     fn fixing_delta_matches_independent_quadratic_differences_for_every_family() {

@@ -36,6 +36,17 @@ use std::time::Duration;
 const CHECKPOINT_FORMAT_VERSION: u32 = 3;
 const BARE_CHECKPOINT_FORMAT_VERSION: u32 = 2;
 
+#[cfg(test)]
+thread_local! {
+    static VALIDATION_STEP_INPUTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Counts step records presented to full/suffix validation on this test thread.
+#[cfg(test)]
+pub(crate) fn take_validation_step_inputs() -> usize {
+    VALIDATION_STEP_INPUTS.with(|count| count.replace(0))
+}
+
 pub(crate) struct CdtMcmcCheckpointParts {
     pub(crate) triangulation: CdtTriangulation2D,
     pub(crate) accepted: usize,
@@ -140,19 +151,22 @@ impl CheckpointAction {
 /// ```
 #[derive(Clone)]
 pub struct CdtMcmcCheckpoint {
-    pub(crate) chain: ChainCheckpoint<CdtTriangulation2D>,
-    pub(crate) config: MetropolisConfig,
-    pub(crate) action_config: ActionConfig,
-    pub(crate) current_step: NonZeroU32,
+    chain: ChainCheckpoint<CdtTriangulation2D>,
+    config: MetropolisConfig,
+    action_config: ActionConfig,
+    current_step: NonZeroU32,
     current_action: CheckpointAction,
-    pub(crate) move_stats: MoveStatistics,
-    pub(crate) proposal_stats: ProposalStatistics,
-    pub(crate) steps: Vec<MonteCarloStep>,
-    pub(crate) measurements: Vec<Measurement>,
-    pub(crate) scalar_trace_rows: Vec<CdtScalarTraceRow>,
-    pub(crate) elapsed_time: Duration,
-    pub(crate) acceptance_rng: Xoshiro256PlusPlus,
-    pub(crate) ergodics: ErgodicsSystem,
+    move_stats: MoveStatistics,
+    proposal_stats: ProposalStatistics,
+    steps: Vec<MonteCarloStep>,
+    measurements: Vec<Measurement>,
+    scalar_trace_rows: Vec<CdtScalarTraceRow>,
+    elapsed_time: Duration,
+    acceptance_rng: Xoshiro256PlusPlus,
+    ergodics: ErgodicsSystem,
+    // All fields are private and accessors borrow immutably. Only constructors
+    // that complete full or suffix validation may seal this evidence.
+    prefix_validated: bool,
 }
 
 /// Borrowed top-level record shared by checkpoint envelopes 2 and 3.
@@ -427,6 +441,7 @@ impl CdtMcmcCheckpoint {
             elapsed_time,
             acceptance_rng,
             ergodics,
+            prefix_validated: false,
         };
         validate_checkpoint_counters(&checkpoint)?;
         share_restored_profile_snapshots(
@@ -434,12 +449,14 @@ impl CdtMcmcCheckpoint {
             &mut checkpoint.scalar_trace_rows,
             &mut checkpoint.measurements,
         )?;
+        checkpoint.prefix_validated = true;
         Ok(checkpoint)
     }
 
     pub(crate) fn from_parts(parts: CdtMcmcCheckpointParts) -> CdtResult<Self> {
-        let checkpoint = Self::assemble(parts)?;
+        let mut checkpoint = Self::assemble(parts)?;
         validate_checkpoint_counters(&checkpoint)?;
+        checkpoint.prefix_validated = true;
         Ok(checkpoint)
     }
 
@@ -448,8 +465,9 @@ impl CdtMcmcCheckpoint {
         parts: CdtMcmcCheckpointParts,
         prefix: ValidatedCheckpointPrefix,
     ) -> CdtResult<Self> {
-        let checkpoint = Self::assemble(parts)?;
+        let mut checkpoint = Self::assemble(parts)?;
         validate_checkpoint_after_prefix(&checkpoint, prefix)?;
+        checkpoint.prefix_validated = true;
         Ok(checkpoint)
     }
 
@@ -470,11 +488,51 @@ impl CdtMcmcCheckpoint {
             elapsed_time: parts.elapsed_time,
             acceptance_rng: parts.acceptance_rng,
             ergodics: parts.ergodics,
+            prefix_validated: false,
         })
+    }
+
+    /// Consumes immutable checkpoint storage, discarding its validation seal.
+    pub(crate) fn into_parts(self) -> CdtMcmcCheckpointParts {
+        let (triangulation, accepted, rejected) = self.chain.into_parts();
+        CdtMcmcCheckpointParts {
+            triangulation,
+            accepted,
+            rejected,
+            config: self.config,
+            action_config: self.action_config,
+            current_step: self.current_step,
+            current_action: self.current_action.get(),
+            move_stats: self.move_stats,
+            proposal_stats: self.proposal_stats,
+            steps: self.steps,
+            measurements: self.measurements,
+            scalar_trace_rows: self.scalar_trace_rows,
+            elapsed_time: self.elapsed_time,
+            acceptance_rng: self.acceptance_rng,
+            ergodics: self.ergodics,
+        }
+    }
+
+    /// Borrows retained scalar telemetry without exposing a mutation path.
+    #[cfg(test)]
+    pub(crate) fn scalar_trace_rows_for_test(&self) -> &[CdtScalarTraceRow] {
+        &self.scalar_trace_rows
+    }
+
+    /// Exercises raw in-memory corruption without preserving trusted evidence.
+    #[cfg(test)]
+    pub(crate) fn tamper_for_test(self, tamper: impl FnOnce(&mut CdtMcmcCheckpointParts)) -> Self {
+        let mut parts = self.into_parts();
+        tamper(&mut parts);
+        Self::assemble(parts).expect("tamper fixture retains typed field invariants")
     }
 
     /// Captures the boundary already proven by a full checkpoint validation.
     pub(crate) fn validated_prefix(&self) -> CdtResult<ValidatedCheckpointPrefix> {
+        if !self.prefix_validated {
+            validate_checkpoint_counters(self)?;
+        }
         Ok(ValidatedCheckpointPrefix {
             steps: self.steps.len(),
             measurements: self.measurements.len(),
@@ -962,7 +1020,7 @@ pub(crate) fn validate_resume_compatible<P>(
             CheckpointResumeFailure::IncompatibleMeasurementFrequency,
         ));
     }
-    validate_checkpoint_counters(checkpoint)
+    Ok(())
 }
 
 /// Proof that requested and checkpointed action couplings describe the same resume target.
@@ -1028,6 +1086,8 @@ const fn ordered_f64_bits(value: f64) -> u64 {
 /// [`MetropolisConfig`] and [`ActionConfig`] validate before storage, so this
 /// helper only audits relationships among their checkpointed data.
 pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
+    #[cfg(test)]
+    VALIDATION_STEP_INPUTS.with(|count| count.set(count.get() + checkpoint.steps.len()));
     validate_checkpoint_summary(checkpoint)?;
     validate_checkpoint_steps(checkpoint)?;
     validate_checkpoint_measurements(checkpoint)?;
@@ -1096,6 +1156,10 @@ fn validate_checkpoint_after_prefix(
     checkpoint: &CdtMcmcCheckpoint,
     prefix: ValidatedCheckpointPrefix,
 ) -> CdtResult<()> {
+    #[cfg(test)]
+    VALIDATION_STEP_INPUTS.with(|count| {
+        count.set(count.get() + checkpoint.steps.len().saturating_sub(prefix.steps));
+    });
     validate_checkpoint_summary(checkpoint)?;
     validate_checkpoint_step_suffix(checkpoint, prefix)?;
     validate_checkpoint_measurement_suffix(checkpoint, prefix)?;
@@ -1844,6 +1908,46 @@ mod tests {
                 }
             }
         );
+    }
+
+    #[test]
+    fn checkpoint_maximum_duration_returns_typed_error_on_continuation() {
+        let mut payload = one_step_checkpoint_payload();
+        payload["elapsed_time"] = json!({"secs": u64::MAX, "nanos": 999_999_999});
+        let checkpoint = CdtMcmcCheckpoint::from_json(&payload.to_string())
+            .expect("maximum normalized duration remains decodable");
+        let result = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 1, 0, 1).expect("one-step continuation"),
+            ActionConfig::default(),
+        )
+        .resume_to_checkpoint(checkpoint);
+        assert_matches!(
+            result.err(),
+            Some(CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::ElapsedTimeOverflow
+            })
+        );
+    }
+
+    #[test]
+    fn checkpoint_invalid_fixing_preserves_domain_error() {
+        use crate::cdt::volume_fixing::VolumeFixingError;
+        for target in [0, 31] {
+            let mut payload = one_step_checkpoint_payload();
+            payload["action_config"]["volume_fixing"] =
+                json!({"mode": "quadratic-triangles", "target": target, "strength": 0.1});
+            assert_matches!(
+                CdtMcmcCheckpoint::from_json(&payload.to_string()).err(),
+                Some(CdtError::VolumeFixing(VolumeFixingError::InvalidTarget { target: actual }))
+                    if actual == target
+            );
+        }
+        let mut payload = one_step_checkpoint_payload();
+        payload["action_config"]["volume_fixing"] =
+            json!({"mode": "quadratic-triangles", "target": 32, "strength": -0.1});
+        assert_matches!(CdtMcmcCheckpoint::from_json(&payload.to_string()).err(),
+            Some(CdtError::VolumeFixing(VolumeFixingError::InvalidStrength { strength }))
+                if strength.to_bits() == (-0.1_f64).to_bits());
     }
 
     #[test]

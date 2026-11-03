@@ -5,7 +5,7 @@
 //! This module implements the discrete Einstein-Hilbert action used in CDT,
 //! which is based on the Regge calculus formulation of general relativity.
 
-use crate::cdt::volume_fixing::{VolumeFixing, VolumeFixingError};
+use crate::cdt::volume_fixing::{VolumeFixing, VolumeFixingError, VolumeFixingWire};
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting, ExpectedConstraint, ObservedValue};
 use num_traits::cast::NumCast;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -84,11 +84,64 @@ fn compute_regge_action_unchecked(
     coupling_2: f64,
     cosmological_constant: f64,
 ) -> f64 {
-    let n_0: f64 = NumCast::from(vertices).expect("usize vertex counts should fit finite f64");
-    let n_1: f64 = NumCast::from(edges).expect("usize edge counts should fit finite f64");
-    let n_2: f64 = NumCast::from(triangles).expect("usize triangle counts should fit finite f64");
+    // Preserve product roundoff until all three signed terms have cancelled.
+    // Nested FMA alone can leave an O(1) spurious action when equal, large
+    // couplings multiply counts satisfying E - V - F = 0.
+    let mut expansion = [0.0; 12];
+    let mut length = 0;
+    for (count, coupling) in [
+        (vertices, -coupling_0),
+        (triangles, -coupling_2),
+        (edges, cosmological_constant),
+    ] {
+        // Two exactly represented 32-bit limbs also retain integer counts
+        // above 2^53. On 32-bit targets the high limb is zero.
+        let low = u32::try_from(count & 0xffff_ffff).expect("masked count fits u32");
+        let high = u32::try_from(count.checked_shr(32).unwrap_or(0))
+            .expect("supported usize has at most 64 bits");
+        for limb in [
+            <f64 as From<u32>>::from(low),
+            <f64 as From<u32>>::from(high) * 4_294_967_296.0,
+        ] {
+            if limb == 0.0 || coupling == 0.0 {
+                continue;
+            }
+            let product = coupling * limb;
+            let residual = coupling.mul_add(limb, -product);
+            grow_action_expansion(&mut expansion, &mut length, residual);
+            grow_action_expansion(&mut expansion, &mut length, product);
+        }
+    }
+    expansion[..length].iter().copied().sum()
+}
 
-    cosmological_constant.mul_add(n_1, (-coupling_0).mul_add(n_0, -(coupling_2 * n_2)))
+/// Adds one term with Two-Sum / Grow-Expansion (Shewchuk, 1997, §2.4).
+/// <https://www.cs.cmu.edu/~quake/robust.html>
+///
+/// Each addition retains its roundoff as a separate, smaller component. The
+/// validated absolute action bound prevents overflow. Integer limbs ensure
+/// product residuals remain multiples of the smallest subnormal, so FMA can
+/// represent them even at the underflow boundary. At most twelve terms enter;
+/// the fixed expansion needs no allocation. Only its final estimate is rounded.
+fn grow_action_expansion(expansion: &mut [f64; 12], length: &mut usize, mut term: f64) {
+    let mut output = 0;
+    for index in 0..*length {
+        let other = expansion[index];
+        let sum = term + other;
+        let other_virtual = sum - term;
+        let term_virtual = sum - other_virtual;
+        let residual = (term - term_virtual) + (other - other_virtual);
+        if residual != 0.0 {
+            expansion[output] = residual;
+            output += 1;
+        }
+        term = sum;
+    }
+    if term != 0.0 {
+        expansion[output] = term;
+        output += 1;
+    }
+    *length = output;
 }
 
 /// Validated configuration for CDT action parameters.
@@ -113,7 +166,7 @@ pub struct ActionConfig {
 #[derive(Deserialize)]
 pub(crate) struct ActionConfigWire {
     #[serde(default)]
-    volume_fixing: Option<VolumeFixing>,
+    volume_fixing: Option<VolumeFixingWire>,
     coupling_0: f64,
     coupling_2: f64,
     cosmological_constant: f64,
@@ -135,7 +188,7 @@ impl TryFrom<ActionConfigWire> for ActionConfig {
 
     fn try_from(wire: ActionConfigWire) -> CdtResult<Self> {
         Self::new(wire.coupling_0, wire.coupling_2, wire.cosmological_constant)?
-            .with_volume_fixing(wire.volume_fixing)
+            .with_volume_fixing(wire.volume_fixing.map(VolumeFixing::try_from).transpose()?)
     }
 }
 
@@ -288,11 +341,8 @@ impl ActionConfig {
 
     /// Calculates the action for given simplex counts.
     ///
-    /// # Panics
-    ///
-    /// Panics only if the platform cannot represent a `usize` simplex count as a
-    /// finite `f64`. Supported targets represent all `usize` counts as finite
-    /// floating-point values, though very large counts may lose integer precision.
+    /// Integer counts are retained exactly through product accumulation on
+    /// supported 32-bit and 64-bit targets; the final action is rounded to `f64`.
     ///
     /// # Examples
     ///
@@ -471,6 +521,51 @@ mod tests {
         // Expected: -2.0 * 5 - 1.5 * 8 + 0.2 * 10 = -10 - 12 + 2 = -20
         let expected = -20.0;
         assert_relative_eq!(action, expected);
+    }
+
+    #[test]
+    fn equal_large_couplings_preserve_torus_action_and_boltzmann_ratio() {
+        let coupling = 9_007_199_254_740_994.0; // exactly 2^53 + 2
+        let config = ActionConfig::new(coupling, coupling, coupling).unwrap();
+        let before = config.calculate_action(16, 48, 32);
+        let after = config.calculate_action(15, 45, 30);
+        // Independently: a(E - V - F) = -a χ = 0 on both toroidal states.
+        assert_eq!(before, 0.0);
+        assert_eq!(after, 0.0);
+        assert_eq!((before - after).exp(), 1.0);
+    }
+
+    #[test]
+    fn cancelling_actions_match_exact_integer_oracle() {
+        let a = 9_007_199_254_740_994_i128;
+        for (vertices, edges, triangles) in [(16, 48, 32), (15, 45, 30), (4, 6, 4)] {
+            for (k0, k2, lambda) in [(a, a, a), (a + 2, a - 2, a), (-a, -a, -a)] {
+                let exact = -k0 * vertices - k2 * triangles + lambda * edges;
+                let config = ActionConfig::new(
+                    NumCast::from(k0).unwrap(),
+                    NumCast::from(k2).unwrap(),
+                    NumCast::from(lambda).unwrap(),
+                )
+                .unwrap();
+                let actual = config.calculate_action(
+                    usize::try_from(vertices).unwrap(),
+                    usize::try_from(edges).unwrap(),
+                    usize::try_from(triangles).unwrap(),
+                );
+                assert_eq!(actual, <f64 as NumCast>::from(exact).unwrap());
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn action_retains_count_units_above_f64_integer_precision() {
+        let count = (1_usize << 53) + 1;
+        let config = ActionConfig::new(1.0, 1.0, 1.0).unwrap();
+        assert_eq!(config.calculate_action(count, count + 2, 1), 1.0);
+        let subnormal = f64::from_bits(1);
+        let config = ActionConfig::new(subnormal, subnormal, subnormal).unwrap();
+        assert_eq!(config.calculate_action(count, count + 2, 1), subnormal);
     }
 
     #[test]

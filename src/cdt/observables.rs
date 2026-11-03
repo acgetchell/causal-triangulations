@@ -250,6 +250,9 @@ pub fn estimate_short_time_effective_spectral_dimension(
 ///
 /// Returns [`CdtError::ValidationFailed`] if backend face adjacency cannot be
 /// resolved or if a graph count cannot be represented as a finite `f64`.
+/// Returns [`CdtError::DiffusionHorizonTooLarge`] when the inclusive horizon
+/// cannot fit a vector, or [`CdtError::DiffusionAllocationFailed`] if reserving
+/// its samples fails.
 ///
 /// # Examples
 ///
@@ -463,7 +466,17 @@ fn average_return_probabilities(adjacency: &[Vec<usize>], max_step: usize) -> Cd
         return Ok(Vec::new());
     }
 
-    let mut sums = vec![0.0; max_step + 1];
+    let sample_count = max_step
+        .checked_add(1)
+        .filter(|&count| count <= isize::MAX as usize / mem::size_of::<f64>())
+        .ok_or(CdtError::DiffusionHorizonTooLarge { max_step })?;
+    let mut sums = Vec::new();
+    sums.try_reserve_exact(sample_count)
+        .map_err(|source| CdtError::DiffusionAllocationFailed {
+            sample_count,
+            source,
+        })?;
+    sums.resize(sample_count, 0.0);
     let mut current = vec![0.0; node_count];
     let mut next = vec![0.0; node_count];
     let live_neighbor_counts = adjacency
@@ -490,7 +503,7 @@ fn average_return_probabilities(adjacency: &[Vec<usize>], max_step: usize) -> Cd
         current[root] = 1.0;
         sums[0] += 1.0;
 
-        for sum in sums.iter_mut().take(max_step + 1).skip(1) {
+        for sum in sums.iter_mut().skip(1) {
             next.fill(0.0);
             for (index, &probability) in current.iter().enumerate() {
                 if probability <= 0.0 {
@@ -702,6 +715,18 @@ mod tests {
         assert!(
             probabilities.is_empty(),
             "empty graph should yield no return probabilities, got {probabilities:?}"
+        );
+    }
+
+    #[test]
+    fn maximum_diffusion_horizon_is_rejected_without_panicking() {
+        let triangulation =
+            CdtTriangulation::from_toroidal_cdt(4, 4).expect("unchanged valid small CDT");
+        assert_matches!(
+            average_dual_return_probability_curve(&triangulation, NonZeroUsize::MAX),
+            Err(CdtError::DiffusionHorizonTooLarge {
+                max_step: usize::MAX
+            })
         );
     }
 

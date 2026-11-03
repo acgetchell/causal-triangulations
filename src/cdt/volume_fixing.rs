@@ -67,7 +67,7 @@ pub struct VolumeFixing {
 /// Version-neutral raw configuration; the tagged mode identifies the observable.
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "mode", rename_all = "kebab-case", deny_unknown_fields)]
-enum VolumeFixingWire {
+pub(crate) enum VolumeFixingWire {
     QuadraticTriangles { target: u32, strength: f64 },
 }
 

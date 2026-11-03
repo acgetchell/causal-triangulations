@@ -13,6 +13,32 @@ use causal_triangulations::{
 use rand::{SeedableRng, rngs::StdRng};
 use std::assert_matches;
 
+#[test]
+fn toroidal_seed_3291_preserves_embedding_after_five_moves() {
+    let mut triangulation =
+        CdtTriangulation::from_toroidal_cdt(4, 3).expect("original torus fixture");
+    let mut moves = ErgodicsSystem::with_seed(3291);
+    for (attempt, expected) in [
+        MoveResult::Success,
+        MoveResult::Success,
+        MoveResult::Success,
+        MoveResult::GeometricViolation,
+        MoveResult::Success,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let result = moves.attempt_random_move(&mut triangulation);
+        assert_eq!(
+            result, expected,
+            "original move outcome at attempt {attempt}"
+        );
+        triangulation.validate().unwrap_or_else(|error| {
+            panic!("attempt {attempt} must preserve the supported embedding: {error}");
+        });
+    }
+}
+
 /// Captures coordinate bits without depending on backend handle identities.
 fn coordinate_bits(triangulation: &CdtTriangulation2D) -> Vec<[u64; 2]> {
     triangulation

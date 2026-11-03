@@ -126,11 +126,17 @@ cdt \
 The CSV trace records one row per completed Metropolis step. The JSON file records configuration, summary statistics, move/proposal statistics, scheduled
 measurements, and the final triangulation state.
 
+Hidden filenames ending in `.causal-triangulations.lock`, `.causal-triangulations.tmp`, or `.causal-triangulations.backup` are reserved for output
+coordination, staging, and recovery. These suffixes are matched without ASCII case sensitivity, including on case-insensitive filesystems; configured
+destinations using them are rejected before creating directories or acquiring locks.
+
 #### Final Mesh Interchange
 
 `final_triangulation.mesh` is Delaunay's stable simplicial-complex export, not a CDT-specific compact-index schema. External tools should first require
-`metadata.schema == "delaunay.simplicial_complex"` and a supported integer `metadata.schema_version` (currently `1`). The metadata also records the producer,
-dimension, counts, topology kind, and topology guarantee.
+`metadata.schema == "delaunay.simplicial_complex"` and a supported integer `metadata.schema_version`. Delaunay 0.8.4 emits version `2`; its reader also
+accepts nonperiodic version `1` data. The metadata records the producer, dimension, counts, topology kind, and topology guarantee. Periodic version `2`
+exports include `periodic.periods` and `periodic.simplex_vertex_offsets`, keyed by simplex UUID. Preserve these offsets when realizing periodic simplices;
+canonical vertex coordinates alone do not specify their covering-space geometry. The spacetime-strip notebook accepts both versions for its open topology.
 
 Treat entity IDs as the format's identity boundary:
 
@@ -199,8 +205,9 @@ Parameter validation errors
 
 Unexpected volume growth or shrinkage
 
-: Current simulations are grand-canonical, unfixed-volume runs. Adjust `--cosmological-constant`, reduce the run length, or start from a smaller initial
-  volume while tuning.
+: Volume fixing is disabled by default. Adjust `--cosmological-constant`, reduce the run length, or start from a smaller initial volume while tuning.
+  For toroidal 1+1 runs, paired `--target-triangles` and `--volume-fixing-strength` options enable a quadratic soft bias; volume still fluctuates.
+  See the [ensemble and evidence limits](scientific-basis.md) before interpreting either mode statistically.
 
 Slow runs
 

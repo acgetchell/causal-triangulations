@@ -11,6 +11,8 @@ closed simplicial S² construction. This is a reference-interpretation result, n
 - [Independent census](#independent-census)
 - [Import boundary](#import-boundary)
 - [Documentation search](#documentation-search)
+- [Acceptance-law discrepancy](#acceptance-law-discrepancy)
+- [Harness limitations](#harness-limitations)
 - [Reproduction](#reproduction)
 
 ## Claim Boundary
@@ -103,12 +105,79 @@ admissibility, and provides no supported S² import contract. Arbitrary imports 
 The public search on 26 October 2026 covered the implementation paper, pinned README and source, the 63-commit ancestor history, the sphere-related
 [8599b0d commit][sphere-history], [6bae388 README update][readme-history], and the v1.0.0 release. The [Zenodo archive][archive] and
 [GitHub release][release] describe a torus implementation. The release tag resolves to `b5f64c7ce8c7ca63d2654a3902d3f66bb9db986a`, distinct from the audit pin.
+The [software bibliography entry](../../../REFERENCES.md#cdt-simulation-implementation-and-ensembles) credits Joren Brunekreef, Andrzej Görlich, and
+Willem van der Feltz separately from the implementation paper; that release DOI does not archive the audited revision.
 History and release metadata are retained under `evidence/`. The README promises further sphere comments but supplies no formal definition afterward.
 
 Public searches for `Brunekreef "effective spherical topology"`, `"2d-cdt" "sphere"`, and `"Joren Brunekreef" "effective" "sphere" topology` located no
 author definition linking this switch to a spherical quotient, cap prescription, target measure, or continuum limit. This is a bounded negative search,
 not proof that no such explanation exists. Author clarification could resolve the intended effective interpretation; it is unnecessary to determine the
 topology of the stored complexes audited here. No author contact was made.
+
+## Acceptance-Law Discrepancy
+
+This additional source audit concerns the same immutable pin, not the topology classification above. We have not changed the reference simulator or rerun
+the retained trajectories. The following is an analytic counterexample to interpreting its volume-fixing factors as the finite differences of the stated
+quadratic bias, and also to interpreting both factors as correct Hastings ratios for a linear absolute-deviation bias.
+
+Write `N = N2`, target `Nt`, strength `epsilon > 0`, vertex count `V`, and count of degree-four removal candidates `n4`. In
+[simulation.cpp:96–99,129–132][fixing-source], the unclipped insertion and deletion factors are:
+
+```text
+R+(N) = V/(n4+1) * exp(-2 lambda) * f+(N)
+R-(N) = n4/(V-1) * exp(+2 lambda) * f-(N)
+
+f+(N) = exp(+2 epsilon) if N < Nt, otherwise exp(-2 epsilon)
+f-(N) = exp(-2 epsilon) if N < Nt, otherwise exp(+2 epsilon)
+```
+
+For a genuine state-only fixing action `F(N)`, the insertion factor is `exp[-(F(N+2)-F(N))]` and the reverse deletion factor at `N+2` is its reciprocal.
+At the pair `N = Nt-2` and `N+2 = Nt`, both implemented fixing factors are `exp(+2 epsilon)`, whose product is `exp(4 epsilon)`, not one. Thus these two
+unclipped factors cannot both be the claimed action-difference ratios. This observation alone does not rule out some different stationary distribution of
+the clipped chain; it identifies a failure of the stated acceptance-law interpretation.
+
+For a linear bias `F(N) = epsilon |N-Nt|`, the deletion from the target must instead receive `exp(-2 epsilon)`. For the quadratic bias in
+[section 2.4, equation (30) of the implementation paper][fixing-paper], `F(N) = epsilon (N-Nt)^2`, the required factors are:
+
+```text
+f+(N) = exp[-epsilon * (4*(N-Nt) + 4)]
+f-(N) = exp[-epsilon * (-4*(N-Nt) + 4)]
+```
+
+Their magnitude depends on distance from the target, unlike the implementation's constant factors. This distinction affects actual acceptance, not only
+unclipped algebra. Consider the supported width-three, four-slice toroidal initializer with `sphere=false`: `V=12`, `N=24`, and `n4=0`. Set the configurable
+upstream target to `Nt=26`, `lambda=ln(2)`, and `epsilon=0.02`. An insertion creates a degree-four vertex and gives `V=13`, `N=26`, `n4=1`. Its reverse
+deletion is eligible because the affected spatial slice has grown from three to four vertices. The bare ratios are `3` and `1/3`. Insertion is accepted with
+probability one under all three laws, but deletion probabilities differ:
+
+| Acceptance law | Reverse deletion probability |
+| --- | ---: |
+| Pinned implementation | `exp(0.04)/3 = 0.34693692473079607` |
+| Linear bias finite difference | `exp(-0.04)/3 = 0.32026314638410774` |
+| Paper's quadratic bias finite difference | `exp(-0.08)/3 = 0.30770544879554523` |
+
+The combinatorial proposal factors cancel when comparing the implemented flux ratio with either intended bias, leaving the discrepancy above. The argument
+uses the same eligible insertion/deletion pair, equal family weights, and the paper's temperature-one convention; it does not substitute a different
+proposal kernel. These are derived values, not measurements. The retained harness uses target 96, so it is not an execution of this target-26 example.
+No estimate of stationary bias, mixing, or finite-run error is asserted. The independent topology census remains valid, while equilibrium comparisons must
+account for this acceptance-law discrepancy. Our own [#316][support] and [#238][exact] obligations remain separate and unresolved.
+
+## Harness Limitations
+
+The retained harness and instrumentation are reference evidence and remain unchanged. Their use beyond the documented bounded workload requires external
+checks:
+
+- The reduced pools admit 100,000 vertices, 200,000 triangles, and 300,000 links. A valid width-three torus with `T=33334` requires `V=100002`, `F=200004`,
+  and `E=300006`: it already exceeds those capacities during import, before the harness's later size guard. The upstream pool capacity is larger; this is a
+  limitation of our retained reduced-capacity harness, not a mathematical defect in that torus. The documented 4,096-attempt runs remain below the pools:
+  `V <= 12+4096 = 4108`, `F=2V <= 8216`, and `E=3V <= 12324`. Validate import sizes before invoking this harness.
+- Its `std::stoi` attempt parser does not require complete consumption. For example, `0junk` parses as zero and produces an initial-only workload.
+  Supply a complete nonnegative decimal integer in range and independently check the recorded total attempts; parser success alone does not certify the
+  intended workload length. See the [C++ string-conversion contract](https://eel.is/c++draft/string.conversions).
+- The upstream `.dat` export does not check stream writes or close failures. The sidecar enables stream exceptions but does not explicitly check a final
+  close. Storage exhaustion can therefore leave incomplete or mismatched outputs despite apparent process success. Require both complete parsed files,
+  consistent counts and metadata, expected attempt totals, and retained digests before accepting a new run. No corruption of the retained inputs has been
+  demonstrated. Their independent parser and digest checks are evidence about these files, not a proof of the writers' failure handling.
 
 ## Reproduction
 
@@ -118,7 +187,9 @@ capacity. Assertions remain enabled. The harness replaces the executable entry p
 attempt. It does not call the production crate.
 
 The build used Apple clang 21.0.0, C++14, `-O3 -Wno-format`, on Darwin 27 arm64 with libc++. Compiler/platform output and compiler/executable SHA-256 digests
-are retained under `evidence/`. `SHA256SUMS` binds the source, patch, harness, configuration, analysis, and generated artifacts. C++ standard-library random
+are retained under `evidence/`. `SHA256SUMS` binds the source, patch, harness, configuration, current independent analysis, and generated artifacts. Updates to
+the repository-owned analysis and its tests update only their entries; reference source, instrumentation, harness, and retained data stay byte-identical.
+C++ standard-library random
 engines/distributions need not produce byte-identical trajectories across toolchains; cross-toolchain runs must preserve their own provenance.
 
 From the repository root, verify and analyze the retained data without another simulation:
@@ -126,6 +197,7 @@ From the repository root, verify and analyze the retained data without another s
 ```bash
 (cd docs/audits/2d-cdt_sphere && shasum -a 256 -c SHA256SUMS)
 uv run --locked --group dev pytest docs/audits/2d-cdt_sphere
+mkdir -p target
 uv run --locked --group dev python docs/audits/2d-cdt_sphere/checks/topology.py \
   docs/audits/2d-cdt_sphere/evidence target/2d-cdt-sphere-census.json
 ```
@@ -157,6 +229,8 @@ samples were collected. The measurement ownership/provenance guidance from `scie
 [exact]: https://github.com/acgetchell/causal-triangulations/issues/238
 [support]: https://github.com/acgetchell/causal-triangulations/issues/316
 [paper]: https://arxiv.org/html/2310.16744v1#S2.SS2
+[fixing-paper]: https://arxiv.org/html/2310.16744v1#S2.SS4
+[fixing-source]: https://github.com/JorenB/2d-cdt/blob/412d0b887532c46e4445581b1a2bd509f65aaaec/simulation.cpp#L87-L150
 [archive]: https://zenodo.org/record/5572409
 [release]: https://github.com/JorenB/2d-cdt/releases/tag/v1.0.0
 [sphere-history]: https://github.com/JorenB/2d-cdt/commit/8599b0d31e9ea1418cd3387cb1a42c8d232cef63
