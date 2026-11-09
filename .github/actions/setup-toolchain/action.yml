@@ -16,19 +16,22 @@ runs:
         enable-cache: ${{ inputs.cache == 'true' }}
         cache-python: ${{ runner.os != 'Windows' }}
 
-    - name: Cache declared tools
+    - name: Cache managed Cargo compilation
       if: inputs.cache == 'true'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: ${{ runner.temp }}/rrt
-        key: rrt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'pyproject.toml', 'uv.lock', '.python-version') }}
-        restore-keys: rrt-${{ runner.os }}-${{ runner.arch }}-
+        path: ${{ runner.temp }}/rrt-cargo-build
+        key: >-
+          cargo-build-v1-${{ runner.os }}-${{ runner.arch }}-${{
+            hashFiles('rust-toolchain.toml', 'pyproject.toml', 'uv.lock', 'Cargo.lock', '.python-version')
+          }}
 
     - name: Install and verify declared tools
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
         RESEARCH_REPO_TOOLS_HOME: ${{ runner.temp }}/rrt
+        RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME: ${{ runner.temp }}/rrt-cargo-build
       run: uv run --locked --managed-python --only-group tooling research-repo-tools setup
 
     - name: Export verified tool paths

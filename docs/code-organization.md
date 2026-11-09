@@ -229,6 +229,7 @@ causal-triangulations/
 ├── clippy.toml
 ├── CODE_OF_CONDUCT.md
 ├── CONTRIBUTING.md
+├── dependency-sources.toml
 ├── dprint.json
 ├── justfile
 ├── LICENSE
@@ -277,6 +278,7 @@ enforce this boundary against new CDT-local generic acceptance draws or manual a
   [The documentation index](README.md) maps their owners; [documentation policy](dev/DEVELOPING.md#documentation-and-command-policy) defines guide naming.
 - `tooling/` — benchmark measurement, example validation, report, and README publication contracts; consumer integration tests live under `tests/tooling/`.
   Generic infrastructure uses `research-repo-tools`; tooling, notebooks and Semgrep share the root Python 3.15 environment.
+- `dependency-sources.toml` — registry-source and native source-build policy for Python and Cargo release dependency provenance.
 
 ## Key Modules
 

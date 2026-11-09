@@ -12,7 +12,7 @@ import pytest
 import yaml
 from packaging.version import Version
 from research_repo_tools.cli import main
-from research_repo_tools.criterion import COMPARISON_SCHEMA, Estimate, Sample, compare_samples, serialize_comparison
+from research_repo_tools.criterion import COMPARISON_SCHEMA, ConfidenceInterval, Estimate, Sample, compare_samples, serialize_comparison
 from research_repo_tools.evidence import Evidence, Provenance, publish_evidence
 from research_repo_tools.just_inspect import dry_run, inspect_justfile
 from research_repo_tools.measurement import MeasurementConfig, load_measurement
@@ -565,8 +565,8 @@ def test_shared_report_and_readme_publication_use_consumer_configuration(tmp_pat
         (tooling / name).write_bytes((ROOT / "tooling" / name).read_bytes())
     template = (ROOT / "tooling/performance-readme.example.toml").read_text(encoding="utf-8")
     config = tomllib.loads(template)
-    baseline = Sample(tuple((row["benchmark"], Estimate(100, 90, 110, 0.95)) for row in config["rows"]), unit=config["unit"])
-    current = Sample(tuple((row["benchmark"], Estimate(80, 70, 90, 0.95)) for row in config["rows"]), unit=config["unit"])
+    baseline = Sample(tuple((row["benchmark"], Estimate(100, ConfidenceInterval(90, 110, 0.95))) for row in config["rows"]), unit=config["unit"])
+    current = Sample(tuple((row["benchmark"], Estimate(80, ConfidenceInterval(70, 90, 0.95))) for row in config["rows"]), unit=config["unit"])
     evidence = Evidence(
         serialize_comparison(compare_samples(baseline, current)),
         COMPARISON_SCHEMA,

@@ -17,6 +17,21 @@ _semgrep_stack_limit := if os() == "linux" { 'if [[ "$(ulimit -Hs)" == unlimited
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+# Prepare native source receipts and registry inputs before release provenance checks.
+release-dependency-builds:
+    uv sync --locked --group dev
+    {{ _run }} cargo fetch --locked
+    {{ _run }} research-repo-tools release dependency-builds
+
+# Authenticate declared registry graphs and this machine's installed dependency bytes.
+release-dependencies:
+    {{ _run }} research-repo-tools release dependencies
+
+# Preview a declared source change; pass --apply to reconcile its manifest and lock.
+[positional-arguments]
+dependency-source name *args:
+    {{ _run }} research-repo-tools deps source "$@"
+
 # Common cargo-llvm-cov arguments for all coverage runs.
 # Excludes benches/examples from reports while allowing integration tests to
 # exercise library code.

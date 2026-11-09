@@ -1,5 +1,21 @@
 # Tooling Alignment
 
+## November 2026 research-repo-tools v0.2.7 Adoption
+
+Adopt the exact published 0.2.7 package through the standalone shared adopter, retaining Python 3.15 and the existing native platform matrix.
+Align isolated workflow pins and their registry cutoff with the published artifacts. Migrate direct Criterion consumers to complete `ConfidenceInterval`
+values while preserving their original numerical inputs, retained evidence formats, and success/failure assertions. Keep generic verification upstream;
+record reproducible supplier defects against its v0.2.8 milestone instead of relaxing consumer gates.
+
+Validate update, setup, security, full local CI, dependency provenance, and isolated release runtimes separately. Local macOS evidence does not establish
+native Linux or Windows success. No tag, publication, or Git-state mutation is part of this adoption.
+
+`dependency-sources.toml` covers the root Python and Cargo graphs. Run `just release-dependency-builds` before `just release-dependencies` on every native
+release machine: the former prepares Cargo's offline inputs and authenticates source-built Python wheels using the locked build group. Python provenance passes
+locally; the full gate is blocked by [research-repo-tools #214](https://github.com/acgetchell/research-repo-tools/issues/214)'s valid winapi archive limit.
+Managed Cargo compilation is cached separately from exact installations, with OS, architecture, toolchain, declaration, and lock identities in the key. Release
+jobs continue disabling caches. The reusable Dependabot workflow selects the v0.2.7 commit with unchanged reviewed workflow bytes.
+
 ## November 2026 Published Dependency Adoption For PR #319
 
 Adopt the published `research-repo-tools` 0.2.5 and `delaunay` 0.8.4 releases through normal registry resolution. Preserve Python 3.15, Rust 1.99.1,

@@ -50,8 +50,8 @@ jobs:
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           commit="$(gh api "repos/$GH_REPO/commits/refs%2Ftags%2F$RELEASE_TAG" --jq '.sha')"
           [[ "$commit" =~ ^[0-9a-f]{40}$ ]]
-          target="$(uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-11-02T20:58:20Z \
-            --from research-repo-tools==0.2.5 research-repo-tools performance release-draft "$GH_REPO" "$RELEASE_TAG" --commit "$commit")"
+          target="$(uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-11-09T20:00:32Z \
+            --from research-repo-tools==0.2.7 research-repo-tools performance release-draft "$GH_REPO" "$RELEASE_TAG" --commit "$commit")"
           target="$(jq -ce . <<< "$target")"
           printf 'target=%s\ncommit=%s\n' "$target" "$commit" >> "$GITHUB_OUTPUT"
 
@@ -124,8 +124,8 @@ jobs:
         env:
           GH_REPO: ${{ github.repository }}
         run: |
-          uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-11-02T20:58:20Z \
-            --from research-repo-tools==0.2.5 python -I - <<'PY'
+          uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-11-09T20:00:32Z \
+            --from research-repo-tools==0.2.7 python -I - <<'PY'
           import os
           from pathlib import Path
           from research_repo_tools.release_assets import parse_release_target, read_baseline
@@ -144,6 +144,6 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         run: >-
-          uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-11-02T20:58:20Z
-          --from research-repo-tools==0.2.5 research-repo-tools performance release-upload
+          uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-11-09T20:00:32Z
+          --from research-repo-tools==0.2.7 research-repo-tools performance release-upload
           "$GH_REPO" "$RELEASE_TAG" "$RUNNER_TEMP/baseline/$RELEASE_ASSET" --target "$RUNNER_TEMP/release-target.json"
