@@ -3,3 +3,8 @@ current = "docs/performance/v2/performance.md"
 archive = "docs/performance/v2"
 title = "CDT benchmark timings"
 prose-file = "tooling/performance-interpretation.md"
+
+[initialization]
+allow-empty = true
+directories = [  ]
+guards = [ "tooling/performance-readme.toml" ]

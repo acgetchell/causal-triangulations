@@ -23,6 +23,22 @@ A missing baseline fails instead of implying success. Local Criterion output liv
 The [benchmark inventory](../benches/README.md) describes the fixtures and persistent-planner and slice-scaling groups.
 The broader `just bench` and `just bench-ci` recipes retain their CDT workloads.
 
+## Exploratory command timing
+
+Run the four existing small, medium, large, and extra-large CLI simulations from the repository root:
+
+```bash
+just performance-command-time target/timings.json
+```
+
+The shared runner builds the release binary before timing, preserves the arguments in `tooling/command-timing.toml`, and records one elapsed-time sample
+per case with no warmup. The report includes command, source, executable, toolchain, and host provenance; existing output files are rejected. Process
+failures propagate and prevent a successful report. The optional `examples/scripts/performance_test.sh OUTPUT.json` shim invokes the same command.
+
+These timings include process startup and the simulation's configured thermalization and measurements. Dividing a case's requested steps by elapsed
+seconds gives only an exploratory end-to-end rate, not a kernel throughput or sampling-efficiency estimate. A single sample does not establish variance,
+scaling, or a performance regression. Use the correctness-gated Criterion workflow for release evidence; these reports cannot serve as release baselines.
+
 ## Fresh release evidence
 
 The next tagged release establishes the first new shared baseline. Create a draft GitHub Release for that tag, then dispatch

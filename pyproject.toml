@@ -153,22 +153,19 @@ build = [
 dev = [
     { include-group = "tooling" },
     "actionlint-py==1.7.12.25",
-    "pytest==9.2.0",
-    "ruff==0.17.4",
     "semgrep==1.184.0",
     "shellcheck-py==0.11.0.1",
     "shfmt-py==4.2.0",
-    "ty==0.0.100",
     "yamllint==1.38.0",
 ]
 notebooks = [
-    "research-repo-tools[notebooks]==0.2.7",
+    "research-repo-tools[notebooks,python-tools]==0.2.7",
     "jupyterlab>=4.6.2",
     "matplotlib>=3.11.1",
     "plotly>=6.9.0",
     "polars>=1.43.2",
 ]
-tooling = [ "research-repo-tools==0.2.7" ]
+tooling = [ "research-repo-tools[python-tools]==0.2.7" ]
 
 [tool.research-repo-tools.changelog]
 owner = "acgetchell"
@@ -177,6 +174,7 @@ formatter = "rumdl.toml"
 
 [tool.research-repo-tools.toolchain]
 inherit-python = true
+inherit-python-tools = true
 
 [tool.research-repo-tools.toolchain.binaries]
 gitleaks = "8.30.1"
@@ -207,6 +205,10 @@ output-dir = "target/notebooks"
 timeout = 600
 outputs = "clear"
 prohibit-installs = true
+
+[tool.research-repo-tools.notebooks.lab]
+browser = true
+scratch-dir = "target/notebooks"
 
 [tool.research-repo-tools.semgrep]
 config = "semgrep.yaml"

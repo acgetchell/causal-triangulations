@@ -17,21 +17,6 @@ _semgrep_stack_limit := if os() == "linux" { 'if [[ "$(ulimit -Hs)" == unlimited
 
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
-# Prepare native source receipts and registry inputs before release provenance checks.
-release-dependency-builds:
-    uv sync --locked --group dev
-    {{ _run }} cargo fetch --locked
-    {{ _run }} research-repo-tools release dependency-builds
-
-# Authenticate declared registry graphs and this machine's installed dependency bytes.
-release-dependencies:
-    {{ _run }} research-repo-tools release dependencies
-
-# Preview a declared source change; pass --apply to reconcile its manifest and lock.
-[positional-arguments]
-dependency-source name *args:
-    {{ _run }} research-repo-tools deps source "$@"
-
 # Common cargo-llvm-cov arguments for all coverage runs.
 # Excludes benches/examples from reports while allowing integration tests to
 # exercise library code.
@@ -44,6 +29,32 @@ alias python-fixtures-check := python-check
 alias python-source-check := python-check
 alias update-python-deps := update-python-dependencies
 
+# Synchronize once before validators and independent runtime lanes.
+[private]
+_ci-environment:
+    uv sync --locked --group dev --group notebooks
+
+# Keep all shared Cargo outputs and scientific execution in one lane.
+[private]
+_ci-native:
+    UV_NO_SYNC=1 just test-rust-ci test-doc
+    UV_NO_SYNC=1 just notebook-execute-fast
+    UV_NO_SYNC=1 just allocation-check examples-validate
+
+# Preserve the complete static and compilation gate before runtime workloads.
+[private]
+_ci-policy: justfile-fmt-check action-lint actions-allowlist-check zizmor markdown-check spell-check performance-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check notebook-lint shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check bench-compile
+
+# Python tests use temporary outputs and the already synchronized environment.
+[private]
+_ci-python:
+    UV_NO_SYNC=1 just test-python
+
+# Independent consumers overlap without synchronizing their shared environment.
+[parallel]
+[private]
+_ci-runtime: _ci-python _ci-native
+
 # Internal helpers: ensure external tooling is installed
 _ensure-jq:
     #!/usr/bin/env bash
@@ -55,9 +66,9 @@ action-lint:
     # actionlint 1.7.12 predates $/ syntax (upstream issue #711); ignore only this exact valid reference.
     {{ _tools }} files run --include '.github/workflows/*.yml' --include '.github/workflows/*.yaml' -- actionlint -ignore '^specifying action "\$/\.github/actions/setup-toolchain" in invalid format because ref is missing\.'
 
-# Validate exact external Action identities in workflows.
+# Validate exact external Action identities in workflows and composites.
 actions-allowlist-check:
-    {{ _tools }} actions allowlist --policy tooling/selected-actions.json .github/workflows
+    {{ _tools }} actions allowlist --policy tooling/selected-actions.json .github/workflows .github/actions
 
 # Run deterministic cached-observable allocation assertions.
 allocation-check:
@@ -149,7 +160,7 @@ check-fast:
     {{ _run }} cargo check
 
 # Run all GitHub-equivalent validators, tests, examples, and benchmark compilation.
-ci: justfile-fmt-check action-lint actions-allowlist-check zizmor markdown-check spell-check performance-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check notebook-lint shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check bench-compile test-python test-rust-ci test-doc notebook-check allocation-check examples-validate
+ci: _ci-environment _ci-policy _ci-runtime
     @echo "🎯 CI checks complete!"
 
 # CI with performance baseline
@@ -217,14 +228,18 @@ debug-large-scale-1p1-512 max_secs="1800":
 default:
     @just --list
 
+# Preview a declared source change; pass --apply to reconcile its manifest and lock.
+[positional-arguments]
+dependency-source name *args:
+    {{ _run }} research-repo-tools deps source "$@"
+
 # Build public and private API documentation with warnings denied.
 doc-check:
     RUSTDOCFLAGS='-D warnings' {{ _run }} cargo doc --workspace --no-deps --document-private-items
 
 # Build and run Cargo examples, checking their semantic output contracts.
 examples-validate:
-    {{ _run }} cargo build --locked --release --examples --target-dir target
-    {{ _run }} research-repo-tools validation run tooling/examples.toml
+    {{ _run }} research-repo-tools validation cargo-examples tooling/examples.toml
 
 # Fix (mutating): apply formatters/auto-fixes
 fix: justfile-fmt toml-fix fmt python-fix shell-fix markdown-fix yaml-fix
@@ -266,11 +281,7 @@ markdown-fix:
 
 # Open a notebook in the managed JupyterLab environment.
 notebook notebook="notebooks/00_quickstart.ipynb":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    notebook_cache="$(pwd)/target/notebooks"
-    mkdir -p "$notebook_cache/.ipython" "$notebook_cache/.matplotlib"
-    MPLBACKEND=Agg IPYTHONDIR="$notebook_cache/.ipython" MPLCONFIGDIR="$notebook_cache/.matplotlib" {{ _run }} uv run --locked --group notebooks jupyter lab --ServerApp.open_browser=True --LabApp.open_browser=True "{{ notebook }}"
+    MPLBACKEND=Agg {{ _notebooks }} notebooks launch "$1"
 
 # Lint notebooks and execute the fast notebook set.
 notebook-check: notebook-lint notebook-execute-fast
@@ -331,24 +342,11 @@ performance-baseline tag:
 
 # Check retained release reports, accepting an empty inventory before the first comparison.
 performance-check:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    shopt -s nullglob
-    artifacts=(
-        docs/performance/v2/*.comparison.json
-        docs/performance/v2/*.evidence.json
-        docs/performance/v2/*.csv
-        docs/performance/v2/*.svg
-        docs/performance/v2/v*-vs-v*.md
-    )
-    if [[ -e docs/performance/v2/performance.md || -L docs/performance/v2/performance.md ]]; then
-        {{ _tools }} performance promote tooling/performance-report.toml --check
-    elif (( ${#artifacts[@]} )) || [[ -e tooling/performance-readme.toml || -L tooling/performance-readme.toml ]]; then
-        echo "Release evidence exists without its current report; restore or promote the report." >&2
-        exit 1
-    else
-        echo "No release comparison yet; the next tagged release establishes the baseline."
-    fi
+    {{ _tools }} performance promote tooling/performance-report.toml --check
+
+# Time the four exploratory CLI workloads, retaining every sample in a fresh JSON file.
+performance-command-time output:
+    {{ _run }} research-repo-tools performance command-time tooling/command-timing.toml --output "$1"
 
 # Promote supplied new evidence, or rerender the retained report offline.
 performance-doc *args:
@@ -387,6 +385,16 @@ python-sync:
 # Type-check all Python files with strict Ty diagnostics.
 python-typecheck:
     {{ _tools }} python typecheck
+
+# Authenticate declared registry graphs and this machine's installed dependency bytes.
+release-dependencies:
+    {{ _run }} research-repo-tools release dependencies
+
+# Prepare native source receipts and registry inputs before release provenance checks.
+release-dependency-builds:
+    uv sync --locked --group dev
+    {{ _run }} cargo fetch --locked
+    {{ _run }} research-repo-tools release dependency-builds
 
 # Validate release-version/date synchronization, concept DOI, and environment metadata.
 release-metadata-check:

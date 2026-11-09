@@ -1,12 +1,11 @@
 # Tooling configuration
 
-Generic maintenance uses the published `research-repo-tools==0.2.5` package.
-This directory contains CDT's tooling configuration. Consumer integration tests live under [`tests/tooling/`](../tests/tooling/);
-CDT maintains no local maintenance CLIs.
-Tooling, notebooks and Semgrep share the root Python 3.15 environment. The root manifest owns the exact scanner pin, wheel-only installation,
-MCP/OpenTelemetry security overrides and Python 3.15 Windows wheel compatibility override.
-`selected-actions.json` declares exact approved workflow Action identities for the shared structured allowlist; Zizmor and Semgrep retain SHA and readable
-version-comment checks. See the [ownership catalog](../docs/dev/tooling-alignment.md#shared-tooling-retirement-catalog) for retained policy and upstream gaps.
+Generic maintenance uses the published `research-repo-tools==0.2.7` package and inherits its `python-tools` profile for pytest, Ruff, and Ty. This directory
+contains CDT's tooling configuration. Consumer integration tests live under [`tests/tooling/`](../tests/tooling/); CDT maintains no local maintenance CLIs.
+Tooling, notebooks and Semgrep share the root Python 3.15 environment. The root manifest owns the exact scanner pin, wheel-only installation, MCP/OpenTelemetry
+security overrides and Python 3.15 Windows wheel compatibility override. `selected-actions.json` declares exact approved workflow and composite Action
+identities for the shared structured allowlist; Zizmor and Semgrep retain SHA and readable version-comment checks. See the
+[ownership catalog](../docs/dev/tooling-alignment.md#shared-tooling-retirement-catalog) for retained policy and upstream gaps.
 
 Bootstrap from the repository root:
 
@@ -22,6 +21,11 @@ responses to protect the captured-target handoff, checkout checks and native bas
 The report-to-README integration verifies absolute timings, confidence bounds, and relative changes together. Tests never contact CodeRabbit.
 
 Generic parser, renderer, subprocess, and notebook infrastructure tests belong to `research-repo-tools` and are not duplicated here.
+
+`test_shared_adoption.py` exercises the published package with CDT's notebook selector, exact Action allowlist, inherited Python tool profile, four
+exploratory timing workloads, and serial/parallel CI graph. `examples.toml` adds semantic output contracts to Cargo-discovered examples;
+`command-timing.toml` owns the exploratory simulation arguments. The report initialization policy permits an empty first-use inventory and rejects
+orphaned evidence or a README publication config before the first retained comparison.
 
 Use `just --list` for maintained commands and [the command guide](../docs/dev/DEVELOPING.md) for details.
 Changelog, release metadata, coverage, dependency/tool updates, notebooks, Semgrep fixtures, and performance evidence all use shared APIs.

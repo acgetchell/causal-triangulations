@@ -84,8 +84,10 @@ Ready-to-use shell workflows live under `examples/scripts/`:
 ```bash
 ./examples/scripts/basic_simulation.sh      # Simple simulation command
 ./examples/scripts/parameter_sweep.sh       # Temperature sweep setup
-./examples/scripts/performance_test.sh      # Performance benchmarking across system sizes
+just performance-command-time target/timings.json # Exploratory timings across four system sizes
 ```
+
+The portable timing command and its optional shell shim are described in [Performance Testing](docs/BENCHMARKING.md#exploratory-command-timing).
 
 Release metadata, changelog generation, tagging, and publication procedures belong to [RELEASING](docs/RELEASING.md).
 

@@ -192,6 +192,7 @@ causal-triangulations/
 │   ├── tooling/
 │   │   ├── __init__.py
 │   │   ├── test_release_benchmarks.py
+│   │   ├── test_shared_adoption.py
 │   │   └── test_shared_tooling.py
 │   ├── cli.rs
 │   ├── error_diagnostics.rs
@@ -208,6 +209,7 @@ causal-triangulations/
 │   └── validation_analysis.rs
 ├── tooling/
 │   ├── benchmark.toml
+│   ├── command-timing.toml
 │   ├── examples.toml
 │   ├── performance-interpretation.md
 │   ├── performance-readme.example.toml

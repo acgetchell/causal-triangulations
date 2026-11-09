@@ -3,7 +3,7 @@
 Release preparation uses the pinned shared CLI. Choose one stable tag, predecessor, and UTC date; reruns with those same inputs are deterministic.
 Benchmark measurements are separate and are not idempotent.
 
-This guide uses published `research-repo-tools==0.2.5`. Tooling, notebook kernels and Semgrep share the root Python 3.15 environment, following Delaunay.
+This guide uses published `research-repo-tools==0.2.7`. Tooling, notebook kernels and Semgrep share the root Python 3.15 environment, following Delaunay.
 `just update` refreshes the root lockfile while preserving the scanner's MCP/OpenTelemetry and Windows wheel compatibility overrides.
 Active documentation links stay on `main` and API links on `latest`; preserve immutable evidence and citation pins.
 
