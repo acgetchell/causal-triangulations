@@ -214,7 +214,8 @@ def test_ci_runtime_lanes_overlap_only_when_enabled_and_preserve_failure(
         "LANE_FAILURE": "23" if failure else "0",
     }.items():
         monkeypatch.setenv(name, value)
-    result = run_safe_command("just", [*(["--jobs", "1"] if serial else []), "_ci-runtime"], cwd=tmp_path, check=False)
+    jobs = "1" if serial else "2"
+    result = run_safe_command("just", ["--jobs", jobs, "_ci-runtime"], cwd=tmp_path, check=False)
     assert result.returncode == (23 if failure else 0), result.stderr
     commands = (tmp_path / "commands.log").read_text(encoding="utf-8").splitlines()
     assert len(commands) == 6
@@ -229,8 +230,11 @@ def test_ci_runtime_lanes_overlap_only_when_enabled_and_preserve_failure(
     assert all(command.endswith(suffix) for command, suffix in zip(native, expected, strict=True))
     events = log.read_text(encoding="utf-8").splitlines()
     if serial:
-        # Just awaits both independent dependencies even when the job limit is one.
-        assert events == ["start python", "end python", "start rust", "end rust"]
+        # Either dependency can acquire Just's single job slot first.
+        assert events in (
+            ["start python", "end python", "start rust", "end rust"],
+            ["start rust", "end rust", "start python", "end python"],
+        )
     else:
         assert set(events[:2]) == {"start python", "start rust"}
         assert set(events[2:]) == {"end python", "end rust"}

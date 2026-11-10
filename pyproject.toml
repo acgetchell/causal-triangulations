@@ -159,13 +159,13 @@ dev = [
     "yamllint==1.38.0",
 ]
 notebooks = [
-    "research-repo-tools[notebooks,python-tools]==0.2.7",
+    "research-repo-tools[notebooks,python-tools]==0.2.8",
     "jupyterlab>=4.6.2",
     "matplotlib>=3.11.1",
     "plotly>=6.9.0",
     "polars>=1.43.2",
 ]
-tooling = [ "research-repo-tools[python-tools]==0.2.7" ]
+tooling = [ "research-repo-tools[python-tools]==0.2.8" ]
 
 [tool.research-repo-tools.changelog]
 owner = "acgetchell"

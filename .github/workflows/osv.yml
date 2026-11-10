@@ -26,12 +26,14 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up declared toolchain
+      - name: Set up declared scanners
         uses: $/.github/actions/setup-toolchain
+        with:
+          binaries-only: "true"
 
       - name: Audit maintained lockfiles
         id: scan
-        run: just audit
+        run: uv run --locked --managed-python --group dev just audit
 
       - name: Retain dependency scan reports
         if: ${{ !cancelled() && steps.scan.outcome != 'skipped' }}

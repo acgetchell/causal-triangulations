@@ -22,7 +22,7 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    uses: acgetchell/research-repo-tools/.github/workflows/dependabot-approve.yml@4a8f53f684dee2abb7c5b8a4beab40ef29212b4c # v0.2.7
+    uses: acgetchell/research-repo-tools/.github/workflows/dependabot-approve.yml@b082da0b0fbd99436a418a3cc232434020558658 # v0.2.8
     with:
       repository: acgetchell/causal-triangulations
       policy: >-

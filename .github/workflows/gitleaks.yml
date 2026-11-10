@@ -27,12 +27,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Set up declared toolchain
+      - name: Set up declared scanners
         uses: $/.github/actions/setup-toolchain
+        with:
+          binaries-only: "true"
 
       - name: Scan reachable history and current files
         id: scan
-        run: just security-secrets
+        run: uv run --locked --managed-python --group dev just security-secrets
 
       - name: Retain redacted secret scan reports
         if: ${{ !cancelled() && steps.scan.outcome != 'skipped' }}

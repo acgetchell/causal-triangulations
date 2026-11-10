@@ -15,9 +15,9 @@ release-owned = [ "." ]
 [sources.tooling]
 project = "python"
 package = "research-repo-tools"
-version = "0.2.7"
+version = "0.2.8"
 
-# Native payload pins follow research-repo-tools v0.2.7's actionlint policy.
+# Native payload pins follow research-repo-tools v0.2.8's actionlint policy.
 [source-builds]
 packages = [ "actionlint-py", "pyyaml", "ruamel-yaml-clib" ]
 group = "build"

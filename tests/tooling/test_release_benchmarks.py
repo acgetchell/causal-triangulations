@@ -108,7 +108,7 @@ def release_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
         "gh": 'exec "$TOOLING_PYTHON" "$RUNNER_TEMP/github_stub.py" "$@"\n',
         "uvx": (
             'while [ "$1" != "--from" ]; do shift; done\n'
-            'test "$2" = "research-repo-tools==0.2.7" || exit 42\n'
+            'test "$2" = "research-repo-tools==0.2.8" || exit 42\n'
             "shift 2\n"
             'if [ "$1" = "python" ]; then shift; exec "$TOOLING_PYTHON" "$@"; fi\n'
             'test "$1" = "research-repo-tools" || exit 43\n'
