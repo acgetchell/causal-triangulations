@@ -1,0 +1,31 @@
+# Preserve the four exploratory simulation workloads; this is not release evidence.
+schema = 1
+sources = [ "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "src/**/*.rs" ]
+preflight = [ [ "cargo", "build", "--locked", "--release", "--bin", "cdt" ] ]
+warmups = 0
+repeats = 1
+timeout = 600
+
+[environment]
+CARGO_TARGET_DIR = "target"
+RUST_LOG = "error"
+
+[probes]
+cargo = [ "cargo", "--version" ]
+rustc = [ "rustc", "-vV" ]
+
+[[cases]]
+id = "small"
+command = [ "target/release/cdt", "--vertices-per-slice", "4", "--timeslices", "5", "--steps", "1000", "--thermalization-steps", "100", "--measurement-frequency", "20", "--simulate" ]
+
+[[cases]]
+id = "medium"
+command = [ "target/release/cdt", "--vertices-per-slice", "4", "--timeslices", "8", "--steps", "2000", "--thermalization-steps", "200", "--measurement-frequency", "40", "--simulate" ]
+
+[[cases]]
+id = "large"
+command = [ "target/release/cdt", "--vertices-per-slice", "5", "--timeslices", "10", "--steps", "3000", "--thermalization-steps", "300", "--measurement-frequency", "60", "--simulate" ]
+
+[[cases]]
+id = "extra-large"
+command = [ "target/release/cdt", "--vertices-per-slice", "8", "--timeslices", "15", "--steps", "5000", "--thermalization-steps", "500", "--measurement-frequency", "100", "--simulate" ]

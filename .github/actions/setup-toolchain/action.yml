@@ -2,6 +2,9 @@ name: Set up declared toolchain
 description: Install locked shared tooling and export verified Rust and Cargo tools.
 
 inputs:
+  binaries-only:
+    description: Install and verify only the declared release binaries for scanner jobs.
+    default: "false"
   cache:
     description: Cache tools for ordinary validation; disable for release producers.
     default: "true"
@@ -16,23 +19,40 @@ runs:
         enable-cache: ${{ inputs.cache == 'true' }}
         cache-python: ${{ runner.os != 'Windows' }}
 
-    - name: Cache declared tools
-      if: inputs.cache == 'true'
+    - name: Cache managed Cargo compilation
+      if: inputs.cache == 'true' && inputs.binaries-only != 'true'
       uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: ${{ runner.temp }}/rrt
-        key: rrt-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'pyproject.toml', 'uv.lock', '.python-version') }}
-        restore-keys: rrt-${{ runner.os }}-${{ runner.arch }}-
+        path: ${{ runner.temp }}/rrt-cargo-build
+        key: >-
+          cargo-build-v1-${{ runner.os }}-${{ runner.arch }}-${{
+            hashFiles('rust-toolchain.toml', 'pyproject.toml', 'uv.lock', 'Cargo.lock', '.python-version')
+          }}
 
     - name: Install and verify declared tools
+      if: inputs.binaries-only != 'true'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
         RESEARCH_REPO_TOOLS_HOME: ${{ runner.temp }}/rrt
+        RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME: ${{ runner.temp }}/rrt-cargo-build
       run: uv run --locked --managed-python --only-group tooling research-repo-tools setup
 
     - name: Export verified tool paths
+      if: inputs.binaries-only != 'true'
       shell: bash
       env:
         RESEARCH_REPO_TOOLS_HOME: ${{ runner.temp }}/rrt
       run: uv run --locked --group dev research-repo-tools toolchain export
+
+    - name: Install locked tooling package
+      if: inputs.binaries-only == 'true'
+      shell: bash
+      run: uv sync --locked --managed-python --only-group tooling
+
+    - name: Install and verify declared release binaries
+      if: inputs.binaries-only == 'true'
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: uv run --locked --no-sync --no-python-downloads python -I -X utf8 -m research_repo_tools toolchain sync-binaries

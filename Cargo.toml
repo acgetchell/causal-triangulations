@@ -65,7 +65,7 @@ delaunay = "0.8.4"
 markov-chain-monte-carlo = { version = "0.5.2", features = [ "serde" ] }
 dirs = "7.0.0"
 env_logger = { version = "0.11.11", optional = true }
-log = "0.4.34"
+log = "0.4.35"
 num-traits = "0.2.19"
 rand = { version = "0.10.3", features = [ "serde" ] }
 serde = { version = "1.0.229", features = [ "derive", "rc" ] }

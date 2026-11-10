@@ -11,8 +11,9 @@ from pathlib import Path
 import pytest
 import yaml
 from packaging.version import Version
+from research_repo_tools.cargo_examples import discover_examples
 from research_repo_tools.cli import main
-from research_repo_tools.criterion import COMPARISON_SCHEMA, Estimate, Sample, compare_samples, serialize_comparison
+from research_repo_tools.criterion import COMPARISON_SCHEMA, ConfidenceInterval, Estimate, Sample, compare_samples, serialize_comparison
 from research_repo_tools.evidence import Evidence, Provenance, publish_evidence
 from research_repo_tools.just_inspect import dry_run, inspect_justfile
 from research_repo_tools.measurement import MeasurementConfig, load_measurement
@@ -51,15 +52,18 @@ def shell_workflow_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     return tmp_path
 
 
-def test_performance_script_completes_every_summary_row(shell_workflow_workspace: Path) -> None:
-    """The summary increment must not turn a successful workload into failure."""
-    result = run_safe_command("bash", [str(ROOT / "examples/scripts/performance_test.sh")], cwd=shell_workflow_workspace, check=False)
-    assert result.returncode == 0, result.stdout
-    summary = result.stdout.split("=== Performance Summary ===", 1)[1]
-    for name in ("Small", "Medium", "Large", "Extra Large"):
-        assert re.search(rf"^{name}\s+\|", summary, re.MULTILINE)
-    assert "Results saved to: performance_results.txt" in summary
-    assert "=== Performance Analysis ===" in summary
+@pytest.mark.parametrize("status", [0, 23])
+def test_performance_script_forwards_literal_output_and_failure(status: int, shell_workflow_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The compatibility entry point delegates without acquiring or parsing timings."""
+    log = shell_workflow_workspace / "timing-arguments"
+    monkeypatch.setenv("TIMING_ARGUMENTS", str(log))
+    command = shell_workflow_workspace / "commands/just"
+    command.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > "$TIMING_ARGUMENTS"\nexit {status}\n', encoding="utf-8", newline="\n")
+    command.chmod(0o700)
+    output = "target/timings with spaces;literal.json"
+    result = run_safe_command("bash", [str(ROOT / "examples/scripts/performance_test.sh"), output], cwd=shell_workflow_workspace, check=False)
+    assert result.returncode == status, result.stderr
+    assert log.read_text(encoding="utf-8").splitlines() == ["performance-command-time", output]
 
 
 @pytest.mark.parametrize(("failure", "failed_count"), [("none", 0), ("mixed", 1), ("all", 8)])
@@ -106,7 +110,7 @@ def test_dependabot_caller_only_delegates_with_complete_cdt_file_policy() -> Non
 def test_published_tooling_pin_and_consumer_metadata() -> None:
     """Exercise the installed package against the real release configuration."""
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    assert project["dependency-groups"]["tooling"] == [f"research-repo-tools=={version('research-repo-tools')}"]
+    assert project["dependency-groups"]["tooling"] == [f"research-repo-tools[python-tools]=={version('research-repo-tools')}"]
     assert main(["--root", str(ROOT), "release", "check", "--final-release"]) == 0
 
 
@@ -213,7 +217,8 @@ def test_semgrep_aggregates_the_complete_eligible_inventory(tmp_path: Path) -> N
     names = select_files(ROOT, include=include, exclude=exclude)
     assert "tests/tooling/test_shared_tooling.py" in names
     reports = tmp_path / "reports"
-    result = run_safe_command("just", ["semgrep", str(reports)], cwd=ROOT, timeout=300)
+    result = run_safe_command("just", ["semgrep", str(reports)], cwd=ROOT, timeout=300, check=False)
+    assert result.returncode == 0, result.stderr
     assert "does not match the project environment" not in result.stderr
     data = json.loads((reports / "semgrep.json").read_text(encoding="utf-8"))
     assert len(data["batches"]) > 1, "The consumer regression must exercise aggregation."
@@ -333,7 +338,7 @@ def test_validation_graph_orders_static_checks_and_stops_on_failure(
     assert result.returncode == (23 if failure else 0), result.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
     assert sum("notebooks lint" in call for call in calls) == (0 if failure in {"actions allowlist", "python check"} else 1)
-    workloads = ("python -m pytest", "cargo nextest run", "cargo test --doc", "notebooks execute", "cargo bench --profile perf", "validation run")
+    workloads = ("python -m pytest", "cargo nextest run", "cargo test --doc", "notebooks execute", "cargo bench --profile perf", "validation cargo-examples")
     runtime_positions = [index for index, call in enumerate(calls) if any(workload in call for workload in workloads)]
     if failure:
         assert f"Injected validation failure: {failure}" in result.stderr
@@ -519,10 +524,11 @@ def test_changelog_regeneration_rotation_and_archived_notes(tmp_path: Path, caps
 def test_example_contract_covers_every_cargo_example() -> None:
     """Adding a Cargo example requires an explicit output contract."""
     configuration = tomllib.loads((ROOT / "tooling/examples.toml").read_text(encoding="utf-8"))
-    actual = {path.stem for path in (ROOT / "examples").glob("*.rs")}
-    actual.update(path.parent.name for path in (ROOT / "examples").glob("*/main.rs"))
-    assert {check["name"] for check in configuration["checks"]} == actual
-    assert all(check["expect"] and check["timeout"] == 600 for check in configuration["checks"])
+    actual = {example.name for example in discover_examples(ROOT, package="causal-triangulations")}
+    assert set(configuration["examples"]) == actual
+    assert configuration["timeout"] == 600
+    assert configuration["examples"]["basic_cdt"] == {"expect-stderr": ["Simulation completed!", "Example completed successfully!"]}
+    assert all(policy["expect"] for name, policy in configuration["examples"].items() if name != "basic_cdt")
 
 
 def test_benchmark_configuration_uses_current_correctness_gates() -> None:
@@ -537,24 +543,31 @@ def test_benchmark_configuration_uses_current_correctness_gates() -> None:
 
 @pytest.mark.parametrize(
     "orphan",
-    [None, "docs/performance/v2/pair.comparison.json", "docs/performance/v2/pair.evidence.json", "tooling/performance-readme.toml"],
+    [
+        None,
+        "docs/performance/v2/pair.comparison.json",
+        "docs/performance/v2/pair.evidence.json",
+        "docs/performance/v2/pair.csv",
+        "docs/performance/v2/pair.svg",
+        "docs/performance/v2/v0.2.0-vs-v0.1.0.md",
+        "tooling/performance-readme.toml",
+    ],
 )
-def test_performance_check_accepts_only_empty_initial_inventory(orphan: str | None, tmp_path: Path) -> None:
+def test_performance_check_accepts_only_empty_initial_inventory(orphan: str | None, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Missing reports are valid before measurement, never after evidence is retained."""
+    (tmp_path / "tooling").mkdir()
+    for name in ("performance-report.toml", "performance-interpretation.md"):
+        (tmp_path / "tooling" / name).write_bytes((ROOT / "tooling" / name).read_bytes())
     if orphan is not None:
         path = tmp_path / orphan
-        path.parent.mkdir(parents=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("orphaned evidence", encoding="utf-8")
-    result = run_safe_command(
-        "just",
-        ["--justfile", str(ROOT / "justfile"), "--working-directory", str(tmp_path), "performance-check"],
-        cwd=tmp_path,
-        check=False,
-    )
-    assert result.returncode == (0 if orphan is None else 1), result.stderr
-    assert ("No release comparison yet" in result.stdout) == (orphan is None)
+    assert "performance promote tooling/performance-report.toml --check" in dry_run(ROOT, "performance-check").stderr
+    assert main(["--root", str(tmp_path), "performance", "promote", "tooling/performance-report.toml", "--check"]) == (0 if orphan is None else 1)
+    result = capsys.readouterr()
+    assert ("uninitialized" in result.out) == (orphan is None)
     if orphan is not None:
-        assert "Release evidence exists without its current report" in result.stderr
+        assert "uninitialized report has orphaned inventory" in result.err
 
 
 def test_shared_report_and_readme_publication_use_consumer_configuration(tmp_path: Path) -> None:
@@ -565,8 +578,8 @@ def test_shared_report_and_readme_publication_use_consumer_configuration(tmp_pat
         (tooling / name).write_bytes((ROOT / "tooling" / name).read_bytes())
     template = (ROOT / "tooling/performance-readme.example.toml").read_text(encoding="utf-8")
     config = tomllib.loads(template)
-    baseline = Sample(tuple((row["benchmark"], Estimate(100, 90, 110, 0.95)) for row in config["rows"]), unit=config["unit"])
-    current = Sample(tuple((row["benchmark"], Estimate(80, 70, 90, 0.95)) for row in config["rows"]), unit=config["unit"])
+    baseline = Sample(tuple((row["benchmark"], Estimate(100, ConfidenceInterval(90, 110, 0.95))) for row in config["rows"]), unit=config["unit"])
+    current = Sample(tuple((row["benchmark"], Estimate(80, ConfidenceInterval(70, 90, 0.95))) for row in config["rows"]), unit=config["unit"])
     evidence = Evidence(
         serialize_comparison(compare_samples(baseline, current)),
         COMPARISON_SCHEMA,

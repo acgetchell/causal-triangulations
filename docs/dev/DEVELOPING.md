@@ -205,12 +205,12 @@ This runs:
 - notebook output hygiene, native notebook checks, and fast headless execution
 - benchmark harness compilation, the deterministic allocation contract, and validated example runs
 
-The `ci` recipe is a flat union of these focused validators. It does not depend on broad `check`, `lint`, or `test-all` bundles. Clippy covers every Cargo
-target to match the GitHub SARIF workflow; the test, benchmark, and example buckets still own their runtime or compile-contract evidence because ordinary
-compilation does not execute Clippy lints.
+The `ci` recipe synchronizes the development and notebook environment, then runs static checks and benchmark compilation before runtime workloads.
+Python consumer tests run alongside one serialized lane for Rust tests, doctests, fast notebooks, allocation checks, and Cargo examples. Both lanes use
+the synchronized environment without changing it. Use `just --jobs 1 ci` to run the same validators serially when diagnosing failures or limiting resources.
 
-Static checks and benchmark compilation finish before runtime workloads. Notebook lint is an early dependency and remains a prerequisite of the standalone
-notebook gate; Just executes that shared dependency once per CI invocation.
+Clippy covers every Cargo target to match the GitHub SARIF workflow; test, benchmark, and example buckets retain their separate execution contracts.
+Notebook lint runs once before the runtime lanes and remains a prerequisite of the standalone notebook gate.
 
 For heavier stabilization work, run the slow-test wrapper:
 
@@ -284,8 +284,8 @@ Examples must:
 `just examples-validate` checks stable output markers for user-facing Cargo examples. Keep those markers semantic rather than exact numeric values
 so simulation output can evolve without making the example contract brittle.
 
-The example runner compiles all Cargo examples once with `cargo build --release --examples`, then executes the compiled binaries directly. This preserves
-example coverage while avoiding repeated Cargo invocations for each example.
+The shared example runner discovers targets through Cargo metadata, builds the release examples once, and executes Cargo's reported artifacts directly.
+It checks stdout and stderr separately, including the tracing output from `basic_cdt`.
 
 When adding or renaming a Cargo example, update `tooling/examples.toml` with stable semantic output markers. A consumer integration test checks
 that the declared validation inventory covers every Cargo example. Shared validation enforces a 600-second per-example timeout on all platforms.
@@ -501,12 +501,15 @@ just notebook-check         # Output hygiene, native notebook checks, and fast h
 just notebook-check-slow    # Also execute heavier run-debugging notebooks
 ```
 
-`just ci` includes `notebook-check`, which executes the quickstart and visualization notebooks but only lints heavier analysis notebooks. Headless execution
+`just ci` lints all notebooks before executing the quickstart and visualization notebooks in its native runtime lane. Headless execution
 writes executed notebooks under `target/notebooks/` and leaves the source notebooks unchanged. To clear source notebook outputs before committing, run:
 
 ```bash
 just notebook-clear-outputs-all
 ```
+
+`just notebook` opens the quickstart in JupyterLab; pass a repository-relative notebook path to select another file. The shared launcher validates the
+selection, opens the selected notebook in the browser, and isolates temporary Jupyter, IPython, and Matplotlib files under `target/notebooks/`.
 
 ## Benchmark And Release Hygiene
 

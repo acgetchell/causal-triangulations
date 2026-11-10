@@ -1,5 +1,47 @@
 # Tooling Alignment
 
+## November 2026 research-repo-tools v0.2.8 Adoption
+
+Adopt the exact published 0.2.8 package through the standalone shared adopter, retaining Python 3.15 and the existing native platform matrix.
+Align isolated workflow pins and their registry cutoff with the published artifacts. The initial 0.2.7 adoption migrated direct Criterion consumers to
+complete `ConfidenceInterval` values while preserving their numerical inputs, retained evidence formats, and success/failure assertions.
+
+Validate update, setup, security, full local CI, dependency provenance, and isolated release runtimes separately. Local macOS evidence does not establish
+native Linux or Windows success. PR #326 also completes the shared-tooling integrations in #300, #301, #302, #303, #305, #312, and #325.
+The coordinated release-flow work in #289, #321, and #322 remains queued after the verified la-stack v0.5.3 reference release.
+
+Replace the notebook-launch shell with the shared literal file selector; replace static example paths with Cargo discovery and explicit stderr markers;
+declare the empty report inventory and its companion guard; and preserve all four exploratory CLI workloads in the shared command-timing format.
+Extend exact Action allowlisting to composites. Inherit pytest, Ruff, and Ty from the published `python-tools` extra without consumer version overrides.
+
+The prior CI graph executes every validator serially. Keep its policy checks, Rust compilation, documentation, notebook lint, and scanner checks before
+runtime work. Synchronize the complete development/notebook environment once, then run Python consumer tests alongside one serialized native lane containing
+Rust tests, doctests, fast notebooks, deterministic allocation assertions, and Cargo examples. Disable environment synchronization within both lanes;
+`just --jobs 1 ci` selects serial execution. Keep every validator, native CI job name, and scientific workload. Record comparable execution timings and
+hosted cache observations without interpreting overlapping checks as scientific performance evidence.
+
+On 9 November 2026, the same macOS arm64 worktree passed complete serial and parallel gates with v0.2.7 in 191.13 and 111.61 seconds respectively. Both retained
+827 Rust tests, 343 doctests, 129 Python tests, the two fast notebooks, allocation assertions, example execution, and every static/compile gate.
+These are single observations with warm tool/build caches while other repositories were validating; they do not establish a general speedup.
+The initial PR head's hosted Ubuntu job waited two seconds for a runner and spent 32 minutes 57 seconds installing tools from a cold cache, then 26 seconds
+checking its declared target. Final native results and subsequent warm-cache observations belong to the PR's actual workflow records; the initial head's
+timing does not establish final-head correctness or a cold/warm comparison.
+
+`dependency-sources.toml` covers the root Python and Cargo graphs. Run `just release-dependency-builds` before `just release-dependencies` on every native
+release machine to prepare Cargo's offline inputs and authenticate source-built Python wheels using the locked build group. v0.2.8 raises the Cargo
+archive limit that rejected valid winapi dependencies in v0.2.7. See [research-repo-tools #214](https://github.com/acgetchell/research-repo-tools/issues/214).
+Managed Cargo compilation is cached separately from exact installations, with OS, architecture, toolchain, declaration, and lock identities in the key. Release
+jobs continue disabling caches. The reusable Dependabot workflow selects the v0.2.8 commit with identical workflow bytes to v0.2.7.
+
+The Ubuntu and macOS runs for `75830cf` exposed an ordering assumption in the serial-fallback test. Just starts the parallel dependencies on separate
+threads even with one job slot. The test checks that both lanes complete without overlap in either order, preserves the parallel barrier, and verifies
+that failures still propagate.
+
+The hosted OSV job exhausted its 30-minute budget building unrelated Cargo tools. OSV and Gitleaks only need the locked Python tooling and verified release
+binaries. Sync the locked tooling group before using the shared `toolchain sync-binaries` mode, so only binary installation receives a GitHub lookup token.
+Keep the scan recipes, lockfile and history scope, report retention, and timeouts. Jobs that run Cargo tools still use full setup and the managed
+compilation cache.
+
 ## November 2026 Published Dependency Adoption For PR #319
 
 Adopt the published `research-repo-tools` 0.2.5 and `delaunay` 0.8.4 releases through normal registry resolution. Preserve Python 3.15, Rust 1.99.1,

@@ -3,7 +3,7 @@
 Release preparation uses the pinned shared CLI. Choose one stable tag, predecessor, and UTC date; reruns with those same inputs are deterministic.
 Benchmark measurements are separate and are not idempotent.
 
-This guide uses published `research-repo-tools==0.2.5`. Tooling, notebook kernels and Semgrep share the root Python 3.15 environment, following Delaunay.
+This guide uses published `research-repo-tools==0.2.8`. Tooling, notebook kernels and Semgrep share the root Python 3.15 environment, following Delaunay.
 `just update` refreshes the root lockfile while preserving the scanner's MCP/OpenTelemetry and Windows wheel compatibility overrides.
 Active documentation links stay on `main` and API links on `latest`; preserve immutable evidence and citation pins.
 
@@ -96,6 +96,8 @@ Update metadata with explicit inputs, then generate the prospective dated change
 ```bash
 just update-version "$TAG" --previous-release "$PREVIOUS_TAG" --date "$RELEASE_DATE"
 just changelog-unreleased "$TAG" "$RELEASE_DATE"
+just release-dependency-builds
+just release-dependencies
 just ci-slow
 just release-version-check
 just publish-check
@@ -105,6 +107,12 @@ The shared release transaction validates candidate files before writing. It sync
 Python is a dependency-only environment, so its placeholder version is not another release version.
 The permanent Zenodo concept DOI is fixed by policy; top-level version-record identifiers are rejected.
 Changelog archives use `docs/archives/changelog/`. Caught write failures trigger rollback; interruption is not a crash-atomic transaction.
+
+`release-dependency-builds` prepares Cargo's offline inputs and installs authenticated wheels for the Python packages named in `dependency-sources.toml`.
+`release-dependencies` verifies both locked registry graphs and the dependency bytes used on this machine. Repeat both commands after changing the lock,
+source policy, interpreter, or build tools. Follow the shared [release-branch validation sequence][shared-release-validation].
+
+[shared-release-validation]: https://github.com/acgetchell/research-repo-tools/blob/v0.2.8/docs/RELEASING.md#4-validate-the-release-branch
 
 Explicit `--previous-release` keeps preparation offline. Omitting it discovers the latest published stable GitHub release.
 Use `--dry-run` to preview metadata edits, or `just changelog-preview --tag "$TAG" --date "$RELEASE_DATE"` to preview notes.

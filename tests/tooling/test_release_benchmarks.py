@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 import yaml
-from research_repo_tools.criterion import Estimate, Sample
+from research_repo_tools.criterion import ConfidenceInterval, Estimate, Sample
 from research_repo_tools.evidence import Provenance
 from research_repo_tools.process import run_safe_command
 from research_repo_tools.release_assets import package_baseline, parse_release_target
@@ -108,7 +108,7 @@ def release_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
         "gh": 'exec "$TOOLING_PYTHON" "$RUNNER_TEMP/github_stub.py" "$@"\n',
         "uvx": (
             'while [ "$1" != "--from" ]; do shift; done\n'
-            'test "$2" = "research-repo-tools==0.2.5" || exit 42\n'
+            'test "$2" = "research-repo-tools==0.2.8" || exit 42\n'
             "shift 2\n"
             'if [ "$1" = "python" ]; then shift; exec "$TOOLING_PYTHON" "$@"; fi\n'
             'test "$1" = "research-repo-tools" || exit 43\n'
@@ -124,7 +124,7 @@ def release_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
         (tmp_path / "gh.cmd").write_text('@echo off\n"%TOOLING_PYTHON%" "%RUNNER_TEMP%/github_stub.py" %*\n', encoding="utf-8")
     (tmp_path / "baseline").mkdir()
     package_baseline(
-        Sample((("fixture/workload", Estimate(10.0, 9.0, 11.0)),)),
+        Sample((("fixture/workload", Estimate(10.0, ConfidenceInterval(9.0, 11.0))),)),
         Provenance(COMMIT, "d" * 64, "e" * 64, (("release", TAG),)),
         tmp_path / "baseline" / ASSET,
     )
@@ -220,7 +220,7 @@ def test_release_writer_checks_native_baseline_provenance(change: str, release_e
     directory = release_environment
     _restore(directory, _capture(directory), monkeypatch)
     package_baseline(
-        Sample((("fixture/workload", Estimate(10.0, 9.0, 11.0)),)),
+        Sample((("fixture/workload", Estimate(10.0, ConfidenceInterval(9.0, 11.0))),)),
         Provenance(OTHER_COMMIT if change == "revision" else COMMIT, context=(("release", "v0.1.2" if change == "release" else TAG),)),
         directory / "baseline" / ASSET,
     )
