@@ -1,5 +1,66 @@
 # Tooling Alignment
 
+## November 2026 Rust 1.100 and Delaunay 0.8.5
+
+Adopt the published Delaunay 0.8.5 crate and align CDT's compiler minimum, pinned toolchain, and Clippy MSRV with its Rust 1.100.0 floor.
+The targeted Cargo dry run on Rust 1.99.1 kept Delaunay 0.8.4 because it selects releases compatible with the declared minimum. Shared Python tooling
+does not own that decision. Keep the existing native matrix and exercise the unchanged scientific regressions with the new compiler and backend.
+Delaunay's intrinsic triangle-gluing API is available in the dependency. CDT still needs to integrate it for the outstanding reverse-support work.
+Remove the homepage field duplicated by the repository URL in response to Rust 1.100's Cargo lint.
+
+## November 2026 research-repo-tools v0.3.1 Adoption
+
+Upgrade the exact published package in both Python groups, the release dependency source policy, and the checkout-free benchmark jobs. Preserve Python
+3.15, the existing Semgrep constraints and native platform matrix. Keep the isolated registry cutoff just after the v0.3.1 distribution uploads and align
+the isolated uv runner with the project pin. The independently pinned Dependabot approval workflow has identical bytes at v0.2.8 and v0.3.1.
+
+OSV flags the pre-existing Semgrep dependency pins for OpenTelemetry and wcmatch. Align the complete OpenTelemetry family and the wcmatch override with
+RRT v0.3.1's tested dependencies. Keep the Semgrep wheel and Python 3.15 Windows override, and exercise the existing native scanner and fixture gates.
+
+For [#327](https://github.com/acgetchell/causal-triangulations/issues/327), use the shared offline Actions pin check and its updater over the same workflow
+and composite inventory. Align the composite's setup-uv pin with the existing release and SARIF workflows. Check CodeQL's init, analyze, and SARIF upload
+references together against the reviewed Action release. RRT v0.3.1 compares repeated uses of each exact identity. As in Delaunay v0.8.5, add a narrow
+CDT check over RRT's parsed references for the single tag and commit shared by the three CodeQL subpaths. Maintainers own routine updates of these
+coupled Actions through `just update-actions`. Dependabot owns other version updates and remains enabled for security updates to all Actions.
+Keep actionlint, the exact identity allowlist, readable version comments, and Zizmor as distinct checks.
+
+The release-flow adoption in [#321](https://github.com/acgetchell/causal-triangulations/issues/321),
+[#322](https://github.com/acgetchell/causal-triangulations/issues/322), and [#289](https://github.com/acgetchell/causal-triangulations/issues/289) uses
+la-stack v0.5.3 (commit `7165ed562f2e4611d201e574fc1f600a8ad8b33e`) as its reference. Evidence ownership, signing, exact Cargo guarantees, recovery,
+and the approval boundary require the Astra checkpoint in #321. The active release procedure stays in force pending verified adoption.
+
+The canonical benchmark dispatch passes the explicit stable tag as both the workflow ref and input. GitHub supplies the workflow ref and source SHA.
+The preflight checks the tag ref and delegates remote tag peeling, SHA comparison, and mutable draft identity and title checks to RRT. The writer uses
+the installed archive inspection command and compares the reported revision with the captured target before calling the draft-only uploader.
+
+Use the v0.3.1 exact-commit tag preflight and its managed Cargo cache for both the locked fetch and dependency proof. Keep local dirty-tree package
+preflight available and add a clean default/all-feature package recipe for final-main validation. The release adoption should follow Delaunay's
+signed `cargo-archive` guarantee and la-stack's two-step operator flow. MCMC's signed-source flow verifies the checkout and package test results, while
+Delaunay also compares a credential-free reproduction with the retained crate before upload. The final registry checksum is a separate verification.
+
+### Remaining release integration
+
+For #321, keep the existing Ubuntu, macOS, and Windows CI jobs as exact main-push producers. The declared Rust target checks and `just ci` cover
+all-feature compilation, default tests, doctests, examples, fast notebooks, allocation checks, and policy checks. The release producer must also run
+the library-only build, `test-slow`, and `release-package` on the clean release commit. Keep OSV, Gitleaks, and the hosted audit and SARIF gates explicit.
+Bind the retained crate and Cargo/rustc identities to the exact source SHA and successful jobs in the same run and attempt. Sign only the authenticated
+handoff in a separate job without a checkout. Rerun an incomplete attempt in full and review any replaced evidence selection before tagging.
+
+For #322, v0.1.1 predates the current persistent-proposal and slice-scaling workloads. CDT's documented new series starts with absolute measurements of
+the complete current suite. RRT v0.3.1 supports a current-only pre-tag acquisition only when the repository has no stable release history. A shared extension
+should identify the series and its workload contract explicitly and verify that it has no compatible predecessor. The first acquisition must keep all raw
+samples and feed the report and release archive through the existing candidate verification and approval flow. Paired comparisons begin with the next
+compatible release. Keep archived data and the existing acquisition path until the shared replacement is published and verified in CDT.
+The implementation is tracked in [RRT #267](https://github.com/acgetchell/research-repo-tools/issues/267) and CDT adoption in
+[#331](https://github.com/acgetchell/causal-triangulations/issues/331).
+
+For #289, the publisher must revalidate the frozen native and benchmark acceptance after deployment approval and before requesting a registry token.
+Reproduce the retained crate with the same Cargo/rustc identities and check that the exact registry version is absent. Cargo repackages the clean
+checkout for its nonbuilding upload. Attach the retained crate to the immutable release so the shared verifier can compare it with the registry checksum.
+Reconcile visibility after an uncertain upload before retrying. The sibling workflows use an explicit tag-bound registry dispatch to pass the independent
+acceptance. Confirm the trigger choice for CDT, since #289 currently specifies a published-release event. The live publisher setup, first approved
+publication, and downstream resolution remain release validation obligations.
+
 ## November 2026 research-repo-tools v0.2.8 Adoption
 
 Adopt the exact published 0.2.8 package through the standalone shared adopter, retaining Python 3.15 and the existing native platform matrix.

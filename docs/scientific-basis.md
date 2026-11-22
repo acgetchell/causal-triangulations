@@ -72,8 +72,8 @@ foliation/topology/causality constraints, the configured action, and Metropolis-
 The current simplicial backend identifies an edge by its endpoint pair. The original exact CDT transfer matrix also counts triangulations with distinct
 timelike edges joining the same vertices: of ten marked strips between two length-three loops, only seven have unique endpoint-pair edges. Restricting the
 minimum loop length to three therefore does not make the current representation match that finite-lattice ensemble.
-[Delaunay #667](https://github.com/acgetchell/delaunay/issues/667) tracks the required abstract triangle-gluing capability. Its adoption must preserve the
-existing simplicial validation contract and keep generic topology algorithms in the geometry backend.
+Delaunay 0.8.5 publishes the abstract triangle-gluing capability from [Delaunay #667](https://github.com/acgetchell/delaunay/issues/667). Integration in CDT
+must preserve the existing simplicial validation contract and keep generic topology algorithms in the geometry backend.
 
 [`delaunay`](https://docs.rs/delaunay/latest/delaunay/) owns structural geometry algorithms; its
 [bibliography](https://github.com/acgetchell/delaunay/blob/main/REFERENCES.md) owns generic geometry attribution.
@@ -158,7 +158,8 @@ asymptotic scaling regime, or that a chosen observable analysis supports a parti
 The [2d-cdt sphere audit](audits/2d-cdt_sphere/README.md) establishes a specific reference boundary: the pinned implementation retains a toroidal stored
 complex under `sphere=true` while modifying observable adjacency. Its advertised effective-sphere option is acknowledged but excluded from planned
 periodic 1+1 parity. That audit establishes neither full reference agreement nor comparative sampler correctness. The planned scientifically validated
-v0.2.0 release requires correction of #316, adoption of Delaunay #667, and completion of the exact-ensemble and external validation gates.
+v0.2.0 release requires correction of #316, integration of the published triangle-gluing API, and completion of the exact-ensemble and external
+validation gates.
 
 ## CDT++ Construction Lesson
 
@@ -250,10 +251,9 @@ Coordinate-dependent feasibility, proposal densities, dimension-changing transfo
 the same action to every valid embedding generally leaves an unknown, state-dependent embedding multiplicity or volume in the marginal over `C`.
 
 The preferred implementation boundary is coordinate-independent checked topology and local edits supplied by the geometry backend, with CDT owning
-foliation, markings, action and proposal probabilities. [Delaunay #667](https://github.com/acgetchell/delaunay/issues/667) requests that abstract capability,
-including parallel-edge identity and edits without mandatory Euclidean realization. Adopt a published API through `src/geometry/`; preserve existing
-realized-mesh validation and do not duplicate structural topology algorithms in `src/cdt/`. The parallel-edge representation gap and #316's reverse-support
-defect remain separate obligations: supplying the former does not automatically correct the latter.
+foliation, markings, action and proposal probabilities. Delaunay 0.8.5 provides parallel-edge identity and edits without mandatory Euclidean realization.
+Integrate the API through `src/geometry/` while preserving realized-mesh validation and backend ownership of structural topology algorithms.
+The parallel-edge representation gap and #316's reverse-support defect remain separate obligations.
 
 `tests/regressions.rs::issue_316_original_removal_has_no_periodic_barycentric_reverse` preserves the original 4×4 constructor, proposal seed 1, caller seed 17,
 deleted coordinate and both valid endpoints. Its independent integer-residue calculation excludes every periodic lift of every destination face. This is

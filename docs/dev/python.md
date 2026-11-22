@@ -3,7 +3,8 @@
 Guidance for all repository-owned Python, including scripts, tests, and negative Semgrep fixtures.
 
 The Rust library is the primary product. Generic maintenance and performance evidence come from the pinned `research-repo-tools` package.
-CDT's Python files are consumer integration tests, independent scientific audits, and deliberate static-analysis fixtures; keep them typed and predictable.
+CDT owns consumer integration tests, independent scientific audits, deliberate static-analysis fixtures
+and the check that its CodeQL subpaths share one release.
 
 ---
 
@@ -21,7 +22,7 @@ Shared file discovery covers every tracked and nonignored `.py` and `.pyi` file.
 with force-exclusion disabled. Both ordinary code and negative fixtures run the full configured Ruff policy; no recipe narrows it with `--select`.
 The canonical shared `python check` command owns this complete inventory in CI, with exact fixture/rule exceptions in `pyproject.toml` for deliberate
 violations. The compatibility names `python-fixtures-check` and `python-source-check` both alias the complete check. Shared `python fix` and
-`python typecheck` likewise own fixing and strict typing; CDT retains its newer explicit Ruff/Ty pins instead of adopting the older optional shared profile.
+`python typecheck` likewise own fixing and strict typing. The shared `python-tools` profile pins Ruff, Ty, and pytest.
 
 `just check` also runs Python formatting checks, Ruff, `ty`, and repository-owned Semgrep rules as part of the normal validation bundle.
 

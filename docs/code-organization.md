@@ -36,6 +36,7 @@ causal-triangulations/
 │   │   ├── rust-clippy.yml
 │   │   ├── semgrep-sarif.yml
 │   │   └── zizmor.yml
+│   ├── action-updates.toml
 │   ├── CODEOWNERS
 │   └── dependabot.yml
 ├── benches/
@@ -209,6 +210,7 @@ causal-triangulations/
 │   └── validation_analysis.rs
 ├── tooling/
 │   ├── benchmark.toml
+│   ├── check_codeql_release.py
 │   ├── command-timing.toml
 │   ├── examples.toml
 │   ├── performance-interpretation.md
@@ -278,7 +280,8 @@ enforce this boundary against new CDT-local generic acceptance draws or manual a
 - `benches/` — Criterion benchmark harnesses and CI performance suites, with shared fail-fast fixture setup support under `benches/support/`.
 - `docs/` — user guides, architecture notes, development rules, and release/testing/performance documentation.
   [The documentation index](README.md) maps their owners; [documentation policy](dev/DEVELOPING.md#documentation-and-command-policy) defines guide naming.
-- `tooling/` — benchmark measurement, example validation, report, and README publication contracts; consumer integration tests live under `tests/tooling/`.
+- `tooling/` — benchmark measurement, example validation, report and README publication contracts, and the shared-release check for CodeQL subpaths.
+  Consumer integration tests live under `tests/tooling/`.
   Generic infrastructure uses `research-repo-tools`; tooling, notebooks and Semgrep share the root Python 3.15 environment.
 - `dependency-sources.toml` — registry-source and native source-build policy for Python and Cargo release dependency provenance.
 
@@ -505,7 +508,7 @@ Notebook files live in `notebooks/` and should wrap the CLI or consume generated
 
 ## Key Dependencies
 
-- `delaunay` (v0.8.4) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
+- `delaunay` (v0.8.5) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
   `set_vertex_data_by_key` for O(1) label mutation)
 - `markov-chain-monte-carlo` (v0.5.2) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, invariant-bearing `Step<Info>` telemetry, `Target`)
 - `num-traits` — `ToPrimitive` and `NumCast` for checked or saturating numeric conversions

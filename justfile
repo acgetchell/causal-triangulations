@@ -8,8 +8,10 @@ set positional-arguments
 
 _tools := "uv run --locked --group dev research-repo-tools"
 _run := _tools + " toolchain run --"
+_release_cargo := _tools + " toolchain run --tool cargo --"
 _notebooks := "uv run --locked --group dev --group notebooks research-repo-tools"
 _scanner := "uv run --locked --no-active --group dev research-repo-tools"
+_actions_inputs := quote(".github/workflows") + " " + quote(".github/actions/setup-toolchain/action.yml")
 
 # Semgrep misreads Python 3.15's positive RLIM_INFINITY on Linux.
 # Keep its inherited stack finite until https://github.com/semgrep/semgrep/issues/11979 is fixed.
@@ -43,7 +45,7 @@ _ci-native:
 
 # Preserve the complete static and compilation gate before runtime workloads.
 [private]
-_ci-policy: justfile-fmt-check action-lint actions-allowlist-check zizmor markdown-check spell-check performance-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check notebook-lint shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check bench-compile
+_ci-policy: justfile-fmt-check action-lint actions-allowlist-check actions-check zizmor markdown-check spell-check performance-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check notebook-lint shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check bench-compile
 
 # Python tests use temporary outputs and the already synchronized environment.
 [private]
@@ -69,6 +71,11 @@ action-lint:
 # Validate exact external Action identities in workflows and composites.
 actions-allowlist-check:
     {{ _tools }} actions allowlist --policy tooling/selected-actions.json .github/workflows .github/actions
+
+# Check coupled GitHub Actions pins offline using the provisioned environment.
+actions-check:
+    uv run --locked --no-sync --no-python-downloads --offline research-repo-tools actions check --policy .github/action-updates.toml {{ _actions_inputs }}
+    uv run --locked --no-sync --no-python-downloads --offline python tooling/check_codeql_release.py {{ _actions_inputs }}
 
 # Run deterministic cached-observable allocation assertions.
 allocation-check:
@@ -265,7 +272,7 @@ justfile-fmt-check:
 lint-code: fmt-check clippy doc-check semgrep semgrep-test python-check shell-check
 
 # Configuration validation: JSON, TOML, YAML/CFF, GitHub Actions workflows
-lint-config: justfile-fmt-check validate-json toml-check yaml-check citation-check action-lint actions-allowlist-check zizmor
+lint-config: justfile-fmt-check validate-json toml-check yaml-check citation-check action-lint actions-allowlist-check actions-check zizmor
 
 # Check Markdown, spelling, and retained performance reports.
 lint-docs: markdown-check spell-check performance-check
@@ -386,15 +393,22 @@ python-sync:
 python-typecheck:
     {{ _tools }} python typecheck
 
+# Dispatch release benchmarks from the explicitly selected stable tag.
+release-benchmarks tag:
+    [[ "$1" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "A canonical stable tag is required." >&2; exit 2; }
+    gh workflow run release-benchmarks.yml --repo acgetchell/causal-triangulations --ref "$1" -f "tag=$1"
+
+# Populate the managed Cargo cache used by the locked release dependency proof.
+release-cargo-fetch *args:
+    {{ _release_cargo }} cargo fetch --locked "$@"
+
 # Authenticate declared registry graphs and this machine's installed dependency bytes.
 release-dependencies:
-    {{ _run }} research-repo-tools release dependencies
+    {{ _release_cargo }} research-repo-tools release dependencies
 
 # Prepare native source receipts and registry inputs before release provenance checks.
-release-dependency-builds:
-    uv sync --locked --group dev
-    {{ _run }} cargo fetch --locked
-    {{ _run }} research-repo-tools release dependency-builds
+release-dependency-builds: python-sync release-cargo-fetch
+    {{ _release_cargo }} research-repo-tools release dependency-builds
 
 # Validate release-version/date synchronization, concept DOI, and environment metadata.
 release-metadata-check:
@@ -403,6 +417,12 @@ release-metadata-check:
 # Print release notes from the active changelog or archives.
 release-notes tag:
     {{ _tools }} changelog notes "$1"
+
+# Verify the clean default and all-feature packages without uploading.
+release-package:
+    {{ _release_cargo }} research-repo-tools validation cargo-metadata --package causal-triangulations
+    {{ _release_cargo }} cargo publish --locked --package causal-triangulations --registry crates-io --dry-run
+    {{ _release_cargo }} cargo publish --locked --package causal-triangulations --registry crates-io --dry-run --all-features
 
 # Inspect a published GitHub release and its crates.io package.
 release-verify tag:
@@ -484,16 +504,16 @@ spell-check:
     {{ _run }} research-repo-tools files run --exclude typos.toml --exclude CHANGELOG.md --exclude 'docs/archive/**' --exclude 'docs/archives/**' -- typos --config typos.toml --force-exclude
 
 # Create an annotated local Git tag from release notes (maintainer operation).
-tag version:
-    {{ _tools }} changelog tag "$1"
+tag version *args:
+    {{ _release_cargo }} research-repo-tools changelog tag "$@"
 
 # Replace a local Git tag from release notes (maintainer operation).
-tag-force version:
-    {{ _tools }} changelog tag "$1" --force
+tag-force version *args:
+    {{ _release_cargo }} research-repo-tools changelog tag "$@" --force
 
 # Preview the annotated release tag without changing Git state.
-tag-preview version:
-    {{ _tools }} changelog tag "$1" --dry-run
+tag-preview version *args:
+    {{ _release_cargo }} research-repo-tools changelog tag "$@" --dry-run
 
 # Focused local Rust buckets: unit tests plus rustdoc doctests.
 test: test-unit test-doc
@@ -575,6 +595,10 @@ unused-deps:
 
 # Update dependency requirements, locks, managed Cargo tools, and the active uv pin.
 update: update-tools update-dependencies
+
+# Reconcile coupled GitHub Actions pins; use --dry-run to preview.
+update-actions *args:
+    uv run --locked --only-group tooling --inexact research-repo-tools actions update --policy .github/action-updates.toml {{ _actions_inputs }} "$@"
 
 # Advance Cargo dependency declarations and lockfile entries.
 update-cargo-dependencies:

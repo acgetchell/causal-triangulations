@@ -1,0 +1,15 @@
+# Maintainers advance these coupled pins together with just update-actions.
+[actions]
+"astral-sh/setup-uv" = "latest"
+# CodeQL publishes bundle tags too. Advance these three reviewed Action tags together.
+"github/codeql-action/init" = "v4.39.3"
+"github/codeql-action/analyze" = "v4.39.3"
+"github/codeql-action/upload-sarif" = "v4.39.3"
+
+[consistency]
+actions = [
+    "astral-sh/setup-uv",
+    "github/codeql-action/init",
+    "github/codeql-action/analyze",
+    "github/codeql-action/upload-sarif",
+]

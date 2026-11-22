@@ -3,6 +3,7 @@
 import json
 import os
 import sys
+from importlib.metadata import version
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -39,7 +40,7 @@ with (root / "github-calls.jsonl").open("a", encoding="utf-8") as log:
 repository = "acgetchell/causal-triangulations"
 release_id = state.get("release_id", 17)
 release = {
-    "id": release_id, "tag_name": "v0.1.1", "name": "v0.1.1",
+    "id": release_id, "tag_name": "v0.1.1", "name": state.get("title", "v0.1.1"),
     "url": f"https://api.github.com/repos/{repository}/releases/{release_id}",
     "draft": True, "immutable": False, "prerelease": False, "assets": [],
 }
@@ -55,9 +56,7 @@ if uploaded.exists():
         "digest": "sha256:" + hashlib.sha256(data).hexdigest(), "state": "uploaded",
     }]
 endpoint = next(arg for arg in args if arg.startswith("repos/"))
-if "/commits/" in endpoint:
-    print(state["commit"])
-elif endpoint.endswith("/releases?per_page=100"):
+if endpoint.endswith("/releases?per_page=100"):
     print(json.dumps([[release]]))
 elif endpoint.endswith("/assets?per_page=100"):
     print(json.dumps([release["assets"]]))
@@ -96,6 +95,8 @@ def release_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
     for name, value in {
         "RUNNER_TEMP": tmp_path.as_posix(),
         "GITHUB_OUTPUT": (tmp_path / "outputs").as_posix(),
+        "GITHUB_REF": f"refs/tags/{TAG}",
+        "GITHUB_SHA": COMMIT,
         "GH_REPO": REPOSITORY,
         "RELEASE_TAG": TAG,
         "RELEASE_ASSET": ASSET,
@@ -108,9 +109,8 @@ def release_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path
         "gh": 'exec "$TOOLING_PYTHON" "$RUNNER_TEMP/github_stub.py" "$@"\n',
         "uvx": (
             'while [ "$1" != "--from" ]; do shift; done\n'
-            'test "$2" = "research-repo-tools==0.2.8" || exit 42\n'
+            f'test "$2" = "research-repo-tools=={version("research-repo-tools")}" || exit 42\n'
             "shift 2\n"
-            'if [ "$1" = "python" ]; then shift; exec "$TOOLING_PYTHON" "$@"; fi\n'
             'test "$1" = "research-repo-tools" || exit 43\n'
             'shift; exec "$TOOLING_PYTHON" -I -m research_repo_tools "$@"\n'
         ),
@@ -136,7 +136,7 @@ def _capture(directory: Path) -> str:
     assert result.returncode == 0, result.stderr
     outputs = dict(line.split("=", 1) for line in (directory / "outputs").read_text(encoding="utf-8").splitlines())
     target = parse_release_target(outputs["target"].encode())
-    assert (target.repository, target.tag, target.release_id, target.commit) == (REPOSITORY, TAG, 17, COMMIT)
+    assert (target.repository, target.tag, target.release_id, target.commit, target.expected_title) == (REPOSITORY, TAG, 17, COMMIT, TAG)
     assert outputs["commit"] == COMMIT
     return outputs["target"]
 
@@ -182,13 +182,62 @@ def test_release_upload_rejects_identity_changed_after_preflight(change: str, re
 
 
 @pytest.mark.parametrize(("commit", "remote"), [("", COMMIT), ("abc123", COMMIT), (COMMIT, OTHER_COMMIT)])
-def test_release_preflight_rejects_unverified_commit(commit: str, remote: str, release_environment: Path) -> None:
+def test_release_preflight_rejects_unverified_commit(commit: str, remote: str, release_environment: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Bad resolution or tag movement during preflight must not produce trusted outputs."""
     directory = release_environment
-    (directory / "github.json").write_text(json.dumps({"commit": commit, "remote_commit": remote}), encoding="utf-8")
+    monkeypatch.setenv("GITHUB_SHA", commit)
+    (directory / "github.json").write_text(json.dumps({"commit": remote}), encoding="utf-8")
     result = _run_step(directory, "validate-release", "Capture verified draft GitHub Release target")
     assert result.returncode != 0
     assert not (directory / "outputs").exists()
+
+
+@pytest.mark.parametrize("ref", ["refs/heads/main", "refs/tags/v0.1.2"])
+def test_release_preflight_rejects_wrong_ref(ref: str, release_environment: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A branch or another tag cannot dispatch the selected release workflow."""
+    monkeypatch.setenv("GITHUB_REF", ref)
+    result = _run_step(release_environment, "validate-release", "Capture verified draft GitHub Release target")
+    assert result.returncode != 0
+    assert "Dispatch ref must match the release tag." in result.stderr
+    assert not (release_environment / "github-calls.jsonl").exists()
+    assert not (release_environment / "outputs").exists()
+
+
+def test_release_preflight_rejects_wrong_draft_title(release_environment: Path) -> None:
+    """The captured stable draft must also have the reviewed tag title."""
+    state = {"commit": COMMIT, "title": "Different draft title"}
+    (release_environment / "github.json").write_text(json.dumps(state), encoding="utf-8")
+    result = _run_step(release_environment, "validate-release", "Capture verified draft GitHub Release target")
+    assert result.returncode != 0
+    assert "title" in result.stderr
+    assert not (release_environment / "outputs").exists()
+
+
+@pytest.mark.parametrize(("args", "dispatch_status", "expected"), [((), 0, 1), (("main",), 0, 2), ((TAG,), 0, 0), ((TAG,), 23, 23)])
+def test_release_benchmark_dispatch_forwards_explicit_tag(
+    args: tuple[str, ...], dispatch_status: int, expected: int, release_environment: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run the real recipe with an inert recorder for the GitHub CLI."""
+    stub = release_environment / "gh"
+    stub.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$RUNNER_TEMP/dispatch"\nexit "$DISPATCH_STATUS"\n', encoding="utf-8", newline="\n")
+    monkeypatch.setenv("DISPATCH_STATUS", str(dispatch_status))
+    result = run_safe_command("just", ["--justfile", str(ROOT / "justfile"), "release-benchmarks", *args], cwd=release_environment, check=False)
+    assert result.returncode == expected, result.stderr
+    dispatch = release_environment / "dispatch"
+    if args == (TAG,):
+        assert dispatch.read_text(encoding="utf-8").splitlines() == [
+            "workflow",
+            "run",
+            "release-benchmarks.yml",
+            "--repo",
+            REPOSITORY,
+            "--ref",
+            TAG,
+            "-f",
+            f"tag={TAG}",
+        ]
+    else:
+        assert not dispatch.exists()
 
 
 @pytest.mark.parametrize("handoff", ["absent-output", "missing-file", "empty", "malformed", "wrong-repository", "wrong-tag"])
@@ -245,6 +294,8 @@ def test_release_workflow_keeps_trusted_data_outside_measured_checkout() -> None
     workflow = yaml.safe_load((ROOT / ".github/workflows/release-benchmarks.yml").read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
     assert workflow["permissions"] == {"contents": "read"}
+    assert set(workflow[True]["workflow_dispatch"]["inputs"]) == {"tag"}
+    assert workflow[True]["workflow_dispatch"]["inputs"]["tag"]["required"] is True
     assert workflow["concurrency"]["cancel-in-progress"] is False
     assert jobs["validate-release"]["outputs"] == {
         "target": "${{ steps.release-target.outputs.target }}",

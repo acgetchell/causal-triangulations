@@ -26,7 +26,7 @@ verify, reproduce, or extend.
 
 Prerequisites:
 
-- Rust 1.99.1, pinned by `rust-toolchain.toml`; `Cargo.toml` also specifies `rust-version = "1.99.1"` as the required toolchain
+- Rust 1.100.0, pinned by `rust-toolchain.toml`; `Cargo.toml` declares the same minimum compiler version
 - Git
 - Platform C/C++ compiler and linker (Xcode command-line tools on macOS, a native build toolchain on Linux, or MSVC Build Tools on Windows)
 - [Just] command runner, installed by shared setup below
@@ -112,7 +112,7 @@ Before opening a PR:
 Rust code uses:
 
 - Rust 2024 edition
-- MSRV 1.99.1
+- MSRV 1.100.0
 - `#![forbid(unsafe_code)]`
 - `rustfmt` and strict Clippy
 - narrow `CdtError` variants and `CdtResult<T>` for production errors
