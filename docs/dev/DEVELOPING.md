@@ -438,9 +438,16 @@ the adjacent human-readable version comment.
 Zizmor owns full-SHA pin validation. Semgrep owns the readable version-comment policy.
 
 `just actions-check` checks coupled SHA pins and version comments offline in the workflows and setup composite. Maintainers own routine setup-uv and
-CodeQL updates. For a new CodeQL release, first set all three Action tags in `.github/action-updates.toml` to the reviewed version. Preview
-`just update-actions --dry-run`, apply `just update-actions`, and run `just actions-check`. Dependabot handles the other routine Actions updates and
-remains enabled for security updates to all Actions.
+CodeQL updates. For a new CodeQL release, select the upstream tag and resolve it to a commit before updating its pins:
+
+```bash
+tag=v4.39.3  # Set to the CodeQL Action release under review.
+gh api "repos/github/codeql-action/commits/refs%2Ftags%2F$tag" --jq .sha
+```
+
+Record that tag and full commit in `.github/codeql-release.toml`. Set all three Action tags in `.github/action-updates.toml` to the same version.
+Preview `just update-actions --dry-run`, apply `just update-actions`, and run `just actions-check`. Dependabot handles the other routine Actions updates
+and remains enabled for security updates to all Actions.
 
 ### Dependabot Approval and Auto-Merge
 

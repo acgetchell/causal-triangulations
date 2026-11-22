@@ -61,16 +61,19 @@ def test_composite_allowlist_checks_the_real_setup_action(approved: bool, tmp_pa
     ("change", "error"),
     [
         ((".github/actions/setup-toolchain/action.yml", r"(astral-sh/setup-uv@)[0-9a-f]{40}", r"\g<1>" + "0" * 40), "inconsistent astral-sh/setup-uv"),
-        ((".github/workflows/codeql.yml", r"(github/codeql-action/analyze@)[0-9a-f]{40}", r"\g<1>" + "0" * 40), "CodeQL Actions must share one release commit"),
+        ((".github/workflows/codeql.yml", r"(github/codeql-action/analyze@)[0-9a-f]{40}", r"\g<1>" + "0" * 40), "differs from the reviewed CodeQL release"),
+        ((".github/workflows/*.yml", r"(github/codeql-action/[\w-]+@)[0-9a-f]{40}", r"\g<1>" + "1" * 40), "differs from the reviewed CodeQL release"),
         ((".github/action-updates.toml", r'("github/codeql-action/analyze" = )"[^"]+"', r'\g<1>"latest"'), "must select one explicit release tag"),
+        ((".github/codeql-release.toml", r'"v[\d.]+"', '"v0.0.0"'), "must match the reviewed tag"),
     ],
 )
-def test_actions_check_rejects_partial_update(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: tuple[str, str, str], error: str) -> None:
+def test_actions_check_rejects_pin_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: tuple[str, str, str], error: str) -> None:
     """Run the complete offline recipe on the actual workflow and composite inventory."""
     policy = ".github/action-updates.toml"
     workflows = ".github/workflows"
     composite = ".github/actions/setup-toolchain/action.yml"
     paths = [ROOT / name for name in (policy, composite, "pyproject.toml", "uv.lock", ".python-version", "justfile", "tooling/check_codeql_release.py")]
+    paths.append(ROOT / ".github/codeql-release.toml")
     paths.extend((ROOT / workflows).glob("*.yml"))
     for source in paths:
         destination = tmp_path / source.relative_to(ROOT)
@@ -78,12 +81,15 @@ def test_actions_check_rejects_partial_update(tmp_path: Path, monkeypatch: pytes
         destination.write_bytes(source.read_bytes())
     monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", sys.prefix)
     assert run_safe_command("just", ["actions-check"], cwd=tmp_path).returncode == 0
-    changed_file, match, replacement = change
-    action = tmp_path / changed_file
-    original = action.read_text(encoding="utf-8")
-    changed = re.sub(match, replacement, original, count=1)
-    assert changed != original
-    action.write_text(changed, encoding="utf-8", newline="\n")
+    file_pattern, match, replacement = change
+    replacements = 0
+    for action in tmp_path.glob(file_pattern):
+        original = action.read_text(encoding="utf-8")
+        changed, count = re.subn(match, replacement, original)
+        if count:
+            replacements += count
+            action.write_text(changed, encoding="utf-8", newline="\n")
+    assert replacements > 0
     result = run_safe_command("just", ["actions-check"], cwd=tmp_path, check=False)
     assert result.returncode != 0
     assert error in result.stderr

@@ -20,8 +20,10 @@ RRT v0.3.1's tested dependencies. Keep the Semgrep wheel and Python 3.15 Windows
 For [#327](https://github.com/acgetchell/causal-triangulations/issues/327), use the shared offline Actions pin check and its updater over the same workflow
 and composite inventory. Align the composite's setup-uv pin with the existing release and SARIF workflows. Check CodeQL's init, analyze, and SARIF upload
 references together against the reviewed Action release. RRT v0.3.1 compares repeated uses of each exact identity. As in Delaunay v0.8.5, add a narrow
-CDT check over RRT's parsed references for the single tag and commit shared by the three CodeQL subpaths. Maintainers own routine updates of these
-coupled Actions through `just update-actions`. Dependabot owns other version updates and remains enabled for security updates to all Actions.
+CDT check over RRT's parsed references for the single tag and commit shared by the three CodeQL subpaths. Record the reviewed upstream tag and its
+peeled commit in `.github/codeql-release.toml` so the offline check catches even a coordinated move to the wrong commit.
+Maintainers own routine updates of these coupled Actions through `just update-actions`. Dependabot owns other version updates and remains enabled
+for security updates to all Actions.
 Keep actionlint, the exact identity allowlist, readable version comments, and Zizmor as distinct checks.
 
 The release-flow adoption in [#321](https://github.com/acgetchell/causal-triangulations/issues/321),

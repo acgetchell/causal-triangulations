@@ -1,6 +1,7 @@
 """Require a common release across CDT's three CodeQL Action identities."""
 
 import sys
+import tomllib
 from pathlib import Path
 
 from research_repo_tools.action_policy import load_policy
@@ -16,14 +17,15 @@ def check_codeql_release(root: Path, inputs: list[str]) -> None:
     if not CODEQL.issubset(policy.consistency) or len(tags) != 1 or tags & {None, "latest"}:
         message = ".github/action-updates.toml: all three CodeQL Actions must select one explicit release tag"
         raise ValueError(message)
-    first_sha: str | None = None
+    reviewed = tomllib.loads((root / ".github/codeql-release.toml").read_text(encoding="utf-8"))
+    if tags != reviewed.keys():
+        message = "The selected CodeQL tag must match the reviewed tag in .github/codeql-release.toml"
+        raise ValueError(message)
+    tag, commit = next(iter(reviewed.items()))
     for path in workflow_paths(root, inputs):
         for use in references(path, path.read_bytes().decode("utf-8-sig")):
-            if use.action in CODEQL and use.ref is not None:
-                sha = use.ref.lower()
-                if first_sha is not None and sha != first_sha:
-                    raise ValueError(f"{use.location}: CodeQL Actions must share one release commit, found {sha} and {first_sha}")
-                first_sha = sha
+            if use.action in CODEQL and use.ref is not None and use.ref.lower() != commit:
+                raise ValueError(f"{use.location}: {use.action}@{use.ref} differs from the reviewed CodeQL release {tag}@{commit}")
 
 
 if __name__ == "__main__":

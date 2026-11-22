@@ -37,6 +37,7 @@ causal-triangulations/
 │   │   ├── semgrep-sarif.yml
 │   │   └── zizmor.yml
 │   ├── action-updates.toml
+│   ├── codeql-release.toml
 │   ├── CODEOWNERS
 │   └── dependabot.yml
 ├── benches/
