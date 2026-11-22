@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -54,6 +55,56 @@ def test_composite_allowlist_checks_the_real_setup_action(approved: bool, tmp_pa
         assert "unapproved reference" in capsys.readouterr().err
     command = dry_run(ROOT, "actions-allowlist-check").stderr
     assert command.rstrip().endswith(".github/workflows .github/actions")
+
+
+@pytest.mark.parametrize(
+    ("change", "error"),
+    [
+        ((".github/actions/setup-toolchain/action.yml", r"(astral-sh/setup-uv@)[0-9a-f]{40}", r"\g<1>" + "0" * 40), "inconsistent astral-sh/setup-uv"),
+        ((".github/workflows/codeql.yml", r"(github/codeql-action/analyze@)[0-9a-f]{40}", r"\g<1>" + "0" * 40), "differs from the reviewed CodeQL release"),
+        ((".github/workflows/*.yml", r"(github/codeql-action/[\w-]+@)[0-9a-f]{40}", r"\g<1>" + "1" * 40), "differs from the reviewed CodeQL release"),
+        ((".github/action-updates.toml", r'("github/codeql-action/analyze" = )"[^"]+"', r'\g<1>"latest"'), "must select one explicit release tag"),
+        ((".github/codeql-release.toml", r'"v[\d.]+"', '"v0.0.0"'), "must match the reviewed tag"),
+    ],
+)
+def test_actions_check_rejects_pin_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: tuple[str, str, str], error: str) -> None:
+    """Run the complete offline recipe on the actual workflow and composite inventory."""
+    policy = ".github/action-updates.toml"
+    workflows = ".github/workflows"
+    composite = ".github/actions/setup-toolchain/action.yml"
+    paths = [ROOT / name for name in (policy, composite, "pyproject.toml", "uv.lock", ".python-version", "justfile", "tooling/check_codeql_release.py")]
+    paths.append(ROOT / ".github/codeql-release.toml")
+    paths.extend((ROOT / workflows).glob("*.yml"))
+    for source in paths:
+        destination = tmp_path / source.relative_to(ROOT)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+    monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", sys.prefix)
+    assert run_safe_command("just", ["actions-check"], cwd=tmp_path).returncode == 0
+    file_pattern, match, replacement = change
+    replacements = 0
+    for action in tmp_path.glob(file_pattern):
+        original = action.read_text(encoding="utf-8")
+        changed, count = re.subn(match, replacement, original)
+        if count:
+            replacements += count
+            action.write_text(changed, encoding="utf-8", newline="\n")
+    assert replacements > 0
+    result = run_safe_command("just", ["actions-check"], cwd=tmp_path, check=False)
+    assert result.returncode != 0
+    assert error in result.stderr
+    scope = f"'{workflows}' '{composite}'"
+    assert all(command.endswith(scope) for command in dry_run(ROOT, "actions-check").stderr.splitlines())
+    assert f'{scope} "$@"' in dry_run(ROOT, "update-actions", ("--dry-run",)).stderr
+
+
+def test_dependabot_reserves_only_coupled_version_updates_for_the_shared_updater() -> None:
+    """Keep security updates eligible for each identity managed by the shared updater."""
+    updates = yaml.safe_load((ROOT / ".github/dependabot.yml").read_bytes())["updates"]
+    actions = next(entry for entry in updates if entry["package-ecosystem"] == "github-actions")
+    policy = tomllib.loads((ROOT / ".github/action-updates.toml").read_text(encoding="utf-8"))
+    version_updates = {f"version-update:semver-{level}" for level in ("major", "minor", "patch")}
+    assert {entry["dependency-name"]: set(entry["update-types"]) for entry in actions["ignore"]} == dict.fromkeys(policy["actions"], version_updates)
 
 
 @pytest.mark.parametrize("selection", ["notebooks/00_quickstart.ipynb", "notebooks/analysis with spaces λ.ipynb"])

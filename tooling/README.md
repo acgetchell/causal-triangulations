@@ -1,7 +1,8 @@
 # Tooling configuration
 
-Generic maintenance uses the published `research-repo-tools==0.2.8` package and inherits its `python-tools` profile for pytest, Ruff, and Ty. This directory
-contains CDT's tooling configuration. Consumer integration tests live under [`tests/tooling/`](../tests/tooling/); CDT maintains no local maintenance CLIs.
+The published `research-repo-tools` pin in `pyproject.toml` supplies generic maintenance and the shared pytest, Ruff, and Ty versions.
+This directory contains CDT's tooling configuration and a check that all three CodeQL subpaths use the same release tag and commit.
+Consumer integration tests live under [`tests/tooling/`](../tests/tooling/).
 Tooling, notebooks and Semgrep share the root Python 3.15 environment. The root manifest owns the exact scanner pin, wheel-only installation, MCP/OpenTelemetry
 security overrides and Python 3.15 Windows wheel compatibility override. `selected-actions.json` declares exact approved workflow and composite Action
 identities for the shared structured allowlist; Zizmor and Semgrep retain SHA and readable version-comment checks. See the

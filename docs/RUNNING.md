@@ -133,7 +133,7 @@ destinations using them are rejected before creating directories or acquiring lo
 #### Final Mesh Interchange
 
 `final_triangulation.mesh` is Delaunay's stable simplicial-complex export, not a CDT-specific compact-index schema. External tools should first require
-`metadata.schema == "delaunay.simplicial_complex"` and a supported integer `metadata.schema_version`. Delaunay 0.8.4 emits version `2`; its reader also
+`metadata.schema == "delaunay.simplicial_complex"` and a supported integer `metadata.schema_version`. Delaunay 0.8.5 emits version `2`; its reader also
 accepts nonperiodic version `1` data. The metadata records the producer, dimension, counts, topology kind, and topology guarantee. Periodic version `2`
 exports include `periodic.periods` and `periodic.simplex_vertex_offsets`, keyed by simplex UUID. Preserve these offsets when realizing periodic simplices;
 canonical vertex coordinates alone do not specify their covering-space geometry. The spacetime-strip notebook accepts both versions for its open topology.

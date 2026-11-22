@@ -81,6 +81,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"tooling/check_codeql_release.py" = [ "INP001" ] # Standalone check invoked by Just.
 "tests/tooling/test_*.py" = [ "S101", "SLF001" ]
 "docs/audits/2d-cdt_sphere/checks/test_*.py" = [ "S101" ]
 "tests/semgrep/scripts/tests/python_exceptions.py" = [
@@ -123,18 +124,19 @@ python_functions = [ "test_*" ]
 
 [tool.uv]
 package = false
-required-version = "==0.13.7"
+required-version = "==0.13.9"
 # Semgrep's sdist does not bundle its required native engine.
 no-build-package = [ "semgrep" ]
-# Follow Delaunay's patched Semgrep dependencies and Python 3.15 Windows wheels.
+# Preserve patched Semgrep dependencies and Python 3.15 Windows wheels.
 override-dependencies = [
     "mcp==1.30.0",
-    "opentelemetry-api==1.45.1",
-    "opentelemetry-sdk==1.45.1",
-    "opentelemetry-exporter-otlp-proto-http==1.45.1",
-    "opentelemetry-instrumentation-requests==0.66b1",
-    "opentelemetry-instrumentation-threading==0.66b1",
+    "opentelemetry-api==1.45.2",
+    "opentelemetry-sdk==1.45.2",
+    "opentelemetry-exporter-otlp-proto-http==1.45.2",
+    "opentelemetry-instrumentation-requests==0.66b2",
+    "opentelemetry-instrumentation-threading==0.66b2",
     "pywin32==312; sys_platform == 'win32'",
+    "wcmatch==11.2", # GHSA-53pm-wgxf-c6qf. Remove when Semgrep accepts a patched release.
 ]
 
 [tool.uv.dependency-groups]
@@ -153,19 +155,19 @@ build = [
 dev = [
     { include-group = "tooling" },
     "actionlint-py==1.7.12.25",
-    "semgrep==1.185.0",
+    "semgrep==1.186.0",
     "shellcheck-py==0.11.0.1",
     "shfmt-py==4.2.0",
     "yamllint==1.38.0",
 ]
 notebooks = [
-    "research-repo-tools[notebooks,python-tools]==0.2.8",
+    "research-repo-tools[notebooks,python-tools]==0.3.1",
     "jupyterlab>=4.6.2",
     "matplotlib>=3.11.1",
     "plotly>=6.9.0",
     "polars>=1.43.2",
 ]
-tooling = [ "research-repo-tools[python-tools]==0.2.8" ]
+tooling = [ "research-repo-tools[python-tools]==0.3.1" ]
 
 [tool.research-repo-tools.changelog]
 owner = "acgetchell"
@@ -181,18 +183,18 @@ gitleaks = "8.30.1"
 osv-scanner = "2.7.1"
 
 [tool.research-repo-tools.toolchain.cargo]
-cargo-audit = "0.22.2"
+cargo-audit = "0.23.0"
 cargo-edit = "0.13.14"
-cargo-llvm-cov = "0.9.1"
-cargo-machete = "0.9.2"
-cargo-nextest = "0.9.151"
+cargo-llvm-cov = "0.9.2"
+cargo-machete = "0.10.1"
+cargo-nextest = "0.9.152"
 clippy-sarif = "0.8.0"
-dprint = "0.64.3"
+dprint = "0.65.0"
 git-cliff = "2.14.2"
-rumdl = "0.3.2"
+rumdl = "0.3.5"
 sarif-fmt = "0.8.0"
 taplo-cli = "0.10.0"
-typos-cli = "1.52.1"
+typos-cli = "1.52.2"
 zizmor = "1.32.0"
 
 [tool.research-repo-tools.zizmor]

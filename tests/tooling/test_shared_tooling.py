@@ -253,10 +253,12 @@ def test_registry_only_release_jobs_match_adopted_tooling() -> None:
         setup = next(step for step in job["steps"] if "setup-uv@" in step.get("uses", ""))
         assert "==" + setup["with"]["version"] == project["tool"]["uv"]["required-version"]
         assert setup["with"]["enable-cache"] is False
-        command = next(step["run"] for step in job["steps"] if "--from research-repo-tools==" in step.get("run", ""))
-        assert "--from research-repo-tools==" + version("research-repo-tools") in command
-        assert "--no-config --isolated --managed-python --python 3.15" in command
-        cutoffs.add(command.split("--exclude-newer ", 1)[1].split()[0])
+        commands = [step["run"] for step in job["steps"] if "--from research-repo-tools==" in step.get("run", "")]
+        assert commands
+        for command in commands:
+            assert "--from research-repo-tools==" + version("research-repo-tools") in command
+            assert "--no-config --isolated --managed-python --python 3.15" in command
+            cutoffs.add(command.split("--exclude-newer ", 1)[1].split()[0])
     assert len(cutoffs) == 1
 
 
@@ -304,6 +306,7 @@ def test_actions_policy_preserves_exact_approved_identities(
     [
         ("ci", ""),
         ("ci", "actions allowlist"),
+        ("ci", "actions check"),
         ("ci", "python check"),
         ("ci", "notebooks lint"),
         ("ci", "cargo clippy"),
@@ -337,7 +340,7 @@ def test_validation_graph_orders_static_checks_and_stops_on_failure(
     result = run_safe_command("just", [recipe], cwd=tmp_path, check=False)
     assert result.returncode == (23 if failure else 0), result.stderr
     calls = log.read_text(encoding="utf-8").splitlines()
-    assert sum("notebooks lint" in call for call in calls) == (0 if failure in {"actions allowlist", "python check"} else 1)
+    assert sum("notebooks lint" in call for call in calls) == (0 if failure in {"actions allowlist", "actions check", "python check"} else 1)
     workloads = ("python -m pytest", "cargo nextest run", "cargo test --doc", "notebooks execute", "cargo bench --profile perf", "validation cargo-examples")
     runtime_positions = [index for index, call in enumerate(calls) if any(workload in call for workload in workloads)]
     if failure:
@@ -347,6 +350,7 @@ def test_validation_graph_orders_static_checks_and_stops_on_failure(
         first_runtime = min(runtime_positions)
         for check in (
             "actions allowlist",
+            "actions check",
             "python check",
             "notebooks lint",
             "shellcheck -x",
@@ -449,16 +453,26 @@ def test_review_uses_consumer_instructions_and_propagates_failure(
 ) -> None:
     """Run the actual Just/shared CLI boundary against a local reviewer stub."""
     stub = tmp_path / ("coderabbit.cmd" if os.name == "nt" else "coderabbit")
-    content = f"@echo off\necho REVIEW_STUB %*\nexit /b {status}\n" if os.name == "nt" else f'#!/bin/sh\nprintf "REVIEW_STUB\\n%s\\n" "$@"\nexit {status}\n'
-    stub.write_text(content, encoding="utf-8")
+    event = json.dumps({"type": "complete", "status": "review_completed", "findings": 0})
+    if os.name == "nt":
+        content = f'@echo off\nif "%~1"=="--version" (\n  echo 0.7.7\n  exit /b 0\n)\necho REVIEW_STUB %* 1>&2\necho {event}\nexit /b {status}\n'
+    else:
+        content = (
+            '#!/bin/sh\nif [ "$1" = "--version" ]; then printf "%s\\n" 0.7.7; exit 0; fi\n'
+            f'printf "REVIEW_STUB\\n%s\\n" "$@" >&2\nprintf "%s\\n" \'{event}\'\nexit {status}\n'
+        )
+    stub.write_text(content, encoding="utf-8", newline="\n")
     stub.chmod(0o700)
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     result = run_safe_command("just", list(recipe), cwd=ROOT, check=False)
     assert result.returncode == status
-    assert "REVIEW_STUB" in result.stdout
+    assert "REVIEW_STUB" in result.stderr
+    outcome = json.loads(result.stdout.splitlines()[-1])
+    assert outcome["status"] == ("completed" if status == 0 else "failed")
     for argument in ("--agent", "--include-untracked", "--config", "AGENTS.md", ".coderabbit.yml"):
-        assert argument in result.stdout
-    assert ("--base=HEAD" if recipe[0] == "review" else "--uncommitted") in result.stdout
+        assert argument in result.stderr
+    assert ("--base=HEAD" if recipe[0] == "review" else "--uncommitted") in result.stderr
+    assert "--use-credits" not in result.stderr
 
 
 def test_security_covers_maintained_lockfiles_and_stays_opt_in() -> None:

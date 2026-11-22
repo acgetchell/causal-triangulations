@@ -3,7 +3,7 @@
 Release preparation uses the pinned shared CLI. Choose one stable tag, predecessor, and UTC date; reruns with those same inputs are deterministic.
 Benchmark measurements are separate and are not idempotent.
 
-This guide uses published `research-repo-tools==0.2.8`. Tooling, notebook kernels and Semgrep share the root Python 3.15 environment, following Delaunay.
+This guide uses the published `research-repo-tools` release pinned in `pyproject.toml`. Tooling, notebook kernels and Semgrep share Python 3.15.
 `just update` refreshes the root lockfile while preserving the scanner's MCP/OpenTelemetry and Windows wheel compatibility overrides.
 Active documentation links stay on `main` and API links on `latest`; preserve immutable evidence and citation pins.
 
@@ -23,18 +23,18 @@ are never replaced. Adoption of the helpers alone does not authorize publishing 
 ## v0.2.0 scientific claim checklist
 
 The implementation provides the simulation and analysis foundation: optional volume control, circular spatial-loop measurements, reproducible
-chain artifacts, and dependence-aware diagnostics. It uses published Delaunay 0.8.4 and MCMC 0.5.2. The [#258 audit](audits/2d-cdt_sphere/README.md) records
+chain artifacts, and dependence-aware diagnostics. It uses published Delaunay 0.8.5 and MCMC 0.5.2. The [#258 audit](audits/2d-cdt_sphere/README.md) records
 why the planned `2d-cdt` comparison excludes `sphere=true` and closed simplicial S² claims.
 
 The [#316 reverse-support defect](scientific-basis.md#move-and-sampler-contract) remains unresolved. Do not claim complete reversibility, exact-paper
 ensemble agreement, mixing, continuum physics, or completed #165/#166/#238/#276 acceptance. The scientifically validated v0.2.0 release requires those
-issues' unchanged acceptance criteria and adoption of the published abstract-gluing capability in Delaunay #667, scheduled for v0.8.5.
+issues' unchanged acceptance criteria and integration of the intrinsic triangle-gluing capability published in Delaunay 0.8.5.
 The current diagnostic implementations do not complete their benchmark-dependent validation. Completing review PR #319 alone does not make v0.2.0 ready.
 
 Release checks, Cargo package verification, exact-release benchmark provenance, and reviewed publication remain mandatory. Passing them establishes the
 engineering release evidence; distributional claims additionally require the analytic gate above. Delaunay 0.8.4 corrects the
 [periodic-realization regression](audits/delaunay-periodic-realization.md): the unchanged seed-3291 fixture now passes complete validation.
-This correction is independent of the unresolved #316 ensemble-validation work and upstream #667 abstract-gluing capability, scheduled for Delaunay 0.8.5.
+This correction is independent of the unresolved #316 ensemble-validation work and the Delaunay #667 triangle-gluing capability.
 
 ## v0.1.1 scientific claim checklist
 
@@ -83,7 +83,9 @@ PREVIOUS_TAG=vA.B.C
 RELEASE_DATE=YYYY-MM-DD
 ```
 
-## Prepare metadata and validate
+## Step 1: Prepare the release PR
+
+### Prepare metadata and validate
 
 Land dependency/tool refreshes separately before release preparation:
 
@@ -111,14 +113,15 @@ Changelog archives use `docs/archives/changelog/`. Caught write failures trigger
 `release-dependency-builds` prepares Cargo's offline inputs and installs authenticated wheels for the Python packages named in `dependency-sources.toml`.
 `release-dependencies` verifies both locked registry graphs and the dependency bytes used on this machine. Repeat both commands after changing the lock,
 source policy, interpreter, or build tools. Follow the shared [release-branch validation sequence][shared-release-validation].
+`just release-package` verifies the default and all-feature Cargo packages from a clean checkout without uploading.
 
-[shared-release-validation]: https://github.com/acgetchell/research-repo-tools/blob/v0.2.8/docs/RELEASING.md#4-validate-the-release-branch
+[shared-release-validation]: https://github.com/acgetchell/research-repo-tools/blob/v0.3.1/docs/RELEASING.md#2-run-the-release-checks
 
 Explicit `--previous-release` keeps preparation offline. Omitting it discovers the latest published stable GitHub release.
 Use `--dry-run` to preview metadata edits, or `just changelog-preview --tag "$TAG" --date "$RELEASE_DATE"` to preview notes.
 Reruns preserve the chosen date; advancing it requires changing the explicit input.
 
-## Fresh performance evidence
+### Fresh performance evidence
 
 The first post-migration tagged release establishes the new baseline. Do not compare it with the retired legacy asset format.
 After that baseline exists, a prospective release may run:
@@ -144,28 +147,28 @@ Keep the README's explicit pending state until a real new comparison exists.
 
 Review and commit the candidate manually, open the release PR, and merge it only after the required hosted checks pass.
 
-## Tag, attach baseline, and publish
+## Step 2: Publish after the PR is merged
 
-After merging, synchronize to the exact reviewed commit and verify metadata:
+### Tag, attach baseline, and publish
+
+After merging, synchronize to the exact reviewed commit. Set `RELEASE_COMMIT` to the full SHA that passed review and validation. The tag command checks
+release metadata, creates the local annotation at that commit, and prints its contents. Use `just tag-preview "$TAG" --commit "$RELEASE_COMMIT"` to inspect it.
 
 ```bash
-just release-version-check
-just tag-preview "$TAG"
-just tag "$TAG"
-git tag -l --format='%(contents)' "$TAG"
-git push origin "$TAG"
+just tag "$TAG" --commit "$RELEASE_COMMIT"
+git push origin "refs/tags/$TAG"
 gh release create "$TAG" --draft --title "$TAG" --notes-from-tag
 ```
 
 Dispatch the release-baseline workflow against the new tag:
 
 ```bash
-gh workflow run release-benchmarks.yml -f release_tag="$TAG"
+just release-benchmarks "$TAG"
 ```
 
-The checkout-free preflight resolves the full tag commit through GitHub and captures the verified repository, tag, release ID and commit with
-`performance release-draft --commit`. Trusted job outputs carry that target directly to the writer. The benchmark job checks out the captured commit,
-verifies HEAD and the local tag, then measures with read-only permissions and caches disabled. Its complete native asset remains
+The recipe dispatches the selected tag ref. The checkout-free preflight compares the dispatch ref and source SHA with the requested tag, then captures
+the verified repository, tag, release title, release ID and commit with `performance release-draft`. Trusted job outputs carry that target to the writer.
+The benchmark job checks out the captured commit, verifies HEAD and the local tag, then measures with read-only permissions and caches disabled. Its asset is
 `causal-triangulations-TAG-cdt-baseline-v2.tar.gz`.
 
 The separate writer installs the exact published tooling package and never checks out benchmark source. It verifies the native baseline's release and commit

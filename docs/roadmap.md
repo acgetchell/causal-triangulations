@@ -61,12 +61,12 @@ Completed maturity work includes:
 ## v0.2.0 Simulation And Analysis Foundation
 
 The implementation provides optional volume control, spatial-loop measurements, reproducible chain artifacts, dependence-aware diagnostics, and the current
-tooling standards on published Delaunay 0.8.4 and MCMC 0.5.2. The [#258 audit](audits/2d-cdt_sphere/README.md) records the scope of the external reference.
+tooling standards on published Delaunay 0.8.5 and MCMC 0.5.2. The [#258 audit](audits/2d-cdt_sphere/README.md) records the scope of the external reference.
 Release preparation retains native/package checks and benchmark provenance. Current engineering checks do not establish an analytically validated
 equilibrium ensemble, mixing, full Brunekreef parity, or a correction of [#316](https://github.com/acgetchell/causal-triangulations/issues/316).
 
 The scientifically validated v0.2.0 release requires the exact gate, reverse-support correction, remaining #165/#166 benchmark evidence, and #276 external
-validation bundle, with their acceptance criteria intact. It also requires adopting the published Delaunay #667 capability, now scheduled for v0.8.5.
+validation bundle, with their acceptance criteria intact. It also requires integrating the intrinsic triangle-gluing API published in Delaunay 0.8.5.
 The merged diagnostics and review PR #319 do not complete those release gates.
 
 <!-- Preserve the earlier exact-validation release-plan deep link. -->
@@ -96,11 +96,13 @@ The release gate is tracked by the exact transfer-matrix validation issue
 ([#143](https://github.com/acgetchell/causal-triangulations/issues/143)) and public topology/boundary API separation
 ([#236](https://github.com/acgetchell/causal-triangulations/issues/236)) are v0.2.1 follow-ups.
 
-The analytic gate also depends on [Delaunay #667](https://github.com/acgetchell/delaunay/issues/667) for a parallel-edge triangle-gluing representation
-and [#316](https://github.com/acgetchell/causal-triangulations/issues/316) for correcting actual reverse-transition support.
+The analytic gate depends on integrating the parallel-edge triangle-gluing representation from [Delaunay #667][delaunay-gluings]
+and correcting reverse-transition support in [#316](https://github.com/acgetchell/causal-triangulations/issues/316).
 The [scientific contract](scientific-basis.md#geometry-backend-role) explains the representation mismatch, and the
 [sampler contract](scientific-basis.md#move-and-sampler-contract) records the reverse-support counterexample. These prerequisites leave #238 open and
 retain its original paper ensemble and statistical acceptance criteria.
+
+[delaunay-gluings]: https://github.com/acgetchell/delaunay/issues/667
 
 Upstream implementation, native validation and crates.io publication of the bounded capability must precede normal CDT adoption through `src/geometry/`.
 The upstream release does not depend on completing CDT's benchmark. After adopting the published API and correcting proposal support, rerun compatibility
