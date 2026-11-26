@@ -203,6 +203,10 @@ esac
     else:
         assert result.returncode != 0
         assert not dispatch.exists()
+        if scenario in {"wrong-run", "active"}:
+            assert "expected the latest failed dispatch and only completed failed runs" in result.stderr
+        elif scenario == "previous-upload":
+            assert "a skipped publisher in run 19 attempt 1" in result.stderr
 
 
 @pytest.mark.parametrize("invalid", ["action", "tag", "draft", "prerelease", "repository"])

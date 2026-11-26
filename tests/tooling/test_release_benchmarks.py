@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from research_repo_tools.candidate_reuse import CandidatePolicy
+    from research_repo_tools.release_interfaces import EvidencePolicy
 
 ROOT = Path(__file__).resolve().parents[2]
 FLOW = "tooling/performance-release.toml"
@@ -417,6 +418,17 @@ def _check_changed_source(verify: Callable[[bytes | None], bytes], accepted: byt
         verify(None)
 
 
+def _dependency_receipts(_root: Path, *, packages: tuple[str, ...] | None = None) -> tuple[()]:
+    """Stand in for the separately tested package registry."""
+    return ()
+
+
+def _native_receipt(_policy: EvidencePolicy, version: str, _commit: str, _read: Callable[[str], object], **_options: object) -> bytes:
+    """Supply a stable native selection for the release under test."""
+    assert version == TAG.removeprefix("v")
+    return b"{}"
+
+
 def test_release_series_uses_original_acquisition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release_environment: Path) -> None:
     """Use the current-only series after v0.1.1 and acquire a pair only for its successor."""
     checkout = tmp_path.resolve() / "checkout"
@@ -461,8 +473,9 @@ def test_release_series_uses_original_acquisition(tmp_path: Path, monkeypatch: p
         return {"ref": f"refs/tags/{tag}", "object": {"type": "commit", "sha": releases[tag]}}
 
     monkeypatch.setattr("research_repo_tools.release_validation.api", provider)
+
     # Registry attestations and the signed CI run belong to separate native integration gates.
-    monkeypatch.setattr("research_repo_tools.dependency_provenance.check_release_dependencies", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr("research_repo_tools.dependency_provenance.check_release_dependencies", _dependency_receipts)
     log = tmp_path / "measurements"
     _write_suite(checkout, log)
     commit("Declare the release series")
@@ -472,7 +485,8 @@ def test_release_series_uses_original_acquisition(tmp_path: Path, monkeypatch: p
     policy = replace(parse_candidate_policy((owner / "policy.json").read_bytes()), commit=head)
     evidence = parse_evidence(*raw)
     native = load_evidence_policy(ROOT / "tooling/release-evidence.toml")
-    monkeypatch.setattr("research_repo_tools.candidate_reuse.verify_release_evidence", lambda *_args, **_kwargs: b"{}")
+
+    monkeypatch.setattr("research_repo_tools.candidate_reuse.verify_release_evidence", _native_receipt)
 
     def verify(expected: bytes | None = None) -> bytes:
         return verify_candidate_release(

@@ -297,7 +297,8 @@ just release-upload "$TAG" "$FAILED_RUN_ID"
 ```
 
 Recovery requires every prior attempt to have failed in `verify` and skipped `publish`. It checks registry absence before dispatch.
-If any attempt reached the publisher, inspect that original upload. If Cargo times out after upload, the publisher succeeds when the registry exposes the reviewed crate checksum.
+If any attempt reached the publisher, inspect that original upload. If Cargo times out after upload, the publisher succeeds when the registry
+exposes the reviewed crate checksum.
 If that check fails, run `just release-verify "$TAG"` and inspect the original upload. Confirm absence independently before rerunning all jobs of that
 dispatch. The regular upload command detects an existing dispatch. An unexpected checksum or conflicting release identity requires maintainer reconciliation.
 
