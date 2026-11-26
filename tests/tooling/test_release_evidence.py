@@ -308,18 +308,40 @@ def registry_proof(transfer: bytes) -> dict[str, object]:
     }
 
 
-@pytest.mark.parametrize("change", ["transfer", "tag", "commit", "repository", "state", "missing-acquisition", "null-publication", "invalid-run"])
+@pytest.mark.parametrize(
+    "change",
+    [
+        "transfer",
+        "tag",
+        "commit",
+        "repository",
+        "state",
+        "missing-acquisition",
+        "null-publication",
+        "invalid-run",
+        "missing-assets",
+        "non-object-assets",
+        "wrong-asset-names",
+    ],
+)
 def test_registry_candidate_rejects_changed_dispatch_before_remote_io(change: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An altered transfer or mismatched dispatch cannot start acquisition, provider access or Cargo."""
     tag = f"v{VERSION}"
     target = ReleaseTarget("other/fork" if change == "repository" else REPOSITORY, tag, 7, SHA)
-    transfer = json.dumps(
-        {
-            "schema": "research-repo-tools/release-asset-batch/v1",
-            "state": "staging" if change == "state" else "complete",
-            "target": json.loads(serialize_release_target(target)),
-        }
-    ).encode()
+    names = ("acceptance.json", "policy.json", CRATE, f"causal-triangulations-{tag}-cdt-series.tar.gz")
+    batch: dict[str, object] = {
+        "schema": "research-repo-tools/release-asset-batch/v1",
+        "state": "staging" if change == "state" else "complete",
+        "target": json.loads(serialize_release_target(target)),
+        "assets": {name: {"id": i, "size": 42, "sha256": "a" * 64} for i, name in enumerate(names, 1)},
+    }
+    if change == "missing-assets":
+        del batch["assets"]
+    elif change == "non-object-assets":
+        batch["assets"] = list(names)
+    elif change == "wrong-asset-names":
+        batch["assets"] = {"different.crate": {}}
+    transfer = json.dumps(batch).encode()
     proof = registry_proof(transfer)
     if change == "transfer":
         proof["transfer"] = "0" * 64
@@ -341,7 +363,22 @@ def test_registry_candidate_rejects_changed_dispatch_before_remote_io(change: st
 
 
 @pytest.mark.parametrize(
-    "change", ["none", "branch", "attempt", "boolean-attempt", "artifact", "release-id", "float-release-id", "missing-digest", "invalid-digest"]
+    "change",
+    [
+        "none",
+        "short-tag-path",
+        "full-tag-path",
+        "wrong-path-ref",
+        "wrong-workflow",
+        "branch",
+        "attempt",
+        "boolean-attempt",
+        "artifact",
+        "release-id",
+        "float-release-id",
+        "missing-digest",
+        "invalid-digest",
+    ],
 )
 def test_registry_dispatch_authenticates_published_event(change: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Use the published-event job contract and GitHub artifact shape, replacing only provider I/O."""
@@ -356,7 +393,12 @@ def test_registry_dispatch_authenticates_published_event(change: str, tmp_path: 
         "head_branch": "main" if change == "branch" else tag,
         "repository": repo,
         "head_repository": repo,
-        "path": workflow["path"],
+        "path": {
+            "short-tag-path": f"{workflow['path']}@{tag}",
+            "full-tag-path": f"{workflow['path']}@refs/tags/{tag}",
+            "wrong-path-ref": f"{workflow['path']}@main",
+            "wrong-workflow": f".github/workflows/unrelated.yml@refs/tags/{tag}",
+        }.get(change, workflow["path"]),
         "name": workflow["name"],
         "event": "release",
         "status": "completed",
@@ -423,7 +465,7 @@ def test_registry_dispatch_authenticates_published_event(change: str, tmp_path: 
     script = runpy.run_path(str(ROOT / "tooling/verify_registry_candidate.py"))
     verify = script["published_event"]
     proof = script["RegistryProof"].parse(registry_proof(b"transfer"))
-    if change == "none":
+    if change in {"none", "short-tag-path", "full-tag-path"}:
         assert verify(proof, tag, SHA, 7, tmp_path) == receipt
     else:
         with pytest.raises(ValueError, match=r"selection|artifact|receipt"):

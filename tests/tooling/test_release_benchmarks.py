@@ -253,11 +253,17 @@ def test_release_workflow_has_no_measurement_or_checkout() -> None:
     receiver = next(step for step in jobs["verify-attachment"]["steps"] if "release assets receive" in step.get("run", ""))
     assert receiver["env"]["TRANSFER"] == "${{ inputs.transfer }}"
     assert receiver["env"]["TRANSFER_SHA256"] == "${{ inputs.digest }}"
-    for job in jobs.values():
+    exercised_shell_step = {
+        "validate-release": "Capture verified draft GitHub Release target",
+        "verify-attachment": "Verify the staged archive against its accepted acquisition",
+    }
+    for name, job in jobs.items():
+        assert [step["name"] for step in job["steps"] if "run" in step] == [exercised_shell_step[name]]
         for step in job["steps"]:
             if "uses" in step:
                 assert step["uses"].split("@")[0] in {"astral-sh/setup-uv", "actions/upload-artifact"}
             else:
+                assert "git " not in step["run"]
                 assert "cargo " not in step["run"]
                 assert "performance release " not in step["run"]
 

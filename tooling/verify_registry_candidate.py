@@ -105,7 +105,6 @@ def published_run(proof: RegistryProof, tag: str, commit: str, release_id: int) 
         "id": proof.run,
         "run_attempt": proof.attempt,
         "workflow_id": workflow["id"],
-        "path": WORKFLOW,
         "name": EVENT_GATE.workflow_name,
         "display_title": f"Verify published release {tag} (release {release_id})",
         "event": "release",
@@ -117,6 +116,7 @@ def published_run(proof: RegistryProof, tag: str, commit: str, release_id: int) 
     require(type(workflow["id"]) is int and workflow["id"] > 0, "invalid publisher workflow ID")
     require(matches_fields(workflow, {"path": WORKFLOW, "state": "active"}), "unexpected publisher workflow")
     require(matches_fields(run, expected), "published event selection changed")
+    require(run.get("path") in (WORKFLOW, f"{WORKFLOW}@{tag}", f"{WORKFLOW}@refs/tags/{tag}"), "published event workflow selection changed")
     require(all(run[key]["full_name"] == REPOSITORY for key in ("repository", "head_repository")), "unexpected event repository")
     return run
 
@@ -162,18 +162,20 @@ def verify_registry_candidate(work: Path, tag: str, commit: str, transfer: bytes
     proof = RegistryProof.parse(dispatch)
     require(sha256(transfer) == proof.transfer, "staging transfer differs from local review")
     batch = parse_release_json(transfer)
-    target = parse_release_target(deterministic_json(batch["target"]))
+    target = parse_release_target(deterministic_json(batch.get("target")))
     require((target.repository, target.tag, target.commit) == (REPOSITORY, tag, commit), "wrong release target")
-    require(batch["state"] == "complete" and batch["schema"] == "research-repo-tools/release-asset-batch/v1", "incomplete staging transfer")
+    require(batch.get("state") == "complete" and batch.get("schema") == "research-repo-tools/release-asset-batch/v1", "incomplete staging transfer")
+    crate = f"{PACKAGE}-{tag.removeprefix('v')}.crate"
+    benchmark = f"{PACKAGE}-{tag}-cdt-series.tar.gz"
+    names = {"acceptance.json", "policy.json", crate, benchmark}
+    assets = batch.get("assets")
+    if not isinstance(assets, dict) or assets.keys() != names:
+        message = "unexpected staging transfer asset inventory"
+        raise ValueError(message)
     require_release_checkout(root, commit)
     event = published_event(proof, tag, commit, target.release_id, work)
     config = load(root=root)
     release = check_reviewed_release(config, tag, target=target, require_crate_asset=True)
-    crate = f"{PACKAGE}-{tag.removeprefix('v')}.crate"
-    benchmark = f"{PACKAGE}-{tag}-cdt-series.tar.gz"
-    names = {"acceptance.json", "policy.json", crate, benchmark}
-    assets = batch["assets"]
-    require(set(assets) == names, "unexpected staged CDT assets")
     require_uploaded_inventory(release, assets)
     require(event["acceptance_sha256"] == proof.acceptance == assets["acceptance.json"]["sha256"], "original acceptance differs")
     require(event["crate_sha256"] == assets[crate]["sha256"], "signed event crate differs")
