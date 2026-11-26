@@ -405,6 +405,14 @@ def _check_published_acceptance(verify: Callable[[bytes], bytes], accepted: byte
             verify(accepted)
 
 
+def _check_changed_source(verify: Callable[[bytes | None], bytes], accepted: bytes) -> None:
+    """Reject both reuse of the earlier acceptance and a fresh binding to changed inputs."""
+    with pytest.raises(ValueError, match="candidate acceptance policy/identity changed"):
+        verify(accepted)
+    with pytest.raises(ValueError, match=r"performance-relevant or undeclared final-tree differences: \['src/lib\.rs'\]"):
+        verify(None)
+
+
 def test_release_series_uses_original_acquisition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release_environment: Path) -> None:
     """Use the current-only series after v0.1.1 and acquire a pair only for its successor."""
     checkout = tmp_path.resolve() / "checkout"
@@ -486,10 +494,7 @@ def test_release_series_uses_original_acquisition(tmp_path: Path, monkeypatch: p
     (checkout / "src/lib.rs").write_bytes(b"// changed input\n")
     changed = commit("Change performance-relevant source")
     policy = replace(policy, commit=changed)
-    with pytest.raises(ValueError, match="candidate acceptance policy/identity changed"):
-        verify(accepted)
-    with pytest.raises(ValueError, match=r"performance-relevant or undeclared final-tree differences: \['src/lib\.rs'\]"):
-        verify()
+    _check_changed_source(verify, accepted)
     _acquire_successor(checkout, tmp_path / "successor")
     assert log.read_bytes().splitlines() == [b"measure"] * 5
     assert ((owner / "run.json").read_bytes(), (owner / "evidence.json").read_bytes()) == raw

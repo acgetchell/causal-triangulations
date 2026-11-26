@@ -245,7 +245,7 @@ def test_registry_dispatch_authenticates_published_event(change: str, tmp_path: 
         "actions/artifacts/21": artifact,
         "actions/runs/17/attempts/1/jobs?per_page=100&page=1": {"jobs": [job], "total_count": 1},
     }
-    receipt = {
+    receipt: dict[str, object] = {
         "repository": REPOSITORY,
         "tag": tag,
         "commit": SHA,
