@@ -560,7 +560,7 @@ release-status:
     fi
 
 # Dispatch registry approval with the original reviewed assets and the successful published event.
-release-upload tag:
+release-upload tag failed_run="":
     #!/usr/bin/env bash
     set -euo pipefail
     tag="$1"
@@ -570,9 +570,28 @@ release-upload tag:
     repo=acgetchell/causal-triangulations
     release_id=$(jq -er --arg tag "$tag" --arg sha "$commit" --arg repo "$repo" 'select(.tag == $tag and .commit == $sha and .repository == $repo) | .release_id' "$state/draft/target.json")
     prior=$(gh api --paginate --slurp "repos/$repo/actions/workflows/publish-crates.yml/runs?event=workflow_dispatch&head_sha=$commit&per_page=100" \
-        | jq -r --arg title "Publish $tag to crates.io" '.[].workflow_runs[] | select(.display_title == $title) | .html_url')
-    if [[ -n "$prior" ]]; then
-        printf 'A registry dispatch already exists. Inspect it and run just release-verify %s before considering a full rerun:\n%s\n' "$tag" "$prior" >&2
+        | jq -c --arg title "Publish $tag to crates.io" '[.[].workflow_runs[] | select(.display_title == $title)]')
+    if [[ -n "$2" ]]; then
+        attempts=$(jq -er --arg id "$2" '
+          def positive_id: type == "number" and . > 0 and floor == .;
+          if length > 0 and (max_by(.id).id | tostring) == $id and
+            all(.[]; .status == "completed" and .conclusion == "failure" and (.id | positive_id) and (.run_attempt | positive_id))
+          then .[] | .id as $run | range(1; .run_attempt + 1) | [$run, .] | @tsv
+          else error("expected the latest failed dispatch and only completed failed runs") end' <<< "$prior")
+        while read -r id attempt; do
+            if ! gh api --paginate --slurp "repos/$repo/actions/runs/$id/attempts/$attempt/jobs?per_page=100" \
+                | jq -e --argjson id "$id" --argjson attempt "$attempt" '
+                  [.[].jobs[]] | all(.[]; .run_id == $id and .run_attempt == $attempt and .status == "completed") and
+                  ([.[] | select(.name == "verify") | .conclusion] == ["failure"]) and
+                  ([.[] | select(.name == "publish") | .conclusion] == ["skipped"])' > /dev/null; then
+                printf 'Recovery requires failed verification and a skipped publisher in run %s attempt %s.\n' "$id" "$attempt" >&2
+                exit 1
+            fi
+        done <<< "$attempts"
+        {{ _release_tools }} release registry "$tag" --expect absent
+    elif [[ "$prior" != '[]' ]]; then
+        printf 'A registry dispatch already exists. Inspect the run and follow the registry recovery procedure:\n' >&2
+        jq -r '.[].html_url' <<< "$prior" >&2
         exit 1
     fi
     reviewed=$(cat "$state/reviewed.sha256")

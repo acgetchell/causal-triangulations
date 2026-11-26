@@ -18,7 +18,8 @@ MCMC, Delaunay and la-stack prepare the citation with the target tag, then let R
 and preserves explicit overrides for recovery. The prepared Cargo version identifies the default external acquisition directory. The release recipes
 use RRT's checkpoint, candidate, archive and publication checks.
 
-Use [RRT's consumer justfile][rrt-recipes] for shared commands and [its release guide][rrt-releasing] for the maintainer workflow.
+Use [RRT's consumer justfile][rrt-recipes] and [release guide][rrt-releasing] for the shared command conventions.
+Follow [CDT's release guide](../RELEASING.md#verify-registry-publication) for the crates.io dispatch and protected environment approval.
 CDT accepts signed Cargo and scientific evidence before tagging, stages the benchmark archive on the draft and dispatches the protected crates.io upload
 after GitHub publication. The release tracker retains the identities and approvals at those boundaries.
 
@@ -74,6 +75,8 @@ clean-package checks from [RRT #278](https://github.com/acgetchell/research-repo
 [RRT #280](https://github.com/acgetchell/research-repo-tools/pull/280). CDT uses the PyPI release in the project and isolated release runtimes.
 The isolated cutoff is `2026-11-26T03:45:46Z`, immediately after both distributions were uploaded.
 The #289 publisher rechecks the accepted evidence after GitHub publication and before crates.io approval.
+Its isolated registry and publication-verification commands read the publishing configuration from the tagged checkout.
+A corrected dispatch checks the original job attempts and registry absence before requesting a new approval.
 
 CDT uses RRT v0.3.2's version-ordered benchmark series for #322 and #331. MCMC v0.5.3 already has a compatible predecessor.
 CDT's v0.1.1 predates the persistent-proposal and slice-scaling cases, so the first acquisition uses schema 5 and reports current-phase timings.

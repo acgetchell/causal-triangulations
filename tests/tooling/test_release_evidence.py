@@ -126,6 +126,85 @@ def test_upload_refuses_to_redispatch_existing_attempt(tmp_path: Path, monkeypat
     assert trace.read_bytes().splitlines() == [b"api"]
 
 
+@pytest.mark.parametrize("scenario", ["verified", "wrong-run", "active", "previous-upload", "registry-present"])
+def test_corrected_upload_checks_every_attempt_and_registry(scenario: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only a reviewed transfer whose previous attempts stopped before publication can be dispatched again."""
+    tag = f"v{VERSION}"
+    owner = tmp_path / "release owner"
+    state = owner / "final" / SHA
+    (state / "draft").mkdir(parents=True)
+    (state / "draft/target.json").write_bytes(serialize_release_target(ReleaseTarget(REPOSITORY, tag, 7, SHA)))
+    transfer = state / "transfer.json"
+    transfer.write_bytes(b"reviewed transfer")
+    (state / "reviewed.sha256").write_bytes(hashlib.sha256(transfer.read_bytes()).hexdigest().encode())
+    (state / "acceptance.json").write_bytes(b"accepted")
+    (owner / "acquisition.sha256").write_bytes(b"b" * 64)
+    (owner / "publication.sha256").write_bytes(b"c" * 64)
+    run = {"id": 19, "display_title": f"Publish {tag} to crates.io", "run_attempt": 2, "status": "in_progress" if scenario == "active" else "completed"}
+    monkeypatch.setenv("PRIOR", json.dumps([{"workflow_runs": [{**run, "conclusion": "failure"}]}]))
+    for attempt in (1, 2):
+        job = {"run_id": 19, "run_attempt": attempt, "status": "completed"}
+        publish = "success" if scenario == "previous-upload" and attempt == 1 else "skipped"
+        jobs = [{**job, "name": "verify", "conclusion": "failure"}, {**job, "name": "publish", "conclusion": publish}]
+        monkeypatch.setenv(f"JOBS_{attempt}", json.dumps([{"jobs": jobs}]))
+    event = {**run, "id": 17, "display_title": f"Verify published release {tag} (release 7)", "run_attempt": 1, "conclusion": "success"}
+    monkeypatch.setenv("EVENT", json.dumps([{"workflow_runs": [event]}]))
+    artifact = {"id": 21, "name": "published-release-17-1", "expired": False, "digest": "sha256:" + "a" * 64}
+    monkeypatch.setenv("ARTIFACT", json.dumps([{"artifacts": [artifact]}]))
+    provider = tmp_path / "gh"
+    provider.write_text(
+        """#!/usr/bin/env bash
+set -eu
+case "$*" in
+  *'event=workflow_dispatch&'*) echo "$PRIOR";;
+  *'/runs/19/attempts/1/jobs?'*) echo "$JOBS_1";;
+  *'/runs/19/attempts/2/jobs?'*) echo "$JOBS_2";;
+  *'event=release&'*) echo "$EVENT";;
+  *'/runs/17/artifacts?'*) echo "$ARTIFACT";;
+  'release registry '*) printf '%s' "$*" > "$REGISTRY"; exit "$REGISTRY_STATUS";;
+  'workflow run '*) printf '%s\\n' "$@" > "$DISPATCH";;
+  *) exit 23;;
+esac
+""",
+        encoding="utf-8",
+        newline="\n",
+    )
+    provider.chmod(0o755)
+    registry, dispatch = tmp_path / "registry", tmp_path / "dispatch"
+    monkeypatch.setenv("REGISTRY", registry.as_posix())
+    monkeypatch.setenv("REGISTRY_STATUS", "1" if scenario == "registry-present" else "0")
+    monkeypatch.setenv("DISPATCH", dispatch.as_posix())
+    monkeypatch.setenv("CDT_RELEASE_OWNER", owner.as_posix())
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    args = ["--set", "_commit", SHA, "--set", "_release_tools", "gh", "release-upload", tag, "18" if scenario == "wrong-run" else "19"]
+    result = run_safe_command("just", args, cwd=ROOT, check=False)
+    if scenario in {"verified", "registry-present"}:
+        assert registry.read_text(encoding="utf-8") == f"release registry {tag} --expect absent"
+    else:
+        assert not registry.exists()
+    if scenario == "verified":
+        assert result.returncode == 0, result.stderr
+        args = dispatch.read_text(encoding="utf-8").splitlines()
+        assert args[:-1] == [
+            "workflow",
+            "run",
+            "publish-crates.yml",
+            "--repo",
+            REPOSITORY,
+            "--ref",
+            tag,
+            "-f",
+            f"tag={tag}",
+            "-F",
+            f"transfer=@{transfer.as_posix()}",
+            "-f",
+        ]
+        assert json.loads(args[-1].removeprefix("proof=")) == {**registry_proof(transfer.read_bytes()), "acceptance": hashlib.sha256(b"accepted").hexdigest()}
+    else:
+        assert result.returncode != 0
+        assert not dispatch.exists()
+
+
 @pytest.mark.parametrize("invalid", ["action", "tag", "draft", "prerelease", "repository"])
 def test_published_event_rejects_invalid_source_before_registry(
     tmp_path: Path,
