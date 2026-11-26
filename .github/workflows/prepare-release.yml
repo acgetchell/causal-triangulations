@@ -43,7 +43,7 @@ jobs:
           uv run --locked --no-sync research-repo-tools toolchain sync --tool cargo
           uv run --locked --no-sync research-repo-tools toolchain export --tool cargo
       - name: Prepare native dependency provenance
-        run: just release-dependency-builds
+        run: uv run --locked --no-sync just release-dependency-builds
       - name: Verify tagged source and freeze native evidence and notes
         id: source
         env:

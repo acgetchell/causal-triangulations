@@ -75,21 +75,24 @@ if "POST" in args:
     print(json.dumps(asset))
     sys.exit(0)
 endpoint = next(arg for arg in args if arg.startswith("repos/"))
-if endpoint.endswith("/releases?per_page=100"):
+releases = f"repos/{repository}/releases"
+git = f"repos/{repository}/git"
+tag_object = "c" * 40
+if endpoint == f"{releases}?per_page=100":
     print(json.dumps([[release]]))
-elif endpoint.endswith("/assets?per_page=100"):
+elif endpoint == f"{releases}/{release_id}/assets?per_page=100":
     print(json.dumps([assets]))
-elif "/releases/assets/" in endpoint:
+elif endpoint in {f"{releases}/assets/{asset['id']}" for asset in assets}:
     sys.stdout.buffer.write((root / ("asset-" + endpoint.rsplit("/", 1)[1])).read_bytes())
-elif "/releases/" in endpoint:
+elif endpoint == f"{releases}/{release_id}":
     print(json.dumps(release))
-elif "/git/ref/tags/" in endpoint:
+elif endpoint == f"{git}/ref/tags/{tag}":
     obj = {"sha": state.get("remote_commit", state["commit"]), "type": "commit"}
     if state.get("annotated"):
-        obj = {"sha": "c" * 40, "type": "tag"}
+        obj = {"sha": tag_object, "type": "tag"}
     print(json.dumps({"ref": f"refs/tags/{tag}", "object": obj}))
-elif "/git/tags/" in endpoint:
-    print(json.dumps({"sha": "c" * 40, "object": {"sha": state.get("remote_commit", state["commit"]), "type": "commit"}}))
+elif state.get("annotated") and endpoint == f"{git}/tags/{tag_object}":
+    print(json.dumps({"sha": tag_object, "object": {"sha": state.get("remote_commit", state["commit"]), "type": "commit"}}))
 else:
     raise SystemExit(f"Unexpected GitHub request: {args}")
 """
@@ -483,8 +486,10 @@ def test_release_series_uses_original_acquisition(tmp_path: Path, monkeypatch: p
     (checkout / "src/lib.rs").write_bytes(b"// changed input\n")
     changed = commit("Change performance-relevant source")
     policy = replace(policy, commit=changed)
-    with pytest.raises(ValueError, match=r"differ|changed"):
+    with pytest.raises(ValueError, match="candidate acceptance policy/identity changed"):
         verify(accepted)
+    with pytest.raises(ValueError, match=r"performance-relevant or undeclared final-tree differences: \['src/lib\.rs'\]"):
+        verify()
     _acquire_successor(checkout, tmp_path / "successor")
     assert log.read_bytes().splitlines() == [b"measure"] * 5
     assert ((owner / "run.json").read_bytes(), (owner / "evidence.json").read_bytes()) == raw

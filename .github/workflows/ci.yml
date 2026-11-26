@@ -91,7 +91,7 @@ jobs:
           cargo check --locked --workspace --target "$RUST_TARGET" --all-features --lib --bins
 
       - name: Run native CI checks
-        run: just ci-native
+        run: uv run --locked --no-sync just ci-native
 
   package:
     needs: build
