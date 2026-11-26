@@ -409,8 +409,8 @@ performance-release owner=_owner_dir: performance-prepare
     {{ _run }} research-repo-tools performance release tooling/performance-release.toml --release-intent --checkpoint {{ quote(_checkpoint) }} --owner "$1"
 
 # Resume complete units against the original preparation in the acquisition checkout.
-performance-resume checkpoint=_checkpoint:
-    {{ _run }} research-repo-tools performance release tooling/performance-release.toml --release-intent --resume --checkpoint "$1" --owner {{ _owner }}
+performance-resume checkpoint=_checkpoint owner=_owner_dir:
+    {{ _run }} research-repo-tools performance release tooling/performance-release.toml --release-intent --resume --checkpoint "$1" --owner "$2"
 
 # Check package metadata and dry-run crates.io publication.
 publish-check: release-package

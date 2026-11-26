@@ -249,6 +249,9 @@ def test_release_workflow_has_no_measurement_or_checkout() -> None:
     jobs = workflow["jobs"]
     assert jobs.keys() == {"validate-release", "verify-attachment"}
     assert jobs["verify-attachment"]["needs"] == "validate-release"
+    receiver = next(step for step in jobs["verify-attachment"]["steps"] if "release assets receive" in step.get("run", ""))
+    assert receiver["env"]["TRANSFER"] == "${{ inputs.transfer }}"
+    assert receiver["env"]["TRANSFER_SHA256"] == "${{ inputs.digest }}"
     for job in jobs.values():
         for step in job["steps"]:
             if "uses" in step:
@@ -392,8 +395,9 @@ def _verify_archive_recovery(owner: Path, policy: CandidatePolicy, accepted: byt
         "--output",
         "benchmark.tar.gz",
     ]
-    assert main(archive) == main(archive) == 0
-    assert serialize_evidence(verify_candidate_archive(owner / "benchmark.tar.gz", policy, accepted)) == raw
+    for _ in range(2):
+        assert main(archive) == 0
+        assert serialize_evidence(verify_candidate_archive(owner / "benchmark.tar.gz", policy, accepted)) == raw
 
 
 def _check_published_acceptance(verify: Callable[[bytes], bytes], accepted: bytes, published: dict[str, object]) -> None:

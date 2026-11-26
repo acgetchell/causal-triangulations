@@ -33,6 +33,7 @@ For #332, MCMC runs repository tooling once, Delaunay separates portable and nat
 CDT runs file-format, workflow, policy and source scans once on Ubuntu. Each native build retains target checks, Clippy, rustdoc, benchmark compilation,
 the Rust and Python suites, examples, fast notebooks and allocation tests. The existing local CI and serial fallback cover the union.
 Native CI and tag preparation launch Just from the locked uv environment. Their selective tool setup exports Cargo tools and the lock supplies Just.
+The benchmark resume recipe forwards the original checkpoint and owner directory to the same RRT acquisition command.
 All notebook execution recipes use the cell timeout configured in `pyproject.toml`. It covers both sequential simulations in the analysis notebook,
 including a cold Cargo build and subprocess cleanup.
 The native Rust suite runs both the small and medium physics simulations. The main-push package job runs only the additional `large_scale_debug`

@@ -246,7 +246,8 @@ For an interrupted measurement with an intact checkpoint, resume the same acquis
 just performance-resume
 ```
 
-An explicit checkpoint path is also accepted. If measurement finished and capture or promotion failed, retain the original scratch payload and manifest:
+If acquisition used a custom owner directory, pass the original checkpoint and owner as `just performance-resume "$CHECKPOINT" "$OWNER"`.
+For an interrupted capture or promotion, retain the original scratch payload and manifest. Use the same owner with `performance-capture`.
 
 ```bash
 just performance-capture
