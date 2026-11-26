@@ -12,7 +12,7 @@ _native_tools := "--tool cargo-nextest --tool git-cliff --tool rumdl"
 _run := _tools + " toolchain run" + (if env("CDT_CI_NATIVE_TOOLS", "") == "1" { " " + _native_tools } else { "" }) + " --"
 _release_cargo := _tools + " toolchain run --tool cargo --"
 _release_tools := "uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-11-26T03:45:46Z --from research-repo-tools==0.3.3 research-repo-tools"
-_release_tag := shell("cargo metadata --offline --locked --no-deps --format-version 1 | jq -er " + quote('.packages[] | select(.name == "causal-triangulations") | "v" + .version'))
+_release_tag := shell("cargo metadata --offline --locked --no-deps --format-version 1 | jq --binary -er " + quote('.packages[] | select(.name == "causal-triangulations") | "v" + .version'))
 _owner_dir := if env("CDT_RELEASE_OWNER", "") != "" { env("CDT_RELEASE_OWNER") } else { env("HOME", home_directory()) / ".local/state/causal-triangulations" / _release_tag }
 _owner := quote(_owner_dir)
 _checkpoint := "target/bench-reports/release-checkpoint"
@@ -568,11 +568,11 @@ release-upload tag failed_run="":
     owner={{ _owner }}
     state={{ _final }}
     repo=acgetchell/causal-triangulations
-    release_id=$(jq -er --arg tag "$tag" --arg sha "$commit" --arg repo "$repo" 'select(.tag == $tag and .commit == $sha and .repository == $repo) | .release_id' "$state/draft/target.json")
+    release_id=$(jq --binary -er --arg tag "$tag" --arg sha "$commit" --arg repo "$repo" 'select(.tag == $tag and .commit == $sha and .repository == $repo) | .release_id' "$state/draft/target.json")
     prior=$(gh api --paginate --slurp "repos/$repo/actions/workflows/publish-crates.yml/runs?event=workflow_dispatch&head_sha=$commit&per_page=100" \
-        | jq -c --arg title "Publish $tag to crates.io" '[.[].workflow_runs[] | select(.display_title == $title)]')
+        | jq --binary -c --arg title "Publish $tag to crates.io" '[.[].workflow_runs[] | select(.display_title == $title)]')
     if [[ -n "$2" ]]; then
-        attempts=$(jq -er --arg id "$2" '
+        attempts=$(jq --binary -er --arg id "$2" '
           def positive_id: type == "number" and . > 0 and floor == .;
           if length > 0 and (max_by(.id).id | tostring) == $id and
             all(.[]; .status == "completed" and .conclusion == "failure" and (.id | positive_id) and (.run_attempt | positive_id))
@@ -598,14 +598,14 @@ release-upload tag failed_run="":
     transfer=$(sha256sum < "$state/transfer.json")
     [[ "${transfer%% *}" == "$reviewed" ]]
     run=$(gh api --paginate --slurp "repos/$repo/actions/workflows/publish-crates.yml/runs?event=release&head_sha=$commit&per_page=100" \
-        | jq -ce --arg title "Verify published release $tag (release $release_id)" '[.[].workflow_runs[] | select(.display_title == $title)] | if length == 1 then .[0] | select(.status == "completed" and .conclusion == "success") else error("expected one published-release gate") end')
-    run_id=$(jq -er '.id' <<< "$run")
-    attempt=$(jq -er '.run_attempt' <<< "$run")
+        | jq --binary -ce --arg title "Verify published release $tag (release $release_id)" '[.[].workflow_runs[] | select(.display_title == $title)] | if length == 1 then .[0] | select(.status == "completed" and .conclusion == "success") else error("expected one published-release gate") end')
+    run_id=$(jq --binary -er '.id' <<< "$run")
+    attempt=$(jq --binary -er '.run_attempt' <<< "$run")
     name="published-release-$run_id-$attempt"
     artifact=$(gh api --paginate --slurp "repos/$repo/actions/runs/$run_id/artifacts?per_page=100" \
-        | jq -ce --arg name "$name" '[.[].artifacts[] | select(.name == $name)] | if length == 1 then .[0] | select(.expired == false) else error("expected one event receipt") end')
+        | jq --binary -ce --arg name "$name" '[.[].artifacts[] | select(.name == $name)] | if length == 1 then .[0] | select(.expired == false) else error("expected one event receipt") end')
     accepted=$(sha256sum < "$state/acceptance.json")
-    proof=$(jq -cn --argjson run "$run_id" --argjson attempt "$attempt" --argjson artifact "$artifact" --arg transfer "$reviewed" \
+    proof=$(jq --binary -cn --argjson run "$run_id" --argjson attempt "$attempt" --argjson artifact "$artifact" --arg transfer "$reviewed" \
         --arg accepted "${accepted%% *}" --arg acquisition "$(cat "$owner/acquisition.sha256")" --arg publication "$(cat "$owner/publication.sha256")" \
         '{run:$run,attempt:$attempt,artifact:$artifact.id,digest:$artifact.digest,transfer:$transfer,acceptance:$accepted,acquisition:$acquisition,publication:$publication}')
     gh workflow run publish-crates.yml --repo "$repo" --ref "$tag" -f "tag=$tag" -F "transfer=@$state/transfer.json" -f "proof=$proof"

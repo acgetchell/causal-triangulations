@@ -282,7 +282,8 @@ if mode == 'list':
     sys.exit(0)
 assert mode == 'measure'
 with Path(log).open('ab') as stream:
-    stream.write(b'measure\\n')
+    version = tomllib.loads(Path('Cargo.toml').read_text(encoding='utf-8'))['package']['version']
+    stream.write(version.encode('ascii') + b'\\n')
 estimate = {'point_estimate': 10.0, 'confidence_interval': {'confidence_level': 0.95, 'lower_bound': 9.0, 'upper_bound': 11.0}}
 for case in cases:
     for sample in ('new', 'retained'):
@@ -508,11 +509,11 @@ def test_release_series_uses_original_acquisition(tmp_path: Path, monkeypatch: p
     git("tag", TAG, head)
     releases[TAG] = head
     _check_published_acceptance(verify, accepted, published)
-    assert log.read_bytes().splitlines() == [b"measure"]
+    assert log.read_bytes().splitlines() == [b"0.2.0"]
     (checkout / "src/lib.rs").write_bytes(b"// changed input\n")
     changed = commit("Change performance-relevant source")
     policy = replace(policy, commit=changed)
     _check_changed_source(verify, accepted)
     _acquire_successor(checkout, tmp_path / "successor")
-    assert log.read_bytes().splitlines() == [b"measure"] * 5
+    assert log.read_bytes().splitlines() == [b"0.2.0", b"0.2.0", b"0.2.1", b"0.2.1", b"0.2.0"]
     assert ((owner / "run.json").read_bytes(), (owner / "evidence.json").read_bytes()) == raw

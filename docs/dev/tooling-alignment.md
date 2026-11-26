@@ -77,6 +77,8 @@ The isolated cutoff is `2026-11-26T03:45:46Z`, immediately after both distributi
 The #289 publisher rechecks the accepted evidence after GitHub publication and before crates.io approval.
 Its isolated registry and publication-verification commands read the publishing configuration from the tagged checkout.
 A corrected dispatch checks the original job attempts and registry absence before requesting a new approval.
+The Bash operator recipes use jq's binary output when capturing IDs and JSON so native Windows line endings preserve the same GitHub request.
+The protected upload has a step deadline and reserves time for checking the public checksum if Cargo times out.
 
 CDT uses RRT v0.3.2's version-ordered benchmark series for #322 and #331. MCMC v0.5.3 already has a compatible predecessor.
 CDT's v0.1.1 predates the persistent-proposal and slice-scaling cases, so the first acquisition uses schema 5 and reports current-phase timings.

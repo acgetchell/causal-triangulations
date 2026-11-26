@@ -54,6 +54,7 @@ def test_registry_approval_contract() -> None:
     assert upload["run"].split()[-8:] == ["cargo", "publish", "--locked", "--no-verify", "--package", "causal-triangulations", "--registry", "crates-io"]
     assert "--env CARGO_REGISTRY_TOKEN" in upload["run"]
     assert upload["continue-on-error"] is True
+    assert sum(step["timeout-minutes"] for step in publish["steps"][:-1]) + observe["timeout-minutes"] <= publish["timeout-minutes"]
     assert observe["if"] == "${{ !cancelled() && steps.auth.outcome == 'success' }}"
     assert not observe.get("continue-on-error", False)
     assert '--publication-only --target "$RUNNER_TEMP/approved/target.json" --require-crate-asset' in observe["run"]
@@ -127,11 +128,8 @@ def test_upload_refuses_to_redispatch_existing_attempt(tmp_path: Path, monkeypat
     assert trace.read_bytes().splitlines() == [b"api"]
 
 
-@pytest.mark.parametrize("scenario", ["verified", "wrong-run", "active", "previous-upload", "registry-present"])
-def test_corrected_upload_checks_every_attempt_and_registry(scenario: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Only a reviewed transfer whose previous attempts stopped before publication can be dispatched again."""
-    tag = f"v{VERSION}"
-    owner = tmp_path / "release owner"
+def _reviewed_registry_transfer(owner: Path, tag: str) -> Path:
+    """Write the operator inputs retained after acceptance of one release."""
     state = owner / "final" / SHA
     (state / "draft").mkdir(parents=True)
     (state / "draft/target.json").write_bytes(serialize_release_target(ReleaseTarget(REPOSITORY, tag, 7, SHA)))
@@ -141,8 +139,18 @@ def test_corrected_upload_checks_every_attempt_and_registry(scenario: str, tmp_p
     (state / "acceptance.json").write_bytes(b"accepted")
     (owner / "acquisition.sha256").write_bytes(b"b" * 64)
     (owner / "publication.sha256").write_bytes(b"c" * 64)
+    return transfer
+
+
+@pytest.mark.parametrize("scenario", ["first-dispatch", "verified", "wrong-run", "active", "previous-upload", "registry-present"])
+def test_corrected_upload_checks_every_attempt_and_registry(scenario: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only a reviewed transfer whose previous attempts stopped before publication can be dispatched again."""
+    tag = f"v{VERSION}"
+    owner = tmp_path / "release owner"
+    transfer = _reviewed_registry_transfer(owner, tag)
     run = {"id": 19, "display_title": f"Publish {tag} to crates.io", "run_attempt": 2, "status": "in_progress" if scenario == "active" else "completed"}
-    monkeypatch.setenv("PRIOR", json.dumps([{"workflow_runs": [{**run, "conclusion": "failure"}]}]))
+    previous = [] if scenario == "first-dispatch" else [{**run, "conclusion": "failure"}]
+    monkeypatch.setenv("PRIOR", json.dumps([{"workflow_runs": previous}]))
     for attempt in (1, 2):
         job = {"run_id": 19, "run_attempt": attempt, "status": "completed"}
         publish = "success" if scenario == "previous-upload" and attempt == 1 else "skipped"
@@ -177,14 +185,18 @@ esac
     monkeypatch.setenv("DISPATCH", dispatch.as_posix())
     monkeypatch.setenv("CDT_RELEASE_OWNER", owner.as_posix())
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
-    args = ["--set", "_commit", SHA, "--set", "_release_tools", "gh", "release-upload", tag, "18" if scenario == "wrong-run" else "19"]
+    args = ["--set", "_commit", SHA, "--set", "_release_tools", "gh", "release-upload", tag]
+    if scenario != "first-dispatch":
+        args.append("18" if scenario == "wrong-run" else "19")
     result = run_safe_command("just", args, cwd=ROOT, check=False)
+    if scenario in {"first-dispatch", "verified"}:
+        assert result.returncode == 0, result.stderr
     if scenario in {"verified", "registry-present"}:
+        assert registry.is_file(), result.stderr
         assert registry.read_text(encoding="utf-8") == f"release registry {tag} --expect absent"
     else:
         assert not registry.exists()
-    if scenario == "verified":
-        assert result.returncode == 0, result.stderr
+    if scenario in {"first-dispatch", "verified"}:
         args = dispatch.read_text(encoding="utf-8").splitlines()
         assert args[:-1] == [
             "workflow",
