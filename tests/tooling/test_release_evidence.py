@@ -10,10 +10,11 @@ import tarfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from unittest.mock import ANY, create_autospec
 
 import pytest
 import yaml
-from research_repo_tools import release_evidence
+from research_repo_tools import release_evidence, release_publishing
 from research_repo_tools.cli import main
 from research_repo_tools.process import run_safe_command
 from research_repo_tools.release_assets import GitHubRelease, ReleaseTarget, serialize_release_target
@@ -222,11 +223,23 @@ esac
             assert "a skipped publisher in run 19 attempt 1" in result.stderr
 
 
-@pytest.mark.parametrize("invalid", ["action", "tag", "draft", "prerelease", "repository"])
-def test_published_event_rejects_invalid_source_before_registry(
+@pytest.mark.parametrize(
+    ("invalid", "diagnostic"),
+    [
+        ("none", None),
+        ("action", "requires a release: published event"),
+        ("tag", "release tag must use stable vX.Y.Z form"),
+        ("draft", "release event must be published and stable"),
+        ("prerelease", "release event must be published and stable"),
+        ("repository", "release event names the wrong repository"),
+    ],
+)
+def test_published_event_selects_valid_source_before_registry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
     invalid: str,
+    diagnostic: str | None,
 ) -> None:
     """Exercise the installed release gate with CDT's real policy and an inert provider event."""
     tag = f"v{VERSION}"
@@ -246,8 +259,16 @@ def test_published_event_rejects_invalid_source_before_registry(
         "GITHUB_REPOSITORY": REPOSITORY,
     }.items():
         monkeypatch.setenv(key, value)
-    monkeypatch.setattr("research_repo_tools.release_publishing.check_reviewed_release", lambda *_a, **_kw: pytest.fail("invalid event reached source gate"))
-    assert main(["--root", str(ROOT), "release", "gate", tag, "--require-crate-asset"]) != 0
+    source_gate = create_autospec(release_publishing.check_reviewed_release)
+    monkeypatch.setattr(release_publishing, "check_reviewed_release", source_gate)
+    status = main(["--root", str(ROOT), "release", "gate", tag, "--require-crate-asset"])
+    if diagnostic is None:
+        assert status == 0
+        source_gate.assert_called_once_with(ANY, tag, event=release_publishing.ReviewedRelease(tag, SHA, 7), reuse_evidence=None, require_crate_asset=True)
+    else:
+        assert status != 0
+        assert diagnostic in capsys.readouterr().err
+        source_gate.assert_not_called()
 
 
 def registry_proof(transfer: bytes) -> dict[str, object]:
