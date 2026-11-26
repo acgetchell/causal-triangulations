@@ -1127,6 +1127,7 @@ pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> Cd
         &checkpoint.steps,
         &checkpoint.measurements,
         &checkpoint.scalar_trace_rows,
+        None,
         checkpoint.triangulation(),
     )
 }
@@ -1205,9 +1206,9 @@ fn validate_checkpoint_after_prefix(
                 expected: prefix.measurements,
             })
         })?;
-    let scalar_trace_rows = checkpoint
+    let (validated_rows, scalar_trace_rows) = checkpoint
         .scalar_trace_rows
-        .get(prefix.scalar_trace_rows..)
+        .split_at_checked(prefix.scalar_trace_rows)
         .ok_or_else(|| {
             checkpoint_resume_failed(CheckpointResumeFailure::ScalarTraceLengthMismatch {
                 actual: checkpoint.scalar_trace_rows.len(),
@@ -1222,6 +1223,7 @@ fn validate_checkpoint_after_prefix(
         steps,
         measurements,
         scalar_trace_rows,
+        validated_rows.last(),
         checkpoint.triangulation(),
     )
 }
@@ -1667,6 +1669,54 @@ mod tests {
         )
         .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3).expect("CDT strip should build"))
         .expect("one-step run should checkpoint")
+    }
+
+    #[test]
+    fn resumed_no_proposal_cannot_change_the_prefix_slab_profile() -> CdtResult<()> {
+        use crate::cdt::metropolis::MonteCarloStepOutcome;
+        use crate::cdt::proposal_policy::CdtMoveFamilyDistribution;
+
+        let sampler = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(0),
+            ActionConfig::default(),
+        )
+        .with_policy(CdtMoveFamilyDistribution::from_weights([
+            0.0, 0.0, 1.0, 0.0,
+        ])?);
+        let mut prefix = sampler.run_to_checkpoint(
+            CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&[3, 4, 5, 4])?,
+        )?;
+        let regular = CdtTriangulation::from_toroidal_cdt(4, 4)?;
+        assert_eq!(
+            prefix.triangulation().simplex_counts()?,
+            regular.simplex_counts()?
+        );
+        assert_ne!(
+            prefix.triangulation().slab_triangle_profile()?,
+            regular.slab_triangle_profile()?
+        );
+
+        let control = sampler.run_to_checkpoint(regular.clone())?;
+        let continued = sampler.resume_steps_to_checkpoint(control, NonZeroU32::MIN)?;
+        assert_matches!(
+            continued.steps[1].outcome(),
+            MonteCarloStepOutcome::NoProposal
+        );
+        CdtMcmcCheckpoint::from_json(&continued.to_json()?)?;
+
+        // Inject a geometry discontinuity at the resume boundary. A step with
+        // no proposal must preserve the last validated slab profile.
+        prefix.chain =
+            ChainCheckpoint::new(regular, prefix.chain.accepted(), prefix.chain.rejected());
+        assert_matches!(
+            sampler
+                .resume_steps_to_checkpoint(prefix, NonZeroU32::MIN)
+                .map(drop),
+            Err(CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::InvalidPeriodicSlabTransition { step: 2 }
+            })
+        );
+        Ok(())
     }
 
     fn one_step_checkpoint_payload() -> Value {

@@ -919,6 +919,30 @@ fn review_regression_restore_rejects_forged_loops_through_unchanged_volume_spans
 }
 
 #[test]
+fn validation_chain_distinguishes_open_results_from_detached_metadata() -> CdtResult<()> {
+    let open = CdtConfig {
+        topology: CdtTopology::OpenBoundary,
+        seed: Some(7),
+        simulate: false,
+        ..CdtConfig::new(16, 4)
+    }
+    .into_validated()?;
+    let results = run_simulation(&open)?;
+    assert_matches!(
+        ValidationChain::from_results("open-run", "open", &open, &results),
+        Err(CdtError::Analysis(CdtAnalysisError::UnsupportedTopology))
+    );
+    let toroidal = CdtConfig {
+        topology: CdtTopology::Toroidal,
+        ..open.config().clone()
+    }
+    .into_validated()?;
+    assert_matches!(ValidationChain::from_results("open-run", "detached", &toroidal, &results),
+        Err(CdtError::Analysis(CdtAnalysisError::IncompatibleCondition { chain })) if chain == "detached");
+    Ok(())
+}
+
+#[test]
 fn released_shape_run_exports_complete_reproducible_chain_json() {
     let config = CdtConfig {
         topology: CdtTopology::Toroidal,

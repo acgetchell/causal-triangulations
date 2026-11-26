@@ -403,7 +403,7 @@ impl ValidationChain {
     /// configuration argument retains the original start-profile declaration.
     ///
     /// # Errors
-    /// Rejects detached configuration or incomplete result telemetry.
+    /// Rejects detached configuration, unsupported topology, or incomplete result telemetry.
     pub fn from_results(
         run_id: &str,
         chain_id: &str,
@@ -413,9 +413,16 @@ impl ValidationChain {
         if configuration.to_action_config() != *results.action_config()
             || configuration.topology() != results.triangulation().metadata().topology()
             || configuration.timeslices().get() != results.triangulation().time_slices().get()
-            || configuration.topology() != CdtTopology::Toroidal
-            || !configuration.matches_initial_profile(&results.initial_periodic_loop_lengths()?)
         {
+            return Err(CdtAnalysisError::IncompatibleCondition {
+                chain: chain_id.to_owned(),
+            }
+            .into());
+        }
+        if configuration.topology() != CdtTopology::Toroidal {
+            return Err(CdtAnalysisError::UnsupportedTopology.into());
+        }
+        if !configuration.matches_initial_profile(&results.initial_periodic_loop_lengths()?) {
             return Err(CdtAnalysisError::IncompatibleCondition {
                 chain: chain_id.to_owned(),
             }

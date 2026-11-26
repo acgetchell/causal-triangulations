@@ -718,10 +718,7 @@ pub fn run_simulation(config: &ValidatedCdtConfig) -> CdtResult<SimulationResult
 
     // Create initial triangulation from the validated topology/profile matrix.
     let triangulation = match (config.topology(), config.initial_spatial_vertices()) {
-        (
-            CdtTopology::Toroidal,
-            ValidatedInitialSpatialVertices::ExplicitProfile { profile, .. },
-        ) => {
+        (CdtTopology::Toroidal, ValidatedInitialSpatialVertices::ExplicitProfile(profile)) => {
             log::info!("Constructing toroidal CDT (S¹×S¹)");
             let profile: Vec<_> = profile.iter().map(|volume| volume.get()).collect();
             CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&profile)?
@@ -733,10 +730,7 @@ pub fn run_simulation(config: &ValidatedCdtConfig) -> CdtResult<SimulationResult
             log::info!("Constructing toroidal CDT (S¹×S¹)");
             CdtTriangulation::from_toroidal_cdt(vertices_per_slice.get(), timeslices.get())?
         }
-        (
-            CdtTopology::OpenBoundary,
-            ValidatedInitialSpatialVertices::ExplicitProfile { profile, .. },
-        ) => {
+        (CdtTopology::OpenBoundary, ValidatedInitialSpatialVertices::ExplicitProfile(profile)) => {
             log::info!("Constructing open-boundary CDT strip");
             let profile: Vec<_> = profile.iter().map(|volume| volume.get()).collect();
             CdtTriangulation::from_cdt_strip_spatial_vertex_profile(&profile)?

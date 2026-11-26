@@ -1262,6 +1262,7 @@ fn validate_result_telemetry(
             steps,
             measurements,
             scalar_trace_rows,
+            None,
             triangulation,
         );
     }
@@ -1300,6 +1301,7 @@ fn validate_result_telemetry(
         steps,
         measurements,
         scalar_trace_rows,
+        None,
         triangulation,
     )
 }
@@ -1357,11 +1359,13 @@ impl CdtTrajectorySnapshot {
 /// Parses all persisted observables against one shared count/action trajectory.
 ///
 /// Callers must validate that `steps` and `scalar_trace_rows` have equal lengths first.
+/// For a resumed suffix, `previous_row` is the last row of the validated prefix.
 pub(crate) fn validate_trajectory_observables(
     action_config: &ActionConfig,
     steps: &[MonteCarloStep],
     measurements: &[Measurement],
     scalar_trace_rows: &[CdtScalarTraceRow],
+    previous_row: Option<&CdtScalarTraceRow>,
     triangulation: &CdtTriangulation2D,
 ) -> CdtResult<()> {
     let final_counts = triangulation.simplex_counts()?;
@@ -1460,7 +1464,7 @@ pub(crate) fn validate_trajectory_observables(
             },
         ));
     }
-    validate_measured_loop_history(triangulation, scalar_trace_rows, measurements)
+    validate_measured_loop_history(triangulation, scalar_trace_rows, measurements, previous_row)
 }
 
 /// Checks stored loops against their topology and the realized periodic moves.
@@ -1468,10 +1472,11 @@ fn validate_measured_loop_history(
     triangulation: &CdtTriangulation2D,
     rows: &[CdtScalarTraceRow],
     measurements: &[Measurement],
+    previous_row: Option<&CdtScalarTraceRow>,
 ) -> CdtResult<()> {
     if triangulation.metadata().topology() == CdtTopology::Toroidal && triangulation.has_foliation()
     {
-        periodic_start_from_history(triangulation, rows, measurements)?;
+        periodic_start_from_history(triangulation, rows, measurements, previous_row)?;
     } else if measurements
         .iter()
         .any(|sample| sample.spatial_loop_lengths().is_some())
@@ -1486,6 +1491,7 @@ fn periodic_start_from_history(
     triangulation: &CdtTriangulation2D,
     rows: &[CdtScalarTraceRow],
     measurements: &[Measurement],
+    previous_row: Option<&CdtScalarTraceRow>,
 ) -> CdtResult<Vec<u32>> {
     let mut rings = loop_lengths_from_validated_slices(triangulation)?;
     let mut remaining = measurements;
@@ -1498,13 +1504,10 @@ fn periodic_start_from_history(
         }
         let prior = index
             .checked_sub(1)
-            .map(|i| rows[i].slab_triangle_profile.as_slice())
+            .map(|i| &rows[i])
+            .or(previous_row)
+            .map(|row| row.slab_triangle_profile.as_slice())
             .or(row.initial_slab_triangle_profile.as_deref());
-        // For an in-process suffix the preceding row belongs to the verified
-        // prefix. All measurements in this suffix are at or after its first row.
-        if index == 0 && row.step.get() > 1 {
-            break;
-        }
         rewind_periodic_ring(&mut rings, row, prior).ok_or_else(|| {
             checkpoint_resume_failed(CheckpointResumeFailure::InvalidPeriodicSlabTransition {
                 step: row.step.get(),
@@ -2330,7 +2333,7 @@ fn triangulation_vertex_time_labels(
 impl SimulationResultsBackend {
     /// Recovers the labeled periodic start from the verified trajectory.
     pub(crate) fn initial_periodic_loop_lengths(&self) -> CdtResult<Vec<u32>> {
-        periodic_start_from_history(&self.triangulation, &self.scalar_trace_rows, &[])
+        periodic_start_from_history(&self.triangulation, &self.scalar_trace_rows, &[], None)
     }
 
     /// Creates a validated simulation result snapshot from explicit components.
@@ -4872,8 +4875,30 @@ mod tests {
             rows[0].initial_slab_triangle_profile =
                 Some(before.slab_triangle_profile().expect("initial slabs"));
             assert_eq!(
-                periodic_start_from_history(&after, &rows, &measurements)
+                periodic_start_from_history(&after, &rows, &measurements, None)
                     .expect("valid trajectory"),
+                before_profile
+            );
+
+            let prefix = CdtScalarTraceRow::capture(
+                &no_proposal_step(1, MoveType::Move22, 0.0),
+                0.0,
+                0.0,
+                &before,
+                None,
+            )
+            .expect("last validated prefix row");
+            let suffix = CdtScalarTraceRow::capture(
+                &accepted_step(2, move_type, 0.0, 0.0),
+                0.0,
+                0.0,
+                &after,
+                None,
+            )
+            .expect("first suffix row changes the seam ring");
+            assert_eq!(
+                periodic_start_from_history(&after, &[suffix], &[], Some(&prefix))
+                    .expect("volume change across the checkpoint boundary"),
                 before_profile
             );
 
@@ -4890,7 +4915,7 @@ mod tests {
                     .try_with_spatial_loop_lengths(forged_profile.to_vec())
                     .expect("forged profile preserves total volume");
                 assert_matches!(
-                    periodic_start_from_history(&after, &rows, &forged),
+                    periodic_start_from_history(&after, &rows, &forged, None),
                     Err(CdtError::SpatialLoop(SpatialLoopError::InvalidProfile { profile, .. }))
                         if profile == forged_profile
                 );
@@ -5190,6 +5215,7 @@ mod tests {
             &results.steps,
             &results.measurements,
             std::slice::from_ref(&row),
+            None,
             &results.triangulation,
         )
         .expect("pre-step profile should validate against reconstructed initial counts");
@@ -5908,6 +5934,7 @@ mod tests {
                 &results.steps,
                 &results.measurements,
                 &results.scalar_trace_rows,
+                None,
                 &results.triangulation,
             ),
             Err(CdtError::InvalidMeasurementActionComponents { step: 0, .. })

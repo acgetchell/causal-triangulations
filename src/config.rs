@@ -176,12 +176,7 @@ enum ValidatedInitialSpatialVerticesData {
     ExplicitProfile(Vec<NonZeroU32>),
 }
 
-/// Validated initial spatial-vertex input for CDT construction.
-///
-/// ```compile_fail,E0639
-/// use causal_triangulations::ValidatedInitialSpatialVertices;
-/// let _ = ValidatedInitialSpatialVertices::ExplicitProfile { profile: &[] };
-/// ```
+/// Borrowed view of the initial spatial-vertex input in a validated configuration.
 ///
 /// This lets callers branch on regular equal-slice data versus an explicit
 /// nonuniform profile without rechecking divisibility, slice-count, or per-slice
@@ -199,7 +194,7 @@ enum ValidatedInitialSpatialVerticesData {
 ///     assert_matches!(
 ///         config.initial_spatial_vertices(),
 ///         ValidatedInitialSpatialVertices::Regular {
-///             vertices_per_slice, ..
+///             vertices_per_slice
 ///         } if vertices_per_slice.get() == 4
 ///     );
 ///     Ok(())
@@ -208,17 +203,12 @@ enum ValidatedInitialSpatialVerticesData {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidatedInitialSpatialVertices<'a> {
     /// Regular equal-size spatial slices.
-    #[non_exhaustive]
     Regular {
         /// Number of vertices in each slice.
         vertices_per_slice: NonZeroU32,
     },
     /// Explicit nonuniform spatial slice vertex counts.
-    #[non_exhaustive]
-    ExplicitProfile {
-        /// Counts in time-slice order, checked against the configuration's topology and total.
-        profile: &'a [NonZeroU32],
-    },
+    ExplicitProfile(&'a [NonZeroU32]),
 }
 
 impl ValidatedCdtConfig {
@@ -231,7 +221,7 @@ impl ValidatedCdtConfig {
             ValidatedInitialSpatialVertices::Regular { vertices_per_slice } => {
                 actual.iter().all(|&size| size == vertices_per_slice.get())
             }
-            ValidatedInitialSpatialVertices::ExplicitProfile { profile } => profile
+            ValidatedInitialSpatialVertices::ExplicitProfile(profile) => profile
                 .iter()
                 .map(|size| size.get())
                 .eq(actual.iter().copied()),
@@ -459,7 +449,7 @@ impl ValidatedCdtConfig {
         }
     }
 
-    /// Returns initial spatial-vertex input with validation proof attached.
+    /// Borrows the initial spatial-vertex input checked by this configuration.
     ///
     /// The returned value is safe to feed directly into CDT constructors because
     /// [`Self::new`] has already checked topology-specific slice constraints.
@@ -482,7 +472,7 @@ impl ValidatedCdtConfig {
     ///
     ///     assert_matches!(
     ///         config.initial_spatial_vertices(),
-    ///         ValidatedInitialSpatialVertices::ExplicitProfile { profile, .. }
+    ///         ValidatedInitialSpatialVertices::ExplicitProfile(profile)
     ///             if profile.iter().map(|volume| volume.get()).eq([4, 6, 5])
     ///     );
     ///     Ok(())
@@ -497,7 +487,7 @@ impl ValidatedCdtConfig {
                 }
             }
             ValidatedInitialSpatialVerticesData::ExplicitProfile(profile) => {
-                ValidatedInitialSpatialVertices::ExplicitProfile { profile }
+                ValidatedInitialSpatialVertices::ExplicitProfile(profile)
             }
         }
     }
@@ -2035,7 +2025,7 @@ mod tests {
         );
         assert_matches!(
             profiled.initial_spatial_vertices(),
-            ValidatedInitialSpatialVertices::ExplicitProfile { profile, .. }
+            ValidatedInitialSpatialVertices::ExplicitProfile(profile)
                 if profile.iter().map(|volume| volume.get()).eq([4, 6, 5])
         );
     }
