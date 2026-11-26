@@ -330,10 +330,11 @@ def test_registry_candidate_rejects_changed_dispatch_before_remote_io(change: st
     if change == "missing-acquisition":
         del proof["acquisition"]
 
-    def unexpected_checkout(*_args: object, **_kwargs: object) -> Never:
-        pytest.fail("invalid dispatch reached checkout")
+    def unexpected_io(*_args: object, **_kwargs: object) -> Never:
+        pytest.fail("invalid dispatch reached checkout or the provider")
 
-    monkeypatch.setattr("research_repo_tools.release_assets.require_release_checkout", unexpected_checkout)
+    monkeypatch.setattr("research_repo_tools.release_assets.require_release_checkout", unexpected_io)
+    monkeypatch.setattr("research_repo_tools.release_validation.api", unexpected_io)
     script = runpy.run_path(str(ROOT / "tooling/verify_registry_candidate.py"))
     with pytest.raises(ValueError, match=r"transfer|target|acquisition|publication|invalid.*run"):
         script["verify_registry_candidate"](tmp_path, tag if change != "tag" else "v0.3.0", SHA if change != "commit" else "b" * 40, transfer, proof)
@@ -413,7 +414,8 @@ def test_registry_dispatch_authenticates_published_event(change: str, tmp_path: 
         work.mkdir()
         (work / names[0]).write_bytes(json.dumps(receipt).encode())
 
-    def read_endpoint(endpoint: str, **_options: object) -> object:
+    def read_endpoint(endpoint: str, *, repository: str) -> object:
+        assert repository == REPOSITORY
         return provider[endpoint]
 
     monkeypatch.setattr("research_repo_tools.release_validation.api", read_endpoint)
@@ -578,7 +580,14 @@ def test_policy_names_match_workflow_coverage() -> None:
     assert signer == "sign-package"
     for name, required in (*POLICY.validation.required_steps, POLICY.signing_job):
         job = ci["build"] if name.startswith("build (") else ci[name]
-        assert set(required) <= {step.get("name") for step in job["steps"]}
+        # Evidence covers unconditional command steps and the attestation and artifact uploads.
+        gates = {
+            step["name"]
+            for step in job["steps"]
+            if ("run" in step and "if" not in step) or step.get("uses", "").startswith(("actions/attest@", "actions/upload-artifact@"))
+        }
+        assert set(required) == gates
+    assert "just release-dependency-builds release-dependencies" in {step.get("run") for step in ci["package"]["steps"]}
     assert ci["package"]["needs"] == "build"
     assert ci["build"]["needs"] == "repository-tooling"
     assert ci["build"]["if"] == "${{ always() }}"
@@ -630,7 +639,8 @@ def test_review_and_publish_share_evidence_and_stop_on_failure(tmp_path: Path, m
     state = owner / "final" / SHA
     (state / "package").mkdir(parents=True)
     (state / "reviewed").mkdir()
-    (state / "draft").mkdir()
+    target = tmp_path / "provider-target.json"
+    target.write_bytes(serialize_release_target(ReleaseTarget(REPOSITORY, tag, 7, SHA)))
     for filename in ("acquisition.sha256", "publication.sha256"):
         (owner / filename).write_bytes(b"f" * 64)
     policy = json.dumps({"tag": tag, "commit": SHA}).encode()
@@ -654,10 +664,20 @@ def test_review_and_publish_share_evidence_and_stop_on_failure(tmp_path: Path, m
         "    return 1\n"
         "}\n"
         'case "$1 $2 ${3-}" in\n'
-        '  "release evidence candidate"|"release evidence archive") has_option --acceptance "$TEST_STATE/acceptance.json" "$@" ;;\n'
-        '  "release assets retrieve") has_option --expected-native-sha256 "$TEST_NATIVE" "$@" ;;\n'
-        '  "release assets receive") has_option --transfer "$TEST_STATE/transfer.json" "$@" ;;\n'
-        '  "release publish v0.2.0") has_option --transfer-sha256 "$TEST_REVIEWED" "$@" ;;\n'
+        '  "release evidence candidate") has_option --acceptance "$TEST_STATE/acceptance.json" "$@" ;;\n'
+        '  "release assets retrieve")\n'
+        '    has_option --expected-native-sha256 "$TEST_NATIVE" "$@"\n'
+        '    has_option --output "$TEST_STATE/draft" "$@"\n'
+        '    mkdir -p "$TEST_STATE/draft"\n'
+        '    cp "$TEST_TARGET" "$TEST_STATE/draft/target.json" ;;\n'
+        '  "release evidence archive"|"release assets receive"|"release publish v0.2.0")\n'
+        '    has_option --target "$TEST_STATE/draft/target.json" "$@"\n'
+        '    cmp "$TEST_TARGET" "$TEST_STATE/draft/target.json"\n'
+        '    case "$2" in\n'
+        '      evidence) has_option --acceptance "$TEST_STATE/acceptance.json" "$@" ;;\n'
+        '      assets) has_option --transfer "$TEST_STATE/transfer.json" "$@" ;;\n'
+        '      publish) has_option --transfer-sha256 "$TEST_REVIEWED" "$@" ;;\n'
+        "    esac ;;\n"
         "  *) exit 41 ;;\nesac\n",
         encoding="utf-8",
         newline="\n",
@@ -665,6 +685,7 @@ def test_review_and_publish_share_evidence_and_stop_on_failure(tmp_path: Path, m
     monkeypatch.setenv("CDT_RELEASE_OWNER", owner.as_posix())
     monkeypatch.setenv("TEST_LOG", log.as_posix())
     monkeypatch.setenv("TEST_STATE", state.as_posix())
+    monkeypatch.setenv("TEST_TARGET", target.as_posix())
     monkeypatch.setenv("TEST_NATIVE", hashlib.sha256(b"native").hexdigest())
     monkeypatch.setenv("TEST_REVIEWED", hashlib.sha256((state / "transfer.json").read_bytes()).hexdigest())
     args = ["--set", "_release_cargo", "", "--set", "_release_tools", "bash " + shlex.quote(stub.as_posix()), "--set", "_commit", SHA]
