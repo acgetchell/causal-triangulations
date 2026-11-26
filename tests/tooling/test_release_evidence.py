@@ -213,7 +213,9 @@ esac
             f"transfer=@{transfer.as_posix()}",
             "-f",
         ]
-        assert json.loads(args[-1].removeprefix("proof=")) == {**registry_proof(transfer.read_bytes()), "acceptance": hashlib.sha256(b"accepted").hexdigest()}
+        field, proof = args[-1].split("=", 1)
+        assert field == "proof"
+        assert json.loads(proof) == {**registry_proof(transfer.read_bytes()), "acceptance": hashlib.sha256(b"accepted").hexdigest()}
     else:
         assert result.returncode != 0
         assert not dispatch.exists()
@@ -609,12 +611,21 @@ def test_review_and_publish_share_evidence_and_stop_on_failure(tmp_path: Path, m
     stub = tmp_path / "release-tool"
     stub.write_text(
         "#!/usr/bin/env bash\nset -euo pipefail\n"
-        'printf "%s\\n" "$*" >> "$TEST_LOG"\n'
+        'printf "%s %s %s\\n" "$1" "$2" "${3-}" >> "$TEST_LOG"\n'
+        "has_option() {\n"
+        '    local option="$1" value="$2"\n'
+        "    shift 2\n"
+        "    while (( $# >= 2 )); do\n"
+        '        if [[ "$1" == "$option" ]]; then [[ "$2" == "$value" ]]; return; fi\n'
+        "        shift\n"
+        "    done\n"
+        "    return 1\n"
+        "}\n"
         'case "$1 $2 ${3-}" in\n'
-        '  "release evidence candidate") [[ " $* " == *" --acceptance $TEST_STATE/acceptance.json "* ]] ;;\n'
-        '  "release assets retrieve") [[ " $* " == *" --expected-native-sha256 $TEST_NATIVE "* ]] ;;\n'
-        '  "release assets receive"|"release evidence archive") ;;\n'
-        '  "release publish v0.2.0") [[ "${!#}" == "$TEST_REVIEWED" ]] ;;\n'
+        '  "release evidence candidate"|"release evidence archive") has_option --acceptance "$TEST_STATE/acceptance.json" "$@" ;;\n'
+        '  "release assets retrieve") has_option --expected-native-sha256 "$TEST_NATIVE" "$@" ;;\n'
+        '  "release assets receive") has_option --transfer "$TEST_STATE/transfer.json" "$@" ;;\n'
+        '  "release publish v0.2.0") has_option --transfer-sha256 "$TEST_REVIEWED" "$@" ;;\n'
         "  *) exit 41 ;;\nesac\n",
         encoding="utf-8",
         newline="\n",
