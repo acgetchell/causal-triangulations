@@ -6,16 +6,14 @@ use super::helpers::{
     action_for, actions_match, expected_measurement_count, expected_measurement_step,
 };
 use super::runner::{MetropolisAlgorithm, MetropolisConfig, MetropolisConfigWire};
-use super::telemetry::{
-    MonteCarloStep, MonteCarloStepWire, ProposalStatistics, ProposalStatisticsWire,
-};
+use super::telemetry::{MonteCarloStep, ProposalStatistics, ProposalStatisticsWire};
 use crate::cdt::action::{ActionConfig, ActionConfigWire};
 use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveStatistics, MoveStatisticsWire, MoveType};
 use crate::cdt::results::{
-    CdtScalarTraceRow, CdtScalarTraceRowWire, Measurement, MeasurementWire, SimulationHistory,
-    SimulationResultsBackend, SimulationResultsParts, scalar_trace_no_proposal_count,
-    share_restored_profile_snapshots, validate_scalar_trace_row_slice, validate_scalar_trace_rows,
-    validate_trajectory_observables,
+    CdtScalarTraceRow, Measurement, MeasurementWire, SimulationHistory, SimulationResultsBackend,
+    SimulationResultsParts, TrajectoryRecord, restore_trajectory, scalar_trace_no_proposal_count,
+    serialize_trajectory, share_restored_profile_snapshots, validate_scalar_trace_row_slice,
+    validate_scalar_trace_rows, validate_trajectory_observables,
 };
 use crate::cdt::triangulation::{
     CdtTriangulation2D, CdtTriangulationCheckpointWireV2, CdtTriangulationCheckpointWireV2Ref,
@@ -33,8 +31,7 @@ use serde_json::Value;
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-const CHECKPOINT_FORMAT_VERSION: u32 = 3;
-const BARE_CHECKPOINT_FORMAT_VERSION: u32 = 2;
+const CHECKPOINT_FORMAT_VERSION: u32 = 4;
 
 #[cfg(test)]
 thread_local! {
@@ -57,17 +54,65 @@ pub(crate) struct CdtMcmcCheckpointParts {
     pub(crate) current_action: f64,
     pub(crate) move_stats: MoveStatistics,
     pub(crate) proposal_stats: ProposalStatistics,
-    pub(crate) steps: Vec<MonteCarloStep>,
-    pub(crate) measurements: Vec<Measurement>,
-    pub(crate) scalar_trace_rows: Vec<CdtScalarTraceRow>,
+    pub(crate) history: CheckpointHistory,
     pub(crate) elapsed_time: Duration,
     pub(crate) acceptance_rng: Xoshiro256PlusPlus,
     pub(crate) ergodics: ErgodicsSystem,
 }
 
+/// Only this owner can append to a history whose prefix has passed validation.
+#[derive(Default)]
+pub(crate) struct CheckpointHistory {
+    steps: Vec<MonteCarloStep>,
+    measurements: Vec<Measurement>,
+    scalar_trace_rows: Vec<CdtScalarTraceRow>,
+    prefix: Option<ValidatedCheckpointPrefix>,
+}
+
+impl CheckpointHistory {
+    pub(crate) fn new(measurements: Vec<Measurement>) -> Self {
+        Self {
+            measurements,
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn measurements(&self) -> &[Measurement] {
+        &self.measurements
+    }
+
+    pub(crate) fn append(
+        &mut self,
+        step: MonteCarloStep,
+        row: CdtScalarTraceRow,
+        measurement: Option<Measurement>,
+    ) {
+        self.steps.push(step);
+        self.scalar_trace_rows.push(row);
+        self.measurements.extend(measurement);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn steps(&self) -> &[MonteCarloStep] {
+        &self.steps
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn steps_mut(&mut self) -> &mut Vec<MonteCarloStep> {
+        self.prefix = None;
+        &mut self.steps
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn measurements_mut(&mut self) -> &mut Vec<Measurement> {
+        self.prefix = None;
+        &mut self.measurements
+    }
+}
+
 /// Length and outcome evidence for an already fully validated checkpoint prefix.
 #[derive(Clone, Copy)]
-pub(crate) struct ValidatedCheckpointPrefix {
+struct ValidatedCheckpointPrefix {
     steps: usize,
     measurements: usize,
     scalar_trace_rows: usize,
@@ -116,9 +161,7 @@ impl CheckpointAction {
 ///
 /// # Serialization compatibility
 ///
-/// [`Self::to_json`] emits version 3 for biased ensembles and retains version 2
-/// for bare ensembles, both with Delaunay's exact Level 4 owner snapshot.
-/// Version 3 prevents old readers from silently dropping a total-volume bias.
+/// Version 4 records each transition once for bare and biased runs.
 /// The geometry schema follows the upstream persistence
 /// contract; chain fields remain independent of the MCMC crate's checkpoint
 /// representation. [`Self::from_json`] rejects other format versions with
@@ -169,9 +212,9 @@ pub struct CdtMcmcCheckpoint {
     prefix_validated: bool,
 }
 
-/// Borrowed top-level record shared by checkpoint envelopes 2 and 3.
+/// Borrowed top-level record shared by the version 4 checkpoint envelope.
 #[derive(Serialize)]
-struct CdtMcmcCheckpointWireV2Ref<'a> {
+struct CdtMcmcCheckpointWireRef<'a> {
     format_version: u32,
     triangulation: CdtTriangulationCheckpointWireV2Ref<'a>,
     accepted: u64,
@@ -182,17 +225,18 @@ struct CdtMcmcCheckpointWireV2Ref<'a> {
     current_action: f64,
     move_stats: &'a MoveStatistics,
     proposal_stats: &'a ProposalStatistics,
-    steps: &'a [MonteCarloStep],
     measurements: &'a [Measurement],
+    #[serde(serialize_with = "serialize_trajectory")]
     scalar_trace_rows: &'a [CdtScalarTraceRow],
-    elapsed_time: CheckpointDurationWireV2,
-    acceptance_rng: CheckpointRngWireV2,
-    ergodics: ErgodicsCheckpointWireV2Ref<'a>,
+    elapsed_time: CheckpointDurationRecord,
+    acceptance_rng: CheckpointRngRecord,
+    ergodics: ErgodicsCheckpointRecordRef<'a>,
 }
 
-/// Owned top-level record accepted for checkpoint envelopes 2 and 3.
+/// Owned top-level record accepted for the version 4 checkpoint envelope.
 #[derive(Deserialize)]
-struct CdtMcmcCheckpointWireV2 {
+#[serde(deny_unknown_fields)]
+struct CdtMcmcCheckpointWire {
     format_version: u32,
     triangulation: CdtTriangulationCheckpointWireV2,
     accepted: u64,
@@ -204,42 +248,41 @@ struct CdtMcmcCheckpointWireV2 {
     move_stats: MoveStatisticsWire,
     #[serde(default)]
     proposal_stats: ProposalStatisticsWire,
-    steps: Vec<MonteCarloStepWire>,
     measurements: Vec<MeasurementWire>,
-    scalar_trace_rows: Vec<CdtScalarTraceRowWire>,
-    elapsed_time: CheckpointDurationWireV2,
-    acceptance_rng: CheckpointRngWireV2,
-    ergodics: ErgodicsCheckpointWireV2,
+    scalar_trace_rows: Vec<TrajectoryRecord<Vec<u32>>>,
+    elapsed_time: CheckpointDurationRecord,
+    acceptance_rng: CheckpointRngRecord,
+    ergodics: ErgodicsCheckpointRecord,
 }
 
-/// Platform-neutral duration representation frozen into checkpoint format v2.
+/// Platform-neutral duration representation in checkpoint records.
 #[derive(Clone, Copy, Serialize, Deserialize)]
-struct CheckpointDurationWireV2 {
+struct CheckpointDurationRecord {
     secs: u64,
     nanos: u32,
 }
 
-/// Dependency-neutral Xoshiro state representation frozen into checkpoint format v2.
+/// Dependency-neutral Xoshiro state representation in checkpoint records.
 #[derive(Clone, Copy, Serialize, Deserialize)]
-struct CheckpointRngWireV2 {
+struct CheckpointRngRecord {
     state: [u64; 4],
 }
 
 /// Borrowed durable portion of the CDT proposal system.
 #[derive(Serialize)]
-struct ErgodicsCheckpointWireV2Ref<'a> {
+struct ErgodicsCheckpointRecordRef<'a> {
     stats: &'a MoveStatistics,
-    rng: CheckpointRngWireV2,
+    rng: CheckpointRngRecord,
 }
 
 /// Owned durable portion of the CDT proposal system.
 #[derive(Deserialize)]
-struct ErgodicsCheckpointWireV2 {
+struct ErgodicsCheckpointRecord {
     stats: MoveStatisticsWire,
-    rng: CheckpointRngWireV2,
+    rng: CheckpointRngRecord,
 }
 
-/// Current rand-serde shape used only as an adapter to the stable v2 record.
+/// Current rand-serde shape used only as an adapter to the checkpoint record.
 #[derive(Serialize, Deserialize)]
 struct CurrentXoshiroSerde {
     s: [u64; 4],
@@ -250,9 +293,7 @@ impl Serialize for CdtMcmcCheckpoint {
     where
         S: Serializer,
     {
-        self.wire_v2()
-            .map_err(S::Error::custom)?
-            .serialize(serializer)
+        self.wire().map_err(S::Error::custom)?.serialize(serializer)
     }
 }
 
@@ -261,15 +302,14 @@ impl<'de> Deserialize<'de> for CdtMcmcCheckpoint {
     where
         D: Deserializer<'de>,
     {
-        let wire = CdtMcmcCheckpointWireV2::deserialize(deserializer)?;
-        Self::from_wire_v2(wire).map_err(DeError::custom)
+        let wire = CdtMcmcCheckpointWire::deserialize(deserializer)?;
+        Self::from_wire(wire).map_err(DeError::custom)
     }
 }
 
 impl CdtMcmcCheckpoint {
     /// Latest CDT-owned checkpoint envelope version.
     ///
-    /// Explicit biases require version 3; bare ensembles still write version 2.
     pub const FORMAT_VERSION: u32 = CHECKPOINT_FORMAT_VERSION;
 
     /// Serializes this checkpoint as a versioned CDT-owned JSON document.
@@ -282,17 +322,17 @@ impl CdtMcmcCheckpoint {
     ///
     /// Returns [`CdtError::InvalidCheckpointRngState`] for an all-zero RNG stream.
     /// Returns [`CdtError::CheckpointSerializationFailed`] if live geometry or
-    /// RNG state cannot be projected into the v2 representation, or if JSON
+    /// RNG state cannot be projected into the checkpoint record, or if JSON
     /// encoding fails.
     pub fn to_json(&self) -> CdtResult<String> {
-        serde_json::to_string(&self.wire_v2()?).map_err(|error| {
+        serde_json::to_string(&self.wire()?).map_err(|error| {
             checkpoint_serialization_failed(CheckpointOperation::Serialize, error.to_string())
         })
     }
 
     /// Loads and fully validates a versioned CDT-owned JSON checkpoint.
     ///
-    /// Both formats reconstruct checked Level 1–4 geometry, then validate CDT
+    /// Checkpoints reconstruct checked Level 1–4 geometry, then validate CDT
     /// topology, foliation, causality, chain accounting, telemetry, measurements,
     /// traces, action state, elapsed time, and both RNG streams before returning.
     /// Older and unversioned checkpoint JSON is rejected without migration.
@@ -300,7 +340,7 @@ impl CdtMcmcCheckpoint {
     /// # Errors
     ///
     /// Returns [`CdtError::UnsupportedCheckpointVersion`] when the envelope names
-    /// a version outside bare version 2 or biased version 3. Malformed JSON and
+    /// a version other than version 4. Malformed JSON and
     /// missing or invalid version tags return
     /// [`CdtError::CheckpointSerializationFailed`]. Restored-state invariant
     /// failures retain their specific [`CdtError`] variants.
@@ -309,22 +349,20 @@ impl CdtMcmcCheckpoint {
             checkpoint_serialization_failed(CheckpointOperation::Deserialize, error.to_string())
         })?;
         let encountered = checkpoint_format_version(&value)?;
-        if encountered != u64::from(Self::FORMAT_VERSION)
-            && encountered != u64::from(BARE_CHECKPOINT_FORMAT_VERSION)
-        {
+        if encountered != u64::from(Self::FORMAT_VERSION) {
             return Err(CdtError::UnsupportedCheckpointVersion {
                 encountered,
                 supported: Self::FORMAT_VERSION,
             });
         }
-        let wire: CdtMcmcCheckpointWireV2 = serde_json::from_value(value).map_err(|error| {
+        let wire: CdtMcmcCheckpointWire = serde_json::from_value(value).map_err(|error| {
             checkpoint_serialization_failed(CheckpointOperation::Deserialize, error.to_string())
         })?;
-        Self::from_wire_v2(wire)
+        Self::from_wire(wire)
     }
 
     /// Projects this checkpoint into the shared record with version-2 geometry.
-    fn wire_v2(&self) -> CdtResult<CdtMcmcCheckpointWireV2Ref<'_>> {
+    fn wire(&self) -> CdtResult<CdtMcmcCheckpointWireRef<'_>> {
         let accepted = u64::try_from(self.chain.accepted()).map_err(|_| {
             checkpoint_serialization_failed(
                 CheckpointOperation::Serialize,
@@ -338,12 +376,8 @@ impl CdtMcmcCheckpoint {
             )
         })?;
 
-        Ok(CdtMcmcCheckpointWireV2Ref {
-            format_version: if self.action_config.volume_fixing().is_some() {
-                Self::FORMAT_VERSION
-            } else {
-                BARE_CHECKPOINT_FORMAT_VERSION
-            },
+        Ok(CdtMcmcCheckpointWireRef {
+            format_version: Self::FORMAT_VERSION,
             triangulation: self.triangulation().checkpoint_wire_v2()?,
             accepted,
             rejected,
@@ -353,10 +387,9 @@ impl CdtMcmcCheckpoint {
             current_action: self.current_action.get(),
             move_stats: &self.move_stats,
             proposal_stats: &self.proposal_stats,
-            steps: &self.steps,
             measurements: &self.measurements,
             scalar_trace_rows: &self.scalar_trace_rows,
-            elapsed_time: CheckpointDurationWireV2 {
+            elapsed_time: CheckpointDurationRecord {
                 secs: self.elapsed_time.as_secs(),
                 nanos: self.elapsed_time.subsec_nanos(),
             },
@@ -364,7 +397,7 @@ impl CdtMcmcCheckpoint {
                 &self.acceptance_rng,
                 CheckpointRngStream::Acceptance,
             )?,
-            ergodics: ErgodicsCheckpointWireV2Ref {
+            ergodics: ErgodicsCheckpointRecordRef {
                 stats: self.ergodics.stats(),
                 rng: checkpoint_rng_wire(
                     self.ergodics.checkpoint_rng(),
@@ -375,10 +408,8 @@ impl CdtMcmcCheckpoint {
     }
 
     /// Hydrates a supported envelope and its exact version-2 geometry record.
-    fn from_wire_v2(wire: CdtMcmcCheckpointWireV2) -> CdtResult<Self> {
-        if wire.format_version != Self::FORMAT_VERSION
-            && wire.format_version != BARE_CHECKPOINT_FORMAT_VERSION
-        {
+    fn from_wire(wire: CdtMcmcCheckpointWire) -> CdtResult<Self> {
+        if wire.format_version != Self::FORMAT_VERSION {
             return Err(CdtError::UnsupportedCheckpointVersion {
                 encountered: u64::from(wire.format_version),
                 supported: Self::FORMAT_VERSION,
@@ -403,41 +434,31 @@ impl CdtMcmcCheckpoint {
             checkpoint_rng(wire.ergodics.rng, CheckpointRngStream::Proposal)?,
         );
         let action_config: ActionConfig = wire.action_config.try_into()?;
-        if wire.format_version == BARE_CHECKPOINT_FORMAT_VERSION
-            && action_config.volume_fixing().is_some()
-        {
-            return Err(CdtError::UnsupportedCheckpointVersion {
-                encountered: u64::from(wire.format_version),
-                supported: Self::FORMAT_VERSION,
-            });
-        }
+        let config = wire.config.try_into()?;
+        let scalar_trace_rows = restore_trajectory(wire.scalar_trace_rows, &config)?;
+        let steps = scalar_trace_rows
+            .iter()
+            .map(CdtScalarTraceRow::to_step)
+            .collect::<CdtResult<_>>()?;
         let mut checkpoint = Self {
             chain: ChainCheckpoint::new(
                 CdtTriangulation2D::from_checkpoint_wire_v2(wire.triangulation)?,
                 accepted,
                 rejected,
             ),
-            config: wire.config.try_into()?,
+            config,
             action_config,
             current_step,
             current_action,
             move_stats: MoveStatistics::from_wire(&wire.move_stats)?,
             proposal_stats: ProposalStatistics::from_wire(&wire.proposal_stats)?,
-            steps: wire
-                .steps
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<CdtResult<_>>()?,
+            steps,
             measurements: wire
                 .measurements
                 .into_iter()
                 .map(TryInto::try_into)
                 .collect::<CdtResult<_>>()?,
-            scalar_trace_rows: wire
-                .scalar_trace_rows
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<CdtResult<_>>()?,
+            scalar_trace_rows,
             elapsed_time,
             acceptance_rng,
             ergodics,
@@ -454,19 +475,12 @@ impl CdtMcmcCheckpoint {
     }
 
     pub(crate) fn from_parts(parts: CdtMcmcCheckpointParts) -> CdtResult<Self> {
+        let prefix = parts.history.prefix;
         let mut checkpoint = Self::assemble(parts)?;
-        validate_checkpoint_counters(&checkpoint)?;
-        checkpoint.prefix_validated = true;
-        Ok(checkpoint)
-    }
-
-    /// Constructs a checkpoint by validating only telemetry appended to a trusted prefix.
-    pub(crate) fn from_parts_after_validated_prefix(
-        parts: CdtMcmcCheckpointParts,
-        prefix: ValidatedCheckpointPrefix,
-    ) -> CdtResult<Self> {
-        let mut checkpoint = Self::assemble(parts)?;
-        validate_checkpoint_after_prefix(&checkpoint, prefix)?;
+        match prefix {
+            Some(prefix) => validate_checkpoint_after_prefix(&checkpoint, prefix)?,
+            None => validate_checkpoint_counters(&checkpoint)?,
+        }
         checkpoint.prefix_validated = true;
         Ok(checkpoint)
     }
@@ -482,9 +496,9 @@ impl CdtMcmcCheckpoint {
             current_action,
             move_stats: parts.move_stats,
             proposal_stats: parts.proposal_stats,
-            steps: parts.steps,
-            measurements: parts.measurements,
-            scalar_trace_rows: parts.scalar_trace_rows,
+            steps: parts.history.steps,
+            measurements: parts.history.measurements,
+            scalar_trace_rows: parts.history.scalar_trace_rows,
             elapsed_time: parts.elapsed_time,
             acceptance_rng: parts.acceptance_rng,
             ergodics: parts.ergodics,
@@ -493,7 +507,14 @@ impl CdtMcmcCheckpoint {
     }
 
     /// Consumes immutable checkpoint storage, discarding its validation seal.
-    pub(crate) fn into_parts(self) -> CdtMcmcCheckpointParts {
+    pub(crate) fn into_resume_parts(self) -> CdtResult<CdtMcmcCheckpointParts> {
+        let prefix = self.validated_prefix()?;
+        let mut parts = self.into_parts();
+        parts.history.prefix = Some(prefix);
+        Ok(parts)
+    }
+
+    fn into_parts(self) -> CdtMcmcCheckpointParts {
         let (triangulation, accepted, rejected) = self.chain.into_parts();
         CdtMcmcCheckpointParts {
             triangulation,
@@ -505,9 +526,12 @@ impl CdtMcmcCheckpoint {
             current_action: self.current_action.get(),
             move_stats: self.move_stats,
             proposal_stats: self.proposal_stats,
-            steps: self.steps,
-            measurements: self.measurements,
-            scalar_trace_rows: self.scalar_trace_rows,
+            history: CheckpointHistory {
+                steps: self.steps,
+                measurements: self.measurements,
+                scalar_trace_rows: self.scalar_trace_rows,
+                prefix: None,
+            },
             elapsed_time: self.elapsed_time,
             acceptance_rng: self.acceptance_rng,
             ergodics: self.ergodics,
@@ -529,7 +553,7 @@ impl CdtMcmcCheckpoint {
     }
 
     /// Captures the boundary already proven by a full checkpoint validation.
-    pub(crate) fn validated_prefix(&self) -> CdtResult<ValidatedCheckpointPrefix> {
+    fn validated_prefix(&self) -> CdtResult<ValidatedCheckpointPrefix> {
         if !self.prefix_validated {
             validate_checkpoint_counters(self)?;
         }
@@ -929,7 +953,7 @@ fn checkpoint_serialization_failed(operation: CheckpointOperation, detail: Strin
 fn checkpoint_rng_wire(
     rng: &Xoshiro256PlusPlus,
     stream: CheckpointRngStream,
-) -> CdtResult<CheckpointRngWireV2> {
+) -> CdtResult<CheckpointRngRecord> {
     let value = serde_json::to_value(rng).map_err(|error| {
         checkpoint_serialization_failed(CheckpointOperation::Serialize, error.to_string())
     })?;
@@ -942,12 +966,12 @@ fn checkpoint_rng_wire(
             stream,
         });
     }
-    Ok(CheckpointRngWireV2 { state: current.s })
+    Ok(CheckpointRngRecord { state: current.s })
 }
 
 /// Hydrates state words through the current rand implementation's serde adapter.
 fn checkpoint_rng(
-    wire: CheckpointRngWireV2,
+    wire: CheckpointRngRecord,
     stream: CheckpointRngStream,
 ) -> CdtResult<Xoshiro256PlusPlus> {
     if wire.state == [0; 4] {
@@ -965,7 +989,7 @@ fn checkpoint_rng(
 }
 
 /// Parses the normalized seconds/nanoseconds duration representation.
-const fn checkpoint_duration(wire: CheckpointDurationWireV2) -> CdtResult<Duration> {
+const fn checkpoint_duration(wire: CheckpointDurationRecord) -> CdtResult<Duration> {
     if wire.nanos >= 1_000_000_000 {
         return Err(checkpoint_resume_failed(
             CheckpointResumeFailure::InvalidElapsedNanoseconds { nanos: wire.nanos },
@@ -1094,6 +1118,7 @@ pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> Cd
     validate_scalar_trace_rows(
         &checkpoint.config,
         &checkpoint.proposal_stats,
+        &checkpoint.move_stats,
         &checkpoint.steps,
         &checkpoint.scalar_trace_rows,
     )?;
@@ -1102,6 +1127,7 @@ pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> Cd
         &checkpoint.steps,
         &checkpoint.measurements,
         &checkpoint.scalar_trace_rows,
+        None,
         checkpoint.triangulation(),
     )
 }
@@ -1180,9 +1206,9 @@ fn validate_checkpoint_after_prefix(
                 expected: prefix.measurements,
             })
         })?;
-    let scalar_trace_rows = checkpoint
+    let (validated_rows, scalar_trace_rows) = checkpoint
         .scalar_trace_rows
-        .get(prefix.scalar_trace_rows..)
+        .split_at_checked(prefix.scalar_trace_rows)
         .ok_or_else(|| {
             checkpoint_resume_failed(CheckpointResumeFailure::ScalarTraceLengthMismatch {
                 actual: checkpoint.scalar_trace_rows.len(),
@@ -1197,6 +1223,7 @@ fn validate_checkpoint_after_prefix(
         steps,
         measurements,
         scalar_trace_rows,
+        validated_rows.last(),
         checkpoint.triangulation(),
     )
 }
@@ -1513,6 +1540,7 @@ fn validate_checkpoint_scalar_trace_suffix(
         rejected_proposal,
         no_proposal,
     )
+    .map(drop)
 }
 
 /// Sums move counters without allowing invalid serialized telemetry to wrap.
@@ -1643,10 +1671,58 @@ mod tests {
         .expect("one-step run should checkpoint")
     }
 
+    #[test]
+    fn resumed_no_proposal_cannot_change_the_prefix_slab_profile() -> CdtResult<()> {
+        use crate::cdt::metropolis::MonteCarloStepOutcome;
+        use crate::cdt::proposal_policy::CdtMoveFamilyDistribution;
+
+        let sampler = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(0),
+            ActionConfig::default(),
+        )
+        .with_policy(CdtMoveFamilyDistribution::from_weights([
+            0.0, 0.0, 1.0, 0.0,
+        ])?);
+        let mut prefix = sampler.run_to_checkpoint(
+            CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&[3, 4, 5, 4])?,
+        )?;
+        let regular = CdtTriangulation::from_toroidal_cdt(4, 4)?;
+        assert_eq!(
+            prefix.triangulation().simplex_counts()?,
+            regular.simplex_counts()?
+        );
+        assert_ne!(
+            prefix.triangulation().slab_triangle_profile()?,
+            regular.slab_triangle_profile()?
+        );
+
+        let control = sampler.run_to_checkpoint(regular.clone())?;
+        let continued = sampler.resume_steps_to_checkpoint(control, NonZeroU32::MIN)?;
+        assert_matches!(
+            continued.steps[1].outcome(),
+            MonteCarloStepOutcome::NoProposal
+        );
+        CdtMcmcCheckpoint::from_json(&continued.to_json()?)?;
+
+        // Inject a geometry discontinuity at the resume boundary. A step with
+        // no proposal must preserve the last validated slab profile.
+        prefix.chain =
+            ChainCheckpoint::new(regular, prefix.chain.accepted(), prefix.chain.rejected());
+        assert_matches!(
+            sampler
+                .resume_steps_to_checkpoint(prefix, NonZeroU32::MIN)
+                .map(drop),
+            Err(CdtError::CheckpointResumeFailed {
+                failure: CheckpointResumeFailure::InvalidPeriodicSlabTransition { step: 2 }
+            })
+        );
+        Ok(())
+    }
+
     fn one_step_checkpoint_payload() -> Value {
         to_value(
             one_step_checkpoint()
-                .wire_v2()
+                .wire()
                 .expect("wire projection should work"),
         )
         .expect("wire should serialize")
@@ -1725,10 +1801,11 @@ mod tests {
             }
         );
         assert_matches!(
-            checkpoint_field_error("/steps/0/step", json!(0)),
-            CdtError::CheckpointResumeFailed {
-                failure: CheckpointResumeFailure::StepTelemetryStepZero
-            }
+            checkpoint_field_error(
+                "/scalar_trace_rows/0/outcome",
+                json!({"NoProposal":{"action_after":1.0}})
+            ),
+            CdtError::CheckpointSerializationFailed { .. }
         );
     }
 
@@ -1779,7 +1856,8 @@ mod tests {
         let json = checkpoint.to_json().expect("checkpoint should serialize");
         let payload: Value = serde_json::from_str(&json).expect("checkpoint JSON should parse");
 
-        assert_eq!(payload["format_version"], json!(2));
+        assert_eq!(payload["format_version"], json!(4));
+        assert!(payload.get("steps").is_none());
         assert!(payload.get("chain").is_none());
         let geometry = &payload["triangulation"]["geometry"];
         assert_eq!(geometry["triangulation"]["schema_version"], json!(1));
@@ -1791,7 +1869,7 @@ mod tests {
         assert!(payload["ergodics"]["rng"]["state"].is_array());
 
         let restored =
-            CdtMcmcCheckpoint::from_json(&json).expect("version 2 checkpoint should deserialize");
+            CdtMcmcCheckpoint::from_json(&json).expect("version 4 checkpoint should deserialize");
         let restored_payload: Value = serde_json::from_str(
             &restored
                 .to_json()
@@ -1804,9 +1882,9 @@ mod tests {
     #[test]
     fn checkpoint_json_rejects_unknown_version_with_typed_context() {
         let checkpoint = one_step_checkpoint();
-        let mut payload = to_value(checkpoint.wire_v2().expect("wire projection should work"))
+        let mut payload = to_value(checkpoint.wire().expect("wire projection should work"))
             .expect("wire should serialize");
-        payload["format_version"] = json!(4);
+        payload["format_version"] = json!(5);
 
         let Err(error) = CdtMcmcCheckpoint::from_json(&payload.to_string()) else {
             panic!("unsupported checkpoint version should be rejected");
@@ -1814,7 +1892,7 @@ mod tests {
         assert_matches!(
             error,
             CdtError::UnsupportedCheckpointVersion {
-                encountered: 4,
+                encountered: 5,
                 supported: CdtMcmcCheckpoint::FORMAT_VERSION,
             }
         );
@@ -1828,7 +1906,7 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_json_wraps_malformed_v2_body() {
+    fn checkpoint_json_wraps_malformed_body() {
         let mut payload = one_step_checkpoint_payload();
         payload
             .as_object_mut()
@@ -1837,7 +1915,7 @@ mod tests {
 
         let error = checkpoint_json_error(
             &payload.to_string(),
-            "incomplete version 2 body should be rejected",
+            "incomplete version 4 body should be rejected",
         );
 
         assert_checkpoint_deserialization_detail(&error, "missing field `accepted`");
@@ -1846,7 +1924,7 @@ mod tests {
     #[test]
     fn checkpoint_serde_rejects_unknown_version() {
         let mut payload = one_step_checkpoint_payload();
-        payload["format_version"] = json!(4);
+        payload["format_version"] = json!(5);
 
         let Err(error) = serde_json::from_value::<CdtMcmcCheckpoint>(payload) else {
             panic!("Serde entry point should enforce the wire version");
@@ -1855,7 +1933,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("Unsupported MCMC checkpoint format version 4")
+                .contains("Unsupported MCMC checkpoint format version 5")
         );
     }
 
@@ -2027,7 +2105,7 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_v2_preserves_delaunay_check_interval() {
+    fn checkpoint_preserves_delaunay_check_interval() {
         let mut triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("CDT strip should build");
         triangulation.set_delaunay_check_interval(NonZeroUsize::new(8));
@@ -2061,7 +2139,7 @@ mod tests {
     #[test]
     fn checkpoint_json_rejects_unversioned_legacy_payload() {
         let checkpoint = one_step_checkpoint();
-        let mut payload = to_value(checkpoint.wire_v2().expect("wire projection should work"))
+        let mut payload = to_value(checkpoint.wire().expect("wire projection should work"))
             .expect("wire should serialize");
         payload
             .as_object_mut()
@@ -2100,7 +2178,7 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_v2_round_trips_exact_toroidal_realization() {
+    fn checkpoint_round_trips_exact_toroidal_realization() {
         let checkpoint = MetropolisAlgorithm::new(
             MetropolisConfig::new(1.0, 1, 0, 1)
                 .expect("test configuration should validate")

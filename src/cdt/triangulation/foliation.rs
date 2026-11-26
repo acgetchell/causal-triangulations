@@ -18,6 +18,7 @@ use crate::geometry::backends::delaunay::{
 use crate::geometry::traits::{TriangulationQuery, exactly_three};
 use crate::geometry::{DelaunayBackend2D, SpacetimeCoordinate};
 use crate::util::f64_band_to_u32;
+use la_stack::{BigInt, BigRational, Interval, ToPrimitive};
 use serde::{Serialize, Serializer};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::NonZeroU32;
@@ -750,11 +751,11 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// by their y-coordinate into `num_slices` equal bands.
     ///
     /// The y-coordinate range is determined from the actual vertex coordinates.
-    /// Band `t` covers `[y_min + t * band_height, y_min + (t+1) * band_height)`.
-    /// Time labels are written directly to vertex data.
+    /// Bands include their lower endpoint. The last band also includes the maximum.
+    /// Classification uses the exact values of the supplied binary64 coordinates.
+    /// A constant coordinate maps to band zero. Time labels are written to vertex data.
     ///
-    /// This is approximate — useful for testing but not guaranteed to produce
-    /// a valid causal structure.
+    /// Coordinate binning can produce a foliation that fails causal validation.
     ///
     /// # Errors
     ///
@@ -787,32 +788,41 @@ impl CdtTriangulation<DelaunayBackend2D> {
     )]
     pub fn assign_foliation_by_y(&mut self, num_slices: NonZeroU32) -> CdtResult<()> {
         let raw_num_slices = num_slices.get();
-        let y_coords: Vec<(DelaunayVertexHandle, f64)> = self
-            .geometry
-            .vertices()
-            .map(|vh| {
-                let coords = self.geometry.vertex_coordinates(&vh).map_err(|e| {
-                    CdtError::ValidationFailed {
-                        check: CdtValidationCheck::FoliationAssignment,
-                        failure: CdtValidationFailure::VertexCoordinateReadFailed {
-                            vertex: format!("{:?}", vh.vertex_key()),
-                            detail: e.to_string(),
-                        },
+        Self::check_time_slices(self.metadata.topology, raw_num_slices)?;
+        let y_coords: Vec<(DelaunayVertexHandle, f64)> =
+            self.geometry
+                .vertices()
+                .map(|vh| {
+                    let coords = self.geometry.vertex_coordinates(&vh).map_err(|e| {
+                        CdtError::ValidationFailed {
+                            check: CdtValidationCheck::FoliationAssignment,
+                            failure: CdtValidationFailure::VertexCoordinateReadFailed {
+                                vertex: format!("{:?}", vh.vertex_key()),
+                                detail: e.to_string(),
+                            },
+                        }
+                    })?;
+                    if coords.len() < 2 {
+                        return Err(CdtError::ValidationFailed {
+                            check: CdtValidationCheck::FoliationAssignment,
+                            failure: CdtValidationFailure::VertexCoordinateDimension {
+                                vertex: format!("{:?}", vh.vertex_key()),
+                                actual: coords.len(),
+                                expected_minimum: 2,
+                            },
+                        });
                     }
-                })?;
-                if coords.len() < 2 {
-                    return Err(CdtError::ValidationFailed {
-                        check: CdtValidationCheck::FoliationAssignment,
-                        failure: CdtValidationFailure::VertexCoordinateDimension {
-                            vertex: format!("{:?}", vh.vertex_key()),
-                            actual: coords.len(),
-                            expected_minimum: 2,
-                        },
-                    });
-                }
-                Ok((vh, coords[1]))
-            })
-            .collect::<CdtResult<Vec<_>>>()?;
+                    let coordinate = SpacetimeCoordinate::try_from_space_time_slice(coords)
+                        .map_err(|error| CdtError::ValidationFailed {
+                            check: CdtValidationCheck::FoliationAssignment,
+                            failure: CdtValidationFailure::from_spacetime_coordinate_error(
+                                format!("{:?}", vh.vertex_key()),
+                                error,
+                            ),
+                        })?;
+                    Ok((vh, coordinate.time()))
+                })
+                .collect::<CdtResult<Vec<_>>>()?;
 
         let y_min = y_coords
             .iter()
@@ -823,30 +833,15 @@ impl CdtTriangulation<DelaunayBackend2D> {
             .map(|(_, y)| *y)
             .fold(f64::NEG_INFINITY, f64::max);
 
-        let range = y_max - y_min;
-        let band_height = if range.abs() < f64::EPSILON {
-            1.0
-        } else {
-            range / f64::from(raw_num_slices)
-        };
-
-        let mut assignments = Vec::with_capacity(y_coords.len());
-        let mut slice_sizes = vec![0usize; raw_num_slices as usize];
-        for (vh, y) in &y_coords {
-            let t = if range.abs() < f64::EPSILON {
-                0
-            } else {
-                let band_index = ((y - y_min) / band_height).floor();
-                f64_band_to_u32(band_index, raw_num_slices - 1)
-            };
-            assignments.push((vh.vertex_key(), t));
-            slice_sizes[t as usize] += 1;
-        }
-
-        Self::check_time_slices(self.metadata.topology, raw_num_slices)?;
-
-        let foliation =
-            Foliation::from_slice_sizes(slice_sizes, num_slices).map_err(CdtError::from)?;
+        let assignments: Vec<_> = y_coords
+            .into_iter()
+            .map(|(vertex, y)| (vertex.vertex_key(), time_band(y, y_min, y_max, num_slices)))
+            .collect();
+        let foliation = Foliation::from_vertex_labels(
+            num_slices,
+            assignments.len(),
+            assignments.iter().map(|&(_, label)| Some(label)),
+        )?;
 
         let face_keys: Vec<_> = self.geometry.faces().map(|f| f.simplex_key()).collect();
         let previous_simplex_data: Vec<_> = face_keys
@@ -1613,12 +1608,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
             return Ok(());
         }
 
-        let slice_sizes = Self::live_slice_sizes_from_vertex_labels(
-            &self.geometry,
-            self.metadata.time_slices.get(),
-        )?;
-        let foliation = Foliation::from_slice_sizes(slice_sizes, self.metadata.time_slices)
-            .map_err(CdtError::from)?;
+        let foliation =
+            Self::foliation_from_live_labels(&self.geometry, self.metadata.time_slices)?;
 
         self.foliation = Some(foliation);
         self.mark_foliation_synchronized();
@@ -2011,6 +2002,39 @@ const fn slab_triangle_profile_count_overflow(slice: u32, value: u64) -> CdtErro
 }
 
 const OPEN_BOUNDARY_TIME_COORDINATE_EPSILON: f64 = 1e-9;
+
+/// Assigns a finite coordinate to an equal-width band, including the top endpoint.
+fn time_band(y: f64, min: f64, max: f64, slices: NonZeroU32) -> u32 {
+    if y <= min {
+        return 0;
+    }
+    let last = slices.get() - 1;
+    if y >= max {
+        return last;
+    }
+    let enclosure = || {
+        let offset = Interval::try_from_subtraction(y, min)?;
+        let width = Interval::try_from_subtraction(max, min)?;
+        offset
+            .try_div(&width)?
+            .try_mul(&Interval::point(f64::from(slices.get()))?)
+    };
+    if let Ok(bounds) = enclosure() {
+        let lower = f64_band_to_u32(bounds.lower(), last);
+        if lower == f64_band_to_u32(bounds.upper(), last) {
+            return lower;
+        }
+    }
+    // A boundary crossing or exhausted interval range needs the original dyadics.
+    // The caller parsed finite coordinates and the endpoints above bound the quotient.
+    let exact = |coordinate| BigRational::from_float(coordinate).expect("finite coordinate");
+    let start = exact(min);
+    let index = (exact(y) - &start) * BigInt::from(slices.get()) / (exact(max) - start);
+    index
+        .to_integer()
+        .to_u32()
+        .expect("interior band fits in u32")
+}
 
 fn geometry_query_error(context: &str, error: &DelaunayError) -> CdtError {
     let failure = match error {
@@ -2592,6 +2616,30 @@ mod tests {
     }
 
     #[test]
+    fn time_bands_preserve_boundaries_across_coordinate_scales() {
+        let slices = slice_count(4);
+        for width in [f64::from_bits(1), 2.0_f64.powi(-70), 1.0] {
+            for i in 0..=4 {
+                assert_eq!(
+                    time_band(f64::from(i) * width, 0.0, 4.0 * width, slices),
+                    i.min(3)
+                );
+            }
+        }
+        // For these stored floats the exact index is 3 - 1/6646139978924579.
+        // The ordinary binary64 quotient rounds to 3.
+        assert_eq!(time_band(3.0 * 1e-20, 0.0, 4.0 * 1e-20, slices), 2);
+        assert_eq!(time_band(0.0, -f64::MAX, f64::MAX, slices), 2);
+        assert_eq!(
+            time_band(-f64::from_bits(1), -f64::MAX, f64::MAX, slices),
+            1
+        );
+        assert_eq!(time_band(0.5_f64.next_down(), 0.0, 1.0, slices), 1);
+        assert_eq!(time_band(f64::MAX, -f64::MAX, f64::MAX, slices), 3);
+        assert_eq!(time_band(9.0, 9.0, 9.0, slices), 0);
+    }
+
+    #[test]
     fn assign_foliation_by_y_error_paths_preserve_state() {
         let mut tri = CdtTriangulation::from_seeded_points(6, 2, 2, TEST_POINT_SEED)
             .expect("Failed to create triangulation");
@@ -2618,6 +2666,10 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::Foliation(FoliationError::EmptySlice { .. }))
+        );
+        assert_matches!(
+            tri.assign_foliation_by_y(NonZeroU32::MAX),
+            Err(CdtError::Foliation(FoliationError::EmptySlice { slice })) if slice <= tri.vertex_count()
         );
         assert_eq!(tri.time_slices(), initial_time_slices);
         assert_eq!(

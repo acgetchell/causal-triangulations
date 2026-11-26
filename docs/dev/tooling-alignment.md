@@ -19,7 +19,7 @@ and preserves explicit overrides for recovery. The prepared Cargo version identi
 use RRT's checkpoint, candidate, archive and publication checks.
 
 Use [RRT's consumer justfile][rrt-recipes] and [release guide][rrt-releasing] for the shared command conventions.
-Follow [CDT's release guide](../RELEASING.md#verify-registry-publication) for the crates.io dispatch and protected environment approval.
+Follow [CDT's release guide](../RELEASING.md#6-dispatch-and-approve-publishing-to-cratesio) for the crates.io dispatch and protected environment approval.
 CDT accepts signed Cargo and scientific evidence before tagging, stages the benchmark archive on the draft and dispatches the protected crates.io upload
 after GitHub publication. The release tracker retains the identities and approvals at those boundaries.
 

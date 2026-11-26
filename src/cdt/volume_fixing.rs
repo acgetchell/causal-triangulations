@@ -4,6 +4,7 @@
 
 use crate::config::CdtTopology;
 use crate::errors::CdtResult;
+use la_stack::{BigInt, BigRational};
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Serialize};
 use std::num::NonZeroU32;
@@ -121,21 +122,46 @@ impl VolumeFixing {
     /// Evaluates the bias at a total triangle count.
     #[must_use]
     pub fn action(self, triangles: usize) -> f64 {
-        let difference = triangles.to_f64().unwrap_or(f64::MAX) - f64::from(self.target.get());
-        (self.strength * difference) * difference
+        let distance = triangles.abs_diff(self.target.get() as usize) as u128;
+        self.scaled_count(distance * distance)
     }
 
-    /// Computes the exact quadratic difference without subtracting extensive actions.
+    /// Computes the quadratic difference from integer counts and rounds once.
     pub(crate) fn delta(self, before: usize, change: i32) -> f64 {
-        let difference = before.to_f64().unwrap_or(f64::MAX) - f64::from(self.target.get());
-        let change = f64::from(change);
-        (self.strength * change) * 2.0_f64.mul_add(difference, change)
+        let distance = i128::try_from(before).expect("supported usize fits i128")
+            - i128::from(self.target.get());
+        let factor = 2 * distance + i128::from(change);
+        let magnitude = self.scaled_count((i128::from(change) * factor).unsigned_abs());
+        if (change < 0) ^ (factor < 0) {
+            -magnitude
+        } else {
+            magnitude
+        }
     }
 
-    /// Bounds the bias over representable simplex counts before target construction.
+    /// Computes the largest rounded bias over the supported simplex counts.
     pub(crate) fn maximum_action(self) -> f64 {
-        let extent = usize::MAX.to_f64().unwrap_or(f64::MAX) + f64::from(self.target.get());
-        (self.strength * extent) * extent
+        // The quadratic is monotone in absolute distance, including after rounding.
+        let target = self.target.get() as usize;
+        self.action(if target > usize::MAX - target {
+            0
+        } else {
+            usize::MAX
+        })
+    }
+
+    /// Multiplies the dyadic strength by an integer without rounding the count first.
+    fn scaled_count(self, count: u128) -> f64 {
+        let rounded = count.to_f64().expect("u128 fits binary64 range");
+        if count <= 1_u128 << f64::MANTISSA_DIGITS
+            || self.strength == 0.0
+            || rounded.to_u128() == Some(count)
+        {
+            return self.strength * rounded;
+        }
+        (BigRational::from_float(self.strength).expect("finite strength") * BigInt::from(count))
+            .to_f64()
+            .expect("binary rational rounds to binary64")
     }
 
     /// Rejects unsupported topology at configuration and runner boundaries.

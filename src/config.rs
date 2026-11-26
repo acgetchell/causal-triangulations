@@ -176,7 +176,7 @@ enum ValidatedInitialSpatialVerticesData {
     ExplicitProfile(Vec<NonZeroU32>),
 }
 
-/// Validated initial spatial-vertex input for CDT construction.
+/// Borrowed view of the initial spatial-vertex input in a validated configuration.
 ///
 /// This lets callers branch on regular equal-slice data versus an explicit
 /// nonuniform profile without rechecking divisibility, slice-count, or per-slice
@@ -212,6 +212,21 @@ pub enum ValidatedInitialSpatialVertices<'a> {
 }
 
 impl ValidatedCdtConfig {
+    /// Compares labeled slice lengths with the parsed initialization declaration.
+    pub(crate) fn matches_initial_profile(&self, actual: &[u32]) -> bool {
+        if actual.len() != self.timeslices().get() as usize {
+            return false;
+        }
+        match self.initial_spatial_vertices() {
+            ValidatedInitialSpatialVertices::Regular { vertices_per_slice } => {
+                actual.iter().all(|&size| size == vertices_per_slice.get())
+            }
+            ValidatedInitialSpatialVertices::ExplicitProfile(profile) => profile
+                .iter()
+                .map(|size| size.get())
+                .eq(actual.iter().copied()),
+        }
+    }
     /// Validates a raw configuration and stores only the accepted value.
     ///
     /// # Errors
@@ -434,7 +449,7 @@ impl ValidatedCdtConfig {
         }
     }
 
-    /// Returns initial spatial-vertex input with validation proof attached.
+    /// Borrows the initial spatial-vertex input checked by this configuration.
     ///
     /// The returned value is safe to feed directly into CDT constructors because
     /// [`Self::new`] has already checked topology-specific slice constraints.

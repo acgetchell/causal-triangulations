@@ -27,8 +27,8 @@ The equivalent action configuration uses `VolumeFixing::quadratic_triangles(targ
 `ActionConfig::with_volume_fixing(Some(fixing))`. `CdtConfig::volume_fixing` carries the same validated value into CLI-backed runs.
 
 This initial mode supports periodic 1+1 CDT only. The target is positive, even, and at least `6 * timeslices`; strength is finite and nonnegative.
-Unsafe individual or combined arithmetic ranges are rejected before sampling. The mode explicitly identifies triangle volume, rather than vertices
-or an unspecified notion of volume.
+Setup checks that the combined action divided by temperature stays finite over the supported count range. It also checks the sampler’s evaluation order,
+which divides the physical and fixing terms by temperature separately and then adds them.
 
 The target is
 
@@ -39,12 +39,12 @@ Delta S_fix = epsilon * d * (2 * (N2 - target) + d), d = Delta N2
 ```
 
 CDT supplies physical and fixing components to upstream `AdditiveTarget`; the existing MCMC backend owns acceptance and family/site Hastings correction.
-Volume-preserving moves have zero fixing delta. No hard clamp, extra rejection rule, or state-dependent measurement cadence is introduced.
+The quadratic bias and its move delta scale exact integer count expressions and round once to binary64. Volume-preserving moves have zero fixing delta.
+No hard clamp, extra rejection rule, or state-dependent measurement cadence is introduced.
 Measurements, summary JSON, and scalar trace CSV distinguish `physical_action`, `fixing_action`, and the combined `action`. The new CSV component columns
 follow the existing slab-profile columns, preserving earlier column positions.
 
-Biased checkpoints use envelope version 3 so older binaries cannot silently ignore the bias. Bare checkpoints retain version 2, and both are readable.
-Legacy version-2 histories without loop measurements remain resumable but cannot become complete validation artifacts retroactively.
+Version 4 checkpoints preserve bare and volume-fixed runs in one format. Validation-chain export checks the declared start against the recorded trajectory.
 Checkpoints retain the bias configuration and action components. Changing target, strength, or enabled/disabled mode cannot silently resume the same chain.
 JSON float round trips preserve parameter bits. Proposal sites use canonical labeled-coordinate order, preserved by exact snapshots, so incidence-table rebuilds
 retain their random ordinals.
@@ -100,12 +100,14 @@ maximum loop length, loop products, or exact profile/volume indicators. Errors r
 
 Each chain retains its own ACF and integrated-time window, and its complete upstream power-of-two binning hierarchy. Binning reports completed-block
 counts, block-mean variance, and blocked mean errors, excluding incomplete trailing blocks. Selection requires the declared completed-block minimum and
-several consecutive error levels within the declared relative tolerance. The coarsest level alone never proves stabilization. Constant traces may have
-valid zero binning errors while their mixing diagnostics remain unavailable.
+several consecutive error levels within the declared relative tolerance. For consecutive reported errors `a` and `b`, the inclusive test is
+`abs(a - b) <= tolerance * max(abs(a), abs(b))`. The comparison resolves rounding ambiguity using the exact values of the binary64 inputs.
+The coarsest level alone never proves stabilization. Constant traces may have valid zero binning errors while their mixing diagnostics remain unavailable.
 
 Multi-chain reports distinguish raw-mean, rank-normalized bulk, and both tail ESS values, including original/retained counts, relative ESS, and upstream
-regularization. Mean MCSE uses upstream raw-scale mean ESS, independently of bulk/tail ESS. Quantile MCSE retains probability, type-7 quantile,
-interval, and indicator ESS; tied/discrete collapsed intervals remain unavailable. Blocked mean errors remain a separately named uncertainty method.
+regularization. Diagnostic report version 2 records each quantile's indicator ESS alongside its MCSE. A tied quantile can retain a valid indicator ESS
+when its uncertainty interval collapses. A resolved quantile carries its type-7 estimate, interval, and standard error. Mean MCSE uses raw-scale
+mean ESS. The optional timing record groups elapsed seconds with the timed chain and draw counts.
 
 Reports preserve both rank-normalized split location R-hat and folded scale R-hat. The combined maximum is unavailable if either component is unavailable.
 An available combined value above 1.01 yields `not-converged`. Missing required estimators, too few chains, insufficient ESS, excessive required MCSE,
@@ -139,9 +141,9 @@ cadence, exercise fixed and unfixed production fixtures, and compare serialized 
 independence, positive correlation, location separation, scale separation, tied data, and explicit unavailable outcomes. Generic estimator mathematics
 remains tested upstream.
 
-The full four-condition, eight-chain-per-condition benchmark, calibrated conditional goodness-of-fit/TV uncertainty, and final acceptance evidence for
-issues #165 and #166 remain in #238's follow-up PR. This implementation does not claim the exact ensemble gate has passed. See the
-[roadmap](roadmap.md#v020-validated-11-cdt-baseline) and [scientific basis](scientific-basis.md).
+[The exact comparison harness](https://github.com/acgetchell/causal-triangulations/issues/238) owns the four-condition, eight-chain-per-condition
+benchmark and calibrated total-variation and goodness-of-fit calculations. The [release tracker](https://github.com/acgetchell/causal-triangulations/issues/335)
+owns the resulting evidence for #165 and #166. See the [roadmap](roadmap.md#v020-validated-11-cdt-baseline) and [scientific basis](scientific-basis.md).
 
 The geometry adapter uses published Delaunay 0.8.5. Periodic containment, local edits, realization
 validation, and exact snapshot restoration remain delegated through the geometry adapter. Raw TDS Delaunay reports are Euclidean; periodic Level 5

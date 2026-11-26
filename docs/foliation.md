@@ -55,7 +55,9 @@ For `from_cdt_strip()` and `from_toroidal_cdt()`, time labels are assigned direc
 starts with exactly `vertices_per_slice` vertices. The profile constructors instead derive slice counts from the supplied `N(t)` vector, still storing each
 vertex's label as `t`. Uniform slices are therefore a regular initial condition, not a CDT requirement.
 
-`assign_foliation_by_y()` uses band-based bucketing and writes labels through the same CDT-owned label-write path.
+`assign_foliation_by_y()` divides the finite coordinate range into equal-width bands. An interior boundary belongs to the upper band, and the maximum
+coordinate belongs to the last band. The classifier uses outward-rounded `la-stack` intervals and resolves ambiguous boundaries with exact rational
+arithmetic on the original binary64 coordinates. It writes labels through the same CDT-owned label-write path.
 
 ## Delaunay Construction
 

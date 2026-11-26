@@ -33,8 +33,7 @@
 //! # Checkpointing
 //!
 //! Durable simulation continuation uses the versioned, CDT-owned
-//! [`CdtMcmcCheckpoint`] JSON format. Bare ensembles write version 2; explicit
-//! volume bias requires version 3. Both embed Delaunay's exact Level 4
+//! [`CdtMcmcCheckpoint`] JSON format. Version 4 stores each transition once and embeds Delaunay's exact Level 4
 //! geometry snapshot alongside CDT chain accounting, telemetry, elapsed time, and
 //! both RNG streams. Restoration rebuilds transient caches and validates geometry
 //! and CDT invariants before use. Older checkpoint formats are unsupported.
@@ -52,7 +51,7 @@
 //!     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
 //!     let json = checkpoint.to_json()?;
 //!     let restored = CdtMcmcCheckpoint::from_json(&json)?;
-//!     assert_eq!(CdtMcmcCheckpoint::FORMAT_VERSION, 3);
+//!     assert_eq!(CdtMcmcCheckpoint::FORMAT_VERSION, 4);
 //!     assert_eq!(restored.current_step().get(), 1);
 //!     Ok(())
 //! }
@@ -196,9 +195,10 @@ pub use cdt::action::{
 pub use cdt::analysis::{
     AnalysisArtifactOperation, CdtAnalysisError, CdtBinningLevel, CdtChainDependence,
     CdtDiagnosticObservable, CdtDiagnosticPolicy, CdtDiagnosticReport, CdtDiagnosticSource,
-    CdtDiagnosticVerdict, CdtEssSummary, CdtMcseSummary, CdtQuantileDiagnostic, DiagnosticEstimate,
-    DiagnosticPolicyField, QuantileRequirement, VALIDATION_CHAIN_SCHEMA_VERSION, ValidationChain,
-    ValidationChainData, analyze_cdt_chains,
+    CdtDiagnosticTiming, CdtDiagnosticVerdict, CdtEssSummary, CdtMcseSummary,
+    CdtQuantileDiagnostic, CdtQuantileMcseSummary, DiagnosticEstimate, DiagnosticPolicyField,
+    QuantileRequirement, VALIDATION_CHAIN_SCHEMA_VERSION, ValidationChain, ValidationChainData,
+    analyze_cdt_chains,
 };
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
 pub use cdt::foliation::{
@@ -1084,28 +1084,29 @@ impl<'a> StagedOutput<'a> {
 
     /// Moves a previous regular output aside for failure-atomic replacement.
     fn back_up_existing(&mut self) -> CdtResult<()> {
-        if !self.final_path.exists() {
-            return Ok(());
-        }
-        if self.backup_path.exists() {
-            return Err(output_write_failed(
-                self.final_path,
-                self.format,
-                OutputWriteStage::BackupExisting,
-                io::Error::new(
-                    ErrorKind::AlreadyExists,
-                    format!("backup path {} already exists", self.backup_path.display()),
-                ),
-            ));
-        }
-        fs::rename(self.final_path, &self.backup_path).map_err(|error| {
+        let backup_error = |error| {
             output_write_failed(
                 self.final_path,
                 self.format,
                 OutputWriteStage::BackupExisting,
                 error,
             )
-        })?;
+        };
+        let entry_exists = |path: &Path| match fs::symlink_metadata(path) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(backup_error(error)),
+        };
+        if !entry_exists(self.final_path)? {
+            return Ok(());
+        }
+        if entry_exists(&self.backup_path)? {
+            return Err(backup_error(io::Error::new(
+                ErrorKind::AlreadyExists,
+                format!("backup path {} already exists", self.backup_path.display()),
+            )));
+        }
+        fs::rename(self.final_path, &self.backup_path).map_err(backup_error)?;
         self.backup_created = true;
         Ok(())
     }
@@ -1285,6 +1286,8 @@ mod tests {
     use serde_json::{Value, from_str, to_string};
     use std::assert_matches;
     use std::collections::HashSet;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use std::sync::{Arc, Barrier};
     use std::thread;
 
@@ -1694,6 +1697,30 @@ mod tests {
         remove_output_lock(&csv);
         fs::remove_file(&csv).expect("remove restored output");
         fs::remove_dir(&directory).expect("remove fixture directory");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_backup_preserves_a_dangling_symlink() {
+        let directory = temp_output_path("dangling-backup");
+        fs::create_dir(&directory).expect("fixture directory");
+        let csv = directory.join("trace.csv");
+        fs::write(&csv, "original").expect("original output");
+        let mut output = StagedOutput::new(&csv, OutputFormat::Csv);
+        let missing = directory.join("missing");
+        symlink(&missing, &output.backup_path).expect("dangling symlink");
+        assert_matches!(
+            output.back_up_existing(),
+            Err(CdtError::OutputWriteFailed {
+                stage: OutputWriteStage::BackupExisting,
+                ..
+            })
+        );
+        assert_eq!(fs::read_to_string(&csv).unwrap(), "original");
+        assert_eq!(fs::read_link(&output.backup_path).unwrap(), missing);
+        fs::remove_file(&output.backup_path).unwrap();
+        fs::remove_file(csv).unwrap();
+        fs::remove_dir(directory).unwrap();
     }
 
     #[test]

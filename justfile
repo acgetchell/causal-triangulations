@@ -468,7 +468,7 @@ release-draft tag:
     state={{ _final }}; digest=$(sha256sum < "$state/selection.json"); {{ _release_tools }} release assets retrieve tooling/draft-receipt.toml --tag "$1" --commit "{{ _commit }}" --expected-native-sha256 "${digest%% *}" --output "$state/draft"
     @printf '%s\n' {{ _final }}/draft/target.json
 
-# Freeze the original Step 1 acquisition and signed native evidence for the clean release commit.
+# Freeze the original benchmark acquisition and signed native evidence for the clean release commit.
 release-evidence: (_release-candidate "select")
 
 # Revalidate the original benchmark and Cargo evidence without sampling or building.
@@ -491,7 +491,7 @@ _release-candidate mode:
         --publication-receipt "$owner/publication.json" --publication-sha256 "$(cat "$owner/publication.sha256")" \
         --native-output "$state/selection.json" --output "$output" --format summary ${args[@]+"${args[@]}"}
 
-# Check the release PR's clean commit against Step 1 evidence before merge.
+# Check the release PR's clean commit against the retained benchmark evidence before merge.
 release-preflight commit="":
     owner={{ _owner }}; {{ _release_tools }} release evidence candidate-preflight --checkout "$PWD" --commit "${1:-{{ _commit }}}" --policy "$owner/policy.json" --payload "$owner/run.json" --manifest "$owner/evidence.json" --acquisition-sha256 "$(cat "$owner/acquisition.sha256")" --publication-receipt "$owner/publication.json" --publication-sha256 "$(cat "$owner/publication.sha256")"
 

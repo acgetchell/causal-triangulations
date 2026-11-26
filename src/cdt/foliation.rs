@@ -603,33 +603,6 @@ impl Foliation {
         slice_sizes: Vec<usize>,
         num_slices: NonZeroU32,
     ) -> Result<Self, FoliationError> {
-        Self::from_nonzero_slice_sizes(slice_sizes, num_slices)
-    }
-
-    /// Parses raw serialized slice counts before rebuilding validated foliation state.
-    ///
-    /// Public constructors require [`NonZeroU32`], but checkpoint payloads still
-    /// carry raw integers. This helper keeps serde restore on the same
-    /// validation path as normal construction without exposing a raw-count API.
-    fn from_raw_slice_sizes(
-        slice_sizes: Vec<usize>,
-        num_slices: u32,
-    ) -> Result<Self, FoliationError> {
-        let Some(num_slices) = NonZeroU32::new(num_slices) else {
-            return Err(FoliationError::EmptyFoliation);
-        };
-        Self::from_nonzero_slice_sizes(slice_sizes, num_slices)
-    }
-
-    /// Builds foliation bookkeeping after the slice-count nonzero proof exists.
-    ///
-    /// The remaining checks protect the public [`Self::from_slice_sizes`]
-    /// contract: the number of per-slice counts must match `num_slices`, and no
-    /// slice may be empty.
-    fn from_nonzero_slice_sizes(
-        slice_sizes: Vec<usize>,
-        num_slices: NonZeroU32,
-    ) -> Result<Self, FoliationError> {
         if slice_sizes.is_empty() {
             return Err(FoliationError::EmptyFoliation);
         }
@@ -652,6 +625,52 @@ impl Foliation {
             num_slices,
             labeled_vertices,
         })
+    }
+
+    /// Parses raw serialized slice counts before rebuilding validated foliation state.
+    ///
+    /// Public constructors require [`NonZeroU32`], but checkpoint payloads still
+    /// carry raw integers. This helper keeps serde restore on the same
+    /// validation path as normal construction without exposing a raw-count API.
+    fn from_raw_slice_sizes(
+        slice_sizes: Vec<usize>,
+        num_slices: u32,
+    ) -> Result<Self, FoliationError> {
+        let Some(num_slices) = NonZeroU32::new(num_slices) else {
+            return Err(FoliationError::EmptyFoliation);
+        };
+        Self::from_slice_sizes(slice_sizes, num_slices)
+    }
+
+    /// Counts live vertex labels while bounding the allocation by the available vertices.
+    pub(crate) fn from_vertex_labels(
+        num_slices: NonZeroU32,
+        vertices: usize,
+        labels: impl Iterator<Item = Option<u32>>,
+    ) -> Result<Self, FoliationError> {
+        let requested = num_slices.get() as usize;
+        // With V vertices, an empty band must occur in the first V + 1 bands
+        // whenever more bands were requested. Keep its index for the diagnostic.
+        let mut counts = vec![0; requested.min(vertices.saturating_add(1))];
+        for (vertex, label) in labels.enumerate() {
+            let label = label.ok_or(FoliationError::MissingVertexLabel { vertex })?;
+            if label >= num_slices.get() {
+                return Err(FoliationError::OutOfRangeVertexLabel {
+                    vertex,
+                    label,
+                    expected_range_end: requested,
+                });
+            }
+            if let Some(count) = counts.get_mut(label as usize) {
+                *count += 1;
+            }
+        }
+        if counts.len() < requested
+            && let Some(slice) = counts.iter().position(|&size| size == 0)
+        {
+            return Err(FoliationError::EmptySlice { slice });
+        }
+        Self::from_slice_sizes(counts, num_slices)
     }
 
     /// Returns the number of vertices in each time slice.

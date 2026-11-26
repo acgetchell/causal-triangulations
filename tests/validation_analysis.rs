@@ -8,7 +8,7 @@ use causal_triangulations::prelude::simulation::{
     MetropolisAlgorithm, MetropolisConfig, MoveType, SimulationResultsBackend,
 };
 use causal_triangulations::{
-    AnalysisArtifactOperation, CdtAnalysisError, CdtConfig, CdtError, CdtTopology,
+    AnalysisArtifactOperation, CdtAnalysisError, CdtConfig, CdtError, CdtResult, CdtTopology,
     CheckpointResumeFailure, DiagnosticPolicyField, MeasurementCountField, SpatialLoopError,
     TriangulationQuery, VALIDATION_CHAIN_SCHEMA_VERSION, ValidationChainData, run_simulation,
 };
@@ -687,13 +687,16 @@ fn fixed_checkpoint_restores_exact_trajectory() {
         .expect("prefix run");
     let mut downgraded: Value =
         serde_json::from_str(&prefix.to_json().expect("complete checkpoint")).expect("valid JSON");
-    assert_eq!(downgraded["format_version"], 3);
+    assert_eq!(
+        downgraded["format_version"],
+        CdtMcmcCheckpoint::FORMAT_VERSION
+    );
     downgraded["format_version"] = json!(2);
     assert_matches!(
         CdtMcmcCheckpoint::from_json(&downgraded.to_string()).map(drop),
         Err(CdtError::UnsupportedCheckpointVersion {
             encountered: 2,
-            supported: 3
+            supported: CdtMcmcCheckpoint::FORMAT_VERSION
         })
     );
     let restored = CdtMcmcCheckpoint::from_json(&prefix.to_json().expect("encode prefix"))
@@ -751,6 +754,74 @@ fn fixed_checkpoint_restores_exact_trajectory() {
             measurement.triangles().get()
         );
     }
+}
+
+#[test]
+fn checkpoint_continuation_preserves_per_chain_and_multi_chain_diagnostics() -> CdtResult<()> {
+    let mut uninterrupted = Vec::new();
+    let mut resumed = Vec::new();
+    for seed in [41, 72] {
+        let configuration = CdtConfig {
+            topology: CdtTopology::Toroidal,
+            spatial_vertex_profile: Some(vec![3, 5, 4, 4]),
+            simulate: true,
+            steps: 32,
+            seed: Some(seed),
+            thermalization_steps: 4,
+            measurement_frequency: 2,
+            volume_fixing: fixed_action().volume_fixing(),
+            ..CdtConfig::new(16, 4)
+        }
+        .into_validated()?;
+        let state = CdtTriangulation::from_toroidal_cdt_spatial_vertex_profile(&[3, 5, 4, 4])?;
+        let chunk = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 16, 4, 2)?.with_seed(seed),
+            fixed_action(),
+        );
+        let full = MetropolisAlgorithm::new(
+            MetropolisConfig::new(1.0, 32, 4, 2)?.with_seed(seed),
+            fixed_action(),
+        )
+        .run(state.clone())?;
+        let prefix = chunk.run_to_checkpoint(state)?;
+        let continued = chunk
+            .resume_to_checkpoint(CdtMcmcCheckpoint::from_json(&prefix.to_json()?)?)?
+            .into_results()?;
+        let id = seed.to_string();
+        uninterrupted.push(ValidationChain::from_results(
+            "blocks",
+            &id,
+            &configuration,
+            &full,
+        )?);
+        let chain = ValidationChain::from_results("blocks", &id, &configuration, &continued)?;
+        let mut bytes = Vec::new();
+        chain.write_json(&mut bytes)?;
+        resumed.push(ValidationChain::read_json(bytes.as_slice())?);
+    }
+    for observable in [
+        CdtDiagnosticObservable::Triangles,
+        CdtDiagnosticObservable::LoopLength { slice: 0 },
+    ] {
+        let full = analyze_cdt_chains(&uninterrupted, observable.clone(), &policy(), None)?;
+        let continued = analyze_cdt_chains(&resumed, observable, &policy(), None)?;
+        for actual in &continued.dependence {
+            let levels = actual
+                .binning
+                .value()
+                .expect("ordered observations support binning");
+            assert!(
+                levels
+                    .iter()
+                    .any(|level| level.blocked_mean_error.is_some())
+            );
+        }
+        assert_eq!(
+            serde_json::to_value(&continued).expect("resumed report"),
+            serde_json::to_value(&full).expect("uninterrupted report")
+        );
+    }
+    Ok(())
 }
 
 #[test]
@@ -848,6 +919,30 @@ fn review_regression_restore_rejects_forged_loops_through_unchanged_volume_spans
 }
 
 #[test]
+fn validation_chain_distinguishes_open_results_from_detached_metadata() -> CdtResult<()> {
+    let open = CdtConfig {
+        topology: CdtTopology::OpenBoundary,
+        seed: Some(7),
+        simulate: false,
+        ..CdtConfig::new(16, 4)
+    }
+    .into_validated()?;
+    let results = run_simulation(&open)?;
+    assert_matches!(
+        ValidationChain::from_results("open-run", "open", &open, &results),
+        Err(CdtError::Analysis(CdtAnalysisError::UnsupportedTopology))
+    );
+    let toroidal = CdtConfig {
+        topology: CdtTopology::Toroidal,
+        ..open.config().clone()
+    }
+    .into_validated()?;
+    assert_matches!(ValidationChain::from_results("open-run", "detached", &toroidal, &results),
+        Err(CdtError::Analysis(CdtAnalysisError::IncompatibleCondition { chain })) if chain == "detached");
+    Ok(())
+}
+
+#[test]
 fn released_shape_run_exports_complete_reproducible_chain_json() {
     let config = CdtConfig {
         topology: CdtTopology::Toroidal,
@@ -865,6 +960,21 @@ fn released_shape_run_exports_complete_reproducible_chain_json() {
     let results = run_simulation(&config).expect("volume-fixed run");
     let chain = ValidationChain::from_results("fixture-run", "nonuniform-72", &config, &results)
         .expect("chain metadata and measurements");
+    for start in [None, Some(vec![4, 4, 4, 4]), Some(vec![4, 4, 5, 3])] {
+        let mut declared = config.config().clone();
+        declared.spatial_vertex_profile = start;
+        assert_matches!(
+            ValidationChain::from_results(
+                "fixture-run",
+                "wrong-start",
+                &declared.into_validated().expect("valid declaration"),
+                &results
+            ),
+            Err(CdtError::Analysis(
+                CdtAnalysisError::IncompatibleCondition { .. }
+            ))
+        );
+    }
     let mut detached = config.config().clone();
     detached.coupling_0 = 1.0;
     assert_matches!(
@@ -949,6 +1059,25 @@ fn independent_chain_diagnostics_preserve_upstream_identity_counts_and_units() {
             .is_some_and(|&value| value < 1.01)
     );
     assert_eq!(report.verdict, CdtDiagnosticVerdict::SufficientInformation);
+    for quantile in &report.quantiles {
+        let expected = EssEstimate::estimate(&slices, EssEstimator::Quantile(quantile.probability))
+            .expect("quantile ESS");
+        assert_relative_eq!(
+            quantile
+                .indicator_ess
+                .value()
+                .expect("reported indicator ESS")
+                .effective_samples,
+            expected.value()
+        );
+        let interval = quantile
+            .mcse
+            .value()
+            .expect("resolved iid quantile interval");
+        assert!(
+            interval.interval[0] <= interval.quantile && interval.quantile <= interval.interval[1]
+        );
+    }
     assert!(report.mean_ess_per_second.value().is_none());
     let mut json = Vec::new();
     report
@@ -961,6 +1090,10 @@ fn independent_chain_diagnostics_preserve_upstream_identity_counts_and_units() {
     );
     assert_eq!(value["mean_ess"]["status"], "available");
     assert_eq!(value["mean_ess_per_second"]["status"], "unavailable");
+    assert_eq!(value["schema_version"], 2);
+    let mut unsupported = value;
+    unsupported["schema_version"] = json!(1);
+    serde_json::from_value::<CdtDiagnosticReport>(unsupported).expect_err("retired report schema");
 }
 
 #[test]
@@ -998,6 +1131,32 @@ fn correlated_chains_have_lower_information_and_larger_mean_error() {
         None,
     )
     .expect("AR diagnostics");
+    // For a block of m draws, variance inflation is 1 + 2 sum((1-k/m) rho^k).
+    // Pool eight independent chains of 256 complete blocks. A 15% band covers
+    // finite-block sampling variation and the AR fixture's integer rounding.
+    for (report, rho) in [(&iid, 0.0_f64), (&ar, 0.8_f64)] {
+        let weighted_lags = (1..16)
+            .map(|k| (1.0 - f64::from(k) / 16.0) * rho.powi(k))
+            .sum::<f64>();
+        let expected = weighted_lags.mul_add(2.0, 1.0);
+        let observed = report
+            .dependence
+            .iter()
+            .map(|chain| {
+                let levels = chain.binning.value().expect("complete block hierarchy");
+                let variance = |size| {
+                    levels
+                        .iter()
+                        .find(|level| level.block_size == size)
+                        .and_then(|level| level.block_mean_variance)
+                        .expect("completed block variance")
+                };
+                16.0 * variance(16) / variance(1)
+            })
+            .sum::<f64>()
+            / 8.0;
+        assert_relative_eq!(observed, expected, max_relative = 0.15);
+    }
     // AR(1) phi=.8 has tau=(1+phi)/(1-phi)=9. Quantization is tiny relative to spread.
     let times: Vec<_> = ar
         .dependence
@@ -1102,6 +1261,10 @@ fn constant_short_and_discrete_traces_preserve_unavailable_reasons() {
     assert_matches!(
         report.quantiles[0].mcse,
         DiagnosticEstimate::Unavailable { .. }
+    );
+    assert!(
+        report.quantiles[0].indicator_ess.value().is_some(),
+        "tied quantile retains usable indicator ESS"
     );
     assert_ne!(report.verdict, CdtDiagnosticVerdict::SufficientInformation);
 }
@@ -1608,7 +1771,6 @@ fn volume_fixing_runner_and_checkpoint_restore_enforce_ensemble_boundaries() {
         .expect("bare open chains remain supported");
     let mut encoded: Value =
         serde_json::from_str(&bare.to_json().expect("checkpoint")).expect("transport");
-    encoded["format_version"] = json!(3);
     encoded["action_config"]["volume_fixing"] =
         serde_json::to_value(fixing).expect("bias transport");
     assert_matches!(

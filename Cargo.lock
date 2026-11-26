@@ -241,6 +241,7 @@ dependencies = [
  "dhat",
  "dirs",
  "env_logger",
+ "la-stack",
  "log",
  "markov-chain-monte-carlo",
  "num-traits",

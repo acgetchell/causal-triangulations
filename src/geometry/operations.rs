@@ -8,6 +8,7 @@
 use super::traits::TriangulationQuery;
 use std::collections::{HashMap, HashSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
+use std::ops::ControlFlow;
 
 /// Produces comparable endpoint hashes so unordered keys can avoid requiring [`Ord`].
 fn stable_hash<T: Hash>(value: &T) -> u64 {
@@ -88,19 +89,15 @@ where
     B: TriangulationQuery + ?Sized,
     B::VertexHandle: Clone + Eq + Hash,
 {
-    boundary_facets_with_policy(tri, QueryFailurePolicy::BestEffort).unwrap_or_default()
+    let Ok(facets) = boundary_facets_with_policy(tri, |_| ControlFlow::<!>::Continue(()));
+    facets
 }
 
-#[derive(Clone, Copy)]
-enum QueryFailurePolicy {
-    BestEffort,
-    Propagate,
-}
-
-fn boundary_facets_with_policy<B>(
+/// Counts facets while the caller chooses which query errors terminate traversal.
+fn boundary_facets_with_policy<B, E>(
     tri: &B,
-    policy: QueryFailurePolicy,
-) -> Result<Vec<Vec<B::VertexHandle>>, B::Error>
+    on_error: impl Fn(B::Error) -> ControlFlow<E>,
+) -> Result<Vec<Vec<B::VertexHandle>>, E>
 where
     B: TriangulationQuery + ?Sized,
     B::VertexHandle: Clone + Eq + Hash,
@@ -112,9 +109,9 @@ where
     for face in tri.faces() {
         let vertices = match tri.face_vertices(&face) {
             Ok(vertices) => vertices,
-            Err(error) => match policy {
-                QueryFailurePolicy::BestEffort => continue,
-                QueryFailurePolicy::Propagate => return Err(error),
+            Err(error) => match on_error(error) {
+                ControlFlow::Continue(()) => continue,
+                ControlFlow::Break(error) => return Err(error),
             },
         };
         let vertices: Vec<_> = vertices.collect();
@@ -219,7 +216,7 @@ pub trait TriangulationOps: TriangulationQuery {
         Self::VertexHandle: Clone + Eq + Hash,
     {
         let mut vertices = HashSet::new();
-        for facet in boundary_facets_with_policy(self, QueryFailurePolicy::Propagate)? {
+        for facet in boundary_facets_with_policy(self, ControlFlow::Break)? {
             vertices.extend(facet);
         }
         Ok(vertices.into_iter().collect())
@@ -302,7 +299,7 @@ pub trait TriangulationOps: TriangulationQuery {
         Self::VertexHandle: Clone + Eq + Hash,
         Self::EdgeHandle: Clone + Eq + Hash,
     {
-        let facets = boundary_facets_with_policy(self, QueryFailurePolicy::Propagate)?;
+        let facets = boundary_facets_with_policy(self, ControlFlow::Break)?;
         let mut by_vertices = HashMap::new();
         for edge in self.edges() {
             let (a, b) = self.edge_endpoints(&edge)?;

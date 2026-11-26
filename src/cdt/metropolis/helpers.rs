@@ -8,6 +8,7 @@ use crate::cdt::results::Measurement;
 use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::config::validate_schedule;
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting, ExpectedConstraint, ObservedValue};
+use crate::util::within_scaled_tolerance;
 use std::num::NonZeroU32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,7 +156,10 @@ pub fn expected_measurement_count(
     thermalization_steps: u32,
     measurement_frequency: NonZeroU32,
 ) -> Option<usize> {
-    let first = first_measurement_step(thermalization_steps, measurement_frequency)?;
+    let Some(first) = first_measurement_step(thermalization_steps, measurement_frequency) else {
+        // The next cadence boundary lies beyond every representable step.
+        return Some(0);
+    };
     if first > current_step {
         return Some(0);
     }
@@ -231,11 +235,12 @@ pub fn proposed_delta_action(
 
 /// Compares action values with a scale-aware tolerance for checkpoint validation.
 pub fn actions_match(left: f64, right: f64) -> bool {
-    if !(left.is_finite() && right.is_finite()) {
-        return false;
-    }
-    let scale = left.abs().max(right.abs()).max(1.0);
-    (left - right).abs() <= f64::EPSILON * scale * 8.0
+    within_scaled_tolerance(
+        left,
+        right,
+        8.0 * f64::EPSILON,
+        left.abs().max(right.abs()).max(1.0),
+    )
 }
 
 /// Checks an action delta without subtracting two extensive action values.
@@ -316,6 +321,23 @@ mod tests {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn fixing_delta_keeps_integer_counts_above_binary64_precision() {
+        let fixing = VolumeFixing::quadratic_triangles(2, 1.0).unwrap();
+        let before = (1_usize << 53) + 1;
+        let distance = i128::try_from(before).unwrap() - 2;
+        for change in [-2, 0, 2] {
+            let expected = (distance + i128::from(change)).pow(2) - distance.pow(2);
+            assert_eq!(
+                fixing.delta(before, change).to_bits(),
+                <f64 as num_traits::NumCast>::from(expected)
+                    .unwrap()
+                    .to_bits()
+            );
+        }
+    }
+
     fn frequency(value: u32) -> NonZeroU32 {
         NonZeroU32::new(value).expect("test measurement frequency should be nonzero")
     }
@@ -360,6 +382,11 @@ mod tests {
         assert_eq!(expected_measurement_count(1, 2, frequency(2)), Some(0));
         assert_eq!(expected_measurement_count(2, 2, frequency(2)), Some(1));
         assert_eq!(expected_measurement_count(4, 2, frequency(2)), Some(2));
+        assert_eq!(
+            expected_measurement_count(u32::MAX, u32::MAX, frequency(2)),
+            Some(0)
+        );
+        assert_eq!(expected_measurement_step(0, u32::MAX, frequency(2)), None);
     }
 
     #[test]

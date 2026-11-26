@@ -738,6 +738,14 @@ pub enum CdtValidationFailure {
         /// Lower-level face-vertex lookup diagnostic.
         detail: String,
     },
+    /// Face adjacency could not be resolved through the geometry backend.
+    #[error("failed to resolve neighbors for face {face}: {detail}")]
+    FaceNeighborsUnavailable {
+        /// Face whose adjacency was requested.
+        face: String,
+        /// Lower-level adjacency lookup diagnostic.
+        detail: String,
+    },
     /// A face had the wrong number of vertices for a CDT triangle.
     #[error("face {face} has {actual} vertices, expected {expected}")]
     FaceVertexCount {
@@ -1380,6 +1388,21 @@ pub enum CheckpointResumeFailure {
         /// Seed from simulation configuration.
         expected: Option<u64>,
     },
+    /// The first trajectory row must establish a slab profile for subsequent rows.
+    #[error("first trajectory row is missing its slab profile")]
+    MissingFirstSlabProfile,
+    /// The recorded slab changes cannot come from the accepted periodic move.
+    #[error("step {step} slab profile change disagrees with its periodic move")]
+    InvalidPeriodicSlabTransition {
+        /// Step whose slice changes cannot be reconstructed.
+        step: u32,
+    },
+    /// Initial-state evidence can occur only on the first trajectory row.
+    #[error("step {step} repeats the initial slab profile")]
+    UnexpectedInitialProfile {
+        /// Step carrying misplaced pre-run evidence.
+        step: u32,
+    },
     /// Scalar trace slab-triangle profile exceeds the stored triangle count.
     #[error(
         "step {step} scalar trace slab-triangle profile total {profile_total} exceeds triangle count {triangles}"
@@ -1429,6 +1452,20 @@ pub enum CheckpointResumeFailure {
         step: u32,
         /// Scalar trace field containing the invalid value.
         field: ScalarTraceField,
+    },
+    /// Scalar trace rows attribute a different number of attempts or acceptances to a move family.
+    #[error(
+        "scalar trace move-family {move_type:?} {counter} count mismatch: got {actual}, expected {expected}"
+    )]
+    ScalarTraceMoveCountMismatch {
+        /// Move family with inconsistent telemetry.
+        move_type: MoveType,
+        /// Attempted or accepted moves.
+        counter: CheckpointMoveCounter,
+        /// Count reconstructed from the canonical trajectory.
+        actual: u64,
+        /// Count in the stored move statistics.
+        expected: u64,
     },
     /// Scalar trace accepted outcome count disagrees with proposal telemetry.
     #[error("scalar trace accepted count mismatch: got {actual}, expected {expected}")]
@@ -1824,6 +1861,7 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
             | CdtError::SlabTriangleProfileTotalOverflow
             | CdtError::SlabTriangleCountOverflow { .. }
             | CdtError::InvalidSimulationConfiguration { .. }
+            | CdtError::ProposalSourceMismatch { .. }
             | CdtError::ProposalPolicyFailed { .. }
             | CdtError::MetropolisProposalPolicyFailed { .. }
             | CdtError::ProposalRatioFailed { .. }
@@ -2087,6 +2125,12 @@ pub enum CdtError {
         step: u32,
         /// Typed policy evaluation or normalization failure.
         source: CdtMoveFamilyPolicyError,
+    },
+    /// A proposal was applied to a different owner or revision.
+    #[error("{move_type:?} proposal belongs to a different triangulation or revision")]
+    ProposalSourceMismatch {
+        /// Planned move family.
+        move_type: MoveType,
     },
     /// A standalone planned proposal carried invalid family/site ratio components.
     #[error("CDT proposal ratio failed for {move_type:?}: {source}")]
@@ -2846,6 +2890,13 @@ mod tests {
                     detail: "backend reported invalid simplex key".to_string(),
                 },
                 "failed to resolve vertices for face FaceKey(3v1): backend reported invalid simplex key",
+            ),
+            (
+                CdtValidationFailure::FaceNeighborsUnavailable {
+                    face: "FaceKey(3v1)".to_string(),
+                    detail: "invalid adjacency".to_string(),
+                },
+                "failed to resolve neighbors for face FaceKey(3v1): invalid adjacency",
             ),
             (
                 CdtValidationFailure::FaceVertexCount {
