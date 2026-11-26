@@ -48,7 +48,8 @@ def test_registry_approval_contract() -> None:
     assert "docker run" in recheck["run"]
     assert "--env GH_TOKEN" in recheck["run"]
     assert "ACTIONS_ID_TOKEN" not in recheck["run"]
-    assert auth["uses"] == "rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9"
+    allowed = json.loads((ROOT / "tooling/selected-actions.json").read_bytes())["patterns_allowed"]
+    assert [ref for ref in allowed if ref.startswith("rust-lang/crates-io-auth-action@")] == [auth["uses"]]
     assert upload["env"] == {"CARGO_REGISTRY_TOKEN": "${{ steps.auth.outputs.token }}"}
     assert upload["run"].split()[-8:] == ["cargo", "publish", "--locked", "--no-verify", "--package", "causal-triangulations", "--registry", "crates-io"]
     assert "--env CARGO_REGISTRY_TOKEN" in upload["run"]
@@ -504,8 +505,15 @@ def test_policy_names_match_workflow_coverage() -> None:
     """Require the actual CI jobs, named steps, runner labels and checkout-free signer."""
     ci = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))["jobs"]
     matrix = ci["build"]["strategy"]["matrix"]["os"]
-    assert {name for name, _ in POLICY.validation.required_steps} == {"repository-tooling", "package", *(f"build ({os})" for os in matrix)}
-    for name, required in POLICY.validation.required_steps:
+    assert ci["build"]["runs-on"] == "${{ matrix.os }}"
+    runners = {name: (ci[name]["runs-on"],) for name in ("repository-tooling", "package")}
+    runners.update({f"build ({runner})": (runner,) for runner in matrix})
+    assert dict(POLICY.validation.runner_labels) == runners
+    assert {name for name, _ in POLICY.validation.required_steps} == set(runners)
+    assert POLICY.signing_job is not None
+    signer, _ = POLICY.signing_job
+    assert signer == "sign-package"
+    for name, required in (*POLICY.validation.required_steps, POLICY.signing_job):
         job = ci["build"] if name.startswith("build (") else ci[name]
         assert set(required) <= {step.get("name") for step in job["steps"]}
     assert ci["package"]["needs"] == "build"

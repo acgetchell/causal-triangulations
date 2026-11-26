@@ -442,6 +442,10 @@ the adjacent human-readable version comment.
 `just actions-allowlist-check` uses the shared structured parser to enforce exact Action and nested workflow identities in workflows.
 Zizmor owns full-SHA pin validation. Semgrep owns the readable version-comment policy.
 
+The crates.io publisher obtains credentials through `rust-lang/crates-io-auth-action`. When Dependabot proposes a new pin, review the upstream
+release and the changes since the approved commit. Update the exact SHA in `tooling/selected-actions.json` alongside the pin and version comment in
+`.github/workflows/publish-crates.yml`, then run `just actions-allowlist-check`. A maintainer reviews that policy change before merge.
+
 `just actions-check` checks coupled SHA pins and version comments offline in the workflows and setup composite. Maintainers own routine setup-uv and
 CodeQL updates. For a new CodeQL release, select the upstream tag and resolve it to a commit before updating its pins:
 
