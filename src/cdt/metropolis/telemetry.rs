@@ -5,18 +5,22 @@
 use super::helpers::action_delta_matches;
 use crate::cdt::ergodic_moves::MoveType;
 use crate::errors::{CdtError, CdtResult, CheckpointResumeFailure};
-use markov_chain_monte_carlo::{DiscreteProposalEndpoint, DiscreteProposalRatio};
+use markov_chain_monte_carlo::{DiscreteProposalEndpoint, DiscreteProposalRatio, StepOutcome};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as DeError};
 use std::error::Error;
 use std::fmt;
 use std::num::NonZeroU32;
 
-/// Typed result of CDT-local proposal planning before the Metropolis decision.
+/// Result of CDT-local planning before the Metropolis decision.
+///
+/// The public classification uses `()` for a realized plan. A planner that
+/// has established proposal absence can use `CdtProposalPlanningOutcome<!>`
+/// to retain its rejection reason without admitting a concrete plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
-pub enum CdtProposalPlanningOutcome {
+pub enum CdtProposalPlanningOutcome<P = ()> {
     /// A concrete site was realized and the complete reversible ratio was evaluated.
-    ConcretePlan,
+    ConcretePlan(P),
     /// The selected move would underflow or overflow count-level simplex arithmetic.
     InvalidCountDelta,
     /// The selected family had no canonical offered sites.
@@ -40,33 +44,62 @@ pub enum CdtProposalPlanningOutcome {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ProposalKernelTelemetry {
     selected_family: MoveType,
-    reverse_family: MoveType,
-    forward_family_probability: f64,
-    reverse_family_probability: Option<f64>,
-    forward_site_count: usize,
-    reverse_site_count: Option<usize>,
-    planning_outcome: CdtProposalPlanningOutcome,
+    density: ProposalDensity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ProposalDensity {
+    Concrete(DiscreteProposalRatio),
+    NoPlan {
+        reason: NoPlanReason,
+        probability: f64,
+        sites: usize,
+    },
+}
+
+/// Self-loop evidence cannot contain a realized proposal.
+pub(crate) type NoPlanReason = CdtProposalPlanningOutcome<!>;
+
+impl NoPlanReason {
+    const fn outcome(self) -> CdtProposalPlanningOutcome {
+        match self {
+            Self::InvalidCountDelta => CdtProposalPlanningOutcome::InvalidCountDelta,
+            Self::NoOfferedSite => CdtProposalPlanningOutcome::NoOfferedSite,
+            Self::CausalityViolation => CdtProposalPlanningOutcome::CausalityViolation,
+            Self::GeometricViolation => CdtProposalPlanningOutcome::GeometricViolation,
+            Self::KernelRejected => CdtProposalPlanningOutcome::KernelRejected,
+        }
+    }
 }
 
 impl ProposalKernelTelemetry {
-    /// Constructs kernel telemetry from already checked planner components.
-    pub(crate) const fn new(
+    pub(crate) const fn concrete(selected_family: MoveType, ratio: DiscreteProposalRatio) -> Self {
+        Self {
+            selected_family,
+            density: ProposalDensity::Concrete(ratio),
+        }
+    }
+
+    pub(crate) const fn no_plan(
         selected_family: MoveType,
-        reverse_family: MoveType,
-        forward_family_probability: f64,
-        reverse_family_probability: Option<f64>,
-        forward_site_count: usize,
-        reverse_site_count: Option<usize>,
-        planning_outcome: CdtProposalPlanningOutcome,
+        reason: NoPlanReason,
+        probability: f64,
+        sites: usize,
     ) -> Self {
         Self {
             selected_family,
-            reverse_family,
-            forward_family_probability,
-            reverse_family_probability,
-            forward_site_count,
-            reverse_site_count,
-            planning_outcome,
+            density: ProposalDensity::NoPlan {
+                reason,
+                probability,
+                sites,
+            },
+        }
+    }
+
+    const fn ratio(self) -> Option<DiscreteProposalRatio> {
+        match self.density {
+            ProposalDensity::Concrete(ratio) => Some(ratio),
+            ProposalDensity::NoPlan { .. } => None,
         }
     }
 
@@ -117,7 +150,7 @@ impl ProposalKernelTelemetry {
     /// ```
     #[must_use]
     pub const fn reverse_family(self) -> MoveType {
-        self.reverse_family
+        self.selected_family.reverse()
     }
 
     /// Returns `p(m | x)` from the pre-move state.
@@ -142,7 +175,10 @@ impl ProposalKernelTelemetry {
     /// ```
     #[must_use]
     pub const fn forward_family_probability(self) -> f64 {
-        self.forward_family_probability
+        match self.density {
+            ProposalDensity::Concrete(r) => r.forward_weight(),
+            ProposalDensity::NoPlan { probability, .. } => probability,
+        }
     }
 
     /// Returns `p(reverse(m) | y)` when a concrete post-move state exists.
@@ -167,7 +203,10 @@ impl ProposalKernelTelemetry {
     /// ```
     #[must_use]
     pub const fn reverse_family_probability(self) -> Option<f64> {
-        self.reverse_family_probability
+        match self.ratio() {
+            Some(r) => Some(r.reverse_weight()),
+            None => None,
+        }
     }
 
     /// Returns the original canonical forward offered-site denominator.
@@ -192,7 +231,10 @@ impl ProposalKernelTelemetry {
     /// ```
     #[must_use]
     pub const fn forward_site_count(self) -> usize {
-        self.forward_site_count
+        match self.density {
+            ProposalDensity::Concrete(r) => r.forward_site_count(),
+            ProposalDensity::NoPlan { sites, .. } => sites,
+        }
     }
 
     /// Returns the canonical reverse offered-site denominator for a concrete plan.
@@ -217,7 +259,10 @@ impl ProposalKernelTelemetry {
     /// ```
     #[must_use]
     pub const fn reverse_site_count(self) -> Option<usize> {
-        self.reverse_site_count
+        match self.ratio() {
+            Some(r) => Some(r.reverse_site_count()),
+            None => None,
+        }
     }
 
     /// Returns the typed CDT-local planning result.
@@ -239,7 +284,7 @@ impl ProposalKernelTelemetry {
     /// };
     /// assert_matches!(
     ///     telemetry.planning_outcome(),
-    ///     CdtProposalPlanningOutcome::ConcretePlan
+    ///     CdtProposalPlanningOutcome::ConcretePlan(())
     ///         | CdtProposalPlanningOutcome::InvalidCountDelta
     ///         | CdtProposalPlanningOutcome::NoOfferedSite
     ///         | CdtProposalPlanningOutcome::CausalityViolation
@@ -251,7 +296,10 @@ impl ProposalKernelTelemetry {
     /// ```
     #[must_use]
     pub const fn planning_outcome(self) -> CdtProposalPlanningOutcome {
-        self.planning_outcome
+        match self.density {
+            ProposalDensity::Concrete(_) => CdtProposalPlanningOutcome::ConcretePlan(()),
+            ProposalDensity::NoPlan { reason, .. } => reason.outcome(),
+        }
     }
 
     /// Returns the family-probability log-ratio component for a concrete plan.
@@ -276,9 +324,9 @@ impl ProposalKernelTelemetry {
     /// ```
     #[must_use]
     pub fn log_family_probability_ratio(self) -> Option<f64> {
-        let reverse = self.reverse_family_probability?;
+        let reverse = self.reverse_family_probability()?;
         DiscreteProposalRatio::from_endpoints(
-            DiscreteProposalEndpoint::new(self.forward_family_probability, 1.0, 1),
+            DiscreteProposalEndpoint::new(self.forward_family_probability(), 1.0, 1),
             DiscreteProposalEndpoint::new(reverse, 1.0, 1),
         )
         .ok()
@@ -307,8 +355,8 @@ impl ProposalKernelTelemetry {
     /// ```
     #[must_use]
     pub fn log_site_count_ratio(self) -> Option<f64> {
-        let reverse = self.reverse_site_count?;
-        DiscreteProposalRatio::from_counts(self.forward_site_count, reverse)
+        let reverse = self.reverse_site_count()?;
+        DiscreteProposalRatio::from_counts(self.forward_site_count(), reverse)
             .ok()
             .map(DiscreteProposalRatio::log_q_ratio)
     }
@@ -341,18 +389,7 @@ impl ProposalKernelTelemetry {
     /// ```
     #[must_use]
     pub fn log_proposal_ratio(self) -> Option<f64> {
-        let reverse_probability = self.reverse_family_probability?;
-        let reverse_sites = self.reverse_site_count?;
-        DiscreteProposalRatio::from_endpoints(
-            DiscreteProposalEndpoint::new(
-                self.forward_family_probability,
-                1.0,
-                self.forward_site_count,
-            ),
-            DiscreteProposalEndpoint::new(reverse_probability, 1.0, reverse_sites),
-        )
-        .ok()
-        .map(DiscreteProposalRatio::log_q_ratio)
+        self.ratio().map(DiscreteProposalRatio::log_q_ratio)
     }
 }
 
@@ -396,7 +433,7 @@ pub struct MonteCarloStep {
     /// In-memory proposal-density audit record.
     ///
     /// External persistence is caller-owned so policy/model logging stays out
-    /// of the timed sampler transition. Serialized legacy checkpoints therefore
+    /// of the timed sampler transition. Checkpoint records therefore
     /// restore this optional field as absent.
     #[serde(skip)]
     proposal_telemetry: Option<ProposalKernelTelemetry>,
@@ -716,7 +753,7 @@ impl MonteCarloStep {
     ///
     /// Fresh and in-memory-resumed simulations populate this field. Callers
     /// that serialize checkpoints should persist any required policy audit log
-    /// separately; deserialized legacy-compatible step telemetry returns
+    /// separately; deserialized step telemetry returns
     /// `None` here.
     ///
     /// # Examples
@@ -898,6 +935,7 @@ impl AcceptedStepTelemetry {
 /// may still report the action delta for the rejected candidate.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct RejectedProposalStepTelemetry {
+    #[serde(skip_serializing_if = "Option::is_none")]
     delta_action: Option<f64>,
 }
 
@@ -966,8 +1004,8 @@ pub enum MonteCarloStepOutcome {
 }
 
 #[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "PascalCase")]
-enum MonteCarloStepOutcomeWire {
+#[serde(deny_unknown_fields)]
+pub(crate) enum MonteCarloStepOutcomeWire {
     Accepted {
         action_after: f64,
         delta_action: f64,
@@ -979,6 +1017,14 @@ enum MonteCarloStepOutcomeWire {
 }
 
 impl MonteCarloStepOutcome {
+    /// Projects the action-bearing outcome onto the upstream sampler outcome.
+    pub(crate) const fn sampler_outcome(self) -> StepOutcome {
+        match self {
+            Self::Accepted(_) => StepOutcome::Accepted,
+            Self::RejectedProposal(_) => StepOutcome::RejectedProposal,
+            Self::NoProposal => StepOutcome::NoProposal,
+        }
+    }
     /// Creates a validated accepted-step outcome.
     ///
     /// Use this when a boundary already has the move-independent action telemetry
@@ -1165,7 +1211,7 @@ impl MonteCarloStepOutcome {
     /// The wire payload is intentionally private because finite-action and
     /// accepted-step delta consistency checks need the enclosing step number and
     /// action-before value for precise diagnostics.
-    fn from_wire(
+    pub(crate) fn from_wire(
         step: NonZeroU32,
         action_before: f64,
         wire: MonteCarloStepOutcomeWire,

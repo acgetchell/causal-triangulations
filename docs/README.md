@@ -37,7 +37,8 @@ Start with [the project README](../README.md) to choose a workflow and run a sma
 - [Tooling alignment](dev/tooling-alignment.md): shared-tool adoption and documented differences.
 - [Tooling contracts](../tooling/README.md): consumer tests and the unified Python tooling environment.
 - [Benchmarking](BENCHMARKING.md): measurement, retained evidence, and report publication.
-- [Releasing](RELEASING.md): release preparation, pre-tag evidence, draft review, registry verification, and recovery.
+- [Releasing](RELEASING.md) covers release preparation, pre-tag evidence, draft review, and registry verification.
+- [Recovering a release](RECOVERING_RELEASES.md) shows how to resume an interrupted release from its original evidence and provider records.
 - [Security policy](../SECURITY.md): private vulnerability reporting.
 
 Generated changelog history remains in [the root changelog](../CHANGELOG.md) and [archives](archives/changelog/).

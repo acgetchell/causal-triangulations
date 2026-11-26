@@ -724,16 +724,13 @@ impl<B> CdtTriangulation<B> {
 
     /// Parses raw time-slice metadata into a nonzero invariant-bearing count.
     fn parse_time_slices(topology: CdtTopology, time_slices: u32) -> CdtResult<NonZeroU32> {
-        if time_slices == 0 {
-            return Err(CdtError::InvalidTriangulationMetadata {
-                field: TriangulationMetadataField::Timeslices,
-                topology,
-                provided_value: ObservedValue::Count(0),
-                expected: ExpectedConstraint::AtLeast { minimum: 1 },
-            });
-        }
-
-        if matches!(topology, CdtTopology::Toroidal) && time_slices < 3 {
+        let count = NonZeroU32::new(time_slices).ok_or(CdtError::InvalidTriangulationMetadata {
+            field: TriangulationMetadataField::Timeslices,
+            topology,
+            provided_value: ObservedValue::Count(0),
+            expected: ExpectedConstraint::AtLeast { minimum: 1 },
+        })?;
+        if matches!(topology, CdtTopology::Toroidal) && count.get() < 3 {
             return Err(CdtError::InvalidTriangulationMetadata {
                 field: TriangulationMetadataField::Timeslices,
                 topology,
@@ -741,13 +738,7 @@ impl<B> CdtTriangulation<B> {
                 expected: ExpectedConstraint::AtLeast { minimum: 3 },
             });
         }
-
-        NonZeroU32::new(time_slices).ok_or_else(|| CdtError::InvalidTriangulationMetadata {
-            field: TriangulationMetadataField::Timeslices,
-            topology,
-            provided_value: time_slices.into(),
-            expected: ExpectedConstraint::AtLeast { minimum: 1 },
-        })
+        Ok(count)
     }
 
     /// Get immutable reference to underlying geometry.
@@ -2480,6 +2471,7 @@ mod tests {
 #[cfg(test)]
 mod prop_tests {
     use super::*;
+    use crate::geometry::operations::TriangulationOps;
     use proptest::prelude::*;
 
     fn coordinate_signature(triangulation: &CdtTriangulation<DelaunayBackend2D>) -> Vec<Vec<u64>> {
@@ -2502,14 +2494,16 @@ mod prop_tests {
     }
 
     proptest! {
-        /// Property: deterministic CDT strips preserve the expected disk Euler characteristic.
+        /// Every regular CDT strip has its requested foliation and passes full CDT validation.
         #[test]
-        fn cdt_strip_euler_characteristic_matches_topology(
+        fn regular_cdt_strip_is_a_valid_foliated_disk(
             vertices_per_slice in 4u32..12,
             num_slices in 2u32..8
         ) {
             let triangulation = CdtTriangulation::from_cdt_strip(vertices_per_slice, num_slices)?;
 
+            let expected_slices = vec![vertices_per_slice as usize; num_slices as usize];
+            prop_assert_eq!(triangulation.slice_sizes(), expected_slices.as_slice());
             prop_assert_eq!(
                 triangulation.geometry().euler_characteristic(),
                 1,
@@ -2517,7 +2511,7 @@ mod prop_tests {
                 vertices_per_slice,
                 num_slices
             );
-            prop_assert!(triangulation.validate_topology().is_ok());
+            triangulation.validate()?;
         }
 
         /// Property: Triangulation should have positive counts for all simplex types
@@ -2603,29 +2597,17 @@ mod prop_tests {
         }
 
         #[test]
-        fn face_edge_relationship(
-            vertices in 4u32..12,  // Even smaller range
+        fn seeded_planar_mesh_has_disk_euler_characteristic(
+            vertices in 4u32..12,
             timeslices in 1u32..3,
             seed in any::<u64>()
         ) {
             let triangulation = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
 
-            let v = i32::try_from(triangulation.vertex_count()).unwrap_or(i32::MAX);
-            let e = i32::try_from(triangulation.edge_count()).unwrap_or(i32::MAX);
-            let f = i32::try_from(triangulation.face_count()).unwrap_or(i32::MAX);
-
-            // Just verify basic positivity and reasonableness
-            prop_assert!(v >= 3, "Must have at least 3 vertices");
-            prop_assert!(e >= 3, "Must have at least 3 edges");
-            prop_assert!(f >= 1, "Must have at least 1 face");
-
-            // Allow very broad Euler characteristic range for random triangulations
-            let euler = v - e + f;
-            prop_assert!(
-                (-10..=10).contains(&euler),
-                "Euler characteristic {} extremely out of range (V={}, E={}, F={})",
-                euler, v, e, f
-            );
+            // The finite faces triangulate the convex hull, a disk.
+            prop_assert_eq!(triangulation.vertex_count(), vertices as usize);
+            prop_assert_eq!(triangulation.vertex_count() + triangulation.face_count(),
+                            triangulation.edge_count() + 1);
         }
 
         /// Property: Timeslice parameter validation
@@ -2715,59 +2697,40 @@ mod prop_tests {
             prop_assert_eq!(cached_count, recalculated_count, "Count should remain same after cache invalidation");
         }
 
-        /// Property: Validation success for well-formed triangulations
+        /// An unfoliated Delaunay disk passes geometry and topology validation.
         #[test]
-        fn validation_success_property(
-            seed in 50u64..250, // Range with some known good seeds
-            vertices in 4u32..8, // Small range with known good seeds
+        fn seeded_disk_requires_foliation_for_full_cdt_validation(
+            seed in 50u64..250,
+            vertices in 4u32..8,
             timeslices in 1u32..3
         ) {
             let triangulation = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
 
-            // Basic validity should always pass for reasonable seeds
-            prop_assert!(triangulation.geometry().is_valid(), "Geometry should be valid");
-
-            // Validation might succeed (depending on Euler characteristic)
-            // We can't guarantee it always passes due to topology constraints
-            // but basic geometric validity should hold
-            prop_assert!(triangulation.vertex_count() >= 3, "Should have >= 3 vertices");
-            prop_assert!(triangulation.edge_count() > 0, "Should have > 0 edges");
-            prop_assert!(triangulation.face_count() > 0, "Should have > 0 faces");
+            triangulation.geometry().validate_delaunay()?;
+            triangulation.validate_topology()?;
+            prop_assert!(!triangulation.has_foliation());
+            let result = triangulation.validate();
+            prop_assert!(
+                matches!(result, Err(CdtError::Foliation(FoliationError::MissingBookkeeping))),
+                "expected missing foliation for an unfoliated point cloud, got {result:?}"
+            );
         }
 
-        /// Property: Geometric invariants for triangulated structures
+        /// Each interior edge borders two triangles and each hull edge borders one.
         #[test]
-        fn geometric_invariants_property(
+        fn seeded_planar_mesh_edge_incidence_matches_its_boundary(
             vertices in 4u32..15,
             timeslices in 1u32..4,
             seed in 1u64..10000
         ) {
             let triangulation = CdtTriangulation::from_seeded_points(vertices, timeslices, 2, seed)?;
 
-            let v = triangulation.vertex_count() as i128;
-            let e = triangulation.edge_count() as i128;
-            let f = triangulation.face_count() as i128;
-
-            // Basic positivity
-            prop_assert!(v >= 3, "Must have at least 3 vertices");
-            prop_assert!(e >= 3, "Must have at least 3 edges");
-            prop_assert!(f >= 1, "Must have at least 1 face");
-
-            // For triangulated surfaces: E can be up to ~3.5V for complex triangulations
-            // This is more realistic for CDT triangulations which can be quite dense
-            prop_assert!(e <= 4 * v, "Edge count should not be excessively large: E={}, 4V={}", e, 4 * v);
-
-            // For triangulated surfaces: F <= 2V (very loose bound)
-            prop_assert!(f <= 2 * v, "Face count should not be excessively large: F={}, 2V={}", f, 2 * v);
-
-            // TODO: Revisit connectivity constraint when Delaunay crate is updated/fixed
-            // The underlying Delaunay triangulation generation can create degenerate triangulations
-            // where E < V-1 due to invalid simplex removal and disconnected components.
-            // This is a known issue with the current Delaunay crate implementation.
-            // For now, we use a more lenient bound that accommodates the observed behavior.
-            //
-            // Connectivity: Ideally E >= V - 1 for connected graphs, but degenerate cases exist
-            prop_assert!(e >= (v - 1) / 2, "Should have reasonable edge count for degenerate triangulations: E={}, (V-1)/2={}", e, (v - 1) / 2);
+            let boundary_edges = triangulation.geometry().try_boundary_edges()?.len();
+            prop_assert!((3..=triangulation.vertex_count()).contains(&boundary_edges));
+            prop_assert_eq!(triangulation.edge_count() + boundary_edges + 3,
+                            3 * triangulation.vertex_count());
+            prop_assert_eq!(3 * triangulation.face_count() + boundary_edges,
+                            2 * triangulation.edge_count());
         }
 
         /// Property: Input parameter bounds validation

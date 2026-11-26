@@ -1568,6 +1568,14 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
             interval.map_or(DelaunayCheckPolicy::EndOnly, DelaunayCheckPolicy::EveryN);
     }
 
+    /// Current validation cadence, including changes made while a CDT proposal was pending.
+    pub(crate) const fn delaunay_check_interval(&self) -> Option<NonZeroUsize> {
+        match self.delaunay_check_policy {
+            DelaunayCheckPolicy::EndOnly => None,
+            DelaunayCheckPolicy::EveryN(interval) => Some(interval),
+        }
+    }
+
     /// Returns `true` when the current Delaunay check policy is due.
     ///
     /// CDT passes the accepted local-mutation count here to reuse the same

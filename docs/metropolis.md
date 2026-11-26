@@ -2,7 +2,7 @@
 
 > **MCMC backend boundary:** this page describes the current CDT production Metropolis runner. Its proposal-before-mutation contract should be preserved, but
 > generic Metropolis-Hastings mechanics should live behind `markov-chain-monte-carlo` adapters rather than CDT-local sampler logic. Chunked continuation now
-> uses upstream proposal planning, weighted discrete proposal ratios, and checkpoint-compatible continuation from `markov-chain-monte-carlo` v0.5.0.
+> uses upstream proposal planning, weighted discrete proposal ratios, and checkpoint-compatible continuation from `markov-chain-monte-carlo` v0.5.3.
 > Repository-owned Semgrep rules enforce the production boundary by rejecting CDT-local generic acceptance draws and manual accepted/rejected sampler
 > counters. Any future upstream API gap must be documented and issue-linked before temporary CDT-local sampler logic is added.
 
@@ -77,18 +77,22 @@ together between chunks.
 
 ### Serialized Checkpoint Compatibility
 
-`CdtMcmcCheckpoint::to_json()` writes version 3 for explicitly biased ensembles, while bare ensembles retain version 2. `FORMAT_VERSION` names the latest
-supported envelope, and `from_json()` reads and fully validates both versions. Older binaries reject version 3 instead of ignoring a fixing term that is
-temporarily zero at the target volume. A version-2 document containing a bias is rejected. The top-level `format_version` tag is mandatory.
+`CdtMcmcCheckpoint::to_json()` writes version 4 for both bare and volume-fixed ensembles. Each trajectory row carries one tagged transition. The
+reader derives public step telemetry from those rows. Rows inherit the run seed and encode a slab profile on its first occurrence and after each change.
+Restore computes the post-step action from the transition and the log probability from that action and the recorded temperature.
+The top-level `format_version` tag is mandatory.
 Unknown tags return `CdtError::UnsupportedCheckpointVersion` with both the encountered and
 supported versions, allowing callers to distinguish an upgrade requirement from malformed state.
 
-Both envelopes embed Delaunay's exact Level 4 owner snapshot, including UUIDs, coordinate bits, connectivity, ordered neighbor slots, periodic offsets, topology
+The envelope embeds Delaunay's exact Level 4 owner snapshot, including UUIDs, coordinate bits, connectivity, ordered neighbor slots, periodic offsets, topology
 context, validation policy, and payloads. Its geometry schema follows upstream's persistence contract. Accepted/rejected chain counters are CDT fields rather
 than a serialized
 `markov-chain-monte-carlo::ChainCheckpoint`. The record also preserves the Metropolis and action configurations, current action and step, move and proposal
-counters, step telemetry, measurements, scalar trace rows, normalized elapsed time, and explicit state words for the acceptance and ergodic-proposal RNGs.
+counters, measurements, trajectory rows, normalized elapsed time, and explicit state words for the acceptance and ergodic-proposal RNGs.
 Transient geometry and proposal-site caches are rebuilt on load.
+
+The sampler consumes MCMC’s `Step` and `DiscreteProposalRatio` and exports numeric diagnostics through `TraceRecord`. Checked persistence for the
+upstream step payload is tracked in [MCMC #246](https://github.com/acgetchell/markov-chain-monte-carlo/issues/246).
 
 Restoration uses `TriangulationSnapshot::try_into_triangulation` inside the `src/geometry/` adapter to certify Delaunay Levels 1–4, and then checks CDT
 topology, foliation, causality, simplex classification, action consistency, counters, and telemetry before exposing the checkpoint. Evolved state need not
@@ -217,13 +221,14 @@ the family/site path that was actually selected.
 
 `CdtMoveFamilyPolicy::family_weight()` is the state-dependent family-only injection boundary. CDT calls it `MoveType::REVERSIBLE_1P1.len()` times per
 evaluated state, once with each `CdtProposalPolicyView`. Outputs are relative normalization inputs, not site weights: every value must be finite and
-nonnegative, and the complete array must have a positive finite normalization total. Custom state-dependent implementations may use topology, simplex counts,
-slice sizes, family identity, and offered-site information from the view.
+nonnegative, and their exact sum must round to a positive finite binary64 value. Reordering the weights gives the same total. Custom state-dependent
+implementations may use topology, simplex counts, slice sizes, family identity, and offered-site information from the view.
 
 `CdtMoveFamilyPolicy::fixed_distribution()` is the opt-in fast path for state-independent policies. `CdtMoveFamilyDistribution::from_weights()` provides a
 checked fixed policy, while `UniformCdtMoveFamilyPolicy` supplies the conventional baseline; both reuse their distribution without enumerating all four
-family-site caches. Effective probabilities are quantized to the proposal RNG's 53-bit categorical draw grid. Every positive input retains at least one draw
-atom, and the same exact integer masses drive family sampling and the reported Hastings probabilities.
+family-site caches. The sampler divides the 53-bit draw grid in proportion to the supplied binary64 weights using exact integer quotients and remainders.
+Extra atoms go to the largest remainders, with ties resolved in family order. A final adjustment gives every positive input at least one atom.
+The same integer masses drive family sampling and the reported Hastings probabilities.
 
 Individual zero family weights are allowed. All-zero output is `CdtMoveFamilyPolicyError::EmptySupport`; negative or non-finite output and non-finite
 normalization totals are separate typed errors. A positive-weight family with zero offered sites remains in the family distribution and becomes a typed
@@ -325,7 +330,7 @@ Hastings correction. Self-loops retain the selected family, pre-state probabilit
 with `MonteCarloStepOutcome` to distinguish planning rejection, Metropolis rejection, and acceptance without parsing strings or accessing private state.
 
 Policy/model persistence and external audit logging remain outside the timed transition. Callers that serialize checkpoints should therefore persist required
-policy state and per-step policy telemetry in their experiment artifact layer; legacy-compatible serialized CDT step records do not embed the optional
+policy state and per-step policy telemetry in their experiment artifact layer; serialized CDT step records do not embed the optional
 in-memory proposal audit field.
 
 `ProposalStatistics` is telemetry, not part of the Markov kernel. It records:

@@ -6,6 +6,8 @@ use crate::cdt::ergodic_moves::{MoveType, ProposalSite};
 use crate::cdt::triangulation::{CdtSimplexCounts, CdtTriangulation2D};
 use crate::config::CdtTopology;
 use crate::errors::CdtResult;
+use la_stack::{BigInt, BigRational, Interval};
+use num_traits::{Float, ToPrimitive};
 use std::error::Error;
 use std::fmt;
 use std::iter::FusedIterator;
@@ -212,8 +214,8 @@ impl CdtMoveFamilyDistribution {
     /// Returns [`CdtMoveFamilyPolicyError::InvalidWeight`] for a negative or
     /// non-finite component, [`CdtMoveFamilyPolicyError::EmptySupport`] when all
     /// components are zero, or
-    /// [`CdtMoveFamilyPolicyError::NonFiniteTotalWeight`] if their finite sum
-    /// overflows.
+    /// [`CdtMoveFamilyPolicyError::NonFiniteTotalWeight`] if the exact sum
+    /// of the supplied binary64 weights rounds to infinity.
     ///
     /// # Examples
     ///
@@ -233,15 +235,16 @@ impl CdtMoveFamilyDistribution {
             }
         }
 
-        let total_weight = weights.into_iter().sum::<f64>();
-        if total_weight == 0.0 {
+        if weights.iter().all(|&w| w == 0.0) {
             return Err(CdtMoveFamilyPolicyError::EmptySupport);
         }
-        if !total_weight.is_finite() {
-            return Err(CdtMoveFamilyPolicyError::NonFiniteTotalWeight { total_weight });
+        if !finite_weight_total(weights) {
+            return Err(CdtMoveFamilyPolicyError::NonFiniteTotalWeight {
+                total_weight: f64::INFINITY,
+            });
         }
 
-        let sample_masses = quantized_sample_masses(weights, total_weight);
+        let sample_masses = quantized_sample_masses(weights);
         let probabilities = sample_masses.map(sample_mass_probability);
 
         Ok(Self {
@@ -329,6 +332,28 @@ fn sample_mass_probability(sample_mass: u64) -> f64 {
     sample_mass_to_f64(sample_mass) / FAMILY_SAMPLE_RESOLUTION_F64
 }
 
+/// Checks one rounded normalization total independent of the order of its terms.
+fn finite_weight_total(weights: [f64; 4]) -> bool {
+    if weights.iter().all(|&w| w <= f64::MAX / 4.0) {
+        return true;
+    }
+    if weights
+        .into_iter()
+        .try_fold(Interval::ZERO, |sum, w| sum.try_add(&Interval::point(w)?))
+        .is_ok()
+    {
+        return true;
+    }
+    // A sum just above MAX may still round to MAX. Only the exact dyadics
+    // distinguish that case from overflowing at the rounding midpoint.
+    weights
+        .into_iter()
+        .map(|w| BigRational::from_float(w).expect("finite weight"))
+        .sum::<BigRational>()
+        .to_f64()
+        .is_some_and(f64::is_finite)
+}
+
 /// Quantizes normalized weights onto the exact 53-bit family-selection grid.
 ///
 /// Largest-remainder allocation assigns missing atoms one at a time to the
@@ -337,31 +362,42 @@ fn sample_mass_probability(sample_mass: u64) -> f64 {
 /// to positive weights below the RNG resolution and removes the same mass from
 /// the largest supported family, so sampling and Hastings telemetry remain
 /// exactly aligned without silently dropping requested support.
-fn quantized_sample_masses(weights: [f64; 4], total_weight: f64) -> [u64; 4] {
-    let mut sample_masses = [0_u64; 4];
-    let mut remainders = [0.0; 4];
-    for index in 0..weights.len() {
-        let ideal_mass = weights[index] / total_weight * FAMILY_SAMPLE_RESOLUTION_F64;
-        sample_masses[index] = floor_sample_mass(ideal_mass);
-        remainders[index] = ideal_mass - sample_mass_to_f64(sample_masses[index]);
-    }
-
-    let allocated = sample_masses.into_iter().sum::<u64>();
-    if allocated < FAMILY_SAMPLE_RESOLUTION {
-        let mut missing = FAMILY_SAMPLE_RESOLUTION - allocated;
-        while missing > 0 {
-            let recipient = largest_remainder_index(&remainders, &weights);
-            sample_masses[recipient] += 1;
-            remainders[recipient] -= 1.0;
-            missing -= 1;
-        }
-    } else if allocated > FAMILY_SAMPLE_RESOLUTION {
-        remove_sample_mass(
-            &mut sample_masses,
-            allocated - FAMILY_SAMPLE_RESOLUTION,
-            [0; 4],
-        );
-    }
+fn quantized_sample_masses(weights: [f64; 4]) -> [u64; 4] {
+    // Express all binary64 weights in one dyadic unit. This preserves the
+    // ordering of remainders even when the rounded quotas are whole numbers.
+    let parts = weights.map(Float::integer_decode);
+    let scale = parts
+        .iter()
+        .filter(|(m, _, _)| *m != 0)
+        .map(|(_, exponent, _)| *exponent)
+        .min()
+        .expect("positive support");
+    let parts =
+        parts.map(|(mantissa, exponent, _)| (mantissa, exponent.max(scale).abs_diff(scale)));
+    // A 53-bit mantissa and a 53-bit draw grid leave 22 spare bits in u128.
+    let mut sample_masses = if parts.iter().all(|&(_, shift)| shift <= 22) {
+        let integers = parts.map(|(m, shift)| u128::from(m) << shift);
+        let total = integers.iter().sum::<u128>();
+        apportion_quotas(&integers.map(|value| {
+            let numerator = value * u128::from(FAMILY_SAMPLE_RESOLUTION);
+            (
+                u64::try_from(numerator / total).expect("quota fits draw grid"),
+                numerator % total,
+            )
+        }))
+    } else {
+        let integers = parts.map(|(m, shift)| BigInt::from(m) << shift);
+        let total = integers.iter().sum::<BigInt>();
+        apportion_quotas(&integers.map(|value| {
+            let numerator = value * FAMILY_SAMPLE_RESOLUTION;
+            (
+                (&numerator / &total)
+                    .to_u64()
+                    .expect("quota fits draw grid"),
+                numerator % &total,
+            )
+        }))
+    };
 
     let minimum_masses = weights.map(|weight| u64::from(weight > 0.0));
     let missing_support = (0..weights.len())
@@ -389,27 +425,19 @@ fn sample_mass_to_f64(sample_mass: u64) -> f64 {
     sample_mass as f64
 }
 
-/// Floors a checked finite nonnegative ideal mass within the categorical range.
-#[expect(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    reason = "the checked normalized mass is finite, nonnegative, and at most 2^53"
-)]
-fn floor_sample_mass(ideal_mass: f64) -> u64 {
-    debug_assert!(ideal_mass.is_finite());
-    debug_assert!((0.0..=FAMILY_SAMPLE_RESOLUTION_F64).contains(&ideal_mass));
-    ideal_mass.floor() as u64
-}
-
-/// Selects the supported family with the greatest ideal-minus-allocated residual.
-fn largest_remainder_index(remainders: &[f64; 4], weights: &[f64; 4]) -> usize {
-    let mut selected = weights.iter().position(|weight| *weight > 0.0).unwrap_or(0);
-    for index in (selected + 1)..remainders.len() {
-        if weights[index] > 0.0 && remainders[index] > remainders[selected] {
-            selected = index;
-        }
+/// Assigns the remaining atoms by descending exact remainder, in family order for ties.
+fn apportion_quotas<R: Ord>(quotas: &[(u64, R); 4]) -> [u64; 4] {
+    let mut masses = quotas.each_ref().map(|(whole, _)| *whole);
+    let remaining = FAMILY_SAMPLE_RESOLUTION - masses.iter().sum::<u64>();
+    let mut order = [0, 1, 2, 3];
+    order.sort_by(|&a, &b| quotas[b].1.cmp(&quotas[a].1));
+    for &family in order
+        .iter()
+        .take(usize::try_from(remaining).expect("fewer than four residual atoms"))
+    {
+        masses[family] += 1;
     }
-    selected
+    masses
 }
 
 /// Removes quantization excess without violating per-family minimum support.
@@ -862,12 +890,16 @@ mod tests {
 
     #[test]
     fn largest_remainder_tie_selects_the_first_supported_family() {
-        assert_eq!(largest_remainder_index(&[0.0; 4], &[0.0, 1.0, 1.0, 0.0]), 1);
+        let base = FAMILY_SAMPLE_RESOLUTION / 3;
+        assert_eq!(
+            quantized_sample_masses([0.0, 1.0, 1.0, 1.0]),
+            [0, base + 1, base + 1, base]
+        );
     }
 
     #[test]
     fn largest_remainder_distributes_tied_deficit_across_supported_families() {
-        let sample_masses = quantized_sample_masses([1.0, 1.0, 1.0, 0.0], 3.0);
+        let sample_masses = quantized_sample_masses([1.0, 1.0, 1.0, 0.0]);
         let base_mass = FAMILY_SAMPLE_RESOLUTION / 3;
 
         assert_eq!(sample_masses, [base_mass + 1, base_mass + 1, base_mass, 0]);
@@ -883,12 +915,19 @@ mod tests {
         ];
         let total_weight = weights.into_iter().sum::<f64>();
         let naive_allocation = weights
-            .map(|weight| floor_sample_mass(weight / total_weight * FAMILY_SAMPLE_RESOLUTION_F64))
+            .map(|weight| {
+                (weight / total_weight * FAMILY_SAMPLE_RESOLUTION_F64)
+                    .to_u64()
+                    .unwrap()
+            })
             .into_iter()
             .sum::<u64>();
         assert!(naive_allocation > FAMILY_SAMPLE_RESOLUTION);
 
-        let sample_masses = quantized_sample_masses(weights, total_weight);
+        let sample_masses = quantized_sample_masses(weights);
+        // Exact dyadic division of the four fixture weights on the 53-bit grid,
+        // followed by one atom of support for the first family.
+        assert_eq!(sample_masses, [1, 160_900_747, 9_007_199_093_840_199, 45]);
 
         assert_eq!(
             sample_masses.into_iter().sum::<u64>(),

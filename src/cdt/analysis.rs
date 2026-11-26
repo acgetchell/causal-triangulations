@@ -41,6 +41,7 @@ use crate::cdt::metropolis::{
 use crate::cdt::results::{Measurement, MeasurementWire, SimulationResultsBackend};
 use crate::config::{CdtConfig, CdtTopology, ValidatedCdtConfig};
 use crate::errors::{CdtError, CdtResult};
+use crate::util::within_scaled_tolerance;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -252,8 +253,9 @@ impl TryFrom<ValidationChainWire> for ValidationChainData {
 /// bypass these checks. Seeds and identities are declarations of independence;
 /// callers remain responsible for generating truly independent trajectories.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(try_from = "ValidationChainData", into = "ValidationChainData")]
+#[serde(try_from = "ValidationChainData")]
 pub struct ValidationChain {
+    #[serde(flatten)]
     data: ValidationChainData,
 }
 
@@ -348,7 +350,8 @@ impl ValidationChain {
                 }
                 .into());
             }
-            if profile.len() != usize::try_from(config.timeslices().get()).unwrap_or(usize::MAX)
+            if (measurement.step() == 0 && !config.matches_initial_profile(profile))
+                || profile.len() != usize::try_from(config.timeslices().get()).unwrap_or(usize::MAX)
                 || profile.len() != measurement.slab_triangle_profile().len()
                 || profile.iter().enumerate().any(|(slice, &length)| {
                     u64::from(length) + u64::from(profile[(slice + 1) % profile.len()])
@@ -407,18 +410,18 @@ impl ValidationChain {
         configuration: &ValidatedCdtConfig,
         results: &SimulationResultsBackend,
     ) -> CdtResult<Self> {
-        let mut configuration = configuration.config().clone();
-        if configuration.clone().into_validated()?.to_action_config() != *results.action_config()
-            || configuration.topology != results.triangulation().metadata().topology()
-            || configuration.timeslices != results.triangulation().time_slices().get()
-            || configuration.vertices as usize
-                != results.triangulation().metadata().initial_vertex_count()
+        if configuration.to_action_config() != *results.action_config()
+            || configuration.topology() != results.triangulation().metadata().topology()
+            || configuration.timeslices().get() != results.triangulation().time_slices().get()
+            || configuration.topology() != CdtTopology::Toroidal
+            || !configuration.matches_initial_profile(&results.initial_periodic_loop_lengths()?)
         {
             return Err(CdtAnalysisError::IncompatibleCondition {
                 chain: chain_id.to_owned(),
             }
             .into());
         }
+        let mut configuration = configuration.config().clone();
         configuration.steps = results.config().steps().get();
         configuration.temperature = results.config().temperature();
         configuration.thermalization_steps = results.config().thermalization_steps();
@@ -531,7 +534,27 @@ pub enum CdtDiagnosticObservable {
 }
 
 impl CdtDiagnosticObservable {
-    /// Extracts one scalar with explicit bounds rather than inventing missing values.
+    /// Checks a profile indicator once against the common chain geometry.
+    fn check_definition(&self, slices: usize) -> CdtResult<()> {
+        let (Self::ProfileIndicator { profile } | Self::TargetProfileIndicator { profile, .. }) =
+            self
+        else {
+            return Ok(());
+        };
+        if profile.len() != slices || profile.iter().any(|&length| length < 3) {
+            return Err(CdtAnalysisError::Observable.into());
+        }
+        if let Self::TargetProfileIndicator { target, .. } = self {
+            // A periodic strip contributes two triangles per spatial link.
+            let links: u64 = profile.iter().map(|&length| u64::from(length)).sum();
+            if links.checked_mul(2) != Some(u64::from(*target)) {
+                return Err(CdtAnalysisError::Observable.into());
+            }
+        }
+        Ok(())
+    }
+
+    /// Extracts one scalar from a validated measurement.
     fn value(&self, measurement: &Measurement) -> CdtResult<f64> {
         let profile = measurement
             .spatial_loop_lengths()
@@ -558,7 +581,6 @@ impl CdtDiagnosticObservable {
             ),
             Self::LoopProduct { left, right } => at(*left)? * at(*right)?,
             Self::ProfileIndicator { profile: expected } => {
-                check_selected_profile(expected, profile.len())?;
                 f64::from(u8::from(profile == expected))
             }
             Self::TargetVolumeIndicator { target } => {
@@ -567,27 +589,11 @@ impl CdtDiagnosticObservable {
             Self::TargetProfileIndicator {
                 target,
                 profile: expected,
-            } => {
-                check_selected_profile(expected, profile.len())?;
-                if expected.iter().map(|&value| u64::from(value)).sum::<u64>() * 2
-                    != u64::from(*target)
-                {
-                    return Err(CdtAnalysisError::Observable.into());
-                }
-                f64::from(u8::from(
-                    profile == expected && measurement.triangles().get() == *target,
-                ))
-            }
+            } => f64::from(u8::from(
+                profile == expected && measurement.triangles().get() == *target,
+            )),
         })
     }
-}
-
-/// Rejects incompatible profile-indicator definitions before statistical analysis.
-fn check_selected_profile(profile: &[u32], slices: usize) -> CdtResult<()> {
-    if profile.len() != slices || profile.iter().any(|&length| length < 3) {
-        return Err(CdtAnalysisError::Observable.into());
-    }
-    Ok(())
 }
 
 /// Predeclared quantile precision in original observable units.
@@ -768,10 +774,17 @@ pub struct CdtMcseSummary {
     pub standard_error: f64,
     /// Matching raw mean or quantile-indicator ESS.
     pub ess: CdtEssSummary,
-    /// Type-7 sample quantile, when estimating a quantile.
-    pub quantile: Option<f64>,
-    /// Upstream order-statistic uncertainty interval; absent for means.
-    pub interval: Option<[f64; 2]>,
+}
+
+/// Original-unit uncertainty for a supported quantile interval.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CdtQuantileMcseSummary {
+    /// Standard error in the observable's units.
+    pub standard_error: f64,
+    /// Type-7 sample quantile.
+    pub quantile: f64,
+    /// Order-statistic interval used by the upstream estimator.
+    pub interval: [f64; 2],
 }
 
 /// Quantile diagnostic retaining probability and unsupported/tied-data outcomes.
@@ -779,8 +792,10 @@ pub struct CdtMcseSummary {
 pub struct CdtQuantileDiagnostic {
     /// Predeclared quantile probability.
     pub probability: f64,
-    /// Quantile MCSE and matching indicator ESS.
-    pub mcse: DiagnosticEstimate<CdtMcseSummary>,
+    /// Effective samples for the predeclared quantile indicator, including tied draws.
+    pub indicator_ess: DiagnosticEstimate<CdtEssSummary>,
+    /// Quantile uncertainty when the order-statistic interval is resolved.
+    pub mcse: DiagnosticEstimate<CdtQuantileMcseSummary>,
 }
 
 /// Information/convergence outcome, distinct from a physics-validation verdict.
@@ -795,10 +810,23 @@ pub enum CdtDiagnosticVerdict {
     Inconclusive,
 }
 
+/// Measured duration and workload used for ESS per second.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CdtDiagnosticTiming {
+    /// Wall-clock seconds spent sampling.
+    pub seconds: f64,
+    /// Number of timed chains.
+    pub chains: usize,
+    /// Number of recorded draws per chain.
+    pub samples_per_chain: usize,
+}
+
 /// Versioned analysis report; per-chain and pooled estimators remain distinct.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CdtDiagnosticReport {
     /// Report schema version.
+    #[serde(deserialize_with = "read_report_version")]
     pub schema_version: u32,
     /// Producer version.
     pub crate_version: String,
@@ -834,14 +862,23 @@ pub struct CdtDiagnosticReport {
     pub quantiles: Vec<CdtQuantileDiagnostic>,
     /// Mean ESS per actual workload wall-clock second, supplementary to correctness.
     pub mean_ess_per_second: DiagnosticEstimate<f64>,
-    /// Caller-supplied post-warmup workload wall time, excluding serialization/setup.
-    pub timed_seconds: Option<f64>,
-    /// Original chain count asserted by optional production timing metadata.
-    pub timed_chain_count: Option<usize>,
-    /// Original samples per chain asserted by optional production timing metadata.
-    pub timed_samples_per_chain: Option<usize>,
+    /// Measured post-warmup workload, when supplied by the caller.
+    pub timing: Option<CdtDiagnosticTiming>,
     /// Information adequacy only; exact ensemble agreement is evaluated separately.
     pub verdict: CdtDiagnosticVerdict,
+}
+
+const DIAGNOSTIC_REPORT_VERSION: u32 = 2;
+
+fn read_report_version<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let version = u32::deserialize(deserializer)?;
+    if version == DIAGNOSTIC_REPORT_VERSION {
+        Ok(version)
+    } else {
+        Err(serde::de::Error::custom(format_args!(
+            "unsupported diagnostic report version {version}"
+        )))
+    }
 }
 
 impl CdtDiagnosticReport {
@@ -934,7 +971,7 @@ pub fn analyze_cdt_chains(
     timing: Option<&DiagnosticTiming>,
 ) -> CdtResult<CdtDiagnosticReport> {
     policy.validate()?;
-    ensure_comparable(chains)?;
+    observable.check_definition(ensure_comparable(chains)?)?;
     let values = chains
         .iter()
         .map(|chain| {
@@ -974,34 +1011,24 @@ pub fn analyze_cdt_chains(
             reason: format!("{error:?}"),
         },
     };
-    let mean = EssEstimate::estimate(&slices, EssEstimator::Mean);
+    let mcse = MeanMcse::estimate(&slices);
+    let mean = mcse.as_ref().map_or_else(
+        |_| EssEstimate::estimate(&slices, EssEstimator::Mean),
+        |value| Ok(*value.effective_sample_size()),
+    );
     let tails = TailEss::estimate(&slices);
-    let mean_mcse = estimate(MeanMcse::estimate(&slices).map(|value| CdtMcseSummary {
+    let mean_mcse = estimate(mcse.map(|value| CdtMcseSummary {
         standard_error: value.value(),
         ess: ess_summary(*value.effective_sample_size()),
-        quantile: None,
-        interval: None,
     }));
     let quantiles = policy
         .quantiles
         .iter()
-        .map(|requirement| CdtQuantileDiagnostic {
-            probability: requirement.probability,
-            mcse: estimate(
-                QuantileMcse::estimate(&slices, requirement.probability).map(|value| {
-                    CdtMcseSummary {
-                        standard_error: value.value(),
-                        ess: ess_summary(*value.effective_sample_size()),
-                        quantile: Some(value.quantile()),
-                        interval: Some(value.interval()),
-                    }
-                }),
-            ),
-        })
+        .map(|requirement| quantile_diagnostic(&slices, requirement.probability))
         .collect();
     let observable_units = observable_units(&observable);
     let mut report = CdtDiagnosticReport {
-        schema_version: 1,
+        schema_version: DIAGNOSTIC_REPORT_VERSION,
         crate_version: env!("CARGO_PKG_VERSION").to_owned(),
         upstream_estimator_contract: "markov-chain-monte-carlo 0.5.3 public diagnostics".to_owned(),
         sources: diagnostic_sources(chains),
@@ -1024,9 +1051,11 @@ pub fn analyze_cdt_chains(
                 reason: format!("{error:?}"),
             },
         },
-        timed_seconds: timing.map(|timing| timing.elapsed().as_secs_f64()),
-        timed_chain_count: timing.map(|timing| timing.chain_count()),
-        timed_samples_per_chain: timing.map(|timing| timing.samples_per_chain()),
+        timing: timing.map(|timing| CdtDiagnosticTiming {
+            seconds: timing.elapsed().as_secs_f64(),
+            chains: timing.chain_count(),
+            samples_per_chain: timing.samples_per_chain(),
+        }),
         verdict: CdtDiagnosticVerdict::Inconclusive,
     };
     report.verdict = diagnostic_verdict(&report);
@@ -1063,8 +1092,8 @@ fn observable_units(observable: &CdtDiagnosticObservable) -> String {
     .to_owned()
 }
 
-/// Checks comparison metadata before any pooled computation.
-fn ensure_comparable(chains: &[ValidationChain]) -> CdtResult<()> {
+/// Checks comparison metadata and returns the common time extent.
+fn ensure_comparable(chains: &[ValidationChain]) -> CdtResult<usize> {
     let Some(first) = chains.first().filter(|_| chains.len() >= 2) else {
         return Err(CdtAnalysisError::InsufficientChains {
             provided: chains.len(),
@@ -1103,7 +1132,25 @@ fn ensure_comparable(chains: &[ValidationChain]) -> CdtResult<()> {
             .into());
         }
     }
-    Ok(())
+    Ok(reference.timeslices as usize)
+}
+
+/// Retains available indicator ESS even when ties collapse the quantile interval.
+fn quantile_diagnostic(chains: &[&[f64]], probability: f64) -> CdtQuantileDiagnostic {
+    let mcse = QuantileMcse::estimate(chains, probability);
+    let indicator = mcse.as_ref().map_or_else(
+        |_| EssEstimate::estimate(chains, EssEstimator::Quantile(probability)),
+        |value| Ok(*value.effective_sample_size()),
+    );
+    CdtQuantileDiagnostic {
+        probability,
+        indicator_ess: estimate(indicator.map(ess_summary)),
+        mcse: estimate(mcse.map(|value| CdtQuantileMcseSummary {
+            standard_error: value.value(),
+            quantile: value.quantile(),
+            interval: value.interval(),
+        })),
+    }
 }
 
 /// Keeps each chain's time ordering and incomplete-block semantics intact.
@@ -1164,10 +1211,12 @@ fn select_binning_level(
                     && level.blocked_mean_error.is_some()
             }) && window.windows(2).all(|pair| {
                 match (pair[0].blocked_mean_error, pair[1].blocked_mean_error) {
-                    (Some(left), Some(right)) => {
-                        (left - right).abs()
-                            <= policy.binning_relative_tolerance * left.abs().max(right.abs())
-                    }
+                    (Some(left), Some(right)) => within_scaled_tolerance(
+                        left,
+                        right,
+                        policy.binning_relative_tolerance,
+                        left.abs().max(right.abs()),
+                    ),
                     _ => false,
                 }
             })
@@ -1212,7 +1261,9 @@ fn diagnostic_verdict(report: &CdtDiagnosticReport) -> CdtDiagnosticVerdict {
                 |(diagnostic, required)| {
                     diagnostic.mcse.value().is_some_and(|value| {
                         value.standard_error <= required.maximum_mcse
-                            && value.ess.effective_samples >= report.policy.minimum_ess
+                            && diagnostic.indicator_ess.value().is_some_and(|ess| {
+                                ess.effective_samples >= report.policy.minimum_ess
+                            })
                     })
                 },
             );

@@ -7,6 +7,7 @@
 
 use crate::cdt::volume_fixing::{VolumeFixing, VolumeFixingError, VolumeFixingWire};
 use crate::errors::{CdtError, CdtResult, ConfigurationSetting, ExpectedConstraint, ObservedValue};
+use la_stack::{BigInt, BigRational, Interval};
 use num_traits::cast::NumCast;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::f64::consts::LN_2;
@@ -377,12 +378,17 @@ impl ActionConfig {
         action
     }
 
-    /// Returns a conservative upper bound for the magnitude of any action
-    /// representable by this configuration's simplex-count types.
-    pub(crate) fn maximum_action_magnitude(&self) -> f64 {
-        maximum_action_magnitude(self.coupling_0, self.coupling_2, self.cosmological_constant)
-            .expect("validated action couplings must retain a finite magnitude bound")
-            + self.volume_fixing.map_or(0.0, VolumeFixing::maximum_action)
+    /// Bounds each term independently for the stored action and the additive sampler target.
+    pub(crate) fn magnitude_bounds(&self) -> ActionMagnitudeBounds {
+        ActionMagnitudeBounds {
+            physical: maximum_action_magnitude(
+                self.coupling_0,
+                self.coupling_2,
+                self.cosmological_constant,
+            )
+            .expect("validated action couplings retain a finite bound"),
+            fixing: self.volume_fixing.map_or(0.0, VolumeFixing::maximum_action),
+        }
     }
 
     /// Returns the optional explicit total-triangle bias.
@@ -414,10 +420,37 @@ impl ActionConfig {
     /// ```
     pub fn with_volume_fixing(mut self, fixing: Option<VolumeFixing>) -> CdtResult<Self> {
         self.volume_fixing = fixing;
-        if !self.maximum_action_magnitude().is_finite() {
+        if !self.magnitude_bounds().combined().is_finite() {
             return Err(VolumeFixingError::CombinedActionOverflow.into());
         }
         Ok(self)
+    }
+}
+
+/// Conservative binary64 upper bounds on absolute physical action and volume bias.
+pub(crate) struct ActionMagnitudeBounds {
+    physical: f64,
+    fixing: f64,
+}
+
+impl ActionMagnitudeBounds {
+    const fn combined(&self) -> f64 {
+        // The stored action adds two already-rounded values. Monotonicity makes
+        // this rounded sum an upper bound even when the real sum exceeds MAX.
+        self.physical + self.fixing
+    }
+
+    /// Checks both binary64 evaluation orders used by the trace and the sampler.
+    pub(crate) const fn check_temperature(&self, temperature: f64) -> Result<(), f64> {
+        let combined = self.combined();
+        // Each rounded operation is monotone on these nonnegative upper bounds.
+        // Mirroring the additive target includes the rounding of each division.
+        let additive = self.physical / temperature + self.fixing / temperature;
+        if (combined / temperature).is_finite() && additive.is_finite() {
+            Ok(())
+        } else {
+            Err(combined)
+        }
     }
 }
 
@@ -440,13 +473,32 @@ fn maximum_action_magnitude(
     coupling_2: f64,
     cosmological_constant: f64,
 ) -> Option<f64> {
-    let maximum_count: f64 = NumCast::from(usize::MAX)?;
-    let coupling_sum = coupling_0.abs() + coupling_2.abs() + cosmological_constant.abs();
-    if !coupling_sum.is_finite() {
-        return None;
+    let magnitudes = [
+        coupling_0.abs(),
+        coupling_2.abs(),
+        cosmological_constant.abs(),
+    ];
+    // usize::MAX converts exactly on 32-bit targets and rounds upward on 64-bit.
+    let maximum_count = Interval::point(NumCast::from(usize::MAX)?).ok()?;
+    let enclosure = magnitudes
+        .into_iter()
+        .try_fold(Interval::ZERO, |sum, value| {
+            sum.try_add(&Interval::point(value)?)
+        })
+        .and_then(|sum| sum.try_mul(&maximum_count));
+    if let Ok(bound) = enclosure {
+        return Some(bound.upper());
     }
-    let bound = maximum_count * coupling_sum;
-    bound.is_finite().then_some(bound)
+
+    // An outward-rounded intermediate can exceed the finite range even when the
+    // original dyadics still fit. Resolve that boundary before rejecting a configuration.
+    let sum = magnitudes
+        .into_iter()
+        .try_fold(BigRational::from_integer(BigInt::from(0)), |sum, value| {
+            Some(sum + BigRational::from_float(value)?)
+        })?;
+    let exact = sum * BigInt::from(usize::MAX);
+    (exact <= BigRational::from_float(f64::MAX)?).then_some(f64::MAX)
 }
 
 /// Rejects jointly finite couplings whose arithmetic range is still unsafe.

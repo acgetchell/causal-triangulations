@@ -286,12 +286,19 @@ fn positive_weight_empty_family_is_typed_self_loop_without_mutation() {
     let info = proposal_info(&mut proposal, plan.as_ref());
 
     assert!(plan.is_none());
-    assert_eq!(info.move_type, MoveType::Move22);
-    assert_eq!(info.reverse_move_type, MoveType::Move22);
-    assert_relative_eq!(info.forward_family_probability, 1.0, epsilon = f64::EPSILON);
-    assert_eq!(info.forward_site_count, 0);
     assert_eq!(
-        info.planning_outcome,
+        info.proposal_telemetry().selected_family(),
+        MoveType::Move22
+    );
+    assert_eq!(info.proposal_telemetry().reverse_family(), MoveType::Move22);
+    assert_relative_eq!(
+        info.proposal_telemetry().forward_family_probability(),
+        1.0,
+        epsilon = f64::EPSILON
+    );
+    assert_eq!(info.proposal_telemetry().forward_site_count(), 0);
+    assert_eq!(
+        info.proposal_telemetry().planning_outcome(),
         CdtProposalPlanningOutcome::NoOfferedSite
     );
     assert_eq!(
@@ -386,10 +393,11 @@ fn uniform_policy_volume_pair_satisfies_independent_detailed_balance() -> CdtRes
     let triangulation = CdtTriangulation::from_toroidal_cdt(4, 4)?;
     let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(83);
     let mut rng = StdRng::seed_from_u64(89);
+    let mut proposed = triangulation.clone();
     let plan = (0..64)
         .find_map(|_| {
             proposal
-                .propose_plan(&triangulation, &mut rng)
+                .propose_plan(&proposed, &mut rng)
                 .expect("uniform planning should not fail")
                 .filter(|plan| {
                     matches!(
@@ -399,7 +407,6 @@ fn uniform_policy_volume_pair_satisfies_independent_detailed_balance() -> CdtRes
                 })
         })
         .expect("representative uniform policy should realize a concrete volume plan");
-    let mut proposed = triangulation.clone();
     proposal.commit(&mut proposed, plan.clone(), &mut rng)?;
 
     let mut inspection = ErgodicsSystem::new();
@@ -441,14 +448,14 @@ fn distinct_flip_mixture_components_satisfy_independent_detailed_balance() -> Cd
     let mut observed_edge_flip = false;
 
     for _ in 0..256 {
-        let Some(plan) = proposal.propose_plan(&triangulation, &mut rng)? else {
+        let mut proposed = triangulation.clone();
+        let Some(plan) = proposal.propose_plan(&proposed, &mut rng)? else {
             continue;
         };
         assert!(matches!(
             plan.move_type(),
             MoveType::Move22 | MoveType::EdgeFlip
         ));
-        let mut proposed = triangulation.clone();
         proposal.commit(&mut proposed, plan.clone(), &mut rng)?;
 
         let mut inspection = ErgodicsSystem::new();
@@ -603,14 +610,15 @@ fn unequal_fixed_weights_match_analytic_family_and_site_ratio() -> CdtResult<()>
         .with_policy(policy);
     let mut rng = StdRng::seed_from_u64(43);
 
+    let mut proposed = triangulation.clone();
     let plan = (0..64)
         .find_map(|_| {
             proposal
-                .propose_plan(&triangulation, &mut rng)
+                .propose_plan(&proposed, &mut rng)
                 .expect("fixed policy planning should not fail")
         })
         .expect("representative toroidal policy should realize a concrete plan");
-    let mut proposed = triangulation.clone();
+    let scored_ratio = proposal.log_q_ratio(&proposed, &plan)?;
     proposal.commit(&mut proposed, plan.clone(), &mut rng)?;
 
     let expected_forward_family = match plan.move_type() {
@@ -664,11 +672,7 @@ fn unequal_fixed_weights_match_analytic_family_and_site_ratio() -> CdtResult<()>
     );
     assert_relative_eq!(plan.log_site_count_ratio(), expected_sites, epsilon = 1e-12);
     assert_relative_eq!(plan.log_proposal_ratio(), expected_ratio, epsilon = 1e-12);
-    assert_relative_eq!(
-        proposal.log_q_ratio(&triangulation, &plan)?,
-        expected_ratio,
-        epsilon = 1e-12
-    );
+    assert_relative_eq!(scored_ratio, expected_ratio, epsilon = 1e-12);
 
     let log_target_forward = plan.action_before() - plan.action_after();
     let log_accept_forward = (log_target_forward + expected_ratio).min(0.0);
@@ -697,10 +701,11 @@ fn reverse_policy_probability_is_evaluated_on_planned_post_state() -> CdtResult<
         .with_policy(VolumeDependentPolicy);
     let mut rng = StdRng::seed_from_u64(53);
 
+    let mut proposed = triangulation.clone();
     let plan = (0..128)
         .find_map(|_| {
             proposal
-                .propose_plan(&triangulation, &mut rng)
+                .propose_plan(&proposed, &mut rng)
                 .expect("state-dependent policy planning should not fail")
                 .filter(|plan| plan.move_type() == MoveType::Move13Add)
         })
@@ -708,7 +713,6 @@ fn reverse_policy_probability_is_evaluated_on_planned_post_state() -> CdtResult<
     let expected_forward = f64::from(vertices_before) / f64::from(vertices_before + 1);
     let expected_reverse = 1.0 / f64::from(vertices_before + 2);
     let incorrect_pre_state_reverse = 1.0 / f64::from(vertices_before + 1);
-    let mut proposed = triangulation.clone();
     proposal.commit(&mut proposed, plan.clone(), &mut rng)?;
     let independently_counted_forward = inspection
         .proposal_policy_view(&triangulation, plan.move_type())
@@ -917,8 +921,8 @@ fn fixed_policy_shortcut_skips_state_dependent_family_evaluation() -> CdtResult<
     let info = proposal_info(&mut proposal, plan.as_ref());
 
     assert_relative_eq!(
-        info.forward_family_probability,
-        distribution.probability(info.move_type),
+        info.proposal_telemetry().forward_family_probability(),
+        distribution.probability(info.proposal_telemetry().selected_family()),
         epsilon = f64::EPSILON
     );
     Ok(())
@@ -948,7 +952,7 @@ fn algorithm_exposes_typed_policy_audit_telemetry_after_each_step() -> CdtResult
             epsilon = 1e-15
         );
 
-        if telemetry.planning_outcome() == CdtProposalPlanningOutcome::ConcretePlan {
+        if telemetry.planning_outcome() == CdtProposalPlanningOutcome::ConcretePlan(()) {
             assert!(telemetry.forward_site_count() > 0);
             let family = telemetry
                 .log_family_probability_ratio()
@@ -992,7 +996,7 @@ fn zero_reverse_family_probability_forces_rejection_without_mutation() -> CdtRes
         .iter()
         .filter(|step| {
             step.proposal_telemetry().is_some_and(|telemetry| {
-                telemetry.planning_outcome() == CdtProposalPlanningOutcome::ConcretePlan
+                telemetry.planning_outcome() == CdtProposalPlanningOutcome::ConcretePlan(())
             })
         })
         .collect::<Vec<_>>();

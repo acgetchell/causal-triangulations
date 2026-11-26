@@ -654,7 +654,7 @@ fn open_strip_vertex_spec(
     let spacing = 1.0_f64 / f64::from(vertices - 1);
     let temporal_index = f64::from(slice);
     let temporal_span = f64::from(profile_len - 1);
-    let side_arc = if temporal_span.abs() < f64::EPSILON {
+    let side_arc = if profile_len == 1 {
         0.0
     } else {
         side_jitter * temporal_index * (temporal_span - temporal_index) / temporal_span.powi(2)
@@ -782,51 +782,25 @@ impl CdtTriangulation<DelaunayBackend2D> {
     /// Returns [`FoliationError`] when live labels are missing, out of range, or
     /// cannot form valid open-boundary foliation bookkeeping.
     fn rebuild_open_foliation_from_live_labels(&mut self) -> CdtResult<()> {
-        let slice_sizes = Self::live_slice_sizes_from_vertex_labels(
-            &self.geometry,
-            self.metadata.time_slices.get(),
-        )?;
-        let foliation = Foliation::from_slice_sizes(slice_sizes, self.metadata.time_slices)
-            .map_err(CdtError::from)?;
-
+        let foliation =
+            Self::foliation_from_live_labels(&self.geometry, self.metadata.time_slices)?;
         self.foliation = Some(foliation);
         self.mark_foliation_synchronized();
         Ok(())
     }
 
     /// Re-reads current backend labels during validation so stale stored bookkeeping is detected.
-    pub(super) fn live_slice_sizes_from_vertex_labels(
+    pub(super) fn foliation_from_live_labels(
         backend: &DelaunayBackend2D,
-        num_slices: u32,
-    ) -> CdtResult<Vec<usize>> {
-        if num_slices == 0 {
-            return Err(FoliationError::SliceSizeMismatch {
-                slice_sizes_len: 0,
-                num_slices,
-            }
-            .into());
-        }
-
-        let mut slice_sizes = vec![0usize; num_slices as usize];
-
-        for (vertex, vh) in backend.vertices().enumerate() {
-            if let Some(t) = backend.vertex_data_by_key(vh.vertex_key()) {
-                let idx = t as usize;
-                if idx >= slice_sizes.len() {
-                    return Err(FoliationError::OutOfRangeVertexLabel {
-                        vertex,
-                        label: t,
-                        expected_range_end: slice_sizes.len(),
-                    }
-                    .into());
-                }
-                slice_sizes[idx] += 1;
-            } else {
-                return Err(FoliationError::MissingVertexLabel { vertex }.into());
-            }
-        }
-
-        Ok(slice_sizes)
+        num_slices: NonZeroU32,
+    ) -> Result<Foliation, FoliationError> {
+        Foliation::from_vertex_labels(
+            num_slices,
+            backend.vertex_count(),
+            backend
+                .vertices()
+                .map(|vh| backend.vertex_data_by_key(vh.vertex_key())),
+        )
     }
 
     /// Creates an unfoliated triangulation with a Delaunay backend from random points.
@@ -982,18 +956,10 @@ impl CdtTriangulation<DelaunayBackend2D> {
             return Err(CdtError::UnsupportedDimension(dimension.into()));
         }
 
-        Self::check_time_slices(CdtTopology::OpenBoundary, time_slices)?;
-        let slice_sizes = Self::live_slice_sizes_from_vertex_labels(&backend, time_slices)?;
-        for (slice, &size) in slice_sizes.iter().enumerate() {
-            if size == 0 {
-                return Err(FoliationError::EmptySlice { slice }.into());
-            }
-        }
+        let count = Self::parse_time_slices(CdtTopology::OpenBoundary, time_slices)?;
+        let foliation = Self::foliation_from_live_labels(&backend, count)?;
         let mut tri = Self::try_new(backend, time_slices, dimension)?;
-        tri.foliation = Some(
-            Foliation::from_slice_sizes(slice_sizes, checked_nonzero_slice_count(time_slices))
-                .map_err(CdtError::from)?,
-        );
+        tri.foliation = Some(foliation);
         tri.mark_foliation_synchronized();
         tri.validate_initial_delaunay_cdt()?;
         Ok(tri)
@@ -2317,6 +2283,15 @@ mod tests {
         assert_matches!(
             result,
             Err(CdtError::Foliation(FoliationError::EmptySlice { slice: 1 }))
+        );
+    }
+
+    #[test]
+    fn labeled_triangle_reports_first_empty_slice_for_extreme_slice_count() {
+        let backend = labeled_triangle_backend([0, 1, u32::MAX - 1]);
+        assert_matches!(
+            CdtTriangulation::from_labeled_delaunay(backend, u32::MAX, 2),
+            Err(CdtError::Foliation(FoliationError::EmptySlice { slice: 2 }))
         );
     }
 

@@ -145,7 +145,7 @@ The [documentation index][repo-docs-readme-md] maps user, scientific, and contri
 This crate is part of a broader Rust ecosystem for computational geometry and simulation:
 
 - [`delaunay`](https://crates.io/crates/delaunay) — geometric primitives and triangulations
-- [`la-stack`](https://crates.io/crates/la-stack) — linear algebra utilities
+- [`la-stack`](https://crates.io/crates/la-stack) — interval and exact arithmetic for assigning CDT time slices, bounding actions, and checking tolerances
 - [`markov-chain-monte-carlo`](https://crates.io/crates/markov-chain-monte-carlo) — composable MCMC traits, including plan-before-commit proposals for CDT
   move ordering
 

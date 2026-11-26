@@ -281,9 +281,6 @@ pub fn average_dual_return_probability_curve(
 /// Builds the combinatorial face-adjacency graph for CDT dual observables.
 fn dual_adjacency(triangulation: &CdtTriangulation2D) -> CdtResult<Vec<Vec<usize>>> {
     let faces: Vec<_> = triangulation.geometry().faces().collect();
-    if faces.len() < 2 {
-        return Ok(Vec::new());
-    }
 
     let face_indices: HashMap<_, _> = faces
         .iter()
@@ -299,7 +296,7 @@ fn dual_adjacency(triangulation: &CdtTriangulation2D) -> CdtResult<Vec<Vec<usize
                 .face_neighbors(face)
                 .map_err(|err| CdtError::ValidationFailed {
                     check: CdtValidationCheck::Geometry,
-                    failure: CdtValidationFailure::FaceVerticesUnavailable {
+                    failure: CdtValidationFailure::FaceNeighborsUnavailable {
                         face: format!("{:?}", face.simplex_key()),
                         detail: err.to_string(),
                     },

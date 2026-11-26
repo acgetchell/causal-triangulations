@@ -110,6 +110,7 @@ causal-triangulations/
 │   ├── metropolis.md
 │   ├── moves.md
 │   ├── README.md
+│   ├── RECOVERING_RELEASES.md
 │   ├── RELEASING.md
 │   ├── roadmap.md
 │   ├── RUNNING-ON-HPC.md
@@ -133,7 +134,8 @@ causal-triangulations/
 │   └── 02_analysis_caches.ipynb
 ├── proptest-regressions/
 │   └── cdt/
-│       └── triangulation.txt
+│       └── triangulation/
+│           └── state.txt
 ├── src/
 │   ├── cdt/
 │   │   ├── metropolis/
@@ -377,9 +379,8 @@ for `markov-chain-monte-carlo` proposal and target traits. `runner.rs` owns `Met
 continuation view, delegates generic acceptance, proposal-ratio application, chain counters, and planned-proposal commit ordering to the upstream MCMC crate,
 then consumes the chain state back into the CDT result without cloning topology per step or per chunk. CDT-owned telemetry and RNG state travel beside that
 single canonical triangulation owner. `checkpoint.rs` owns resumable state, the versioned CDT-owned JSON envelope, dependency-neutral RNG/duration adapters,
-and resume validation. Bare version 2 and biased version 3 delegate exact geometry persistence to Delaunay's Level 4 owner snapshot.
-Version 3 prevents older readers from ignoring an explicit bias. `telemetry.rs` owns public step/proposal
-telemetry, and `helpers.rs` holds shared CDT-domain calculations.
+and resume validation. Version 4 stores each transition once and delegates exact geometry persistence to Delaunay's Level 4 owner snapshot.
+`telemetry.rs` owns public step/proposal telemetry, and `helpers.rs` holds shared CDT-domain calculations.
 
 Checkpoint JSON first decodes raw CDT records, then runs the same typed constructors used by standalone configuration and telemetry APIs. Domain errors retain
 their variants; malformed encodings remain serialization errors. RNG errors identify the acceptance or proposal stream, and sampler failures retain the
@@ -507,6 +508,7 @@ Delaunay triangulation before CDT foliation, causality, topology, and simplex-cl
 
 - `usize_to_f64` — checked `usize`→`f64` conversion for observable estimators
 - `f64_band_to_u32` — clamped `f64`→`u32` conversion for internal y-coordinate binning
+- `within_scaled_tolerance` — inclusive action-consistency and binning-plateau comparisons using interval bounds and an exact rational fallback
 - Simulation action inputs use native `usize` topology counts; validated CDT count snapshots use `NonZeroUsize`; measurement and trace telemetry downcasts to
   `u32` are checked at construction boundaries
 
@@ -525,5 +527,8 @@ Notebook files live in `notebooks/` and should wrap the CLI or consume generated
 
 - `delaunay` (v0.8.5) — geometry backend (Delaunay triangulations, vertex data for time labels, checked TDS reconstruction with topology context,
   `set_vertex_data_by_key` for O(1) label mutation)
+- `la-stack` (v0.5.4, `exact` feature) — Delaunay supplies vertex coordinates and CDT assigns them to time slices. CDT depends directly on `la-stack`
+  to bound each slice index and resolve ambiguous boundaries using the exact binary64 inputs. CDT also uses it to bound actions, apportion move-family
+  probabilities, and compare checkpoint actions and binning errors against their tolerances.
 - `markov-chain-monte-carlo` (v0.5.3) — MCMC framework (`DelayedProposal`, `Chain::step_delayed`, invariant-bearing `Step<Info>` telemetry, `Target`)
 - `num-traits` — `ToPrimitive` and `NumCast` for checked or saturating numeric conversions

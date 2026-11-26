@@ -71,7 +71,7 @@ Commit the generated outputs after reviewing
 The README configuration selects the state-dependent proposal median and its confidence bounds. Run `just performance-readme --check` to check the
 table against the promoted report. `just performance-check` validates retained output without measuring.
 
-After merge, follow the [release guide](RELEASING.md#wait-for-the-draft-and-review-its-assets). The release workflow receives the existing staged
+After merge, follow the [release guide](RELEASING.md#3-stage-the-prepared-draft). The release workflow receives the existing staged
 archive by its original GitHub asset ID. Recovery uses the same selection and archive name, `causal-triangulations-TAG-cdt-series.tar.gz`.
 
 Marginal timing intervals do not establish an interval for a speed ratio or statistical significance.
