@@ -143,12 +143,8 @@ def _reviewed_registry_transfer(owner: Path, tag: str) -> Path:
     return transfer
 
 
-@pytest.mark.parametrize("scenario", ["first-dispatch", "verified", "wrong-run", "active", "previous-upload", "registry-present"])
-def test_corrected_upload_checks_every_attempt_and_registry(scenario: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Only a reviewed transfer whose previous attempts stopped before publication can be dispatched again."""
-    tag = f"v{VERSION}"
-    owner = tmp_path / "release owner"
-    transfer = _reviewed_registry_transfer(owner, tag)
+def _set_dispatch_responses(scenario: str, tag: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Serve the two-attempt history and release receipt for the selected scenario."""
     run = {"id": 19, "display_title": f"Publish {tag} to crates.io", "run_attempt": 2, "status": "in_progress" if scenario == "active" else "completed"}
     previous = [] if scenario == "first-dispatch" else [{**run, "conclusion": "failure"}]
     monkeypatch.setenv("PRIOR", json.dumps([{"workflow_runs": previous}]))
@@ -161,10 +157,24 @@ def test_corrected_upload_checks_every_attempt_and_registry(scenario: str, tmp_p
     monkeypatch.setenv("EVENT", json.dumps([{"workflow_runs": [event]}]))
     artifact = {"id": 21, "name": "published-release-17-1", "expired": False, "digest": "sha256:" + "a" * 64}
     monkeypatch.setenv("ARTIFACT", json.dumps([{"artifacts": [artifact]}]))
+
+
+@pytest.mark.parametrize("scenario", ["first-dispatch", "verified", "wrong-run", "active", "previous-upload", "registry-present"])
+def test_corrected_upload_checks_every_attempt_and_registry(scenario: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only a reviewed transfer whose previous attempts stopped before publication can be dispatched again."""
+    tag = f"v{VERSION}"
+    owner = tmp_path / "release owner"
+    transfer = _reviewed_registry_transfer(owner, tag)
+    _set_dispatch_responses(scenario, tag, monkeypatch)
     provider = tmp_path / "gh"
     provider.write_text(
         """#!/usr/bin/env bash
 set -eu
+if [[ "$1" == api ]]; then
+  printf '%s\\n' "${!#}" >> "$CALLS"
+else
+  printf '%s\\n' "$1" >> "$CALLS"
+fi
 case "$*" in
   *'event=workflow_dispatch&'*) echo "$PRIOR";;
   *'/runs/19/attempts/1/jobs?'*) echo "$JOBS_1";;
@@ -181,6 +191,8 @@ esac
     )
     provider.chmod(0o755)
     registry, dispatch = tmp_path / "registry", tmp_path / "dispatch"
+    calls = tmp_path / "provider-calls"
+    monkeypatch.setenv("CALLS", calls.as_posix())
     monkeypatch.setenv("REGISTRY", registry.as_posix())
     monkeypatch.setenv("REGISTRY_STATUS", "1" if scenario == "registry-present" else "0")
     monkeypatch.setenv("DISPATCH", dispatch.as_posix())
@@ -190,8 +202,17 @@ esac
     if scenario != "first-dispatch":
         args.append("18" if scenario == "wrong-run" else "19")
     result = run_safe_command("just", args, cwd=ROOT, check=False)
+    actions = f"repos/{REPOSITORY}/actions"
+    runs = f"{actions}/workflows/publish-crates.yml/runs"
+    expected_calls = [f"{runs}?event=workflow_dispatch&head_sha={SHA}&per_page=100"]
+    for attempt in {"verified": (1, 2), "registry-present": (1, 2), "previous-upload": (1,)}.get(scenario, ()):
+        expected_calls.append(f"{actions}/runs/19/attempts/{attempt}/jobs?per_page=100")
+    if scenario in {"verified", "registry-present"}:
+        expected_calls.append("release")
     if scenario in {"first-dispatch", "verified"}:
         assert result.returncode == 0, result.stderr
+        expected_calls.extend([f"{runs}?event=release&head_sha={SHA}&per_page=100", f"{actions}/runs/17/artifacts?per_page=100", "workflow"])
+    assert calls.read_text(encoding="utf-8").splitlines() == expected_calls
     if scenario in {"verified", "registry-present"}:
         assert registry.is_file(), result.stderr
         assert registry.read_text(encoding="utf-8") == f"release registry {tag} --expect absent"
