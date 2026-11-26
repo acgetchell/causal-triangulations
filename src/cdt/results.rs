@@ -4089,33 +4089,54 @@ mod tests {
     }
 
     #[test]
+    fn accepted_trace_row_rejects_inconsistent_action_triples() {
+        for (before, delta, after) in [(4.25, -0.5, 3.5), (4.0, -0.25, 3.5), (4.0, -0.5, 3.25)] {
+            let error = trace_fixture_outcome(
+                step_number(1),
+                StepOutcome::Accepted,
+                before,
+                Some(delta),
+                Some(after),
+            )
+            .expect_err("an accepted row must reconcile its action and delta");
+            assert_checkpoint_resume_failure(
+                &error,
+                &CheckpointResumeFailure::StepActionAfterDeltaMismatch { step: 1 },
+            );
+        }
+    }
+
+    #[test]
     fn public_constructor_rejects_scalar_trace_action_mismatches() {
         let config = seeded_metropolis_config(1.5, 1, 0, 1, 23);
         let step = accepted_step(1, MoveType::Move22, 4.0, 3.5);
+        // The comparison allows 8 epsilon times the action magnitude.
+        // This offset fits the tolerance at 4.0 and exceeds it at 3.5.
+        let offset = 32.0 * f64::EPSILON;
         let cases = [
             (
                 -3.5 / config.temperature(),
                 3.5,
-                Some(-0.5),
+                Some(-0.75),
                 4.25,
                 Some(3.5),
-                CheckpointResumeFailure::StepActionAfterDeltaMismatch { step: 1 },
+                CheckpointResumeFailure::ScalarTraceActionBeforeMismatch { step: 1 },
             ),
             (
-                -3.5 / config.temperature(),
-                3.5,
+                -3.75 / config.temperature(),
+                3.75,
                 Some(-0.25),
                 4.0,
-                Some(3.5),
-                CheckpointResumeFailure::StepActionAfterDeltaMismatch { step: 1 },
+                Some(3.75),
+                CheckpointResumeFailure::ScalarTraceDeltaActionMismatch { step: 1 },
             ),
             (
-                -3.5 / config.temperature(),
-                3.5,
+                -(3.5 + offset) / config.temperature(),
+                3.5 + offset,
                 Some(-0.5),
-                4.0,
-                Some(3.25),
-                CheckpointResumeFailure::StepActionAfterDeltaMismatch { step: 1 },
+                4.0 + offset,
+                Some(3.5 + offset),
+                CheckpointResumeFailure::ScalarTraceActionAfterMismatch { step: 1 },
             ),
             (
                 -3.25 / config.temperature(),
@@ -4152,26 +4173,24 @@ mod tests {
                 action_before,
                 action_after,
                 config.seed(),
-            );
+            )
+            .expect("each row describes an internally consistent accepted transition");
 
-            let error = row
-                .and_then(|row| {
-                    SimulationResultsBackend::new(
-                        config.clone(),
-                        ActionConfig::default(),
-                        move_stats,
-                        ProposalStatistics::from_validated_parts(1, 7, 0, 0, 0, 0, 0, 1, 0),
-                        vec![step.clone()],
-                        vec![
-                            measurement(0, 4.0, 12, 26, 12),
-                            measurement(1, 3.5, 12, 26, 12),
-                        ],
-                        vec![row],
-                        Duration::ZERO,
-                        triangulation,
-                    )
-                })
-                .expect_err("scalar trace action telemetry must match step telemetry");
+            let error = SimulationResultsBackend::new(
+                config.clone(),
+                ActionConfig::default(),
+                move_stats,
+                ProposalStatistics::from_validated_parts(1, 7, 0, 0, 0, 0, 0, 1, 0),
+                vec![step.clone()],
+                vec![
+                    measurement(0, 4.0, 12, 26, 12),
+                    measurement(1, 3.5, 12, 26, 12),
+                ],
+                vec![row],
+                Duration::ZERO,
+                triangulation,
+            )
+            .expect_err("scalar trace action telemetry must match step telemetry");
 
             assert_checkpoint_resume_failure(&error, &expected);
         }
