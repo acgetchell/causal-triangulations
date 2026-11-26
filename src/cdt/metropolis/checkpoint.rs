@@ -1118,6 +1118,7 @@ pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> Cd
     validate_scalar_trace_rows(
         &checkpoint.config,
         &checkpoint.proposal_stats,
+        &checkpoint.move_stats,
         &checkpoint.steps,
         &checkpoint.scalar_trace_rows,
     )?;
@@ -1537,6 +1538,7 @@ fn validate_checkpoint_scalar_trace_suffix(
         rejected_proposal,
         no_proposal,
     )
+    .map(drop)
 }
 
 /// Sums move counters without allowing invalid serialized telemetry to wrap.

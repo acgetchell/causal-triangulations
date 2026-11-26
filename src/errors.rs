@@ -1453,6 +1453,20 @@ pub enum CheckpointResumeFailure {
         /// Scalar trace field containing the invalid value.
         field: ScalarTraceField,
     },
+    /// Scalar trace rows attribute a different number of attempts or acceptances to a move family.
+    #[error(
+        "scalar trace move-family {move_type:?} {counter} count mismatch: got {actual}, expected {expected}"
+    )]
+    ScalarTraceMoveCountMismatch {
+        /// Move family with inconsistent telemetry.
+        move_type: MoveType,
+        /// Attempted or accepted moves.
+        counter: CheckpointMoveCounter,
+        /// Count reconstructed from the canonical trajectory.
+        actual: u64,
+        /// Count in the stored move statistics.
+        expected: u64,
+    },
     /// Scalar trace accepted outcome count disagrees with proposal telemetry.
     #[error("scalar trace accepted count mismatch: got {actual}, expected {expected}")]
     ScalarTraceAcceptedCountMismatch {

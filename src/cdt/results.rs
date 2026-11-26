@@ -31,7 +31,7 @@ use crate::errors::{
 use crate::geometry::backends::delaunay::DelaunayMeshExport;
 use crate::geometry::traits::TriangulationQuery;
 use crate::util::usize_to_f64;
-use la_stack::BigRational;
+use la_stack::{BigInt, BigRational, Interval};
 use num_traits::ToPrimitive;
 use serde::{Deserialize, Deserializer, Serialize, de::Error as DeError};
 use serde_json::to_writer_pretty;
@@ -1294,7 +1294,7 @@ fn validate_result_telemetry(
     validate_result_steps(steps, accepted)?;
     validate_result_measurements(config, steps, measurements)?;
     validate_result_proposal_stats(proposal_stats, steps.len(), accepted, rejected)?;
-    validate_scalar_trace_rows(config, proposal_stats, steps, scalar_trace_rows)?;
+    validate_scalar_trace_rows(config, proposal_stats, move_stats, steps, scalar_trace_rows)?;
     validate_trajectory_observables(
         action_config,
         steps,
@@ -1981,20 +1981,47 @@ fn validate_result_proposal_stats(
 pub(crate) fn validate_scalar_trace_rows(
     config: &MetropolisConfig,
     proposal_stats: &ProposalStatistics,
+    move_stats: &MoveStatistics,
     steps: &[MonteCarloStep],
     scalar_trace_rows: &[CdtScalarTraceRow],
 ) -> CdtResult<()> {
-    validate_scalar_trace_row_slice(
+    let observed = validate_scalar_trace_row_slice(
         config,
         steps,
         scalar_trace_rows,
         proposal_stats.accepted_transitions(),
         proposal_stats.metropolis_rejections(),
         scalar_trace_no_proposal_count(proposal_stats)?,
-    )
+    )?;
+    for move_type in MoveType::REVERSIBLE_1P1 {
+        for (counter, actual, expected) in [
+            (
+                CheckpointMoveCounter::Attempted,
+                observed.attempted(move_type),
+                move_stats.attempted(move_type),
+            ),
+            (
+                CheckpointMoveCounter::Accepted,
+                observed.accepted(move_type),
+                move_stats.accepted(move_type),
+            ),
+        ] {
+            if actual != expected {
+                return Err(checkpoint_resume_failed(
+                    CheckpointResumeFailure::ScalarTraceMoveCountMismatch {
+                        move_type,
+                        counter,
+                        actual,
+                        expected,
+                    },
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
-/// Checks a newly appended scalar-trace suffix against its corresponding steps.
+/// Checks a scalar-trace slice and returns the move-family counts its rows represent.
 pub(crate) fn validate_scalar_trace_row_slice(
     config: &MetropolisConfig,
     steps: &[MonteCarloStep],
@@ -2002,7 +2029,7 @@ pub(crate) fn validate_scalar_trace_row_slice(
     expected_accepted: u64,
     expected_rejected_proposal: u64,
     expected_no_proposal: u64,
-) -> CdtResult<()> {
+) -> CdtResult<MoveStatistics> {
     if scalar_trace_rows.len() != steps.len() {
         return Err(checkpoint_resume_failed(
             CheckpointResumeFailure::ScalarTraceLengthMismatch {
@@ -2012,13 +2039,14 @@ pub(crate) fn validate_scalar_trace_row_slice(
         ));
     }
 
-    let mut accepted = 0_u64;
+    let mut observed = MoveStatistics::new();
     let mut rejected_proposal = 0_u64;
     let mut no_proposal = 0_u64;
     for (step, row) in steps.iter().zip(scalar_trace_rows) {
         validate_scalar_trace_row(config, step, row)?;
+        observed.record_attempt(row.move_type);
         match row.payload {
-            MonteCarloStepOutcome::Accepted(_) => accepted = accepted.saturating_add(1),
+            MonteCarloStepOutcome::Accepted(_) => observed.record_success(row.move_type),
             MonteCarloStepOutcome::RejectedProposal(_) => {
                 rejected_proposal = rejected_proposal.saturating_add(1);
             }
@@ -2026,6 +2054,7 @@ pub(crate) fn validate_scalar_trace_row_slice(
         }
     }
 
+    let accepted = observed.total_accepted();
     if accepted != expected_accepted {
         return Err(checkpoint_resume_failed(
             CheckpointResumeFailure::ScalarTraceAcceptedCountMismatch {
@@ -2051,7 +2080,7 @@ pub(crate) fn validate_scalar_trace_row_slice(
         ));
     }
 
-    Ok(())
+    Ok(observed)
 }
 
 /// Checks one scalar trace row against the corresponding step telemetry.
@@ -3073,9 +3102,7 @@ impl SimulationResultsBackend {
             proposal_stats: &self.proposal_stats,
             aggregate: AggregateSummary {
                 acceptance_rate: self.acceptance_rate(),
-                average_action: mean_measurement_action(
-                    self.post_thermalization_measurements().iter(),
-                ),
+                average_action: mean_measurement_action(self.post_thermalization_measurements()),
                 elapsed_time_ms: self.elapsed_time.as_millis(),
                 measurement_count: self.measurements.len(),
                 step_count: self.steps.len(),
@@ -3129,26 +3156,29 @@ fn mean_slab_count(total: u128, samples: usize) -> f64 {
         .expect("finite mean of u32 slab counts")
 }
 
-/// Returns the mean action across a measurement stream.
-fn mean_measurement_action<'a>(measurements: impl IntoIterator<Item = &'a Measurement>) -> f64 {
-    let mut mean = 0.0_f64;
-    let mut count = 0_usize;
-    for measurement in measurements {
-        count += 1;
-        let Some(count) = usize_to_f64(count) else {
-            return 0.0;
-        };
-        let weight = count.recip();
-        let action = measurement.action();
-        mean = if action.is_sign_negative() == mean.is_sign_negative() {
-            (action - mean).mul_add(weight, mean)
-        } else {
-            // Scale opposite signs separately to preserve cancellation and avoid
-            // overflow in their difference.
-            action.mul_add(weight, mean * (1.0 - weight))
-        };
+/// Rounds the arithmetic mean of finite measurement actions once.
+fn mean_measurement_action(measurements: &[Measurement]) -> f64 {
+    if measurements.is_empty() {
+        return 0.0;
     }
-    mean
+    // Distinct u32 measurement steps keep the divisor exactly representable.
+    let count = usize_to_f64(measurements.len()).expect("usize fits binary64 range");
+    let enclosure = measurements.iter().try_fold(Interval::ZERO, |sum, row| {
+        sum.try_add(&Interval::point(row.action())?)
+    });
+    if let Ok(sum) = enclosure {
+        let lower = sum.lower() / count;
+        if lower.to_bits() == (sum.upper() / count).to_bits() {
+            return lower;
+        }
+    }
+    let total: BigRational = measurements
+        .iter()
+        .map(|row| BigRational::from_float(row.action()).expect("finite measurement action"))
+        .sum();
+    (total / BigInt::from(measurements.len()))
+        .to_f64()
+        .expect("mean is bounded by the finite actions")
 }
 
 /// Creates a parent directory for configured output paths when needed.
@@ -4249,6 +4279,7 @@ mod tests {
             let error = validate_scalar_trace_rows(
                 &config,
                 &ProposalStatistics::from_validated_parts(1, 0, 1, 0, 0, 0, 0, 0, 0),
+                &MoveStatistics::new(),
                 std::slice::from_ref(&step),
                 &[row],
             )
@@ -4281,6 +4312,7 @@ mod tests {
         let error = validate_scalar_trace_rows(
             &config,
             &ProposalStatistics::from_validated_parts(1, 7, 0, 0, 0, 0, 0, 1, 0),
+            &MoveStatistics::new(),
             &[step],
             &[row],
         )
@@ -4370,8 +4402,14 @@ mod tests {
         ];
 
         for (step, row, proposal_stats, expected) in cases {
-            let error = validate_scalar_trace_rows(&config, &proposal_stats, &[step], &[row])
-                .expect_err("scalar trace aggregate counters must match proposal telemetry");
+            let error = validate_scalar_trace_rows(
+                &config,
+                &proposal_stats,
+                &MoveStatistics::new(),
+                &[step],
+                &[row],
+            )
+            .expect_err("scalar trace aggregate counters must match proposal telemetry");
 
             assert_checkpoint_resume_failure(&error, &expected);
         }
@@ -5598,6 +5636,26 @@ mod tests {
             mean_measurement_action(&residual).to_bits(),
             (f64::EPSILON / 2.0).to_bits()
         );
+    }
+
+    #[test]
+    fn action_mean_preserves_three_term_cancellation() {
+        let large = 2.0_f64.powi(53);
+        for (actions, expected) in [
+            ([large, large, -2.0 * large], 0.0_f64),
+            ([f64::MAX, 1.0, -f64::MAX], 1.0 / 3.0),
+            ([f64::MAX, -f64::MAX, 1.0], 1.0 / 3.0),
+            (
+                [f64::from_bits(1), f64::from_bits(1), 0.0],
+                f64::from_bits(1),
+            ),
+        ] {
+            let measurements = actions.map(|action| measurement(1, action, 3, 3, 1));
+            assert_eq!(
+                mean_measurement_action(&measurements).to_bits(),
+                expected.to_bits()
+            );
+        }
     }
 
     #[test]

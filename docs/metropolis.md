@@ -105,6 +105,9 @@ format receives a new version tag. Serialization borrows the geometry and payloa
 Checkpoint JSON is an exact stochastic-continuation artifact, not the preferred long-term analysis format. Use trace CSV for rectangular per-step diagnostics
 and the simulation-summary JSON for durable cross-version results and metadata. Those exports intentionally omit resumable RNG and live geometry state.
 
+Serde snapshots of `SimulationResultsBackend` now rebuild steps from the canonical `scalar_trace_rows`. The reader rejects the retired top-level
+`steps` field. To recover data from an older result snapshot, load it with the build that wrote it and export trace CSV or simulation-summary JSON.
+
 Chunk execution is implemented through `markov-chain-monte-carlo::Sampler::step_delayed` on the CDT proposal-plan adapter. The upstream sampler owns the
 Metropolis-Hastings accept/reject draw, log-probability cache, chain counters, and checkpoint-compatible continuation view. CDT keeps domain-specific state
 outside that generic sampler: action and schedule metadata, proposal telemetry, move statistics, measurements, elapsed time, and the serialized ergodic proposal

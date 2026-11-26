@@ -612,6 +612,68 @@ fn checkpoint_rejects_an_altered_early_ring_even_when_every_slab_agrees() -> Cdt
 }
 
 #[test]
+fn persisted_trajectory_rejects_misattributed_move_families() -> CdtResult<()> {
+    use causal_triangulations::{CheckpointMoveCounter, SimulationResultsBackend};
+
+    let sampler = MetropolisAlgorithm::new(
+        MetropolisConfig::new(1.0, 32, 0, 1)?.with_seed(41),
+        ActionConfig::new(0.0, 0.0, 0.0)?,
+    );
+    let checkpoint = sampler.run_to_checkpoint(CdtTriangulation2D::from_toroidal_cdt(4, 4)?)?;
+    let checkpoint_json = serde_json::to_value(&checkpoint).unwrap();
+    let results = checkpoint.into_results()?;
+    let results_json = serde_json::to_value(&results).unwrap();
+    // A non-accepted attempt can change family without changing the geometry,
+    // action, total attempts, or any acceptance count.
+    let rejected = results
+        .steps()
+        .iter()
+        .position(|step| !step.accepted())
+        .unwrap();
+    let original = results.steps()[rejected].move_type();
+    let replacement = MoveType::REVERSIBLE_1P1
+        .into_iter()
+        .find(|family| *family != original)
+        .unwrap();
+    let accepted = results
+        .steps()
+        .iter()
+        .position(|step| step.accepted() && step.move_type() != original)
+        .unwrap();
+    for swap in [false, true] {
+        let tamper = |mut stored: Value| {
+            let rows = stored["scalar_trace_rows"].as_array_mut().unwrap();
+            if swap {
+                // Swapping the family labels also preserves every family's
+                // attempt count. Only the per-family acceptance counts change.
+                rows[rejected]["move_type"] = rows[accepted]["move_type"].clone();
+                rows[accepted]["move_type"] = json!(original);
+            } else {
+                rows[rejected]["move_type"] = json!(replacement);
+            }
+            stored
+        };
+        let checkpoint_error =
+            CdtMcmcCheckpoint::from_json(&tamper(checkpoint_json.clone()).to_string())
+                .map(drop)
+                .unwrap_err();
+        let results_error =
+            serde_json::from_value::<SimulationResultsBackend>(tamper(results_json.clone()))
+                .unwrap_err();
+        let expected_counter = if swap {
+            CheckpointMoveCounter::Accepted
+        } else {
+            CheckpointMoveCounter::Attempted
+        };
+        assert_matches!(&checkpoint_error, CdtError::CheckpointResumeFailed {
+            failure: CheckpointResumeFailure::ScalarTraceMoveCountMismatch { counter, actual, expected, .. }
+        } if *counter == expected_counter && actual.abs_diff(*expected) == 1);
+        assert_eq!(results_error.to_string(), checkpoint_error.to_string());
+    }
+    Ok(())
+}
+
+#[test]
 fn constant_observations_preserve_their_exact_action_and_slab_means() -> CdtResult<()> {
     let sampler = MetropolisAlgorithm::new(
         MetropolisConfig::new(1.0, 3, 1, 1)?.with_seed(7),

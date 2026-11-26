@@ -266,10 +266,12 @@ with the original transfer. Once verification succeeds, resume at [review the dr
 
 ### Inspect the draft asset digests
 
-Check the asset IDs, upload states, sizes, and digests against the retained transfer and evidence records.
+Set `RELEASE_ID` to the numeric release ID in the captured `target.json`. Compare the numeric REST asset IDs, upload states, sizes, and digests
+with the retained transfer and evidence records.
 
 ```bash
-gh release view "$TAG" --json assets --jq '.assets[] | [.id, .name, .state, .size, .digest] | @tsv' | cat
+gh api --paginate "repos/{owner}/{repo}/releases/$RELEASE_ID/assets" \
+  --jq '.[] | [.id, .name, .state, .size, .digest] | @tsv'
 ```
 
 If an asset differs, keep the draft unpublished and [recover staging](#recover-staging-and-inspect-the-draft) against the original target and journal.
