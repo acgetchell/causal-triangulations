@@ -1,188 +1,305 @@
 # Releasing causal-triangulations
 
-Release preparation uses the pinned shared CLI. Choose one stable tag, predecessor, and UTC date; reruns with those same inputs are deterministic.
-Benchmark measurements are separate and are not idempotent.
+## Contents
 
-This guide uses the published `research-repo-tools` release pinned in `pyproject.toml`. Tooling, notebook kernels and Semgrep share Python 3.15.
-`just update` refreshes the root lockfile while preserving the scanner's MCP/OpenTelemetry and Windows wheel compatibility overrides.
-Active documentation links stay on `main` and API links on `latest`; preserve immutable evidence and citation pins.
+- [Prepare the environment](#prepare-the-environment)
+- [Step 1: Prepare the release PR](#step-1-prepare-the-release-pr)
+  - [Prepare metadata](#create-the-branch-and-prepare-the-metadata)
+  - [Acquire benchmarks](#acquire-benchmarks-and-review-the-readme)
+  - [Validate and commit](#validate-and-commit-the-candidate)
+  - [Review and open the PR](#open-and-merge-the-release-pr)
+- [Step 2: Publish after the PR is merged](#step-2-publish-after-the-pr-is-merged)
+  - [Wait for main CI](#synchronize-main-and-wait-for-ci)
+  - [Accept the evidence and tag](#accept-the-merged-commit-and-create-the-tag)
+  - [Stage and inspect the draft](#wait-for-the-draft-and-review-its-assets)
+  - [Publish the GitHub Release](#publish-the-reviewed-draft)
+  - [Approve and verify the crates.io upload](#verify-registry-publication)
+- [Recovering a failed run](#recovering-a-failed-run)
 
-## Validated artifact promotion assessment
+Follow the [RRT release process][rrt-releasing] for release preparation, PR review, tagging, draft publication and registry verification.
+CDT adds a scientific benchmark acquisition, reviews its signed Cargo evidence before tagging, and requires a protected crates.io upload.
+If a run stops, [resume from the retained evidence](#recovering-a-failed-run).
 
-The shared package's selection and immutable retrieval helpers could support future reuse of exact-commit main validation. CDT currently has no signed
-main Cargo-package evidence producer or native crates.io publishing workflow; that work remains
-[#289](https://github.com/acgetchell/causal-triangulations/issues/289).
-The shared Python wheel/sdist promotion flow does not supply a Cargo publication policy. The manual native flow below remains authoritative, including
-`ci-slow`, Cargo package verification, the scientific checklist, and actual registry approvals.
+Use the [release tracker][release-issues] for the milestone's scientific claims, approvals, run links and checksums.
+Compare those claims with the [scientific basis](scientific-basis.md) and [roadmap](roadmap.md) before opening the release PR.
 
-Before enabling reuse, design and validate a Cargo-specific producer and promotion policy binding source commit, workflow/run/attempt, validator job results,
-package identity, immutable artifact IDs/ZIP digests, and signatures. Preserve citation, source, dependency, and harness provenance. Main unit-test success
-does not establish fresh scientific release measurements: correctness-gated baseline-v2 workloads still run against the release tag, and immutable assets
-are never replaced. Adoption of the helpers alone does not authorize publishing or change registry approval controls.
+[rrt-releasing]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RELEASING.md
+[release-issues]: https://github.com/acgetchell/causal-triangulations/issues?q=is%3Aissue+label%3Arelease
 
-## v0.2.0 scientific claim checklist
+## Prepare the environment
 
-The implementation provides the simulation and analysis foundation: optional volume control, circular spatial-loop measurements, reproducible
-chain artifacts, and dependence-aware diagnostics. It uses published Delaunay 0.8.5 and MCMC 0.5.2. The [#258 audit](audits/2d-cdt_sphere/README.md) records
-why the planned `2d-cdt` comparison excludes `sphere=true` and closed simplicial S² claims.
-
-The [#316 reverse-support defect](scientific-basis.md#move-and-sampler-contract) remains unresolved. Do not claim complete reversibility, exact-paper
-ensemble agreement, mixing, continuum physics, or completed #165/#166/#238/#276 acceptance. The scientifically validated v0.2.0 release requires those
-issues' unchanged acceptance criteria and integration of the intrinsic triangle-gluing capability published in Delaunay 0.8.5.
-The current diagnostic implementations do not complete their benchmark-dependent validation. Completing review PR #319 alone does not make v0.2.0 ready.
-
-Release checks, Cargo package verification, exact-release benchmark provenance, and reviewed publication remain mandatory. Passing them establishes the
-engineering release evidence; distributional claims additionally require the analytic gate above. Delaunay 0.8.4 corrects the
-[periodic-realization regression](audits/delaunay-periodic-realization.md): the unchanged seed-3291 fixture now passes complete validation.
-This correction is independent of the unresolved #316 ensemble-validation work and the Delaunay #667 triangle-gluing capability.
-
-## v0.1.1 scientific claim checklist
-
-The v0.1.1 release establishes the internal scientific correctness of the implemented 1+1 CDT foundation: validated open-time strips and periodic
-S¹(time) × S¹(space) triangulations, topology and foliation preservation, strict causal-simplex classification, reversible local-move bookkeeping,
-failure-atomic mutation, Regge-action deltas, complete family/site Hastings factors, exact compatible-build checkpoint continuation, and the documented
-finite combinatorial diagnostics.
-
-The release evidence includes:
-
-- Delaunay 0.8.1 Level 1–5 validation for fresh toroidal initializers and topology-aware Level 1–4 reconstruction for evolved or checkpoint-restored states;
-- independent counts, incidence, connectivity, boundary, Euler-characteristic, periodic-seam, and strict Up/Down classification checks on open and toroidal
-  fixtures, including nonuniform profiles and minimum legal slices;
-- spatial- and temporal-seam applications for both k=2 identifiers, exact `(1,3)`/`(3,1)` seam-local inverses, unchanged self-loops, and canonical-state,
-  derived-profile, simplex-count, and action restoration after simulated hard failure;
-- full action recomputation for every successful move family under ordinary and extreme finite couplings, plus finite target scoring at a matching extreme
-  temperature;
-- independent forward/reverse flux reconstruction for uniform, unequal fixed, and state-dependent family policies, including distinct `Move22` and
-  `EdgeFlip` mixture components and zero reverse support;
-- deterministic chunked continuation of both RNG streams, counters, proposal telemetry, measurements, traces, policy binding, and exact triangulation state;
-  and
-- benchmark correctness gates that identify the workload being measured.
-
-This records historical structural and transition-bookkeeping evidence. The later #316 counterexample limits its reversibility claim; the listed
-family/site checks do not establish actual coordinate-state reverse support. v0.1.1 does **not** establish ergodicity, mixing,
-thermalization, continuum-limit behavior, finite-size scaling, fixed-volume production sampling, or agreement with the exact 1+1 transfer-matrix
-distribution. That stronger quantitative gate remains [issue #238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.0. Level 5
-Delaunay validation is likewise not required after valid CDT evolution because Delaunayhood is not part of the sampled ensemble.
-
-Historical benchmark reports were deliberately retired in September 2026. New evidence uses the shared v2 workflow described below.
-
-## Prerequisites
-
-Install Git, Rustup, the declared uv version, authenticated GitHub CLI, and jq. Bootstrap the managed tools:
-
-```bash
-uv run --locked --managed-python --only-group tooling research-repo-tools setup
-just tools-check
-```
-
-Prepare a focused release branch manually from reviewed `main`. Choose:
+Start on a clean, current `main` with the [development environment](../CONTRIBUTING.md#getting-started) and an authenticated GitHub CLI.
+Use the same published RRT distribution for the project and isolated release jobs. Land dependency and tool updates before starting release preparation.
+Set the intended tag once per shell:
 
 ```bash
 TAG=vX.Y.Z
-PREVIOUS_TAG=vA.B.C
-RELEASE_DATE=YYYY-MM-DD
 ```
 
 ## Step 1: Prepare the release PR
 
-### Prepare metadata and validate
-
-Land dependency/tool refreshes separately before release preparation:
+### Create the branch and prepare the metadata
 
 ```bash
-just update
+git switch -c "release/$TAG"
+just update-version "$TAG"
+just changelog-release "$TAG"
 ```
 
-Update metadata with explicit inputs, then generate the prospective dated changelog without creating a tag:
+Review the Cargo metadata, lockfile, citation date, installation examples and generated changelog. The updater looks up the previous stable release.
+The changelog reads the prepared date from `CITATION.cff`.
+
+### Acquire benchmarks and review the README
 
 ```bash
-just update-version "$TAG" --previous-release "$PREVIOUS_TAG" --date "$RELEASE_DATE"
-just changelog-unreleased "$TAG" "$RELEASE_DATE"
 just release-dependency-builds
-just release-dependencies
-just ci-slow
+just performance-release
+```
+
+The first command prepares dependency receipts. The second includes RRT's release dependency check, prepares the measurement and runs the scientific
+gates. The first release in a series reports absolute timings and uncertainty. A compatible successor uses paired trials.
+Review the workload inventory, uncertainty, host and compiler before interpreting the [report](BENCHMARKING.md#fresh-release-evidence).
+
+```bash
+just performance-readme --preview
+just performance-readme
+```
+
+Review the README changes alongside the promoted report and raw run records. Back up the external acquisition directory printed by
+`just release-status`. Record its acquisition and publication digests in the release tracker.
+
+### Validate and commit the candidate
+
+```bash
 just release-version-check
+```
+
+Inspect and stage the intended release files, including the generated outputs, then commit:
+
+```bash
+git --no-pager diff --cached --check
+git --no-pager diff --cached
+git commit -m "chore(release): prepare $TAG"
+```
+
+### Open and merge the release PR
+
+These checks verify the original measurement, the additional scientific test and both Cargo packages on the final, clean release commit.
+
+```bash
+just release-preflight
+just test-slow
 just publish-check
 ```
 
-The shared release transaction validates candidate files before writing. It synchronizes Cargo metadata, the CFF version/date, and active dependency examples.
-Python is a dependency-only environment, so its placeholder version is not another release version.
-The permanent Zenodo concept DOI is fixed by policy; top-level version-record identifiers are rejected.
-Changelog archives use `docs/archives/changelog/`. Caught write failures trigger rollback; interruption is not a crash-atomic transaction.
-
-`release-dependency-builds` prepares Cargo's offline inputs and installs authenticated wheels for the Python packages named in `dependency-sources.toml`.
-`release-dependencies` verifies both locked registry graphs and the dependency bytes used on this machine. Repeat both commands after changing the lock,
-source policy, interpreter, or build tools. Follow the shared [release-branch validation sequence][shared-release-validation].
-`just release-package` verifies the default and all-feature Cargo packages from a clean checkout without uploading.
-
-[shared-release-validation]: https://github.com/acgetchell/research-repo-tools/blob/v0.3.1/docs/RELEASING.md#2-run-the-release-checks
-
-Explicit `--previous-release` keeps preparation offline. Omitting it discovers the latest published stable GitHub release.
-Use `--dry-run` to preview metadata edits, or `just changelog-preview --tag "$TAG" --date "$RELEASE_DATE"` to preview notes.
-Reruns preserve the chosen date; advancing it requires changing the explicit input.
-
-### Fresh performance evidence
-
-The first post-migration tagged release establishes the new baseline. Do not compare it with the retired legacy asset format.
-After that baseline exists, a prospective release may run:
+RRT and CDT require the same three gates before pushing.
 
 ```bash
-just performance-release "$TAG" "$PREVIOUS_TAG"
+just security
+just ci
+just review origin/main
 ```
 
-This user-invoked command creates temporary Git worktrees, runs the configured correctness gate and measurements, and promotes shared evidence and reports.
-Agents need explicit user authorization for these Git mutations under [AGENTS.md](../AGENTS.md#git-operations).
-Review host, source, dependency, and harness provenance before accepting a comparison.
-
-For README publication, prepare the independently pinned configuration from `tooling/performance-readme.example.toml` and run:
+Resolve any findings before pushing. When the candidate changes, repeat the affected preparation steps and run the push gates on the final changes.
 
 ```bash
-just performance-readme tooling/performance-readme.toml --preview
-just performance-readme tooling/performance-readme.toml
+git push -u origin "release/$TAG" &&
+  gh pr create --base main --head "release/$TAG" --title "chore(release): release $TAG"
 ```
 
-The table includes absolute baseline/current times, units and intervals alongside relative changes.
-See [performance testing](BENCHMARKING.md) for evidence paths and render-only recovery.
-Keep the README's explicit pending state until a real new comparison exists.
-
-Review and commit the candidate manually, open the release PR, and merge it only after the required hosted checks pass.
+Link the tracker, scientific review and local results in the PR. Merge after the required hosted checks and CodeRabbit review pass. Keep the PR number.
 
 ## Step 2: Publish after the PR is merged
 
-### Tag, attach baseline, and publish
+### Synchronize main and wait for CI
 
-After merging, synchronize to the exact reviewed commit. Set `RELEASE_COMMIT` to the full SHA that passed review and validation. The tag command checks
-release metadata, creates the local annotation at that commit, and prints its contents. Use `just tag-preview "$TAG" --commit "$RELEASE_COMMIT"` to inspect it.
+Set `RELEASE_PR` to the merged PR number and start in a clean checkout. The PR identifies the merge commit and the **CI** run to watch.
+
+```bash
+git switch main
+git pull --ff-only origin main
+RELEASE_COMMIT=$(gh pr view "${RELEASE_PR:?Set the release PR number}" --json state,baseRefName,mergeCommit \
+  --jq 'select(.state == "MERGED" and .baseRefName == "main") | .mergeCommit.oid')
+MAIN_RUN_ID=$(gh run list --workflow ci.yml --event push --branch main --commit "${RELEASE_COMMIT:?Check the merged PR}" \
+  --limit 2 --json databaseId --jq 'select(length == 1) | .[0].databaseId')
+gh run watch "${MAIN_RUN_ID:?Expected one main-push CI run for the reviewed commit}" --exit-status
+```
+
+If main has advanced, run `git switch --detach "$RELEASE_COMMIT"` in the clean checkout. Wait for the required OSV, Gitleaks, CodeQL, Clippy SARIF,
+repository-rule SARIF and workflow security checks on that SHA. For a missing or ambiguous run, see [CI recovery](#missing-ci-or-interrupted-draft-preparation).
+
+### Accept the merged commit and create the tag
+
+Review the signed crate and the original benchmark acquisition before creating the tag.
+
+```bash
+just release-evidence
+```
+
+Check the printed SHA, CI run and attempt, signed crate checksum and benchmark acquisition. The main-push evidence covers repository tooling, the three
+native target jobs, the library-only build, slow tests, both clean Cargo package checks and the all-feature packaged public docs.
+Record these identities before creating the tag.
 
 ```bash
 just tag "$TAG" --commit "$RELEASE_COMMIT"
-git push origin "refs/tags/$TAG"
-gh release create "$TAG" --draft --title "$TAG" --notes-from-tag
 ```
 
-Dispatch the release-baseline workflow against the new tag:
+Inspect the printed annotation and commit, then push the tag explicitly:
 
 ```bash
+git push origin "refs/tags/$TAG"
+```
+
+### Wait for the draft and review its assets
+
+Wait for **Prepare GitHub release** to succeed on the original tag push. `just release-stage` calls `release-draft` to capture the authenticated draft
+target and checks it against the native evidence you accepted before tagging. It then stages the crate and benchmark assets.
+
+```bash
+just release-stage
 just release-benchmarks "$TAG"
 ```
 
-The recipe dispatches the selected tag ref. The checkout-free preflight compares the dispatch ref and source SHA with the requested tag, then captures
-the verified repository, tag, release title, release ID and commit with `performance release-draft`. Trusted job outputs carry that target to the writer.
-The benchmark job checks out the captured commit, verifies HEAD and the local tag, then measures with read-only permissions and caches disabled. Its asset is
-`causal-triangulations-TAG-cdt-baseline-v2.tar.gz`.
-
-The separate writer installs the exact published tooling package and never checks out benchmark source. It verifies the native baseline's release and commit
-provenance, then passes the original target to `performance release-upload --target`. Target data and runtime stay outside the downloaded artifact directory.
-Missing or malformed handoffs, unexpected checkouts, moved tags, replaced release IDs and mismatched repository/tag/provenance fail before upload.
-An identical attachment retry succeeds; different bytes fail rather than overwriting evidence. The release remains a draft for explicit maintainer publication.
-
-Verify the baseline attachment and all release gates before publishing:
+Once **Release Benchmarks** verifies the staged attachment, inspect the draft title, notes and asset digests.
 
 ```bash
-cargo publish --locked
-gh release edit "$TAG" --draft=false
+gh release view "$TAG"
+gh release view "$TAG" --json assets --jq '.assets[] | [.name, .state, .size, .digest] | @tsv'
 ```
 
-Inspect the published GitHub release, assets, and crates.io package with `just release-verify "$TAG"`. Verify the Zenodo record through the permanent concept
-DOI before removing the release branch.
-These Git and publication commands are manual maintainer operations.
+Check the title, generated notes, signed crate, benchmark archive, policy and acceptance against the retained records.
+To inspect the authenticated target on its own after draft preparation finishes, run `just release-draft "$TAG"`.
+
+### Publish the reviewed draft
+
+After inspecting the inventory, ensure all draft writers have finished and retain exclusive control through confirmation:
+
+```bash
+just release-review "$TAG" release-publish "$TAG"
+```
+
+In one invocation, Just validates the original candidate and draft receipt once. The review freezes the verified inventory digest. Publication
+checks current source, required checks and asset identities immediately before changing the release and verifies the response.
+To pause after review, run the recipes separately. On resumption, publication revalidates the original inputs.
+
+### Verify registry publication
+
+Wait for **Publish to crates.io** to verify the published event, reproduce the signed crate and retain its receipt. From the same reviewed checkout:
+
+```bash
+just release-upload "$TAG"
+```
+
+The dispatched run appears under the reviewed tag and commit.
+
+```bash
+gh run list --workflow publish-crates.yml --event workflow_dispatch --branch "$TAG" --commit "$RELEASE_COMMIT" --json displayTitle,url
+```
+
+Open the run titled `Publish <tag> to crates.io` and wait for `verify` to pass. Under **Review deployments**, select **crates-io**, choose
+**Approve and deploy**, and wait for `publish` to succeed. The publisher rechecks the original benchmark, native
+selection, tool identities, exact Cargo bytes and registry absence before obtaining a short-lived upload token. Cargo packages the same source again
+when it uploads. Record the original run and attempt in the [release tracker][release-issues]. After upload:
+
+```bash
+just release-verify "$TAG"
+```
+
+Verify that the registry checksum matches the immutable GitHub crate asset. Test ordinary resolution from a fresh directory:
+
+```bash
+consumer=$(mktemp -d)
+dependency="causal-triangulations@=${TAG#v}"
+cargo new --quiet --vcs none --name cdt_release_smoke "$consumer/consumer"
+cargo add --manifest-path "$consumer/consumer/Cargo.toml" "$dependency"
+cargo check --locked --manifest-path "$consumer/consumer/Cargo.toml"
+```
+
+Record the registry, downstream check and Zenodo version reached from the concept DOI in `CITATION.cff` before closing the release tracker.
+
+## Recovering a failed run
+
+Start in the prepared checkout, set `TAG` again and inspect the local inventory:
+
+```bash
+just release-status
+```
+
+The default owner is `$HOME/.local/state/causal-triangulations/$TAG`, inferred from the prepared Cargo version. If you set `CDT_RELEASE_OWNER` during
+acquisition, restore that same absolute path. File presence helps locate the last step. Each recovery command authenticates the evidence it consumes.
+
+### Metadata or source corrections
+
+For offline metadata preparation, pass the independently confirmed stable tag to `just update-version "$TAG" --previous-release "$PREVIOUS_TAG"`.
+To deliberately change the citation date, use `just update-version "$TAG" --date YYYY-MM-DD` and rerun `just changelog-release "$TAG"`.
+Check the staged diff after an interruption. Restore a backup or repeat preparation after reconciling partial edits.
+
+If preflight reports differences, inspect the named paths. Regenerate declared outputs from the retained acquisition, review and commit the corrections,
+then repeat the clean preflight. For changes to measured source, harness, inputs or other bound files, preserve the original checkout and owner.
+Prepare a fresh checkout, choose a fresh external owner with `CDT_RELEASE_OWNER`, regenerate the notes and repeat Step 1.
+
+### Interrupted benchmark or promotion
+
+For an interrupted measurement with an intact checkpoint, resume the same acquisition:
+
+```bash
+just performance-resume
+```
+
+If acquisition used a custom owner directory, pass the original checkpoint and owner as `just performance-resume "$CHECKPOINT" "$OWNER"`.
+For an interrupted capture or promotion, retain the original scratch payload and manifest. Use the same owner with `performance-capture`.
+
+```bash
+just performance-capture
+just performance-readme --preview
+just performance-readme
+just performance-check
+```
+
+Restore missing original evidence from its independent backup, checking the retained digests. Keep partial or conflicting records for inspection.
+
+### Missing CI or interrupted draft preparation
+
+Restore `RELEASE_COMMIT` from the reviewed merge PR and inspect the main-push runs for that SHA.
+
+```bash
+gh run list --workflow ci.yml --event push --branch main --commit "$RELEASE_COMMIT" --json databaseId,attempt,status,conclusion,url
+```
+
+Inspect the original run and its exact attempt. Artifacts have 30-day retention. Pending jobs must finish. A new complete attempt requires
+fresh review of the SHA, signer, artifact IDs and digests. Preserve the old selection. If the original push can no longer be rerun, use a newly reviewed
+commit. PR runs, partial reruns and manual dispatches cannot supply main-push evidence.
+
+For an interrupted draft, locate the original tag-push run by its workflow, tag and commit.
+
+```bash
+gh run list --workflow prepare-release.yml --event push --branch "$TAG" --commit "$RELEASE_COMMIT" --json databaseId,attempt,status,conclusion,url
+```
+
+For a failed tag-push draft writer, retain the original handoff, journal and target. Inspect the exact release ID after any uncertain write.
+Use the [authenticated draft recovery procedure][draft-recovery] before continuing. Keep the original tag and draft during diagnosis.
+
+### Interrupted staging, publication or registry visibility
+
+If you need the original target path, run `just release-draft "$TAG"` after the tag-push workflow succeeds.
+Retry `just release-stage` against the same draft and journal. It reconciles the original IDs and bytes. Retry `just release-benchmarks "$TAG"`
+to verify the staged attachment. Once all writers finish, inspect the draft again before running review and publication together.
+
+If GitHub publication times out, inspect the captured release ID, lifecycle, immutable state, notes and asset digests. Resume draft publication only
+after confirming the original draft is still unpublished and intact. If the published-event check failed, rerun its complete workflow before
+dispatching from the retained owner.
+
+If dispatch verification rejected incorrect inputs, restore the originally approved evidence and inspect the prior runs. Pass the latest failed
+dispatch ID to request a corrected approval:
+
+```bash
+just release-upload "$TAG" "$FAILED_RUN_ID"
+```
+
+Recovery requires every prior attempt to have failed in `verify` and skipped `publish`. It checks registry absence before dispatch.
+If any attempt reached the publisher, inspect that original upload. If Cargo times out after upload, the publisher succeeds when the registry
+exposes the reviewed crate checksum.
+If that check fails, run `just release-verify "$TAG"` and inspect the original upload. Confirm absence independently before rerunning all jobs of that
+dispatch. The regular upload command detects an existing dispatch. An unexpected checksum or conflicting release identity requires maintainer reconciliation.
+
+[draft-recovery]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md#retry-and-recovery

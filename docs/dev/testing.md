@@ -176,14 +176,15 @@ Run integration tests:
 just test-integration
 ```
 
-Run feature-gated slow integration tests:
+Run the feature-gated toroidal stress test:
 
 ```bash
 just test-slow
 ```
 
-Slow tests run through the repository `perf` Cargo profile and set a wall-clock cap for large-scale debug runs. This keeps stress probes aligned with
-release/debug recipes and prevents default test-profile runtime from dominating slow validation.
+The ordinary integration suite runs the small and medium seeded physics simulations. `just test-slow` selects only the `large_scale_debug` target.
+It checks toroidal geometry after each checkpointed sweep and verifies proposal accounting and accepted volume moves. It uses the `perf` Cargo profile
+with a 30-minute wall-clock cap.
 
 Run all tests:
 

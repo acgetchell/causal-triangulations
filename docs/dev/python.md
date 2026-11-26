@@ -3,21 +3,21 @@
 Guidance for all repository-owned Python, including scripts, tests, and negative Semgrep fixtures.
 
 The Rust library is the primary product. Generic maintenance and performance evidence come from the pinned `research-repo-tools` package.
-CDT owns consumer integration tests, independent scientific audits, deliberate static-analysis fixtures
-and the check that its CodeQL subpaths share one release.
+CDT owns the crates.io candidate verifier, consumer integration tests, independent scientific audits and deliberate static-analysis fixtures.
+RRT checks the CodeQL action pins against CDT's declared policy.
 
 ---
 
 ## Validation
 
-Run Python validators through the repository toolchain:
+Run the full Python checks and the test suite through the repository toolchain:
 
 ```bash
 just python-check
-just python-typecheck
 just test-python
 ```
 
+Use `just python-typecheck` when iterating on a typing issue. The full `just python-check` already includes that pass.
 Shared file discovery covers every tracked and nonignored `.py` and `.pyi` file. Ruff check, Ruff format, and `ty check --error all` receive explicit paths
 with force-exclusion disabled. Both ordinary code and negative fixtures run the full configured Ruff policy; no recipe narrows it with `--select`.
 The canonical shared `python check` command owns this complete inventory in CI, with exact fixture/rule exceptions in `pyproject.toml` for deliberate

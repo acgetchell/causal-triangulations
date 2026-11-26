@@ -11,11 +11,11 @@ ecosystem = "cargo"
 directory = "."
 release-owned = [ "." ]
 
-# Edit this selection, preview with `just dependency-source tooling`, then apply.
+# Keep this selection and the Python manifest on the same source. See docs/dev/tooling-alignment.md.
 [sources.tooling]
+version = "0.3.3"
 project = "python"
 package = "research-repo-tools"
-version = "0.3.1"
 
 # Native payload pins match the declared actionlint-py distribution.
 [source-builds]

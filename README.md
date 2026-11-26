@@ -17,6 +17,12 @@
 Causal Dynamical Triangulations for quantum gravity in [Rust], built on fast [Delaunay triangulation] primitives and composable, adaptable
 [Metropolis-Hastings sampling].
 
+![Seven circular slices form a cylinder. Time points up. Blue triangles have a base on the earlier slice and red triangles on the later slice.][cdt-hero]
+
+Illustration of a 1+1 CDT cylinder. Each spatial slice is a circle (S¹), and the first and last time slices are its two boundaries.
+
+[cdt-hero]: docs/assets/foliated-spacetime.svg
+
 ## Contents
 
 - [Introduction](#-introduction)
@@ -147,8 +153,7 @@ See [geometry and sampling responsibilities][scientific-backends] for the bounda
 
 ## 📈 Benchmarking
 
-Performance validation uses [Criterion] workloads with shared measurement and reporting tools. Run `just bench-ci` for the CDT benchmark contract,
-`just bench-save-last` for a fresh local baseline, and `just bench-latest-vs-last` for a comparison on the same host.
+To compare [Criterion] timings before and after a change on the same host, follow the [local baseline procedure][local-baseline].
 
 <!-- performance-summary:start -->
 
@@ -223,6 +228,7 @@ This project is licensed under the [BSD 3-Clause License][repo-license].
 [`markov-chain-monte-carlo`]: https://crates.io/crates/markov-chain-monte-carlo
 [Metropolis-Hastings sampling]: https://crates.io/crates/markov-chain-monte-carlo
 [Criterion]: https://github.com/bheisler/criterion.rs
+[local-baseline]: docs/BENCHMARKING.md#local-baseline-and-comparison
 [api]: https://docs.rs/causal-triangulations/latest/causal_triangulations/
 [api-action]: https://docs.rs/causal-triangulations/latest/causal_triangulations/prelude/action/
 [api-config]: https://docs.rs/causal-triangulations/latest/causal_triangulations/prelude/config/

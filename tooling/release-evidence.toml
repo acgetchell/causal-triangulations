@@ -1,0 +1,46 @@
+schema = 1
+repository = "acgetchell/causal-triangulations"
+package = "causal-triangulations"
+workflow = ".github/workflows/ci.yml"
+workflow-name = "CI"
+branch = "main"
+artifact-prefix = "cargo-package"
+guarantee = "cargo-archive"
+
+[signing-job]
+name = "sign-package"
+steps = [ "Authenticate the original package handoff", "Sign the original Cargo manifest", "Retain the original signature", "Upload signed Cargo evidence" ]
+
+[[jobs]]
+name = "repository-tooling"
+steps = [ "Run repository tooling checks" ]
+runner-labels = [ "ubuntu-latest" ]
+
+[[jobs]]
+name = "build (ubuntu-latest)"
+steps = [ "Check declared Rust target", "Run native CI checks" ]
+runner-labels = [ "ubuntu-latest" ]
+
+[[jobs]]
+name = "build (macos-latest)"
+steps = [ "Check declared Rust target", "Run native CI checks" ]
+runner-labels = [ "macos-latest" ]
+
+[[jobs]]
+name = "build (windows-latest)"
+steps = [ "Check declared Rust target", "Run native CI checks" ]
+runner-labels = [ "windows-latest" ]
+
+[[jobs]]
+name = "package"
+steps = [
+    "Verify release dependencies",
+    "Audit locked Cargo dependencies",
+    "Build the library without default features",
+    "Run slow scientific tests",
+    "Verify clean default and all-feature Cargo packages",
+    "Build packaged public documentation",
+    "Record the verified archive",
+    "Upload verified Cargo package",
+]
+runner-labels = [ "ubuntu-latest" ]

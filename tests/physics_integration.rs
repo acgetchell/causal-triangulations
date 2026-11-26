@@ -85,7 +85,6 @@ fn small_cdt_simulation_has_nontrivial_physics_signal() {
     assert_physics_pipeline(config);
 }
 
-#[cfg(feature = "slow-tests")]
 #[test]
 fn medium_cdt_simulation_has_nontrivial_physics_signal() {
     let config = simulated_config(TestConfig::medium(), 42);

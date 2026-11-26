@@ -152,7 +152,7 @@ asymptotic scaling regime, or that a chosen observable analysis supports a parti
 | Reference implementation comparison | A separate [follow-up][reference-validation], not existing Rust validation evidence |
 | Continuum interpretation | Requires downstream mixing, scaling, fit-window, and uncertainty analyses |
 
-[claims]: RELEASING.md#v011-scientific-claim-checklist
+[claims]: https://github.com/acgetchell/causal-triangulations/blob/a738cd8af53716a37cfd1bc618c81d1f67c7a2bd/docs/RELEASING.md#v011-scientific-claim-checklist
 [reference-validation]: roadmap.md#v02x-11-follow-up-and-brunekreef-reference-validation
 
 The [2d-cdt sphere audit](audits/2d-cdt_sphere/README.md) establishes a specific reference boundary: the pinned implementation retains a toroidal stored

@@ -30,6 +30,11 @@ name = "cli"
 path = "tests/cli.rs"
 required-features = [ "cli" ]
 
+[[test]]
+name = "large_scale_debug"
+path = "tests/large_scale_debug.rs"
+required-features = [ "slow-tests" ]
+
 [[bench]]
 name = "cdt_benchmarks"
 harness = false
@@ -59,9 +64,9 @@ debug = "line-tables-only"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-clap = { version = "4.6.9", features = [ "derive" ], optional = true }
+clap = { version = "4.6.10", features = [ "derive" ], optional = true }
 delaunay = "0.8.5"
-markov-chain-monte-carlo = { version = "0.5.2", features = [ "serde" ] }
+markov-chain-monte-carlo = { version = "0.5.3", features = [ "serde" ] }
 dirs = "7.0.0"
 env_logger = { version = "0.11.12", optional = true }
 log = "0.4.35"

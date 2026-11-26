@@ -1,0 +1,133 @@
+schema = 5
+outputs = [ "README.md" ]
+benchmark-series = { id = "cdt-release-signal", first-release = "v0.2.0", workloads = { cdt = [
+    "cdt_generation_2d/open_strip_small/96",
+    "cdt_generation_2d/open_strip_medium/200",
+    "cdt_generation_2d/open_strip_large/336",
+    "cdt_generation_2d/toroidal_small/64",
+    "cdt_generation_2d/toroidal_medium/120",
+    "cdt_validation_2d/open_strip_small/154",
+    "cdt_validation_2d/open_strip_medium/342",
+    "cdt_validation_2d/open_strip_large/594",
+    "cdt_validation_2d/toroidal_small/128",
+    "cdt_validation_2d/toroidal_medium/240",
+    "cdt_move_attempts_2d/Move22/342",
+    "cdt_move_attempts_2d/Move13Add/240",
+    "cdt_move_attempts_2d/Move31Remove/242",
+    "cdt_move_attempts_2d/EdgeFlip/342",
+    "cdt_proposal_site_move_attempts_2d/open_strip_medium_Move22/342",
+    "cdt_proposal_site_move_attempts_2d/open_strip_medium_Move13Add/342",
+    "cdt_proposal_site_move_attempts_2d/open_strip_medium_Move31Remove/342",
+    "cdt_proposal_site_move_attempts_2d/open_strip_medium_EdgeFlip/342",
+    "cdt_proposal_site_move_attempts_2d/toroidal_medium_Move22/240",
+    "cdt_proposal_site_move_attempts_2d/toroidal_medium_Move13Add/240",
+    "cdt_proposal_site_move_attempts_2d/toroidal_medium_Move31Remove/240",
+    "cdt_proposal_site_move_attempts_2d/toroidal_medium_EdgeFlip/240",
+    "cdt_proposal_site_move_attempts_2d/toroidal_probe_Move22/1024",
+    "cdt_proposal_site_move_attempts_2d/toroidal_probe_Move13Add/1024",
+    "cdt_proposal_site_move_attempts_2d/toroidal_probe_Move31Remove/1024",
+    "cdt_proposal_site_move_attempts_2d/toroidal_probe_EdgeFlip/1024",
+    "cdt_single_metropolis_proposal_2d/open_strip_medium/342",
+    "cdt_single_metropolis_proposal_2d/toroidal_medium/240",
+    "cdt_single_metropolis_proposal_2d/toroidal_probe/1024",
+    "cdt_persistent_proposals_2d/cold_view/open_strip_medium",
+    "cdt_persistent_proposals_2d/warm_view/open_strip_medium",
+    "cdt_persistent_proposals_2d/discard_32_attempts/open_strip_medium",
+    "cdt_persistent_proposals_2d/commit_32_attempts/open_strip_medium",
+    "cdt_persistent_proposals_2d/cold_view/toroidal_medium",
+    "cdt_persistent_proposals_2d/warm_view/toroidal_medium",
+    "cdt_persistent_proposals_2d/discard_32_attempts/toroidal_medium",
+    "cdt_persistent_proposals_2d/commit_32_attempts/toroidal_medium",
+    "cdt_persistent_proposals_2d/cold_view/toroidal_probe",
+    "cdt_persistent_proposals_2d/warm_view/toroidal_probe",
+    "cdt_persistent_proposals_2d/discard_32_attempts/toroidal_probe",
+    "cdt_persistent_proposals_2d/commit_32_attempts/toroidal_probe",
+    "cdt_local_finalization_by_slices_2d/8",
+    "cdt_local_finalization_by_slices_2d/16",
+    "cdt_local_finalization_by_slices_2d/32",
+    "cdt_local_finalization_by_slices_2d/64",
+    "cdt_state_dependent_policy_2d/single_metropolis_proposal",
+    "cdt_successful_local_finalization_2d/toroidal_small/130",
+    "cdt_successful_local_finalization_2d/toroidal_medium/242",
+    "cdt_successful_local_finalization_2d/toroidal_large/386",
+    "cdt_random_move_attempt_budget_2d/open_strip_tiny/12",
+    "cdt_random_move_attempt_budget_2d/open_strip_small/30",
+    "cdt_random_move_attempt_budget_2d/toroidal_tiny/24",
+    "cdt_metropolis_2d/open_strip_tiny/12",
+    "cdt_metropolis_2d/open_strip_small/30",
+] } }
+
+[[suites]]
+name = "cdt"
+contract = "cdt-2d-release-signal-v1"
+nominal-seconds-per-case = 3
+
+[suites.measurement]
+schema = 4
+backend = "export"
+harness-mode = "independent"
+sources = [ "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "src/**/*.rs", "tests/**/*.rs" ]
+harness = [ "benches/ci_performance_suite.rs", "benches/support/or_abort.rs" ]
+workloads = [ "benches/ci_performance_suite.rs", "benches/support/or_abort.rs" ]
+raw-files = [ "tukey.json" ]
+saved-sample = "retained"
+sample-count = 10
+statistics = [ "mean", "median" ]
+confidence-level = 0.95
+unit = "ns"
+timeout = 7200
+compatible = [ "context.os", "context.architecture", "context.cpu" ]
+
+[suites.measurement.probes]
+build-policy = [
+    "python",
+    "-I",
+    "-c",
+    """import json, os, tomllib; from pathlib import Path; \
+    manifest = tomllib.loads(Path('Cargo.toml').read_text(encoding='utf-8')); \
+    keys = {'RUSTFLAGS','CARGO_ENCODED_RUSTFLAGS','RUSTC','RUSTC_WRAPPER','RUSTC_WORKSPACE_WRAPPER',\
+    'RUSTUP_TOOLCHAIN','CARGO_INCREMENTAL','CARGO_BUILD_TARGET','CARGO_BUILD_RUSTFLAGS'}; \
+    flags = {k:v for k,v in os.environ.items() if k in keys or k.startswith('CARGO_PROFILE_') \
+    or (k.startswith('CARGO_TARGET_') and k.endswith(('_RUSTFLAGS','_LINKER','_RUNNER')))}; \
+    print(json.dumps({'profile':manifest.get('profile'),'features':manifest.get('features'),'environment':flags}, sort_keys=True))""",
+]
+cargo = [ "cargo", "--version" ]
+rustc = [ "rustc", "--version", "--verbose" ]
+
+criterion = [ "cargo", "pkgid", "--locked", "--offline", "--package", "criterion" ]
+delaunay = [ "cargo", "pkgid", "--locked", "--offline", "--package", "delaunay" ]
+la-stack = [ "cargo", "pkgid", "--locked", "--offline", "--package", "la-stack" ]
+markov-chain-monte-carlo = [ "cargo", "pkgid", "--locked", "--offline", "--package", "markov-chain-monte-carlo" ]
+
+[suites.measurement.context]
+repository = "acgetchell/causal-triangulations"
+acquisition-owner = "local"
+profile = "perf"
+
+[suites.measurement.phases.baseline]
+command = [ "cargo", "bench", "--locked", "--profile", "perf", "--bench", "ci_performance_suite", "--", "--save-baseline=retained", "--noplot" ]
+gate = [ "cargo", "test", "--locked", "--release", "--test", "integration_tests", "--test", "physics_integration" ]
+environment = { CRITERION_HOME = "target/criterion", CARGO_TARGET_DIR = "target", CARGO_INCREMENTAL = "0" }
+
+[suites.measurement.phases.baseline.discovery]
+required = [ "cdt_state_dependent_policy_2d/single_metropolis_proposal" ]
+suites = [ { name = "cdt", command = [ "cargo", "bench", "--locked", "--profile", "perf", "--bench", "ci_performance_suite", "--", "--list" ] } ]
+
+[suites.measurement.phases.current]
+command = [ "cargo", "bench", "--locked", "--profile", "perf", "--bench", "ci_performance_suite", "--", "--save-baseline=retained", "--noplot" ]
+gate = [ "cargo", "test", "--locked", "--release", "--test", "integration_tests", "--test", "physics_integration" ]
+environment = { CRITERION_HOME = "target/criterion", CARGO_TARGET_DIR = "target", CARGO_INCREMENTAL = "0" }
+
+[suites.measurement.phases.current.discovery]
+required = [ "cdt_state_dependent_policy_2d/single_metropolis_proposal" ]
+suites = [ { name = "cdt", command = [ "cargo", "bench", "--locked", "--profile", "perf", "--bench", "ci_performance_suite", "--", "--list" ] } ]
+
+[[suites.measurement.series]]
+name = "baseline"
+phase = "baseline"
+select = { include = [ "*" ] }
+
+[[suites.measurement.series]]
+name = "current"
+phase = "current"
+select = { include = [ "*" ] }

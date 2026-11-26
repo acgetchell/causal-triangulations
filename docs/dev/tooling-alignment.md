@@ -1,5 +1,123 @@
 # Tooling Alignment
 
+## RRT v0.3.3 consumer commands
+
+CDT follows RRT's consumer recipes for help, cleanup previews, changelog rebuilds and packaged public documentation.
+`clean-build` keeps the explicit Cargo and coverage cleanup. The main-push package job checks public docs with the all-feature selection from
+`package.metadata.docs.rs` once. Native jobs keep their workspace checks for private documentation.
+
+As in Delaunay, the development group requests RRT's Semgrep extra. Its published compatibility constraints apply at the uv root and the lock selects
+the native scanner. The scan and fixture commands use RRT to extract Rust fences from Rust documentation. CDT owns the floating-point rule and its
+positive and negative examples. The SARIF workflow verifies the completed scan's report hashes before upload and propagates the scan result.
+The portable CI job checks the complete input inventory, rule set and SARIF wiring against the reports from that same scan.
+Standalone Python tests generate their own reports. Native CI runs the remaining Python tests on each platform.
+
+## Release commands and hosted CI
+
+MCMC, Delaunay and la-stack prepare the citation with the target tag, then let RRT generate the changelog from that date. CDT uses the same commands
+and preserves explicit overrides for recovery. The prepared Cargo version identifies the default external acquisition directory. The release recipes
+use RRT's checkpoint, candidate, archive and publication checks.
+
+Use [RRT's consumer justfile][rrt-recipes] and [release guide][rrt-releasing] for the shared command conventions.
+Follow [CDT's release guide](../RELEASING.md#verify-registry-publication) for the crates.io dispatch and protected environment approval.
+CDT accepts signed Cargo and scientific evidence before tagging, stages the benchmark archive on the draft and dispatches the protected crates.io upload
+after GitHub publication. The release tracker retains the identities and approvals at those boundaries.
+
+MCMC v0.5.3, Delaunay v0.8.5 and la-stack v0.5.4 accept a named Criterion baseline and default comparisons to `last`.
+CDT follows that convention and delegates comparisons to RRT. Its `publish-check` delegates to `release-package`, as in MCMC. RRT's clean Cargo
+package command already validates metadata. RRT also includes strict typing in `python-check` and exposes `python-typecheck` for focused runs.
+
+[rrt-recipes]: https://github.com/acgetchell/research-repo-tools/blob/v0.3.3/src/research_repo_tools/templates/justfile
+[rrt-releasing]: https://github.com/acgetchell/research-repo-tools/blob/v0.3.3/docs/RELEASING.md
+
+For #332, MCMC runs repository tooling once, Delaunay separates portable and native CI, and la-stack and RRT have staged native coverage.
+CDT runs file-format, workflow, policy and source scans once on Ubuntu. Each native build retains target checks, Clippy, rustdoc, benchmark compilation,
+the Rust and Python suites, examples, fast notebooks and allocation tests. The existing local CI and serial fallback cover the union.
+Native CI and tag preparation launch Just from the locked uv environment. Their selective tool setup exports Cargo tools and the lock supplies Just.
+The benchmark resume recipe forwards the original checkpoint and owner directory to the same RRT acquisition command.
+All notebook execution recipes use the cell timeout configured in `pyproject.toml`. It covers both sequential simulations in the analysis notebook,
+including a cold Cargo build and subprocess cleanup.
+The native Rust suite runs both the small and medium physics simulations. The main-push package job runs only the additional `large_scale_debug`
+test target with `slow-tests` enabled. It checks toroidal invariants across resumed sweeps using the `perf` profile.
+The release evidence policy names the portable job and each native job. For #289, the authorized publisher must verify the original signed
+Cargo archive and the immutable release before obtaining credentials.
+
+The pre-split PR runs below show the critical path and aggregate runner time for three successful native jobs. Cache status refers to the
+managed Cargo compilation cache. Job time includes checkout, cleanup and cache handling. Setup includes tool installation and cache restoration.
+
+| Run and Cargo cache | Runner | Queue | Tool setup | Target check | Full CI | Job time |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| [Nov 19, miss][cold-run] | Linux | 2s | 32m 10s | 24s | 8m 44s | 41m 54s |
+| Nov 19, miss | macOS | 2s | 39m 43s | 33s | 10m 55s | 52m 42s |
+| Nov 19, miss | Windows | 5s | 55m 59s | 41s | 16m 15s | 77m 45s |
+| [Nov 22, hit][warm-run] | Linux | 2s | 1m 30s | 22s | 7m 35s | 9m 45s |
+| Nov 22, hit | macOS | 3s | 2m 18s | 43s | 13m 57s | 17m 27s |
+| Nov 22, hit | Windows | 2s | 2m 19s | 34s | 11m 31s | 14m 49s |
+
+The Nov 19 critical path was 77m 50s from run creation, with 172m 21s of aggregate job time. Nov 22 took 17m 30s and 42m 01s respectively.
+The runs have different source and cache keys. Compare the adoption PR's native results, cache state and four-job totals before attributing savings.
+Separate Clippy and repository-rule SARIF uploads retain their existing workflows.
+
+[cold-run]: https://github.com/acgetchell/causal-triangulations/actions/runs/44530200177
+[warm-run]: https://github.com/acgetchell/causal-triangulations/actions/runs/45052897775
+
+## Automatic RRT updates
+
+CDT follows MCMC's `update-python-dependencies` recipe. It runs RRT outside the project environment and passes `--adopt-supplier tooling`.
+For an exact Git pin, RRT verifies that the signed release contains the pinned commit and that its distributions match PyPI before replacing the
+source declaration, manifest pins, lock and installed package. If no eligible release contains the commit, the updater retains the Git pin.
+Registry-only release jobs keep an independently reviewed package version and upload cutoff because they can run without a checkout.
+
+## Single acquisition for the v0.2.0 benchmark series
+
+The published v0.3.3 package contains the rehearsed RRT commit `2f21d77d54457ee54a070c82a655b3d254d76ab1`, including the staged-asset and
+clean-package checks from [RRT #278](https://github.com/acgetchell/research-repo-tools/pull/278) and immutable benchmark series verification from
+[RRT #280](https://github.com/acgetchell/research-repo-tools/pull/280). CDT uses the PyPI release in the project and isolated release runtimes.
+The isolated cutoff is `2026-11-26T03:45:46Z`, immediately after both distributions were uploaded.
+The #289 publisher rechecks the accepted evidence after GitHub publication and before crates.io approval.
+Its isolated registry and publication-verification commands read the publishing configuration from the tagged checkout.
+A corrected dispatch checks the original job attempts and registry absence before requesting a new approval.
+The Bash operator recipes use jq's binary output when capturing IDs and JSON so native Windows line endings preserve the same GitHub request.
+The protected upload has a step deadline and reserves time for checking the public checksum if Cargo times out.
+
+CDT uses RRT v0.3.2's version-ordered benchmark series for #322 and #331. MCMC v0.5.3 already has a compatible predecessor.
+CDT's v0.1.1 predates the persistent-proposal and slice-scaling cases, so the first acquisition uses schema 5 and reports current-phase timings.
+The series declaration pins the complete native Criterion inventory, the perf profile, and the scientific gates. RRT owns discovery, source binding,
+owner capture, report promotion, and archive verification.
+The four offline Cargo package-ID probes read each exported tree's fingerprinted `Cargo.lock`. They work with an empty Cargo cache.
+Draft preparation serializes writers by tag. Read-only attachment verification runs independently so repeated dispatches cannot displace a queued writer.
+
+The release staging transfer binds each verified file to the original draft and asset ID. CDT stages once and verifies the attachment in a
+checkout-free job. A combined review and publish invocation shares the signed candidate and receipt checks. Publication rechecks current GitHub
+state at the mutation boundary. RRT now supplies the clean Cargo dry runs, staged transfer verification and offline reviewed CodeQL pin group. CDT
+declares the required commands, scientific cases, checks and approvals. Its Semgrep fixture continues to reject unsafe package flags in any
+future release shell helper.
+
+## November 2026 retained Cargo validation for #321
+
+CDT follows the signed Cargo archive handoff from Delaunay v0.8.5 (`9ca4e8516e9b57db88275ea539ad86f77e02ee16`).
+MCMC v0.5.3 (`398220c16ba34c7686e1e7226c00eec75c865ed5`) and la-stack v0.5.4 (`560b8dd736cdc83441e888e36c25dc5ddc069fea`)
+provide the two-step operator flow and authenticated draft preparation. Their signed-source policies attest a different Cargo guarantee.
+
+The Astra review maps each existing native target check and complete `just ci` to its original runner. These jobs own the scientific and Python
+tests, allocation checks, examples, and fast notebooks. The main-push package job adds the library-only build, slow tests, dependency proof, Cargo audit
+and both clean package dry runs. A separate checkout-free job signs the manifest binding the crate bytes and producing tools. Evidence inspection
+requires these jobs in the same successful main-push attempt. GitHub retains the artifacts for 30 days. A replacement attempt requires fresh review.
+The hosted security checks remain explicit. Registry-byte verification and the approval-time reproduction belong to #289, and Step 1 benchmark
+acquisition and reuse belong to #322 and #331.
+
+The initial Bash implementation rejected Cargo flags that admitted a dirty checkout or skipped archive verification. The shared dry-run command
+now owns those arguments.
+
+The registry lock resolves Delaunay 0.8.5, la-stack 0.5.4 and MCMC 0.5.3. Facet adjacency uses Delaunay's indexed neighbor query. CDT delegates
+discrete proposal ratios and chain diagnostics to MCMC and identifies its 0.5.3 estimator contract in exported reports. The release corrects acceptance
+arithmetic and quantile interpolation, so seeded trajectories and diagnostic values can differ across library versions.
+
+## November 2026 research-repo-tools v0.3.2 Adoption
+
+CDT first adopted v0.3.2 for tooling, notebooks, release dependency checks and the checkout-free benchmark jobs. It introduced the benchmark series
+used by [#331](https://github.com/acgetchell/causal-triangulations/issues/331).
+
 ## November 2026 Rust 1.100 and Delaunay 0.8.5
 
 Adopt the published Delaunay 0.8.5 crate and align CDT's compiler minimum, pinned toolchain, and Clippy MSRV with its Rust 1.100.0 floor.

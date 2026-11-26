@@ -955,6 +955,10 @@ fn independent_chain_diagnostics_preserve_upstream_identity_counts_and_units() {
         .write_json(&mut json)
         .expect("diagnostic report export");
     let value: Value = serde_json::from_slice(&json).expect("external report parser");
+    assert_eq!(
+        value["upstream_estimator_contract"],
+        "markov-chain-monte-carlo 0.5.3 public diagnostics"
+    );
     assert_eq!(value["mean_ess"]["status"], "available");
     assert_eq!(value["mean_ess_per_second"]["status"], "unavailable");
 }

@@ -35,10 +35,9 @@ Use ordinary IEEE arithmetic operators when their operation order is part of the
 single-rounding fused operation and must not be replaced mechanically. Any other relaxed or fast-math facility requires a separate tracked scientific review
 with an explicit numerical contract, adversarial special-value and reproducibility tests, and representative benchmark evidence.
 
-The `causal-triangulations.rust.no-algebraic-f64-operations` Semgrep rule enforces receiver, associated-function, qualified, function-item, alias, and callback
-forms across source, tests, examples, benchmarks, and Rust doctest mirrors. Its sole policy exception is
-`tests/semgrep/src/project_rules/algebraic_float.rs`, which intentionally
-contains prohibited operations as positive rule fixtures.
+Semgrep checks algebraic operations in source, tests, examples and benchmarks. RRT extracts executable rustdoc blocks so CDT's doctest rule can check
+receiver calls, associated functions and function items, including calls through type aliases. The fixture `tests/semgrep/src/project_rules/algebraic_float.rs`
+contains prohibited operations alongside permitted IEEE operations, prose and strings.
 
 ---
 

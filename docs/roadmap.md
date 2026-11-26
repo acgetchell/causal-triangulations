@@ -61,7 +61,7 @@ Completed maturity work includes:
 ## v0.2.0 Simulation And Analysis Foundation
 
 The implementation provides optional volume control, spatial-loop measurements, reproducible chain artifacts, dependence-aware diagnostics, and the current
-tooling standards on published Delaunay 0.8.5 and MCMC 0.5.2. The [#258 audit](audits/2d-cdt_sphere/README.md) records the scope of the external reference.
+tooling standards on published Delaunay 0.8.5 and MCMC 0.5.3. The [#258 audit](audits/2d-cdt_sphere/README.md) records the scope of the external reference.
 Release preparation retains native/package checks and benchmark provenance. Current engineering checks do not establish an analytically validated
 equilibrium ensemble, mixing, full Brunekreef parity, or a correction of [#316](https://github.com/acgetchell/causal-triangulations/issues/316).
 

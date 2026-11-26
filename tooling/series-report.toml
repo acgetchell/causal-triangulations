@@ -1,0 +1,11 @@
+schema = 2
+current = "docs/performance/current.md"
+archive = "docs/performance/runs"
+title = "CDT release-signal timings"
+measurement = "benchmark-series/cdt-release-signal.toml"
+release = true
+
+[initialization]
+allow-empty = true
+directories = [  ]
+guards = [ "target/bench-reports/preparation.json", "target/bench-reports/run.json", "target/bench-reports/evidence.json" ]
