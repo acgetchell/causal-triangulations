@@ -32,20 +32,19 @@ changes the sampled ensemble even when it is not interpreted as a physical heat 
 
 ### `performance_test.sh`
 
-Runs CLI timing checks across several system sizes and writes `performance_results.txt`.
+Runs the shared timing command for four CDT simulations. Choose a new JSON path for each run.
 
 ```bash
-./examples/scripts/performance_test.sh
+./examples/scripts/performance_test.sh target/timings.json
 ```
 
-Use this for quick command-level scaling checks. For regression-quality benchmarking, use `just bench-ci`, `just bench-latest-vs-last`, and the Criterion suites
-described in [`benches/README.md`](../../benches/README.md) and [`docs/BENCHMARKING.md`](../../docs/BENCHMARKING.md).
+The report records one end-to-end timing per simulation. Use the [Criterion benchmarking guide](../../docs/BENCHMARKING.md) for release comparisons.
 
 ## Requirements
 
 - Bash or zsh
 - Rust toolchain
-- `bc` for `performance_test.sh`
+- Just and uv for the shared timing command
 - Project dependencies available to Cargo
 
 The scripts build the release binary before running:
@@ -56,7 +55,7 @@ cargo build --release
 
 ## Customization
 
-Each script keeps editable parameters near the top. Common knobs are:
+The basic simulation and parameter sweep keep editable parameters near the top.
 
 ```bash
 VERTICES_PER_SLICE=4
@@ -74,20 +73,12 @@ TIMESLICES=8
 STEPS=2000
 ```
 
-For performance checks, edit the size tuples:
-
-```bash
-TEST_CONFIGS=(
-    "10 5 1000"
-    "20 8 2000"
-    "50 10 3000"
-)
-```
+The timing workloads and their CLI arguments are declared in [command-timing.toml](../../tooling/command-timing.toml).
 
 ## Outputs
 
 - `sweep_results/`: one log per sweep point
-- `performance_results.txt`: command-level timing summary
+- The selected JSON file contains the command timings and their provenance.
 - Terminal logs from `RUST_LOG=info`
 
 Typical successful logs include dimensionality, vertex count, time-slice count, topology, triangulation construction, output-file writes when configured, and
@@ -99,12 +90,6 @@ Permission denied:
 
 ```bash
 chmod +x examples/scripts/*.sh
-```
-
-`bc: command not found` on macOS:
-
-```bash
-brew install bc
 ```
 
 Slow or memory-heavy runs:

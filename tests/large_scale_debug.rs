@@ -1,16 +1,14 @@
-#![cfg_attr(not(feature = "slow-tests"), allow(dead_code))]
 #![forbid(unsafe_code)]
 
-//! Large-scale CDT debug harnesses.
+//! Toroidal CDT stress test for checkpointed Metropolis sweeps.
 //!
-//! These tests are intended for manual performance and invariant debugging at
-//! sizes larger than the default integration-test budget. They are gated behind
-//! the `slow-tests` feature and should usually be run through the matching
-//! `just debug-large-scale-*` and `just perf-large-scale-debug` recipes.
+//! `just test-slow` runs the release check. Use `just debug-large-scale-1p1`
+//! to vary the mesh, sweep count, or seed during manual investigation.
 
-#[cfg(feature = "slow-tests")]
-use std::time::Instant;
-use std::{env, time::Duration};
+use std::{
+    env,
+    time::{Duration, Instant},
+};
 
 use causal_triangulations::prelude::moves::{MoveStatistics, MoveType};
 use causal_triangulations::prelude::simulation::{
@@ -234,7 +232,6 @@ const fn accepted_count(stats: &MoveStatistics, move_type: MoveType) -> u64 {
     stats.accepted(move_type)
 }
 
-#[cfg(feature = "slow-tests")]
 #[test]
 #[expect(
     clippy::too_many_lines,

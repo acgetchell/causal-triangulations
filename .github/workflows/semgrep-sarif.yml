@@ -43,18 +43,15 @@ jobs:
 
       - name: Run repository Semgrep rules
         id: semgrep
-        run: |
-          set +e
-          uv run --locked --managed-python --group dev just semgrep
-          status=$?
-          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
-          exit 0
+        continue-on-error: true
+        run: uv run --locked --managed-python --group dev just semgrep
+
+      - name: Verify the current report hashes
+        run: uv run --locked --no-sync research-repo-tools semgrep check-reports --output target/security/semgrep
 
       - name: Upload SARIF results
         if: >-
-          always() &&
-          hashFiles('target/security/semgrep/semgrep.sarif') != '' &&
-          (
+          success() && (
             github.event_name != 'pull_request' ||
             github.event.pull_request.head.repo.full_name == github.repository
           )
@@ -65,5 +62,5 @@ jobs:
           wait-for-processing: true
 
       - name: Fail on repository rule findings
-        if: steps.semgrep.outputs.exit_code != '0'
+        if: steps.semgrep.outcome == 'failure'
         run: exit 1

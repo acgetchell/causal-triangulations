@@ -1003,7 +1003,7 @@ pub fn analyze_cdt_chains(
     let mut report = CdtDiagnosticReport {
         schema_version: 1,
         crate_version: env!("CARGO_PKG_VERSION").to_owned(),
-        upstream_estimator_contract: "markov-chain-monte-carlo 0.5.2 public diagnostics".to_owned(),
+        upstream_estimator_contract: "markov-chain-monte-carlo 0.5.3 public diagnostics".to_owned(),
         sources: diagnostic_sources(chains),
         observable,
         observable_units,

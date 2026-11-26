@@ -44,6 +44,13 @@ Public callers do not receive mutable backend access; CDT mutation paths are nar
 
 ## Time Label Assignment
 
+The [README illustration](assets/foliated-spacetime.svg) depicts a constructed cylinder with open time boundaries. The seven spatial loops
+have 22, 27, 18, 23, 15, 20 and 25 edges from bottom to top. Each blue face has its base on the earlier slice and each red face on the later slice.
+The drawing contains 253 triangles. Each SVG polygon in the mesh records the slice and vertex index of each corner in `data-vertices`.
+
+OpenAI ImageGen studies of an open-ended cylinder with irregular spatial loops, a red-and-blue mesh and an upward arrow informed the composition.
+The editable SVG defines the geometric projection and mesh directly. This project illustration is covered by the [BSD 3-Clause license](../LICENSE).
+
 For `from_cdt_strip()` and `from_toroidal_cdt()`, time labels are assigned directly while building vertices. Vertex `(i, t)` receives label `t`, so each slice
 starts with exactly `vertices_per_slice` vertices. The profile constructors instead derive slice counts from the supplied `N(t)` vector, still storing each
 vertex's label as `t`. Uniform slices are therefore a regular initial condition, not a CDT requirement.

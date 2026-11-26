@@ -897,8 +897,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
             }
         })?;
         let neighbor = simplex
-            .neighbors()
-            .and_then(|mut neighbors| neighbors.nth(usize::from(facet.facet_index())))
+            .neighbor_key(usize::from(facet.facet_index()))
             .flatten()
             .ok_or_else(|| DelaunayError::InteriorFacetIndexUpdateFailed {
                 operation,
@@ -1969,10 +1968,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationQ
         if vertices_0.len() != 3 || facet_index >= vertices_0.len() {
             return Ok(None);
         }
-        let Some(face_1) = simplex_0
-            .neighbors()
-            .and_then(|mut neighbors| neighbors.nth(facet_index).flatten())
-        else {
+        let Some(face_1) = simplex_0.neighbor_key(facet_index).flatten() else {
             return Ok(None);
         };
 

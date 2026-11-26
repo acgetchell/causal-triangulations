@@ -1,0 +1,251 @@
+name: Publish to crates.io
+run-name: >-
+  ${{ github.event_name == 'release' && format('Verify published release {0} (release {1})', github.event.release.tag_name, github.event.release.id)
+  || format('Publish {0} to crates.io', inputs.tag) }}
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Reviewed published stable tag
+        type: string
+        required: true
+      transfer:
+        description: Original complete staging transfer
+        type: string
+        required: true
+      proof:
+        description: Independent owner digests and original published-event selection
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  published-release:
+    if: github.repository == 'acgetchell/causal-triangulations' && github.event_name == 'release'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install the declared uv runner
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version-file: pyproject.toml
+          enable-cache: false
+          cache-python: false
+
+      - name: Prepare the declared dependency receipts
+        run: |
+          uv run --locked --managed-python --group dev research-repo-tools toolchain sync --tool cargo
+          uv run --locked --no-sync research-repo-tools toolchain export --tool cargo
+          uv run --locked --no-sync just release-dependency-builds
+
+      - name: Verify the published event, source, required checks and crate asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --locked --no-sync research-repo-tools toolchain run --tool cargo -- \
+            research-repo-tools release gate "$RELEASE_TAG" --require-crate-asset
+
+      - name: Reproduce the signed crate without building or uploading
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Fetch the frozen selection by the digest in this provider event.
+          uv run --locked --no-sync python -I - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          from research_repo_tools.evidence import deterministic_json
+          from research_repo_tools.release_assets import download_release_asset
+
+          root = Path.cwd()
+          work = Path(os.environ["RUNNER_TEMP"])
+          event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_bytes())
+          acceptance, = (a for a in event["release"]["assets"] if a["name"] == "acceptance.json" and a["state"] == "uploaded")
+          destination = work / "acceptance.json"
+          download_release_asset(root, os.environ["GITHUB_REPOSITORY"], os.environ["RELEASE_TAG"], "acceptance.json",
+                                 destination, expected_sha256=acceptance["digest"].removeprefix("sha256:"))
+          (work / "selection.json").write_bytes(deterministic_json(json.loads(destination.read_bytes())["native"]))
+          PY
+          crate="causal-triangulations-${RELEASE_TAG#v}.crate"
+          cargo package --locked --package causal-triangulations --no-verify --target-dir "$RUNNER_TEMP/reproduction"
+          archive="$RUNNER_TEMP/reproduction/package/$crate"
+          cargo_version=$(cargo --version)
+          rustc_version=$(rustc --version --verbose)
+          jq -n --arg cargo "$cargo_version" --arg rustc "$rustc_version" '{cargo: $cargo, rustc: $rustc}' > "$RUNNER_TEMP/tools.json"
+          uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-11-26T03:45:46Z \
+            --from research-repo-tools==0.3.3 research-repo-tools release evidence verify tooling/release-evidence.toml \
+            --checkout "$PWD" --commit "$GITHUB_SHA" --version "${RELEASE_TAG#v}" --expected "$RUNNER_TEMP/selection.json" --reproduced-archive "$archive" \
+            --tools "$RUNNER_TEMP/tools.json" --output "$RUNNER_TEMP/rechecked.json"
+          archive_sha=$(sha256sum < "$archive")
+          acceptance_sha=$(sha256sum < "$RUNNER_TEMP/acceptance.json")
+          jq -e --arg crate "$crate" --arg digest "sha256:${archive_sha%% *}" \
+            '[.release.assets[] | select(.name == $crate) | [.state, .digest]] == [["uploaded", $digest]]' "$GITHUB_EVENT_PATH"
+          jq -e --arg tag "$RELEASE_TAG" --arg commit "$GITHUB_SHA" \
+            --arg run "$GITHUB_RUN_ID" --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg crate "${archive_sha%% *}" --arg acceptance "${acceptance_sha%% *}" \
+            '{repository: .repository.full_name, release_id: .release.id, tag: $tag, commit: $commit,
+              run: $run, attempt: $attempt, crate_sha256: $crate, acceptance_sha256: $acceptance}' \
+            "$GITHUB_EVENT_PATH" > "$RUNNER_TEMP/published-release.json"
+
+      - name: Retain the published release identity for registry approval
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: published-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/published-release.json
+          if-no-files-found: error
+          retention-days: 30
+
+  verify:
+    if: >-
+      github.event_name == 'workflow_dispatch' && github.repository == 'acgetchell/causal-triangulations' &&
+      github.actor == 'acgetchell' && github.triggering_actor == 'acgetchell' && github.ref == format('refs/tags/{0}', inputs.tag)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+    outputs:
+      attempt: ${{ github.run_attempt }}
+      accepted: ${{ steps.review.outputs.accepted }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version-file: pyproject.toml
+          enable-cache: false
+          cache-python: false
+      - name: Verify the independently selected published candidate
+        id: review
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_COMMIT: ${{ github.sha }}
+          RELEASE_TRANSFER: ${{ inputs.transfer }}
+          RELEASE_PROOF: ${{ inputs.proof }}
+          REGISTRY_WORK: ${{ runner.temp }}/candidate
+        run: |
+          set -euo pipefail
+          uv run --locked --managed-python --group dev research-repo-tools toolchain sync --tool cargo
+          uv run --locked --no-sync research-repo-tools toolchain run --tool cargo -- just _registry-candidate
+          digest=$(sha256sum < "$REGISTRY_WORK/acceptance.json")
+          printf 'accepted=%s\n' "${digest%% *}" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      UPLOAD_IMAGE: rust:1.100.0-bookworm@sha256:30a9c647e188457aac6e0bd3f9d73ae725dc3f36e57a2808ba3dde653c7c6db8
+    environment: crates-io
+    concurrency:
+      group: publish-crates-causal-triangulations
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      checks: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.10"
+          enable-cache: false
+          cache-python: false
+      - name: Recheck the exact candidate after environment approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_COMMIT: ${{ github.sha }}
+          RELEASE_TRANSFER: ${{ inputs.transfer }}
+          RELEASE_PROOF: ${{ inputs.proof }}
+          EXPECTED_ACCEPTANCE: ${{ needs.verify.outputs.accepted }}
+          VERIFIED_ATTEMPT: ${{ needs.verify.outputs.attempt }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_RUN_ATTEMPT" == "$VERIFIED_ATTEMPT" && "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]]
+          [[ "$EXPECTED_ACCEPTANCE" =~ ^[0-9a-f]{64}$ ]]
+          mkdir "$RUNNER_TEMP/approved"
+          jq -e '.target' <<< "$RELEASE_TRANSFER" > "$RUNNER_TEMP/approved/target.json"
+          # Source builds and the candidate verifier receive only a read token inside a disposable container.
+          docker run --rm --security-opt=no-new-privileges \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/source,readonly" \
+            --mount "type=bind,src=$(command -v uv),dst=/usr/local/bin/uv,readonly" \
+            --mount "type=bind,src=$(command -v gh),dst=/usr/local/bin/gh,readonly" \
+            --env GH_TOKEN --env RELEASE_TAG --env RELEASE_COMMIT --env RELEASE_TRANSFER --env RELEASE_PROOF \
+            --env EXPECTED_ACCEPTANCE --env REGISTRY_WORK=/tmp/candidate "$UPLOAD_IMAGE" \
+            bash -euo pipefail -c '
+              apt-get update -qq
+              apt-get install -y --no-install-recommends jq
+              git -c safe.directory=/source clone --no-local --no-checkout /source /tmp/checkout
+              cd /tmp/checkout
+              git remote set-url origin https://github.com/acgetchell/causal-triangulations.git
+              git checkout --detach "$RELEASE_COMMIT"
+              uv run --locked --managed-python --group dev research-repo-tools toolchain sync --tool cargo
+              uv run --locked --no-sync research-repo-tools toolchain run --tool cargo -- just _registry-candidate
+              printf "%s  %s\n" "$EXPECTED_ACCEPTANCE" "$REGISTRY_WORK/acceptance.json" | sha256sum --check --status
+              [[ "$(jq -er .cargo "$REGISTRY_WORK/tools.json")" == "$(cargo --version)" ]]
+              [[ "$(jq -er .rustc "$REGISTRY_WORK/tools.json")" == "$(rustc --version --verbose)" ]]
+            '
+          # Exercise the upload image and read-only source mount before obtaining credentials.
+          version=${RELEASE_TAG#v}
+          sha=$(jq -er --arg name "causal-triangulations-$version.crate" '.assets[$name].sha256 | select(test("^[0-9a-f]{64}$"))' <<< "$RELEASE_TRANSFER")
+          docker run --rm --security-opt=no-new-privileges --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/source,readonly" --workdir /source \
+            --env GIT_CONFIG_COUNT=1 --env GIT_CONFIG_KEY_0=safe.directory --env GIT_CONFIG_VALUE_0=/source --env CARGO_TARGET_DIR=/tmp/upload \
+            --env "EXPECTED_SHA=$sha" --env "CRATE=causal-triangulations-$version.crate" "$UPLOAD_IMAGE" bash -euo pipefail -c '
+              cargo package --locked --no-verify --package causal-triangulations
+              printf "%s  %s\n" "$EXPECTED_SHA" "/tmp/upload/package/$CRATE" | sha256sum --check --status
+            '
+          uv run --no-config --no-project --isolated --managed-python --python 3.15 --exclude-newer 2026-11-26T03:45:46Z \
+            --with research-repo-tools==0.3.3 python -I -m research_repo_tools release registry "$RELEASE_TAG" --expect absent
+      - name: Obtain the short-lived registry token
+        id: auth
+        uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+      - name: Publish the verified Cargo package
+        # Cargo can time out after upload. The mandatory registry checksum check below decides the outcome.
+        continue-on-error: true
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          docker run --rm --security-opt=no-new-privileges --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/source,readonly" --workdir /source \
+            --env GIT_CONFIG_COUNT=1 --env GIT_CONFIG_KEY_0=safe.directory --env GIT_CONFIG_VALUE_0=/source --env CARGO_TARGET_DIR=/tmp/upload \
+            --env CARGO_REGISTRY_TOKEN "$UPLOAD_IMAGE" cargo publish --locked --no-verify --package causal-triangulations --registry crates-io
+      - name: Verify public bytes even after a Cargo timeout
+        if: ${{ !cancelled() && steps.auth.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          uv run --no-config --no-project --isolated --managed-python --python 3.15 --exclude-newer 2026-11-26T03:45:46Z \
+            --with research-repo-tools==0.3.3 python -I -m research_repo_tools release verify "$RELEASE_TAG" \
+            --publication-only --target "$RUNNER_TEMP/approved/target.json" --require-crate-asset --attempts 7 --interval 10

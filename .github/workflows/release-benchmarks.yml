@@ -1,8 +1,7 @@
 name: Release Benchmarks
 run-name: Release benchmark ${{ inputs.tag }}
 
-# Write-token jobs install registry tooling and never check out benchmark code.
-# Keep both registry resolution cutoffs aligned with the reviewed adoption.
+# Both jobs operate on inert bytes with the isolated release runtime.
 permissions:
   contents: read
 
@@ -13,19 +12,22 @@ on:
         description: Existing stable tag with a draft GitHub Release
         required: true
         type: string
-
-concurrency:
-  group: release-benchmarks-${{ inputs.tag }}
-  cancel-in-progress: false
+      transfer:
+        description: Original complete staging receipt
+        required: true
+        type: string
+      digest:
+        description: Independently retained SHA-256 of the staging receipt
+        required: true
+        type: string
 
 env:
-  CARGO_TERM_COLOR: always
   RELEASE_TAG: ${{ inputs.tag }}
-  RELEASE_ASSET: causal-triangulations-${{ inputs.tag }}-cdt-baseline-v2.tar.gz
-  RUST_BACKTRACE: 1
+  RELEASE_ASSET: causal-triangulations-${{ inputs.tag }}-cdt-series.tar.gz
 
 jobs:
   validate-release:
+    if: github.repository == 'acgetchell/causal-triangulations' && github.actor == 'acgetchell' && github.triggering_actor == 'acgetchell'
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -37,8 +39,9 @@ jobs:
       - name: Install registry tooling runner
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.9"
+          version: "0.13.10"
           enable-cache: false
+          cache-python: false
 
       - name: Capture verified draft GitHub Release target
         id: release-target
@@ -49,95 +52,47 @@ jobs:
           set -euo pipefail
           [[ "$GITHUB_REF" == "refs/tags/$RELEASE_TAG" ]] || { echo "Dispatch ref must match the release tag." >&2; exit 1; }
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "Dispatch source must be a full commit SHA." >&2; exit 1; }
-          target="$(uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-11-22T02:44:08Z \
-            --from research-repo-tools==0.3.1 research-repo-tools performance release-draft "$GH_REPO" "$RELEASE_TAG" \
+          target="$(uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-11-26T03:45:46Z \
+            --from research-repo-tools==0.3.3 research-repo-tools performance release-draft "$GH_REPO" "$RELEASE_TAG" \
             --commit "$GITHUB_SHA" --expected-title "$RELEASE_TAG")"
           target="$(jq -ce . <<< "$target")"
           printf 'target=%s\ncommit=%s\n' "$target" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
-  release-baseline:
+  verify-attachment:
     needs: validate-release
-    runs-on: ubuntu-latest
-    timeout-minutes: 150
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.validate-release.outputs.commit }}
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Verify captured benchmark checkout
-        env:
-          RELEASE_COMMIT: ${{ needs.validate-release.outputs.commit }}
-        run: |
-          set -euo pipefail
-          [[ "$RELEASE_COMMIT" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git --no-pager rev-parse HEAD)" = "$RELEASE_COMMIT"
-          test "$(git --no-pager rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$RELEASE_COMMIT"
-
-      - name: Set up declared toolchain
-        uses: $/.github/actions/setup-toolchain
-        with:
-          cache: "false"
-
-      - name: Measure and package shared release baseline
-        run: |
-          just release-version-check
-          just performance-baseline "$RELEASE_TAG"
-
-      - name: Upload temporary baseline artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: bench-baseline-${{ inputs.tag }}
-          path: ${{ env.RELEASE_ASSET }}
-          retention-days: 30
-          if-no-files-found: error
-
-  publish-baseline:
-    needs: [validate-release, release-baseline]
     permissions:
       contents: write
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - name: Install registry tooling runner
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.9"
+          version: "0.13.10"
           enable-cache: false
+          cache-python: false
 
-      - name: Restore trusted preflight target
+      - name: Verify the staged archive against its accepted acquisition
         env:
-          RELEASE_TARGET: ${{ needs.validate-release.outputs.target }}
-        run: |
-          set -euo pipefail
-          test -n "$RELEASE_TARGET"
-          printf '%s\n' "$RELEASE_TARGET" > "$RUNNER_TEMP/release-target.json"
-
-      - name: Download release baseline
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: bench-baseline-${{ inputs.tag }}
-          path: ${{ runner.temp }}/baseline
-
-      - name: Verify native baseline provenance against captured target
-        env:
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          baseline="$(uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-11-22T02:44:08Z \
-            --from research-repo-tools==0.3.1 research-repo-tools release evidence archive inspect \
-            --archive "$RUNNER_TEMP/baseline/$RELEASE_ASSET" --tag "$RELEASE_TAG")"
-          jq -e --arg repo "$GH_REPO" --slurpfile target "$RUNNER_TEMP/release-target.json" \
-            '($target | length) == 1 and $target[0].repository == $repo
-            and .tag == $target[0].tag and .revision == $target[0].commit' <<< "$baseline" >/dev/null \
-            || { echo "Baseline provenance differs from the captured release target." >&2; exit 1; }
-
-      - name: Attach verified baseline to draft GitHub Release
-        env:
-          GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
-        run: >-
-          uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-11-22T02:44:08Z
-          --from research-repo-tools==0.3.1 research-repo-tools performance release-upload
-          "$GH_REPO" "$RELEASE_TAG" "$RUNNER_TEMP/baseline/$RELEASE_ASSET" --target "$RUNNER_TEMP/release-target.json"
+          RELEASE_TARGET: ${{ needs.validate-release.outputs.target }}
+          TRANSFER: ${{ inputs.transfer }}
+          TRANSFER_SHA256: ${{ inputs.digest }}
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          printf '%s\n' "$RELEASE_TARGET" > target.json
+          printf '%s' "$TRANSFER" > transfer.json
+          runtime=(uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-11-26T03:45:46Z
+            --from research-repo-tools==0.3.3 research-repo-tools)
+          "${runtime[@]}" release assets receive --transfer transfer.json --transfer-sha256 "$TRANSFER_SHA256" --target target.json --output staged
+          "${runtime[@]}" release evidence archive verify --policy staged/policy.json --acceptance staged/acceptance.json \
+            --archive "staged/$RELEASE_ASSET" --target target.json
+
+      - name: Retain the verified attachment receipt
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: benchmark-attachment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/transfer.json
+          if-no-files-found: error
+          retention-days: 30

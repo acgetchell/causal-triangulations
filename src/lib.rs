@@ -28,9 +28,7 @@
 //!
 //! # Feature flags
 //!
-//! - `slow-tests` enables long-running validation tests used by repository
-//!   development commands. It does not change the library or `cdt` binary API
-//!   and is not needed for normal use.
+//! - `slow-tests` enables the repository's large toroidal checkpoint stress test.
 //!
 //! # Checkpointing
 //!

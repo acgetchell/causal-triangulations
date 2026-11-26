@@ -1,0 +1,23 @@
+schema = 2
+document = "README.md"
+archive = "docs/performance/runs"
+measurement = "benchmark-series/cdt-release-signal.toml"
+release = true
+repository = "acgetchell/causal-triangulations"
+tag-policy = "prepare"
+begin = "<!-- performance-summary:start -->"
+end = "<!-- performance-summary:end -->"
+statistic = "median"
+unit = "ns"
+rows = [ { key = "proposal", label = "State-dependent Metropolis proposal" } ]
+series = [ { name = "cdt/current", label = "Current", rows = { proposal = "cdt_state_dependent_policy_2d/single_metropolis_proposal" } } ]
+references = [
+    { path = "Cargo.toml", pattern = '^version = "(?P<value>[^"]+)"\r?$', source = "version" },
+    { path = "docs/performance/current.md", pattern = '^- current: available .*; release (?P<value>[^;]+); revision', source = "tag" },
+]
+
+[table]
+intervals = "below"
+timing-legend = true
+
+[provenance.current]

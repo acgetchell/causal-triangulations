@@ -41,6 +41,7 @@ jobs:
             ".github/workflows/gitleaks.yml",
             ".github/workflows/osv.yml",
             ".github/workflows/performance.yml",
+            ".github/workflows/prepare-release.yml",
             ".github/workflows/release-benchmarks.yml",
             ".github/workflows/rust-clippy.yml",
             ".github/workflows/semgrep-sarif.yml",

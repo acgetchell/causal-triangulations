@@ -94,7 +94,16 @@ def label_rows(value: object, name: str, bound: int) -> list[list[int]]:
 
 def read_observation(path: Path, raw: Complex) -> Observation:
     """Establish the sidecar shape and its time-profile agreement with the export."""
-    value = json.loads(path.read_text(encoding="utf-8"))
+
+    def unique_fields(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        fields: dict[str, object] = {}
+        for key, item in pairs:
+            if key in fields:
+                raise ValueError(f"duplicate sidecar field: {key}")
+            fields[key] = item
+        return fields
+
+    value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_fields)
     if not isinstance(value, dict) or type(value.get("sphere")) is not bool:
         message = "sidecar sphere must be a boolean"
         raise ValueError(message)
@@ -168,13 +177,8 @@ def incidence(faces: list[Face]) -> dict[Edge, list[int]]:
     return dict(result)
 
 
-def link_kind(vertex: int, faces: list[Face]) -> str:
+def link_kind(edges: list[Edge]) -> str:
     """A surface vertex link is one simple cycle or one simple boundary path."""
-    edges: list[Edge] = []
-    for face in faces:
-        if vertex in face:
-            a, b = [v for v in face if v != vertex]
-            edges.append(edge(a, b))
     vertices = {v for pair in edges for v in pair}
     adjacency = graph(vertices, edges)
     if not edges or len(set(edges)) != len(edges) or components(adjacency) != 1:
@@ -219,7 +223,16 @@ def orientable(faces: list[Face], edges: dict[Edge, list[int]]) -> bool:
 
 
 def census(n0: int, faces: list[Face]) -> dict[str, object]:
-    """Classify the finite simplicial complex, including manifold prerequisites."""
+    """Classify a sampled, nonempty vertex set, including manifold prerequisites."""
+    result, _, _ = _analyze_complex(n0, faces)
+    return result
+
+
+def _analyze_complex(n0: int, faces: list[Face]) -> tuple[dict[str, object], dict[Edge, list[int]], Graph]:
+    """Retain the incidence and dual graph for independent observable comparisons."""
+    if n0 <= 0:
+        message = "census requires a positive vertex count"
+        raise ValueError(message)
     if any(v < 0 or v >= n0 for face in faces for v in face):
         message = "vertex outside complex"
         raise ValueError(message)
@@ -227,12 +240,17 @@ def census(n0: int, faces: list[Face]) -> dict[str, object]:
     boundary = [pair for pair, incident in edges.items() if len(incident) == 1]
     boundary_vertices = {v for pair in boundary for v in pair}
     boundary_graph = graph(boundary_vertices, boundary)
-    links = [link_kind(v, faces) for v in range(n0)]
+    vertex_links: list[list[Edge]] = [[] for _ in range(n0)]
+    for a, b, c in faces:
+        vertex_links[a].append(edge(b, c))
+        vertex_links[b].append(edge(c, a))
+        vertex_links[c].append(edge(a, b))
+    links = [link_kind(link) for link in vertex_links]
     manifold = all(len(incident) in (1, 2) for incident in edges.values()) and all(
         kind == ("path" if v in boundary_vertices else "cycle") for v, kind in enumerate(links)
     )
     dual = graph(range(len(faces)), (pair for incident in edges.values() for pair in combinations(incident, 2)))
-    return {
+    result = {
         "N0": n0,
         "N1": len(edges),
         "N2": len(faces),
@@ -248,6 +266,7 @@ def census(n0: int, faces: list[Face]) -> dict[str, object]:
         "closed": manifold and not boundary,
         "orientable": orientable(faces, edges) if manifold else None,
     }
+    return result, edges, dual
 
 
 def adjacency_census(rows: list[list[int]], expected: Graph) -> dict[str, object]:
@@ -272,40 +291,49 @@ def audit(path: Path) -> dict[str, object]:
     """Census one snapshot and compare independent edges with all helper lists."""
     raw = read_export(path)
     observed = read_observation(path.with_suffix(".json"), raw)
-    edges = incidence(raw.faces)
-    dual = graph(range(len(raw.faces)), (pair for incident in edges.values() for pair in combinations(incident, 2)))
+    result, edges, dual = _analyze_complex(len(raw.times), raw.faces)
     pointer_errors: list[list[int]] = []
     for index, ((a, b, c), neighbors) in enumerate(zip(raw.faces, raw.neighbors, strict=True)):
         for slot, pair in enumerate((edge(a, c), edge(b, c), edge(a, b))):
             if set(edges[pair]) != {index, neighbors[slot]} or len(edges[pair]) != 2:
                 pointer_errors.append([index, slot])
-    reconstructed_links = [edge(a, b) for a, b in observed["links"]]
+    reconstructed_links = Counter(edge(a, b) for a, b in observed["links"])
     periods = max(raw.times) + 1
     bad_time_edges = [list(pair) for pair in edges if (raw.times[pair[0]] - raw.times[pair[1]]) % periods not in (0, 1, periods - 1)]
     return {
-        "complex": census(len(raw.times), raw.faces),
+        "complex": result,
         "sphere": observed["sphere"],
         "move_counts_reject_add_delete_flip": observed["move_counts_reject_add_delete_flip"],
         "slice_sizes": observed["slice_sizes"],
         "nonadjacent_time_edges": bad_time_edges,
         "stored_pointer_errors": pointer_errors,
-        "reconstructed_links_match": Counter(reconstructed_links) == Counter(dict.fromkeys(edges, 1)),
+        "reconstructed_links_match": reconstructed_links == dict.fromkeys(edges, 1),
         "observable_vertices": adjacency_census(observed["vertex_neighbors"], graph(range(len(raw.times)), edges)),
         "observable_triangles": adjacency_census(observed["triangle_neighbors"], dual),
     }
 
 
+def _snapshot_name(path: Path) -> bool:
+    return path.stem.endswith(("-initial", "-evolved")) and path.suffix in {".dat", ".json"}
+
+
 def write_report(directory: Path, output: Path) -> None:
     """Publish a complete report atomically, without replacing any snapshot input."""
-    paths = sorted(directory.glob("*-initial.dat")) + sorted(directory.glob("*-evolved.dat"))
+    paths = sorted({path.with_suffix(".dat") for path in directory.iterdir() if _snapshot_name(path)})
     if not paths:
         message = "no audit snapshots found"
         raise ValueError(message)
     for path in paths:
         for source in (path, path.with_suffix(".json")):
+            if not source.is_file():
+                message = f"missing snapshot input: {source}"
+                raise ValueError(message)
             if output.resolve() == source.resolve() or (output.exists() and output.samefile(source)):
                 message = "report output aliases a snapshot input"
                 raise ValueError(message)
+    if output.parent.resolve() == directory.resolve() and _snapshot_name(output):
+        message = "report output uses a snapshot filename"
+        raise ValueError(message)
     results = {path.stem: audit(path) for path in paths}
     text = json.dumps(results, indent=2, sort_keys=True) + "\n"
     with ExitStack() as cleanup:
@@ -322,7 +350,10 @@ def main() -> None:
     parser.add_argument("directory", type=Path)
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
-    write_report(args.directory, args.output)
+    try:
+        write_report(args.directory, args.output)
+    except (OSError, ValueError, TypeError) as error:
+        parser.exit(1, f"{parser.prog}: {error}\n")
 
 
 if __name__ == "__main__":

@@ -35,21 +35,25 @@ just update
 `pyproject.toml`. Use `update-tools` or `update-dependencies` for an independent scope, and `tools-check` for non-mutating installed-version verification.
 Review every resulting manifest, lockfile, and pin change before committing it.
 
-Python updates delegate to `deps update-python --all-projects`: tooling, notebooks and Semgrep share the root Python 3.15 environment and lockfile.
-The root manifest retains the exact scanner pin, wheel-only installation, patched MCP/OpenTelemetry dependencies and Python 3.15 Windows wheel override.
+Python updates delegate to `deps update-python --all-projects --adopt-supplier tooling`. Both `just update` and `just update-python-dependencies`
+adopt a compatible published RRT release when its signed evidence proves it contains the current Git pin. Once on PyPI, they select newer compatible
+releases. Tooling, notebooks and Semgrep share the root Python 3.15 environment and lockfile.
+RRT's Semgrep extra supplies the scanner range. The root lock selects the exact wheel, and the manifest applies RRT's published compatibility overrides.
 
 To adopt a newer published shared package and its Python baseline, preview `just shared-python-plan VERSION`, then apply the reviewed plan with
 `just shared-python-update VERSION`. Supply the package version, not a Python version. These commands run outside the old environment.
-`just tools-clean` previews unused managed-cache entries; `just tools-clean --apply` removes them.
+`just clean` previews obsolete managed tools and retained coverage runs. Review the preview before using `just clean --apply`.
+`just clean-build` immediately removes the local Cargo build and generated coverage reports.
 
 Release metadata is a separate deterministic transaction:
 
 ```bash
 TAG=vX.Y.Z
-just update-version "$TAG" --date "$RELEASE_DATE" --previous-release "$PREVIOUS_TAG"
+just update-version "$TAG"
+just changelog-release "$TAG"
 ```
 
-An explicit previous tag keeps preparation offline; omitting it discovers the latest published stable GitHub release. The updater synchronizes Cargo/CFF
+The updater discovers the latest published stable GitHub release. An explicit previous tag permits offline preparation. It synchronizes Cargo/CFF
 versions and owned active-documentation references; Python remains a dependency-only environment. It uses the declared date, rejects version-specific DOI
 identifiers, validates the complete candidate tree
 before replacement, and rolls back byte-for-byte on a caught publication failure. It does not update dependencies, generate the changelog, or run benchmarks.
@@ -57,23 +61,22 @@ before replacement, and rolls back byte-for-byte on a caught publication failure
 Release performance is a separate evidence transaction:
 
 ```bash
-just bench-latest
-just bench-latest-vs-last
-just performance-release vX.Y.Z vA.B.C
-just performance-doc
-just performance-readme tooling/performance-readme.toml
+just release-dependency-builds
+just performance-release
+just performance-readme
 ```
 
-`bench-latest` runs the correctness gate before `ci_performance_suite`. `performance-release` requires two explicit fresh-series tags and measures
-in temporary worktrees before retaining and promoting shared evidence. It requires an explicit user request because it mutates Git state.
-The first post-migration tag establishes a baseline; comparisons and README tables wait until a second compatible measurement exists.
-`performance-doc` and `performance-readme CONFIG` render retained evidence without measurement. See [performance testing](../BENCHMARKING.md).
+For a local before-and-after measurement, follow the [Criterion baseline workflow](../BENCHMARKING.md#local-baseline-and-comparison).
+For a release, the prepared Cargo version selects the external owner directory.
+`performance-release` prepares the series, measures in private source exports and captures the
+original evidence before promoting the report. The first series release reports absolute timings. A compatible successor uses paired trials.
+`performance-capture` and `performance-readme` recover outputs from the original run. See [performance testing](../BENCHMARKING.md).
 
 ## Justfile Usage
 
 This repository standardizes development tasks through the `justfile`.
-Run bare `just` for the complete public recipe list with arguments and descriptions. The explicit private default runs `just --list`; there is no separate
-hand-maintained help list. Recipe definitions stay lexicographically sorted and `just justfile-fmt-check` checks formatting.
+Bare `just` and `just help` list the public recipes with their arguments and descriptions. Recipe definitions stay lexicographically sorted and
+`just justfile-fmt-check` checks formatting. For historical changelog repair, `just changelog-rebuild` previews the full diff before an explicit `--apply`.
 
 Agents should **prefer running `just` commands instead of invoking the underlying tools directly**. The justfile ensures the correct flags, configuration, and
 tool ordering are used.
@@ -219,8 +222,8 @@ For heavier stabilization work, run the slow-test wrapper:
 just ci-slow
 ```
 
-This runs the normal CI command and then feature-gated slow/stress tests through the repository `perf` Cargo profile. The slow suite includes large-scale
-toroidal debug probes, so optimized builds are part of the validation contract rather than an optional speed tweak.
+This runs normal CI, including the medium physics simulation, then runs the toroidal stress test once under the `perf` Cargo profile.
+Use `just test-slow` on its own when normal CI has already passed for the same changes.
 
 ## Fast Validation Cycle
 
@@ -247,6 +250,8 @@ just semgrep-test  # Verify Semgrep rule fixtures
 
 Both commands use the root Python 3.15 development environment. On Linux, they and `just test-python` inherit a finite stack limit to work around
 [Semgrep's Python 3.15 resource-limit handling](https://github.com/semgrep/semgrep/issues/11979).
+RRT extracts executable Rust documentation blocks for the floating-point rule and checks their fixture annotations against original source locations.
+The hosted SARIF job verifies RRT's report hashes before uploading findings.
 
 ## Coverage
 
@@ -445,7 +450,7 @@ tag=v4.39.3  # Set to the CodeQL Action release under review.
 gh api "repos/github/codeql-action/commits/refs%2Ftags%2F$tag" --jq .sha
 ```
 
-Record that tag and full commit in `.github/codeql-release.toml`. Set all three Action tags in `.github/action-updates.toml` to the same version.
+Record the tag and full commit in the `consistency.releases` group in `.github/action-updates.toml`. Set all three Action tags there to the same version.
 Preview `just update-actions --dry-run`, apply `just update-actions`, and run `just actions-check`. Dependabot handles the other routine Actions updates
 and remains enabled for security updates to all Actions.
 
@@ -499,7 +504,7 @@ Python scripts are linted and type-checked:
 ```bash
 just python-check      # Full Ruff/format/Ty policy, including negative fixtures
 just python-fix        # ruff check --fix + ruff format
-just python-typecheck  # strict ty check (blocking)
+just python-typecheck  # Type-check only, for focused iteration
 just test-python       # pytest
 ```
 
@@ -668,14 +673,10 @@ just changelog
 The shared CLI uses its bundled `git-cliff` template, applies Markdown hygiene, archives completed minor release series under `docs/archives/changelog/`,
 and formats generated changelog files with `rumdl`. `just changelog-preview` validates a preview without changing history.
 
-For release PRs, generate the changelog for a version before the final tag exists with:
+For release PRs, generate the changelog using the prepared citation date:
 
 ```bash
-just changelog-unreleased "$TAG" "$RELEASE_DATE"
+just changelog-release "$TAG"
 ```
 
-Create annotated release tags from the generated changelog after the release PR is merged with:
-
-```bash
-just tag "$TAG"
-```
+Follow the [release guide](../RELEASING.md) to verify the merged commit, create its annotated tag and publish.

@@ -61,10 +61,10 @@ def test_composite_allowlist_checks_the_real_setup_action(approved: bool, tmp_pa
     ("change", "error"),
     [
         ((".github/actions/setup-toolchain/action.yml", r"(astral-sh/setup-uv@)[0-9a-f]{40}", r"\g<1>" + "0" * 40), "inconsistent astral-sh/setup-uv"),
-        ((".github/workflows/codeql.yml", r"(github/codeql-action/analyze@)[0-9a-f]{40}", r"\g<1>" + "0" * 40), "differs from the reviewed CodeQL release"),
-        ((".github/workflows/*.yml", r"(github/codeql-action/[\w-]+@)[0-9a-f]{40}", r"\g<1>" + "1" * 40), "differs from the reviewed CodeQL release"),
-        ((".github/action-updates.toml", r'("github/codeql-action/analyze" = )"[^"]+"', r'\g<1>"latest"'), "must select one explicit release tag"),
-        ((".github/codeql-release.toml", r'"v[\d.]+"', '"v0.0.0"'), "must match the reviewed tag"),
+        ((".github/workflows/codeql.yml", r"(github/codeql-action/analyze@)[0-9a-f]{40}", r"\g<1>" + "0" * 40), "differs from the reviewed release"),
+        ((".github/workflows/*.yml", r"(github/codeql-action/[\w-]+@)[0-9a-f]{40}", r"\g<1>" + "1" * 40), "differs from the reviewed release"),
+        ((".github/action-updates.toml", r'("github/codeql-action/analyze" = )"[^"]+"', r'\g<1>"latest"'), "must select its reviewed tag"),
+        ((".github/action-updates.toml", r'tag = "v[\d.]+"', 'tag = "v0.0.0"'), "must select its reviewed tag"),
     ],
 )
 def test_actions_check_rejects_pin_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: tuple[str, str, str], error: str) -> None:
@@ -72,8 +72,7 @@ def test_actions_check_rejects_pin_drift(tmp_path: Path, monkeypatch: pytest.Mon
     policy = ".github/action-updates.toml"
     workflows = ".github/workflows"
     composite = ".github/actions/setup-toolchain/action.yml"
-    paths = [ROOT / name for name in (policy, composite, "pyproject.toml", "uv.lock", ".python-version", "justfile", "tooling/check_codeql_release.py")]
-    paths.append(ROOT / ".github/codeql-release.toml")
+    paths = [ROOT / name for name in (policy, composite, "pyproject.toml", "uv.lock", ".python-version", "justfile")]
     paths.extend((ROOT / workflows).glob("*.yml"))
     for source in paths:
         destination = tmp_path / source.relative_to(ROOT)

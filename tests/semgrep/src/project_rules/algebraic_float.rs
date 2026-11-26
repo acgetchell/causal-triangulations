@@ -125,65 +125,78 @@ pub fn permitted_qualified_fma_item() -> fn(f64, f64, f64) -> f64 {
 }
 
 /// ```rust
-/// // ruleid: causal-triangulations.rust.no-algebraic-f64-operations
+/// // ruleid: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
+/// let value = 1.0_f64.algebraic_add(2.0);
+/// ```
+/// ~~~rust
+/// // ruleid: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
+/// # let add = <f64>::algebraic_add;
+/// type Real = f64;
+/// // ruleid: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
+/// let value = Real::algebraic_sub(2.0, 1.0);
+/// // ruleid: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
+/// let multiply = <Real>::algebraic_mul;
+/// // ok: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
+/// let fused = Real::mul_add;
+/// // ok: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
+/// let description = "f64::algebraic_add";
+/// ~~~
+/// ```standalone_crate
+/// // ruleid: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
 /// let value = 1.0_f64.algebraic_add(2.0);
 /// ```
 /// ```standalone_crate
-/// // ruleid: causal-triangulations.rust.no-algebraic-f64-operations
-/// let value = 1.0_f64.algebraic_add(2.0);
-/// ```
-/// ```standalone_crate
-/// // ok: causal-triangulations.rust.no-algebraic-f64-operations
+/// // ok: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
 /// let value = 1.0_f64 + 2.0;
 /// ```
 /// ```ignore-x86_64,ignore-windows
-/// // ruleid: causal-triangulations.rust.no-algebraic-f64-operations
+/// // ruleid: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
 /// let value = f64::algebraic_sub(1.0, 2.0);
 /// ```
 /// ```ignore-x86_64,ignore-windows
-/// // ok: causal-triangulations.rust.no-algebraic-f64-operations
+/// // ok: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
 /// let value = 1.0_f64 - 2.0;
 /// ```
 pub fn forbidden_receiver_doctest() {}
 
 /// ```
-/// // ruleid: causal-triangulations.rust.no-algebraic-f64-operations
+/// // ruleid: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
 /// let value = f64::algebraic_sub(1.0, 2.0);
 /// ```
 pub fn forbidden_associated_doctest() {}
 
 /// ```rust,no_run
-/// // ruleid: causal-triangulations.rust.no-algebraic-f64-operations
+/// // ruleid: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
 /// let multiply = <f64>::algebraic_mul;
 /// ```
 pub fn forbidden_function_item_doctest() {}
 
 mod inner_doctest {
     //! ```no_run
-    //! // ruleid: causal-triangulations.rust.no-algebraic-f64-operations
+    //! // ruleid: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
     //! let value = <f64>::algebraic_div(1.0, 2.0);
     //! ```
 }
 
 /**
  * ```rust
- * // ruleid: causal-triangulations.rust.no-algebraic-f64-operations
+ * // ruleid: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
  * let value = 1.0_f64.algebraic_rem(2.0);
  * ```
  * ```standalone_crate,no_run
- * // ruleid: causal-triangulations.rust.no-algebraic-f64-operations
+ * // ruleid: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
  * let value = 1.0_f64.algebraic_rem(2.0);
  * ```
  * ```standalone_crate,no_run
- * // ok: causal-triangulations.rust.no-algebraic-f64-operations
+ * // ok: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
  * let value = 1.0_f64 % 2.0;
  * ```
  * ```ignore-x86_64-unknown-linux-gnu
- * // ruleid: causal-triangulations.rust.no-algebraic-f64-operations
+ * // ruleid: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
  * let value = <f64>::algebraic_mul(1.0, 2.0);
  * ```
  * ```ignore-x86_64-unknown-linux-gnu
- * // ok: causal-triangulations.rust.no-algebraic-f64-operations
+ * // ok: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
  * let value = 1.0_f64.mul_add(2.0, 3.0);
  * ```
  */
@@ -192,7 +205,7 @@ pub fn forbidden_block_doctest() {}
 mod inner_block_doctest {
     /*!
     ```rust
-    // ruleid: causal-triangulations.rust.no-algebraic-f64-operations
+    // ruleid: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
     let value = 1.0_f64.algebraic_add(2.0);
     ```
     */
@@ -200,14 +213,14 @@ mod inner_block_doctest {
 
 /// Prose may discuss f64::algebraic_add without executing it.
 /// ```rust
-/// // ok: causal-triangulations.rust.no-algebraic-f64-operations
+/// // ok: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
 /// let value = 1.0_f64 + 2.0;
-/// // ok: causal-triangulations.rust.no-algebraic-f64-operations
+/// // ok: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
 /// let value = 1.0_f64.mul_add(2.0, 3.0);
 /// ```
 /// Prose after a Rust fence may also discuss f64::algebraic_sub.
 /// ```
-/// // ok: causal-triangulations.rust.no-algebraic-f64-operations
+/// // ok: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
 /// let value = 1.0_f64 - 2.0;
 /// ```
 /// ```text
@@ -217,12 +230,12 @@ pub fn permitted_doctest() {}
 
 /**
  * ```rust
- * // ok: causal-triangulations.rust.no-algebraic-f64-operations
+ * // ok: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
  * let value = 1.0_f64 % 2.0;
  * ```
  * Prose outside the fence may discuss f64::algebraic_rem.
  * ```
- * // ok: causal-triangulations.rust.no-algebraic-f64-operations
+ * // ok: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
  * let value = 1.0_f64 / 2.0;
  * ```
  */

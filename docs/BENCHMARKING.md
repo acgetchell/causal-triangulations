@@ -9,7 +9,7 @@ old GitHub Release assets remain remote historical records and are not selected 
 Run on the same quiet host, with the same toolchain and workload:
 
 ```bash
-just bench-save-last
+just bench-save-baseline last
 # Make the intended change.
 just bench-latest-vs-last
 ```
@@ -17,6 +17,10 @@ just bench-latest-vs-last
 The first command runs integration and physics checks before saving the native Criterion baseline. The second reruns those gates and measurements,
 then uses the shared comparison CLI to display absolute baseline/current median times in nanoseconds, recorded intervals, and relative changes.
 A missing baseline fails instead of implying success. Local Criterion output lives under `target/criterion/` and is disposable.
+
+`just bench-save-last` is shorthand for `just bench-save-baseline last`. To keep several baselines, pass the same name to `bench-save-baseline` and
+`bench-latest-vs-last`. Use `just bench-latest-vs-last cdt-v2-last` for a baseline saved under CDT's previous default.
+If the current run is already on disk, `just bench-compare NAME` compares it with the named baseline without measuring again.
 
 `just bench-smoke` checks that harnesses run with small sample counts; it does not produce publishable timing evidence.
 `just allocation-check` enforces deterministic budgets for cached observables, checked edge queries, proposal-cache reuse, and unchanged trace storage.
@@ -41,58 +45,34 @@ scaling, or a performance regression. Use the correctness-gated Criterion workfl
 
 ## Fresh release evidence
 
-The next tagged release establishes the first new shared baseline. Create a draft GitHub Release for that tag, then dispatch
-`.github/workflows/release-benchmarks.yml` with its `release_tag`.
-The workflow captures the verified draft release identity and full tag commit before measurement. It checks out that commit with read-only permissions and
-caches disabled, then verifies native baseline provenance and attaches inert bytes to the original release ID in a separate registry-only writer job.
-The trusted target travels through preflight job outputs, separately from the measured checkout and baseline artifact. Changed identities or missing
-handoffs fail closed. See [release guidance](RELEASING.md#tag-attach-baseline-and-publish) for the handoff contract and explicit publication step.
-The release stays a draft for review. The new asset name is `causal-triangulations-TAG-cdt-baseline-v2.tar.gz`.
+The v0.2.0 series starts after the historical v0.1.1 release. Its first report covers all 54 Criterion cases with absolute timings and recorded
+uncertainty. A compatible successor can use paired trials. Review host, compiler, dependencies, build policy and workload coverage before interpreting
+a comparison. The series declaration is in `benchmark-series/cdt-release-signal.toml`.
 
-To package an exact clean local tag with the same shared format:
+On the prepared release branch, use the external owner directory selected for the Cargo version. Keep it for the entire release.
 
 ```bash
-just performance-baseline "$TAG"
+just release-dependency-builds
+just performance-release
+just performance-readme --preview
+just performance-readme
+just performance-check
 ```
 
-After two fresh releases exist, compare their assets without running benchmarks:
-
-```bash
-just performance-github-assets "$TAG" "$PREVIOUS_TAG"
-```
-
-For a prospective release, the explicit comparison recipe creates temporary Git worktrees and runs the trusted benchmark command from
-`tooling/benchmark.toml`:
-
-```bash
-just performance-release "$TAG" "$PREVIOUS_TAG"
-```
-
-This recipe mutates Git worktrees and requires explicit user authorization under [AGENTS.md](../AGENTS.md#git-operations). It is outside normal validation.
-Measurements capture source/harness fingerprints, host identity, Rust, Criterion, Delaunay, la-stack, and MCMC versions.
-Matching known host OS, architecture, and CPU are required for local pairs. Review dependency and workload changes before interpreting any ratio.
-
-The recipe saves shared JSON comparison/evidence files under `target/bench-reports/`, then promotes the report and retained evidence into
-`docs/performance/v2/`. Missing or mismatched evidence fails before publication.
-Use `just performance-doc --payload PATH --manifest PATH` to promote an already reviewed pair. `just performance-check` validates retained output, accepts
-the empty inventory before the first comparison, and rejects evidence without its current report. It runs in `check` and `ci` without taking measurements.
-No current report is tracked until the first compatible new comparison exists.
+The release command checks published dependencies, exports the selected sources and runs the integration and physics gates before measurement.
+It freezes the raw evidence and original provenance in the owner directory. If promotion fails after acquisition,
+`just performance-capture` uses those bytes. For an interrupted measurement, `just performance-resume` resumes its checkpoint.
+README rendering is independently repeatable.
+Commit the generated outputs after reviewing
+`docs/performance/current.md` and the retained run under `docs/performance/runs/`.
 
 ## README publication
 
-Copy `tooling/performance-readme.example.toml` to `tooling/performance-readme.toml` when a fresh retained pair is available.
-Set its evidence paths, independently verified source commit/tag pins, and representative benchmark rows. Keep the references to the package version
-and both report tags. Preview before publishing:
+The README configuration selects the state-dependent proposal median and its confidence bounds. Run `just performance-readme --check` to check the
+table against the promoted report. `just performance-check` validates retained output without measuring.
 
-```bash
-just performance-readme tooling/performance-readme.toml --preview
-just performance-readme tooling/performance-readme.toml
-just performance-readme tooling/performance-readme.toml --check
-```
-
-The table includes **absolute baseline and current times with units**, recorded confidence bounds, the baseline/current point ratio, and percent reduction.
-This makes the cost of each operation visible rather than presenting relative speed alone. It also reports added/missing workload coverage.
-The full report retains provenance and all comparable workloads. The template intentionally omits a ratio-only SVG.
+After merge, follow the [release guide](RELEASING.md#wait-for-the-draft-and-review-its-assets). The release workflow receives the existing staged
+archive by its original GitHub asset ID. Recovery uses the same selection and archive name, `causal-triangulations-TAG-cdt-series.tar.gz`.
 
 Marginal timing intervals do not establish an interval for a speed ratio or statistical significance.
 These measurements do not establish ergodicity, mixing, thermalization, or continuum behavior.

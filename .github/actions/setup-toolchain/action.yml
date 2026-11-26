@@ -2,6 +2,9 @@ name: Set up declared toolchain
 description: Install locked shared tooling and export verified Rust and Cargo tools.
 
 inputs:
+  native:
+    description: Install the CI compiler and tools needed by native tests and changelog fixtures.
+    default: "false"
   binaries-only:
     description: Install and verify only the declared release binaries for scanner jobs.
     default: "false"
@@ -30,7 +33,7 @@ runs:
           }}
 
     - name: Install and verify declared tools
-      if: inputs.binaries-only != 'true'
+      if: inputs.binaries-only != 'true' && inputs.native != 'true'
       shell: bash
       env:
         GITHUB_TOKEN: ${{ github.token }}
@@ -39,11 +42,23 @@ runs:
       run: uv run --locked --managed-python --only-group tooling research-repo-tools setup
 
     - name: Export verified tool paths
-      if: inputs.binaries-only != 'true'
+      if: inputs.binaries-only != 'true' && inputs.native != 'true'
       shell: bash
       env:
         RESEARCH_REPO_TOOLS_HOME: ${{ runner.temp }}/rrt
       run: uv run --locked --group dev research-repo-tools toolchain export
+
+    - name: Install and export native CI tools
+      if: inputs.native == 'true'
+      shell: bash
+      env:
+        RESEARCH_REPO_TOOLS_HOME: ${{ runner.temp }}/rrt
+        RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME: ${{ runner.temp }}/rrt-cargo-build
+      run: |
+        uv sync --locked --managed-python --group dev --group notebooks
+        tools=(--tool cargo-nextest --tool git-cliff --tool rumdl)
+        uv run --locked --no-sync research-repo-tools toolchain sync "${tools[@]}"
+        uv run --locked --no-sync research-repo-tools toolchain export "${tools[@]}"
 
     - name: Install locked tooling package
       if: inputs.binaries-only == 'true'

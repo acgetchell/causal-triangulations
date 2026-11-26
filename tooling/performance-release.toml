@@ -1,0 +1,10 @@
+schema = 1
+repository = "acgetchell/causal-triangulations"
+measurement = "benchmark-series/cdt-release-signal.toml"
+report = "tooling/series-report.toml"
+publication = "tooling/series-readme.toml"
+preparation = "target/bench-reports/preparation.json"
+payload = "target/bench-reports/run.json"
+manifest = "target/bench-reports/evidence.json"
+mode = "infer-release"
+order = "version"

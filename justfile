@@ -5,10 +5,19 @@
 
 # Use bash with strict error handling for all recipes
 set positional-arguments
+set lazy
 
 _tools := "uv run --locked --group dev research-repo-tools"
-_run := _tools + " toolchain run --"
+_native_tools := "--tool cargo-nextest --tool git-cliff --tool rumdl"
+_run := _tools + " toolchain run" + (if env("CDT_CI_NATIVE_TOOLS", "") == "1" { " " + _native_tools } else { "" }) + " --"
 _release_cargo := _tools + " toolchain run --tool cargo --"
+_release_tools := "uvx --no-config --isolated --managed-python --python 3.15 --exclude-newer 2026-11-26T03:45:46Z --from research-repo-tools==0.3.3 research-repo-tools"
+_release_tag := shell("cargo metadata --offline --locked --no-deps --format-version 1 | jq -er " + quote('.packages[] | select(.name == "causal-triangulations") | "v" + .version'))
+_owner_dir := if env("CDT_RELEASE_OWNER", "") != "" { env("CDT_RELEASE_OWNER") } else { env("HOME", home_directory()) / ".local/state/causal-triangulations" / _release_tag }
+_owner := quote(_owner_dir)
+_checkpoint := "target/bench-reports/release-checkpoint"
+_commit := '$(git --no-pager rev-parse --verify HEAD)'
+_final := _owner + "/final/" + _commit
 _notebooks := "uv run --locked --group dev --group notebooks research-repo-tools"
 _scanner := "uv run --locked --no-active --group dev research-repo-tools"
 _actions_inputs := quote(".github/workflows") + " " + quote(".github/actions/setup-toolchain/action.yml")
@@ -45,12 +54,16 @@ _ci-native:
 
 # Preserve the complete static and compilation gate before runtime workloads.
 [private]
-_ci-policy: justfile-fmt-check action-lint actions-allowlist-check actions-check zizmor markdown-check spell-check performance-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check notebook-lint shell-check semgrep semgrep-test fmt-check clippy-all-targets doc-check bench-compile
+_ci-policy: ci-repository-tooling _ci-compile
+
+# Compile and lint all target-dependent code on each host.
+[private]
+_ci-compile: clippy-all-targets doc-check bench-compile
 
 # Python tests use temporary outputs and the already synchronized environment.
 [private]
 _ci-python:
-    UV_NO_SYNC=1 just test-python
+    UV_NO_SYNC=1 just test-python -m 'not semgrep_report'
 
 # Independent consumers overlap without synchronizing their shared environment.
 [parallel]
@@ -75,7 +88,6 @@ actions-allowlist-check:
 # Check coupled GitHub Actions pins offline using the provisioned environment.
 actions-check:
     uv run --locked --no-sync --no-python-downloads --offline research-repo-tools actions check --policy .github/action-updates.toml {{ _actions_inputs }}
-    uv run --locked --no-sync --no-python-downloads --offline python tooling/check_codeql_release.py {{ _actions_inputs }}
 
 # Run deterministic cached-observable allocation assertions.
 allocation-check:
@@ -95,7 +107,7 @@ bench-ci: allocation-check
     {{ _run }} cargo bench --profile perf --bench ci_performance_suite
 
 # Compare existing current Criterion output with a retained named baseline.
-bench-compare baseline="cdt-v2-last":
+bench-compare baseline="last":
     {{ _tools }} performance compare target/criterion target/criterion --baseline-sample "$1" --format markdown
 
 # Compile all benchmark harnesses with warnings denied.
@@ -106,16 +118,15 @@ bench-compile:
 bench-latest: benchmark-input-check
     {{ _run }} cargo bench --locked --profile perf --bench ci_performance_suite -- --noplot
 
-# Produce the current release signal and compare it with the conventional local baseline.
-bench-latest-vs-last: bench-latest
-    {{ _tools }} performance compare target/criterion target/criterion --baseline-sample cdt-v2-last --format markdown
+# Produce the current release signal and compare it with a saved local baseline.
+bench-latest-vs-last baseline="last": bench-latest && (bench-compare baseline)
 
 # Produce a named native Criterion baseline after validating benchmark inputs.
 bench-save-baseline tag: benchmark-input-check
     {{ _run }} cargo bench --locked --profile perf --bench ci_performance_suite -- --save-baseline "$1" --noplot
 
 # Refresh the conventional local comparison baseline.
-bench-save-last: (bench-save-baseline "cdt-v2-last")
+bench-save-last: (bench-save-baseline "last")
 
 # Smoke-test benchmark harnesses with minimal samples; not for performance data.
 bench-smoke:
@@ -138,6 +149,10 @@ build:
 build-release:
     {{ _run }} cargo build --release
 
+# Build the public documentation from a packaged Cargo library.
+cargo-docs package *args:
+    {{ _run }} research-repo-tools validation cargo-docs "$@"
+
 # Changelog management (git-cliff + post-processing + archiving + rumdl formatting)
 changelog:
     {{ _run }} research-repo-tools changelog generate
@@ -154,9 +169,13 @@ changelog-check:
 changelog-preview *args:
     {{ _run }} research-repo-tools changelog generate --dry-run "$@"
 
-# Generate prospective release notes using an explicit tag and date.
-changelog-unreleased tag date:
-    {{ _run }} research-repo-tools changelog generate --tag "$1" --date "$2"
+# Preview the complete changelog history rebuild, or apply it with --apply.
+changelog-rebuild *args:
+    {{ _run }} research-repo-tools changelog rebuild "$@"
+
+# Generate prospective notes from the prepared citation date or an explicit override.
+changelog-unreleased tag date="":
+    {{ _run }} research-repo-tools changelog generate --tag "$1" ${2:+--date "$2"}
 
 # Check (non-mutating): run all linters/validators
 check: lint-code lint-docs lint-config
@@ -170,10 +189,12 @@ check-fast:
 ci: _ci-environment _ci-policy _ci-runtime
     @echo "🎯 CI checks complete!"
 
-# CI with performance baseline
-ci-baseline tag="ci":
-    just ci
-    just bench-save-baseline "$1"
+# Hosted native compile, runtime and Python portability checks.
+ci-native: _ci-environment _ci-compile _ci-runtime
+
+# Source, dependency policy and formatting checks shared by the native runners.
+ci-repository-tooling: justfile-fmt-check action-lint actions-allowlist-check actions-check zizmor markdown-check spell-check performance-check validate-json toml-fmt-check toml-lint yaml-fmt-check yaml-lint citation-check python-check notebook-lint shell-check semgrep semgrep-test fmt-check
+    CDT_CI_SEMGREP_REPORT=target/security/semgrep uv run --locked --group dev pytest -q -m semgrep_report tests/tooling/test_shared_tooling.py
 
 # CI + feature-gated slow/stress tests.
 ci-slow: ci test-slow
@@ -183,8 +204,12 @@ ci-slow: ci test-slow
 citation-check: release-metadata-check
     uvx --from cffconvert==2.0.0 cffconvert --validate -i CITATION.cff
 
-# Clean build artifacts
-clean:
+# Preview obsolete managed tools and retained coverage runs, or remove them with --apply.
+clean *args:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools clean "$@"
+
+# Remove local Cargo build artifacts and generated coverage reports.
+clean-build:
     {{ _run }} cargo clean
     rm -rf target/llvm-cov
     rm -rf coverage_report
@@ -232,8 +257,7 @@ debug-large-scale-1p1-512 max_secs="1800":
 # Default recipe shows available commands
 [default]
 [private]
-default:
-    @just --list
+default: help
 
 # Preview a declared source change; pass --apply to reconcile its manifest and lock.
 [positional-arguments]
@@ -259,6 +283,10 @@ fmt:
 # Check Rust formatting without modifying sources.
 fmt-check:
     {{ _run }} cargo fmt --all -- --check
+
+# List available recipes and their arguments.
+help:
+    @just --justfile {{ quote(justfile()) }} --list
 
 # Apply canonical Justfile formatting.
 justfile-fmt:
@@ -320,7 +348,7 @@ notebook-execute-fast output_dir="target/notebooks":
 
 # Execute the heavier analysis-cache notebook.
 notebook-execute-slow output_dir="target/notebooks":
-    {{ _run }} {{ _notebooks }} notebooks execute --timeout 1800 --output-dir "$1" notebooks/02_analysis_caches.ipynb
+    {{ _run }} {{ _notebooks }} notebooks execute --output-dir "$1" notebooks/02_analysis_caches.ipynb
 
 # Validate notebook structure, output hygiene, and native Python.
 notebook-lint:
@@ -343,13 +371,14 @@ perf-large-scale-debug max_secs="1800":
 performance *args:
     {{ _run }} research-repo-tools performance "$@"
 
-# Package a fresh tagged baseline in the shared format.
+# Package a historical exact-tag baseline in the original shared format.
 performance-baseline tag:
     {{ _run }} research-repo-tools performance baseline tooling/benchmark.toml "$1" "causal-triangulations-$1-cdt-baseline-v2.tar.gz"
 
 # Check retained release reports, accepting an empty inventory before the first comparison.
 performance-check:
     {{ _tools }} performance promote tooling/performance-report.toml --check
+    {{ _tools }} performance promote tooling/series-report.toml --check
 
 # Time the four exploratory CLI workloads, retaining every sample in a fresh JSON file.
 performance-command-time output:
@@ -363,19 +392,28 @@ performance-doc *args:
 performance-github-assets current baseline:
     {{ _tools }} performance assets "$1" "$2" --repository acgetchell/causal-triangulations --asset-template 'causal-triangulations-{tag}-cdt-baseline-v2.tar.gz' --payload target/bench-reports/assets.comparison.json --manifest target/bench-reports/assets.evidence.json --report target/bench-reports/assets.md
 
-# Publish absolute timing columns and relative changes from independently pinned evidence.
-performance-readme configuration *args:
-    {{ _tools }} performance publish "$1" "${@:2}"
+# Freeze or recover the original measurement and regenerate its release report.
+performance-capture owner=_owner_dir:
+    {{ _run }} research-repo-tools performance capture tooling/performance-release.toml --owner "$1" --promote
 
-# Measure and publish release evidence in temporary Git worktrees (maintainer operation).
-performance-release current baseline:
-    {{ _run }} research-repo-tools performance measure tooling/benchmark.toml "$1" "$2" --allow-git-mutations --payload target/bench-reports/release.comparison.json --manifest target/bench-reports/release.evidence.json --report target/bench-reports/release.md
-    {{ _tools }} performance promote tooling/performance-report.toml --payload target/bench-reports/release.comparison.json --manifest target/bench-reports/release.evidence.json
+# Select release history and validate the complete series declaration without measuring.
+performance-prepare:
+    {{ _run }} research-repo-tools performance prepare tooling/performance-release.toml --release-intent
+
+# Render the release README from the captured run.
+performance-readme *args:
+    {{ _tools }} performance readme tooling/performance-release.toml "$@"
+
+# Acquire the prepared release workload once and retain its evidence outside the checkout.
+performance-release owner=_owner_dir: performance-prepare
+    {{ _run }} research-repo-tools performance release tooling/performance-release.toml --release-intent --checkpoint {{ quote(_checkpoint) }} --owner "$1"
+
+# Resume complete units against the original preparation in the acquisition checkout.
+performance-resume checkpoint=_checkpoint:
+    {{ _run }} research-repo-tools performance release tooling/performance-release.toml --release-intent --resume --checkpoint "$1" --owner {{ _owner }}
 
 # Check package metadata and dry-run crates.io publication.
-publish-check:
-    {{ _run }} research-repo-tools validation cargo-metadata
-    {{ _run }} cargo publish --locked --allow-dirty --dry-run
+publish-check: release-package
 
 # Check all Python source and negative fixtures with Ruff and Ty.
 python-check:
@@ -393,10 +431,24 @@ python-sync:
 python-typecheck:
     {{ _tools }} python typecheck
 
-# Dispatch release benchmarks from the explicitly selected stable tag.
-release-benchmarks tag:
-    [[ "$1" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] || { echo "A canonical stable tag is required." >&2; exit 2; }
-    gh workflow run release-benchmarks.yml --repo acgetchell/causal-triangulations --ref "$1" -f "tag=$1"
+# Verify the original staged release batch in the checkout-free tag workflow.
+release-benchmarks tag: (release-draft tag)
+    state={{ _final }}; sha=$(sha256sum < "$state/transfer.json"); gh workflow run release-benchmarks.yml --repo acgetchell/causal-triangulations --ref "$1" -f "tag=$1" -F "transfer=@$state/transfer.json" -f "digest=${sha%% *}"
+
+# Verify one dispatched registry candidate using a private work directory on the runner.
+[private]
+_registry-candidate: release-dependency-builds
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [[ "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+    [[ "$RELEASE_COMMIT" == {{ _commit }} && "$REGISTRY_WORK" == /* ]]
+    mkdir "$REGISTRY_WORK"
+    {{ _release_cargo }} cargo package --locked --package causal-triangulations --no-verify --target-dir "$REGISTRY_WORK"
+    cargo_version=$(cargo --version)
+    rustc_version=$(rustc --version --verbose)
+    jq -n --arg cargo "$cargo_version" --arg rustc "$rustc_version" '{cargo: $cargo, rustc: $rustc}' > "$REGISTRY_WORK/tools.json"
+    uv run --locked --no-sync python -I tooling/verify_registry_candidate.py
+    {{ _tools }} release registry "$RELEASE_TAG" --expect absent
 
 # Populate the managed Cargo cache used by the locked release dependency proof.
 release-cargo-fetch *args:
@@ -410,6 +462,39 @@ release-dependencies:
 release-dependency-builds: python-sync release-cargo-fetch
     {{ _release_cargo }} research-repo-tools release dependency-builds
 
+# Capture the original prepared draft and print the retained target path.
+release-draft tag:
+    state={{ _final }}; jq -e --arg tag "$1" --arg commit "{{ _commit }}" '.tag == $tag and .commit == $commit' "$state/policy.json" >/dev/null
+    state={{ _final }}; digest=$(sha256sum < "$state/selection.json"); {{ _release_tools }} release assets retrieve tooling/draft-receipt.toml --tag "$1" --commit "{{ _commit }}" --expected-native-sha256 "${digest%% *}" --output "$state/draft"
+    @printf '%s\n' {{ _final }}/draft/target.json
+
+# Freeze the original Step 1 acquisition and signed native evidence for the clean release commit.
+release-evidence: (_release-candidate "select")
+
+# Revalidate the original benchmark and Cargo evidence without sampling or building.
+[private]
+_release-candidate mode:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    owner={{ _owner }}
+    state={{ _final }}
+    commit={{ _commit }}
+    args=()
+    output="$state/acceptance.json"
+    if [[ "$1" != select || -e "$output" ]]; then
+        args+=(--acceptance "$output")
+        output="$state/revalidated.json"
+    fi
+    {{ _release_cargo }} {{ _release_tools }} release evidence candidate tooling/release-evidence.toml \
+        --required-checks --checkout "$PWD" --commit "$commit" --policy "$owner/policy.json" --policy-output "$state/policy.json" \
+        --payload "$owner/run.json" --manifest "$owner/evidence.json" --acquisition-sha256 "$(cat "$owner/acquisition.sha256")" \
+        --publication-receipt "$owner/publication.json" --publication-sha256 "$(cat "$owner/publication.sha256")" \
+        --native-output "$state/selection.json" --output "$output" --format summary ${args[@]+"${args[@]}"}
+
+# Check the release PR's clean commit against Step 1 evidence before merge.
+release-preflight commit="":
+    owner={{ _owner }}; {{ _release_tools }} release evidence candidate-preflight --checkout "$PWD" --commit "${1:-{{ _commit }}}" --policy "$owner/policy.json" --payload "$owner/run.json" --manifest "$owner/evidence.json" --acquisition-sha256 "$(cat "$owner/acquisition.sha256")" --publication-receipt "$owner/publication.json" --publication-sha256 "$(cat "$owner/publication.sha256")"
+
 # Validate release-version/date synchronization, concept DOI, and environment metadata.
 release-metadata-check:
     {{ _tools }} release check
@@ -419,15 +504,96 @@ release-notes tag:
     {{ _tools }} changelog notes "$1"
 
 # Verify the clean default and all-feature packages without uploading.
-release-package:
-    {{ _release_cargo }} research-repo-tools validation cargo-metadata --package causal-triangulations
-    {{ _release_cargo }} cargo publish --locked --package causal-triangulations --registry crates-io --dry-run
-    {{ _release_cargo }} cargo publish --locked --package causal-triangulations --registry crates-io --dry-run --all-features
+release-package directory="":
+    {{ _release_cargo }} research-repo-tools validation cargo-package --package causal-triangulations ${1:+--output "$1"}
 
-# Inspect a published GitHub release and its crates.io package.
+# Publish the explicitly reviewed GitHub draft and verify the resulting asset identities.
+release-publish tag: (_release-candidate "reviewed") (release-draft tag)
+    state={{ _final }}; {{ _release_cargo }} {{ _release_tools }} release publish "$1" --approve --target "$state/draft/target.json" --asset-transfer "$state/transfer.json" --transfer-sha256 "$(cat "$state/reviewed.sha256")"
+
+# Review the original draft and freeze its verified asset IDs and digests.
+release-review tag: (_release-candidate "reviewed") (release-draft tag)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    state={{ _final }}
+    digest=$(sha256sum < "$state/transfer.json")
+    digest=${digest%% *}
+    {{ _release_tools }} release assets receive --target "$state/draft/target.json" --transfer "$state/transfer.json" --transfer-sha256 "$digest" --output "$state/reviewed"
+    cmp "$state/policy.json" "$state/reviewed/policy.json"
+    cmp "$state/acceptance.json" "$state/reviewed/acceptance.json"
+    cmp "$state/package/causal-triangulations-${1#v}.crate" "$state/reviewed/causal-triangulations-${1#v}.crate"
+    {{ _release_tools }} release evidence archive verify --policy "$state/policy.json" --acceptance "$state/acceptance.json" \
+        --archive "$state/reviewed/causal-triangulations-$1-cdt-series.tar.gz" --target "$state/draft/target.json"
+    if [[ -e "$state/reviewed.sha256" ]]; then test "$(cat "$state/reviewed.sha256")" = "$digest"; else (set -C; printf '%s\n' "$digest" > "$state/reviewed.sha256"); fi
+    jq '.target, .assets' "$state/transfer.json"
+
+# Attach the retained signed Cargo package to the authenticated draft.
+release-stage tag=_release_tag: (release-draft tag)
+    #!/usr/bin/env bash
+    set -euo pipefail
+    owner={{ _owner }}
+    commit={{ _commit }}
+    state="$owner/final/$commit"
+    asset="causal-triangulations-$1-cdt-series.tar.gz"
+    {{ _release_cargo }} {{ _release_tools }} release evidence verify tooling/release-evidence.toml --checkout "$PWD" --commit "$commit" --version "${1#v}" \
+        --expected "$state/selection.json" --output "$state/rechecked-native.json" --retain-crate "$state/package"
+    {{ _release_tools }} --root "$owner" release evidence archive derive --payload run.json --manifest evidence.json \
+        --policy "final/$commit/policy.json" --acceptance "final/$commit/acceptance.json" --output "final/$commit/$asset"
+    {{ _release_cargo }} {{ _release_tools }} release assets stage tooling/release-assets.toml --checkout "$PWD" --tag "$1" --commit "$commit" \
+        --target "$state/draft/target.json" --journal "$state/staging.json" --output "$state/transfer.json" --approve \
+        --asset "$state/package/causal-triangulations-${1#v}.crate" --asset "$state/$asset" --asset "$state/policy.json" --asset "$state/acceptance.json"
+
+# Inspect retained local evidence without accepting a candidate or mutating its release.
+release-status:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    owner={{ _owner }}
+    state={{ _final }}
+    printf 'Release: %s\nOwner: %s\nCommit: %s\n' {{ quote(_release_tag) }} "$owner" "{{ _commit }}"
+    for file in {{ quote(_checkpoint) }} target/bench-reports/{preparation,run,evidence}.json \
+        "$owner"/{acquisition,publication}.sha256 "$state"/{selection,acceptance}.json \
+        "$state/draft/target.json" "$state"/{staging,transfer}.json "$state/reviewed.sha256"; do
+        if [[ -e "$file" ]]; then printf 'retained  %s\n' "$file"; else printf 'missing   %s\n' "$file"; fi
+    done
+    if [[ -f "$state/draft/target.json" ]]; then
+        jq '{repository, tag, commit, release_id}' "$state/draft/target.json"
+    fi
+
+# Dispatch registry approval with the original reviewed assets and the successful published event.
+release-upload tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tag="$1"
+    commit={{ _commit }}
+    owner={{ _owner }}
+    state={{ _final }}
+    repo=acgetchell/causal-triangulations
+    release_id=$(jq -er --arg tag "$tag" --arg sha "$commit" --arg repo "$repo" 'select(.tag == $tag and .commit == $sha and .repository == $repo) | .release_id' "$state/draft/target.json")
+    prior=$(gh api --paginate --slurp "repos/$repo/actions/workflows/publish-crates.yml/runs?event=workflow_dispatch&head_sha=$commit&per_page=100" \
+        | jq -r --arg title "Publish $tag to crates.io" '.[].workflow_runs[] | select(.display_title == $title) | .html_url')
+    if [[ -n "$prior" ]]; then
+        printf 'A registry dispatch already exists. Inspect it and run just release-verify %s before considering a full rerun:\n%s\n' "$tag" "$prior" >&2
+        exit 1
+    fi
+    reviewed=$(cat "$state/reviewed.sha256")
+    transfer=$(sha256sum < "$state/transfer.json")
+    [[ "${transfer%% *}" == "$reviewed" ]]
+    run=$(gh api --paginate --slurp "repos/$repo/actions/workflows/publish-crates.yml/runs?event=release&head_sha=$commit&per_page=100" \
+        | jq -ce --arg title "Verify published release $tag (release $release_id)" '[.[].workflow_runs[] | select(.display_title == $title)] | if length == 1 then .[0] | select(.status == "completed" and .conclusion == "success") else error("expected one published-release gate") end')
+    run_id=$(jq -er '.id' <<< "$run")
+    attempt=$(jq -er '.run_attempt' <<< "$run")
+    name="published-release-$run_id-$attempt"
+    artifact=$(gh api --paginate --slurp "repos/$repo/actions/runs/$run_id/artifacts?per_page=100" \
+        | jq -ce --arg name "$name" '[.[].artifacts[] | select(.name == $name)] | if length == 1 then .[0] | select(.expired == false) else error("expected one event receipt") end')
+    accepted=$(sha256sum < "$state/acceptance.json")
+    proof=$(jq -cn --argjson run "$run_id" --argjson attempt "$attempt" --argjson artifact "$artifact" --arg transfer "$reviewed" \
+        --arg accepted "${accepted%% *}" --arg acquisition "$(cat "$owner/acquisition.sha256")" --arg publication "$(cat "$owner/publication.sha256")" \
+        '{run:$run,attempt:$attempt,artifact:$artifact.id,digest:$artifact.digest,transfer:$transfer,acceptance:$accepted,acquisition:$acquisition,publication:$publication}')
+    gh workflow run publish-crates.yml --repo "$repo" --ref "$tag" -f "tag=$tag" -F "transfer=@$state/transfer.json" -f "proof=$proof"
+
+# Compare the immutable GitHub crate asset with the exact crates.io version.
 release-verify tag:
-    gh release view "$1" --repo acgetchell/causal-triangulations --json tagName,isDraft,isPrerelease,body,assets | cat
-    {{ _run }} cargo info "causal-triangulations@${1#v}" --registry crates-io
+    {{ _release_cargo }} {{ _release_tools }} release verify "$1" --target {{ _final }}/draft/target.json --require-crate-asset --attempts 7 --interval 10
 
 # Require the generated current-version changelog heading for final release publication.
 release-version-check:
@@ -468,11 +634,11 @@ security-secrets:
 
 # Repository-owned Semgrep rules for project-specific diagnostics.
 semgrep output='target/security/semgrep':
-    {{ _semgrep_stack_limit }} {{ _scanner }} semgrep scan --include '*.rs' --include '*.py' --include '*.yml' --include '*.yaml' --include '*.md' --include '*.sh' --include '*.ipynb' --exclude 'tests/semgrep/**' --exclude 'docs/archive/**' --exclude 'docs/archives/**' --exclude .codecov.yml --exclude .coderabbit.yml --exclude .github/actions/setup-toolchain/action.yml --exclude .github/dependabot.yml --exclude semgrep.yaml --output "$1"
+    {{ _semgrep_stack_limit }} {{ _scanner }} semgrep scan --rust-docs --include '*.rs' --include '*.py' --include '*.yml' --include '*.yaml' --include '*.md' --include '*.sh' --include '*.ipynb' --exclude 'tests/semgrep/**' --exclude 'docs/archive/**' --exclude 'docs/archives/**' --exclude .codecov.yml --exclude .coderabbit.yml --exclude .github/actions/setup-toolchain/action.yml --exclude .github/dependabot.yml --exclude semgrep.yaml --output "$1"
 
 # Validate annotated repository-owned Semgrep fixtures.
 semgrep-test:
-    {{ _semgrep_stack_limit }} {{ _scanner }} semgrep check-fixtures
+    {{ _semgrep_stack_limit }} {{ _scanner }} semgrep check-fixtures --rust-docs
 
 # Development setup
 setup:
@@ -504,12 +670,15 @@ spell-check:
     {{ _run }} research-repo-tools files run --exclude typos.toml --exclude CHANGELOG.md --exclude 'docs/archive/**' --exclude 'docs/archives/**' -- typos --config typos.toml --force-exclude
 
 # Create an annotated local Git tag from release notes (maintainer operation).
-tag version *args:
-    {{ _release_cargo }} research-repo-tools changelog tag "$@"
+[arg('commit', long)]
+[arg('dry_run', long='dry-run', value='--dry-run')]
+[arg('force', long, value='--force')]
+tag version commit="" dry_run="" force="": (_release-candidate "reviewed")
+    head={{ _commit }}; [[ -z "$2" || "$2" == "$head" ]]; jq -e --arg tag "$1" --arg commit "$head" '.tag == $tag and .commit == $commit' {{ _final }}/policy.json >/dev/null; {{ _release_cargo }} {{ _release_tools }} changelog tag "$1" --commit "$head" ${3:+"$3"} ${4:+"$4"}
 
 # Replace a local Git tag from release notes (maintainer operation).
 tag-force version *args:
-    {{ _release_cargo }} research-repo-tools changelog tag "$@" --force
+    just tag "$@" --force
 
 # Preview the annotated release tag without changing Git state.
 tag-preview version *args:
@@ -539,8 +708,8 @@ test-integration:
     {{ _run }} cargo nextest run --tests --verbose
 
 # Run Python consumer integration tests.
-test-python:
-    {{ _semgrep_stack_limit }} {{ _run }} uv run --locked python -m pytest
+test-python *args:
+    {{ _semgrep_stack_limit }} {{ _run }} uv run --locked python -m pytest "$@"
 
 # Run release-mode Rust tests and doctests.
 test-release: test-rust-ci
@@ -554,9 +723,9 @@ test-rust: test-rust-ci test-doc
 test-rust-ci:
     {{ _run }} cargo nextest run --release --profile ci --lib --tests --verbose
 
-# Run bounded feature-gated stress tests through the perf profile.
+# Run the bounded toroidal stress test through the perf profile.
 test-slow:
-    CDT_LARGE_DEBUG_MAX_RUNTIME_SECS=1800 {{ _run }} cargo nextest run --cargo-profile perf --tests --features slow-tests --verbose
+    CDT_LARGE_DEBUG_MAX_RUNTIME_SECS=1800 {{ _run }} cargo nextest run --cargo-profile perf --test large_scale_debug --features slow-tests --verbose
 
 # Focused library unit tests for changed-surface validation.
 test-unit:
@@ -614,7 +783,7 @@ update-dependencies: update-cargo-dependencies update-python-dependencies
 
 # Advance root dev pins, then refresh and sync the unified Python environment.
 update-python-dependencies:
-    uv run --locked --only-group tooling --inexact research-repo-tools deps update-python --all-projects
+    uv run --isolated --locked --only-group tooling research-repo-tools deps update-python --all-projects --adopt-supplier tooling
 
 # Upgrade uv and managed tools before dependency changes.
 update-tools: update-uv update-cargo-tools setup

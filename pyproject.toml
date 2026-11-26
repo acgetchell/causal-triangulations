@@ -81,7 +81,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tooling/check_codeql_release.py" = [ "INP001" ] # Standalone check invoked by Just.
+"tooling/verify_registry_candidate.py" = [ "INP001" ] # Standalone entry point in the tagged CDT deployment.
 "tests/tooling/test_*.py" = [ "S101", "SLF001" ]
 "docs/audits/2d-cdt_sphere/checks/test_*.py" = [ "S101" ]
 "tests/semgrep/scripts/tests/python_exceptions.py" = [
@@ -121,14 +121,16 @@ testpaths = [ "tests/tooling", "docs/audits/2d-cdt_sphere" ]
 python_files = [ "test_*.py", "*_test.py" ]
 python_classes = [ "Test*" ]
 python_functions = [ "test_*" ]
+markers = [ "semgrep_report: verify the complete portable Semgrep scan and its SARIF workflow" ]
 
 [tool.uv]
 package = false
-required-version = "==0.13.9"
+required-version = "==0.13.10"
 # Semgrep's sdist does not bundle its required native engine.
 no-build-package = [ "semgrep" ]
-# Preserve patched Semgrep dependencies and Python 3.15 Windows wheels.
+# Root overrides mirror RRT's semgrep-constraints.txt because uv applies them only here.
 override-dependencies = [
+    "jsonschema==4.26.0",
     "mcp==1.30.0",
     "opentelemetry-api==1.45.2",
     "opentelemetry-sdk==1.45.2",
@@ -136,6 +138,7 @@ override-dependencies = [
     "opentelemetry-instrumentation-requests==0.66b2",
     "opentelemetry-instrumentation-threading==0.66b2",
     "pywin32==312; sys_platform == 'win32'",
+    "tomli==2.5.0",
     "wcmatch==11.2", # GHSA-53pm-wgxf-c6qf. Remove when Semgrep accepts a patched release.
 ]
 
@@ -155,24 +158,49 @@ build = [
 dev = [
     { include-group = "tooling" },
     "actionlint-py==1.7.12.25",
-    "semgrep==1.186.0",
+    "research-repo-tools[python-tools,semgrep]==0.3.3",
     "shellcheck-py==0.11.0.1",
     "shfmt-py==4.2.0",
     "yamllint==1.38.0",
 ]
 notebooks = [
-    "research-repo-tools[notebooks,python-tools]==0.3.1",
+    "research-repo-tools[notebooks,python-tools]==0.3.3",
     "jupyterlab>=4.6.2",
     "matplotlib>=3.11.1",
     "plotly>=6.9.0",
     "polars>=1.43.2",
 ]
-tooling = [ "research-repo-tools[python-tools]==0.3.1" ]
+tooling = [ "research-repo-tools[python-tools]==0.3.3" ]
 
 [tool.research-repo-tools.changelog]
 owner = "acgetchell"
 repository = "causal-triangulations"
 formatter = "rumdl.toml"
+date-source = "citation"
+
+[tool.research-repo-tools.publishing]
+registry = "crates-io"
+package = "causal-triangulations"
+repository = "acgetchell/causal-triangulations"
+expected-title = "tag"
+generated-notes = true
+require-immutable = true
+required-checks = [
+    { name = "repository-tooling", app-id = 15368 },
+    { name = "build (ubuntu-latest)", app-id = 15368 },
+    { name = "build (macos-latest)", app-id = 15368 },
+    { name = "build (windows-latest)", app-id = 15368 },
+    { name = "package", app-id = 15368 },
+    { name = "sign-package", app-id = 15368 },
+    { name = "Clippy SARIF Analysis", app-id = 15368 },
+    { name = "Repository Rule SARIF Analysis", app-id = 15368 },
+    { name = "Analyze (actions)", app-id = 15368 },
+    { name = "Analyze (rust)", app-id = 15368 },
+    { name = "GitHub Actions Security Analysis", app-id = 15368 },
+    { name = "Gitleaks secret scan", app-id = 15368 },
+    { name = "OSV dependency scan", app-id = 15368 },
+]
+required-assets = [ "causal-triangulations-{version}.crate", "causal-triangulations-v{version}-cdt-series.tar.gz", "policy.json", "acceptance.json" ]
 
 [tool.research-repo-tools.toolchain]
 inherit-python = true
@@ -191,11 +219,11 @@ cargo-nextest = "0.9.152"
 clippy-sarif = "0.8.0"
 dprint = "0.65.0"
 git-cliff = "2.14.2"
-rumdl = "0.3.5"
+rumdl = "0.3.6"
 sarif-fmt = "0.8.0"
 taplo-cli = "0.10.0"
 typos-cli = "1.52.2"
-zizmor = "1.32.0"
+zizmor = "1.33.1"
 
 [tool.research-repo-tools.zizmor]
 persona = "regular"
@@ -204,7 +232,8 @@ persona = "regular"
 group = "notebooks"
 cwd = "."
 output-dir = "target/notebooks"
-timeout = 600
+# The analysis cell runs two simulations with 900-second subprocess limits.
+timeout = 1860
 outputs = "clear"
 prohibit-installs = true
 
@@ -222,6 +251,7 @@ inline-suppressions = false
 jobs = 1
 report-category = "semgrep-repository-rules"
 report-layout = "aggregate"
+rustdoc-include = [ "src/**/*.rs", "examples/**/*.rs", "benches/**/*.rs", "tests/**/*.rs" ]
 target-timeout = 30
 timeout = 300
 

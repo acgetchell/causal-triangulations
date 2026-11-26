@@ -66,9 +66,6 @@ just fix             # Formatters and auto-fixes
 just ci              # CI parity
 just commit-check    # Full pre-commit validation
 just run-example     # Basic simulation example
-just bench-ci        # CI benchmark contract
-just bench-save-last # Save a fresh local Criterion baseline
-just bench-latest-vs-last # Compare absolute timings and relative changes
 ```
 
 `just setup` repeats this shared setup. It installs Just, synchronizes the declared Rust/Cargo tools in a managed cache, and syncs the locked
@@ -190,17 +187,16 @@ Performance is part of the scientific contract for this project. Use:
 - [benches/README.md](benches/README.md) for benchmark inventory, Criterion usage, and adding new benchmarks;
 - [docs/BENCHMARKING.md](docs/BENCHMARKING.md) for regression checks, baselines, CI behavior, and reporting.
 
-Before large algorithmic changes, save or inspect a baseline:
+For a before-and-after comparison, use the same host and toolchain for both runs.
 
 ```bash
-just bench-ci
-just bench-save-last
+just bench-save-baseline last
+# Make the change, then measure it.
 just bench-latest-vs-last
 ```
 
-New performance evidence uses shared schemas. Historical reports and formats were retired in September 2026. Start with a fresh local baseline;
-release comparisons require two explicit new-series tags. `just performance-doc` rerenders retained shared evidence, and `performance-readme CONFIG`
-publishes absolute timings and relative changes together. See the performance guide for draft-release assets and publication configuration.
+Run `just bench-ci` independently to exercise the allocation budgets and CI benchmark suite. For release measurements and draft assets,
+follow [Fresh release evidence](docs/BENCHMARKING.md#fresh-release-evidence).
 
 ## Pull Requests
 

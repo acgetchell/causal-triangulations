@@ -97,6 +97,12 @@ def test_directed_adjacency_is_not_symmetric_boundary() -> None:
     assert result["nonreciprocal_arcs"] == [[0, 1]]
 
 
+@pytest.mark.parametrize("vertices", [0, -1])
+def test_census_requires_a_nonempty_vertex_set(vertices: int) -> None:
+    with pytest.raises(ValueError, match="positive vertex count"):
+        census(vertices, [])
+
+
 def test_export_parser_rejects_truncation(tmp_path: Path) -> None:
     path = tmp_path / "broken.dat"
     path.write_text((EVIDENCE / "true-initial.dat").read_text(encoding="utf-8").rsplit("\n", 2)[0], encoding="utf-8")
@@ -145,6 +151,14 @@ def test_export_parser_rejects_negative_time_labels(tmp_path: Path) -> None:
         audit(path)
 
 
+def test_sidecar_rejects_ambiguous_observation(tmp_path: Path) -> None:
+    path = copy_snapshot(tmp_path)
+    sidecar = path.with_suffix(".json")
+    sidecar.write_text(sidecar.read_text(encoding="utf-8").replace("{", '{"sphere":false,', 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="duplicate sidecar field: sphere"):
+        audit(path)
+
+
 def test_stored_pointer_negative_control_preserves_independent_census(tmp_path: Path) -> None:
     path = copy_snapshot(tmp_path)
     expected = audit(path)
@@ -181,6 +195,27 @@ def test_report_rejects_input_aliases(tmp_path: Path, kind: str, suffix: str) ->
     with pytest.raises(ValueError, match="aliases a snapshot input"):
         write_report(tmp_path, output)
     assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("missing", [".dat", ".json"])
+def test_incomplete_snapshot_preserves_prior_report(tmp_path: Path, missing: str) -> None:
+    snapshot = copy_snapshot(tmp_path)
+    other = tmp_path / "other-evolved.dat"
+    present = ".json" if missing == ".dat" else ".dat"
+    other.with_suffix(present).write_bytes(snapshot.with_suffix(present).read_bytes())
+    output = tmp_path / "report.json"
+    output.write_bytes(b"prior report")
+    with pytest.raises(ValueError, match=r"other-evolved"):
+        write_report(tmp_path, output)
+    assert output.read_bytes() == b"prior report"
+
+
+def test_report_cannot_create_a_future_snapshot_input(tmp_path: Path) -> None:
+    copy_snapshot(tmp_path)
+    output = tmp_path / "report-initial.json"
+    with pytest.raises(ValueError, match="snapshot filename"):
+        write_report(tmp_path, output)
+    assert not output.exists()
 
 
 def test_report_replacement_failure_preserves_prior_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

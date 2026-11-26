@@ -1,6 +1,7 @@
 name: "Audit dependencies"
 on:
   push:
+    branches: ["**"]
     paths:
       # Run if workflow changes
       - .github/workflows/audit.yml

@@ -12,6 +12,8 @@ rules:
     severity: WARNING
     message: "Use log macros for production diagnostics instead of stdout/stderr macros."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: maintainability
       rationale: "Runtime diagnostics should be filterable through log/env_logger."
     paths:
@@ -78,6 +80,8 @@ rules:
     severity: WARNING
     message: "Do not hide failed floating-point conversion with NaN or infinity defaults."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: correctness
       rationale: >-
         CDT acceptance rates and probability-like calculations should reject or
@@ -107,6 +111,8 @@ rules:
     severity: WARNING
     message: "Use defined IEEE-754 operators or deliberate f64::mul_add; f64 algebraic operations are forbidden."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: correctness
       rationale: >-
         Algebraic f64 operations permit real-number transformations with
@@ -145,48 +151,29 @@ rules:
               metavariable: $METHOD
               regex: ^algebraic_(?:add|sub|mul|div|rem)$
           - pattern-not-inside: $FLOAT::$METHOD(...)
-      # Rust AST matching does not inspect documentation comments. Match
-      # complete Rust fences, skipping compliant/non-Rust fences so their
-      # closing delimiters cannot start a match over later prose. Rust string
-      # literals containing Markdown examples are not documentation mirrors.
-      - patterns:
-          - pattern-not-inside: '"..."'
-          - pattern-regex: >-
-              (?mx)
-              (?:
-                ^[ \t]*//[/!][ \t]*`{3}
-                (?:(?:rust|no_run|ignore(?:-[A-Za-z0-9_-]+)?|compile_fail|should_panic|standalone_crate|edition[0-9]+)
-                (?:[ \t]*,[ \t]*[A-Za-z0-9_-]+)*)?[ \t]*\r?\n
-                (?:(?![ \t]*//[/!][ \t]*`{3})[ \t]*//[/!][^\n]*\n)*?
-                [ \t]*//[/!][^\n]*(?:\.|::)[ \t]*algebraic_(?:add|sub|mul|div|rem)\b[^\n]*\n
-                (?:(?![ \t]*//[/!][ \t]*`{3})[ \t]*//[/!][^\n]*\n)*
-                [ \t]*//[/!][ \t]*`{3}[ \t]*\r?$
-              )
-              |
-              (?:
-                ^[ \t]*//[/!][ \t]*`{3}[^\n]*\n
-                (?:(?![ \t]*//[/!][ \t]*`{3})[ \t]*//[/!][^\n]*\n)*
-                [ \t]*//[/!][ \t]*`{3}[ \t]*\r?$
-              )(*SKIP)(*F)
-      - patterns:
-          - pattern-not-inside: '"..."'
-          - pattern-regex: >-
-              (?mx)
-              (?:
-                ^[ \t]*(?:\*[ \t]*)?`{3}
-                (?:(?:rust|no_run|ignore(?:-[A-Za-z0-9_-]+)?|compile_fail|should_panic|standalone_crate|edition[0-9]+)
-                (?:[ \t]*,[ \t]*[A-Za-z0-9_-]+)*)?[ \t]*\r?\n
-                (?:(?![ \t]*(?:\*[ \t]*)?(?:`{3}|\*/))[^\n]*\n)*?
-                [ \t]*(?:\*[ \t]*)?[^\n]*(?:\.|::)[ \t]*algebraic_(?:add|sub|mul|div|rem)\b[^\n]*\n
-                (?:(?![ \t]*(?:\*[ \t]*)?(?:`{3}|\*/))[^\n]*\n)*
-                [ \t]*(?:\*[ \t]*)?`{3}[ \t]*\r?$
-              )
-              |
-              (?:
-                ^[ \t]*(?:\*[ \t]*)?`{3}[^\n]*\n
-                (?:(?![ \t]*(?:\*[ \t]*)?(?:`{3}|\*/))[^\n]*\n)*
-                [ \t]*(?:\*[ \t]*)?`{3}[ \t]*\r?$
-              )(*SKIP)(*F)
+
+  # Rustdoc snippets can use type aliases imported from the surrounding crate.
+  - id: causal-triangulations.rust.no-algebraic-f64-operations-in-doctests
+    languages: [rust]
+    severity: WARNING
+    message: "Use defined IEEE-754 operations or deliberate f64::mul_add in Rust documentation examples."
+    metadata:
+      research-repo-tools:
+        representations: [rust-block]
+    patterns:
+      - pattern-either:
+          - pattern: $VALUE.$METHOD(...)
+          - pattern: $TYPE::$METHOD(...)
+          - pattern: <$TYPE>::$METHOD(...)
+          - patterns:
+              - pattern: $TYPE::$METHOD
+              - pattern-not-inside: $TYPE::$METHOD(...)
+          - patterns:
+              - pattern: <$TYPE>::$METHOD
+              - pattern-not-inside: <$TYPE>::$METHOD(...)
+      - metavariable-regex:
+          metavariable: $METHOD
+          regex: ^algebraic_(?:add|sub|mul|div|rem)$
 
   - id: causal-triangulations.rust.no-silent-conversion-fallbacks
     languages:
@@ -194,6 +181,8 @@ rules:
     severity: WARNING
     message: "Handle numeric conversion failures explicitly instead of hiding them behind unwrap_or fallbacks."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: correctness
       rationale: >-
         CDT observable and topology calculations should preserve conversion
@@ -268,6 +257,8 @@ rules:
     severity: WARNING
     message: "Handle incomparable partial_cmp results explicitly instead of defaulting to an Ordering."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: correctness
       rationale: >-
         Geometry and observable ordering code should document the impossible or
@@ -304,6 +295,8 @@ rules:
     severity: WARNING
     message: "Move source imports to module scope instead of declaring use items inside functions."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: maintainability
       rationale: >-
         Function-local imports obscure dependency shape and make it easier for
@@ -340,6 +333,8 @@ rules:
     severity: WARNING
     message: "Use typed error handling or an explicit fallback instead of unwrap() in production src/."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: correctness
       rationale: >-
         Production library code should preserve recoverable failures and
@@ -437,6 +432,8 @@ rules:
     severity: WARNING
     message: "Use explicit fixture error handling instead of unwrap() or expect() in benchmarks and examples."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: correctness
       rationale: >-
         Benchmarks and public examples should keep failure modes explicit so
@@ -477,6 +474,8 @@ rules:
     severity: WARNING
     message: "Return a typed error or Option instead of panicking in production src/."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: correctness
       rationale: >-
         Public and production CDT APIs should report failures through typed
@@ -539,6 +538,8 @@ rules:
     severity: WARNING
     message: "Keep *_unchecked APIs private so invalid-state escape hatches do not become public contracts."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: correctness
       rationale: >-
         Unchecked helpers should stay behind validated CDT constructors,
@@ -581,6 +582,8 @@ rules:
     severity: WARNING
     message: "Keep direct delaunay imports inside src/geometry; use CDT geometry abstractions elsewhere."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: architecture
       rationale: >-
         CDT physics should depend on the trait-based geometry layer rather than
@@ -605,6 +608,8 @@ rules:
     severity: WARNING
     message: "Keep direct delaunay paths inside src/geometry; use CDT geometry abstractions elsewhere."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: architecture
       rationale: >-
         CDT physics should not couple to upstream delaunay paths through
@@ -642,6 +647,8 @@ rules:
     severity: WARNING
     message: "Keep direct markov-chain-monte-carlo imports at the CDT Metropolis adapter boundary."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: architecture
       rationale: >-
         Generic MCMC mechanics should remain delegated through the CDT
@@ -667,6 +674,8 @@ rules:
     severity: WARNING
     message: "Keep direct markov-chain-monte-carlo paths at the CDT Metropolis adapter boundary."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: architecture
       rationale: >-
         Generic MCMC mechanics should not leak through fully-qualified upstream
@@ -706,6 +715,8 @@ rules:
     severity: WARNING
     message: "Delegate Metropolis-Hastings acceptance draws to markov-chain-monte-carlo instead of recomputing exp(log_alpha) locally."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: architecture
       rationale: >-
         CDT owns proposal planning and telemetry, while markov-chain-monte-carlo
@@ -739,6 +750,8 @@ rules:
     severity: WARNING
     message: "Use upstream Chain/Sampler counters instead of maintaining local generic accepted/rejected MCMC counters."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: architecture
       rationale: >-
         CDT may translate upstream outcomes into domain telemetry, but generic
@@ -774,6 +787,8 @@ rules:
     severity: WARNING
     message: "Use the planned step's returned info for runtime bookkeeping; keep proposal cache reads to debug/test checks."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: correctness
       rationale: >-
         Planned-proposal telemetry should come from the step returned by the
@@ -807,6 +822,8 @@ rules:
     severity: WARNING
     message: 'Add reason = "..." to #[expect(...)] so lint suppressions remain auditable.'
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: maintainability
       rationale: >-
         Repository guidance prefers documented lint expectations over
@@ -828,6 +845,8 @@ rules:
     severity: WARNING
     message: "Use #[expect(..., reason = ...)] instead of #[allow(...)] for Clippy suppressions."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: maintainability
       rationale: >-
         Clippy suppressions should be checked by the compiler and carry a
@@ -851,6 +870,8 @@ rules:
     severity: WARNING
     message: "Use typed errors in production src/; borrowed dyn Error is allowed only in standard Error::source implementations."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: maintainability
       rationale: >-
         Public and production fallible paths should preserve typed error
@@ -924,6 +945,8 @@ rules:
     severity: WARNING
     message: "Use CdtResult or a concrete crate error in examples and benchmarks instead of dynamic error erasure."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: maintainability
       rationale: >-
         Examples and benchmarks should model typed error handling that users
@@ -972,6 +995,8 @@ rules:
     severity: WARNING
     message: "Public error enums must be #[non_exhaustive] so adding variants remains API-safe."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: maintainability
       rationale: >-
         Error enums grow as diagnostics become more precise; non-exhaustive
@@ -1003,6 +1028,8 @@ rules:
       Use causal_triangulations::prelude focused imports in examples,
       benchmarks, and integration tests instead of deep crate module paths.
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: maintainability
       rationale: >-
         Public-facing usage should model the small, orthogonal prelude import
@@ -1021,6 +1048,8 @@ rules:
     severity: WARNING
     message: "Use the dedicated CdtError variant instead of stringly ValidationFailed for this domain."
     metadata:
+      research-repo-tools:
+        representations: [source]
       category: maintainability
       rationale: >-
         Topology, foliation, and unsupported construction failures have typed
@@ -1032,6 +1061,20 @@ rules:
         - "/tests/semgrep/src/**/*.rs"
     pattern-regex: >-
       (?s)CdtError::ValidationFailed\s*\{(?=[^}]*\bcheck\s*:\s*(?:"(?:foliation|topology|cdt_construction)"(?:\s*\.\s*(?:to_string|into)\s*\(\s*\))?|String\s*::\s*from\s*\(\s*"(?:foliation|topology|cdt_construction)"\s*\)))[^}]*\}
+
+  - id: causal-triangulations.release.clean-package-verification
+    languages: [bash]
+    severity: ERROR
+    message: "Release package verification requires Cargo's clean source and archive checks."
+    paths:
+      include:
+        - "/tooling/**/*.sh"
+        - "/tests/semgrep/tooling/**/*.sh"
+    pattern-either:
+      - pattern: cargo publish ... --allow-dirty ...
+      - pattern: cargo publish ... --no-verify ...
+      - pattern: cargo package ... --allow-dirty ...
+      - pattern: cargo package ... --no-verify ...
 
   - id: causal-triangulations.docs.check-before-fix-command-order
     languages:

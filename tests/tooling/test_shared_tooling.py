@@ -5,11 +5,13 @@ import os
 import re
 import shlex
 import tomllib
+from datetime import datetime
 from importlib.metadata import version
 from pathlib import Path
 
 import pytest
 import yaml
+from packaging.requirements import Requirement
 from packaging.version import Version
 from research_repo_tools.cargo_examples import discover_examples
 from research_repo_tools.cli import main
@@ -19,6 +21,7 @@ from research_repo_tools.just_inspect import dry_run, inspect_justfile
 from research_repo_tools.measurement import MeasurementConfig, load_measurement
 from research_repo_tools.process import run_safe_command
 from research_repo_tools.selection import select_files
+from research_repo_tools.semgrep_tool import constraints
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -28,14 +31,9 @@ def shell_workflow_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     """Execute the real workflows with cheap, deterministic process boundaries."""
     commands = tmp_path / "commands"
     commands.mkdir()
-    for name, body in {
-        "cargo": "exit 0",
-        "date": "echo 100.000000000",
-        "bc": "cat >/dev/null; echo 1",
-    }.items():
-        command = commands / name
-        command.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
-        command.chmod(0o700)
+    cargo = commands / "cargo"
+    cargo.write_bytes(b"#!/bin/sh\nexit 0\n")
+    cargo.chmod(0o700)
     binary = tmp_path / "target/release/cdt"
     binary.parent.mkdir(parents=True)
     binary.write_text(
@@ -46,6 +44,7 @@ def shell_workflow_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
         "  shift\n"
         "done\n",
         encoding="utf-8",
+        newline="\n",
     )
     binary.chmod(0o700)
     monkeypatch.setenv("PATH", str(commands) + os.pathsep + os.environ["PATH"])
@@ -53,15 +52,16 @@ def shell_workflow_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 
 
 @pytest.mark.parametrize("status", [0, 23])
-def test_performance_script_forwards_literal_output_and_failure(status: int, shell_workflow_workspace: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_performance_script_forwards_literal_output_and_failure(status: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The compatibility entry point delegates without acquiring or parsing timings."""
-    log = shell_workflow_workspace / "timing-arguments"
-    monkeypatch.setenv("TIMING_ARGUMENTS", str(log))
-    command = shell_workflow_workspace / "commands/just"
+    log = tmp_path / "timing-arguments"
+    monkeypatch.setenv("TIMING_ARGUMENTS", log.as_posix())
+    monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
+    command = tmp_path / "just"
     command.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > "$TIMING_ARGUMENTS"\nexit {status}\n', encoding="utf-8", newline="\n")
     command.chmod(0o700)
     output = "target/timings with spaces;literal.json"
-    result = run_safe_command("bash", [str(ROOT / "examples/scripts/performance_test.sh"), output], cwd=shell_workflow_workspace, check=False)
+    result = run_safe_command("bash", [str(ROOT / "examples/scripts/performance_test.sh"), output], cwd=tmp_path, check=False)
     assert result.returncode == status, result.stderr
     assert log.read_text(encoding="utf-8").splitlines() == ["performance-command-time", output]
 
@@ -104,7 +104,8 @@ def test_dependabot_caller_only_delegates_with_complete_cdt_file_policy() -> Non
         for path in directory.rglob("*")
         if path.suffix in {".yml", ".yaml"}
     }
-    assert set(policy["github_actions"]["files"]) == action_files
+    # Updates to the protected crates.io publisher require a maintainer's review.
+    assert set(policy["github_actions"]["files"]) == action_files - {".github/workflows/publish-crates.yml"}
 
 
 def test_published_tooling_pin_and_consumer_metadata() -> None:
@@ -118,7 +119,10 @@ def test_unified_scanner_contract_and_update_inventory() -> None:
     """The root environment owns Semgrep and its patched cross-platform dependencies."""
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     assert not project["tool"]["research-repo-tools"].get("deps", {}).get("python-projects", [])
-    assert f"semgrep=={version('semgrep')}" in project["dependency-groups"]["dev"]
+    dev = [Requirement(raw) for raw in project["dependency-groups"]["dev"] if isinstance(raw, str)]
+    assert not any(item.name == "semgrep" for item in dev)
+    assert any(item.name == "research-repo-tools" and "semgrep" in item.extras and version(item.name) in item.specifier for item in dev)
+    assert {Requirement(item) for item in constraints()} <= {Requirement(item) for item in project["tool"]["uv"]["override-dependencies"]}
     assert project["tool"]["uv"]["no-build-package"] == ["semgrep"]
     lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
     versions = {package["name"]: Version(package["version"]) for package in lock["package"]}
@@ -135,6 +139,7 @@ def test_unified_scanner_contract_and_update_inventory() -> None:
     for recipe in ("semgrep", "semgrep-test"):
         commands = dry_run(ROOT, recipe).stderr
         assert "uv run --locked --no-active --group dev research-repo-tools semgrep" in commands
+        assert "--rust-docs" in commands
         assert commands.count("uv run") == 1
 
 
@@ -208,6 +213,7 @@ def test_python_rules_cover_relocated_tooling_tests(tmp_path: Path) -> None:
     }
 
 
+@pytest.mark.semgrep_report
 def test_semgrep_aggregates_the_complete_eligible_inventory(tmp_path: Path) -> None:
     """The actual recipe retains all scanned inputs and rules across native batches."""
     command = dry_run(ROOT, "semgrep").stderr.splitlines()[-1]
@@ -216,12 +222,16 @@ def test_semgrep_aggregates_the_complete_eligible_inventory(tmp_path: Path) -> N
     exclude = tuple(arguments[index + 1] for index, item in enumerate(arguments) if item == "--exclude")
     names = select_files(ROOT, include=include, exclude=exclude)
     assert "tests/tooling/test_shared_tooling.py" in names
-    reports = tmp_path / "reports"
-    result = run_safe_command("just", ["semgrep", str(reports)], cwd=ROOT, timeout=300, check=False)
-    assert result.returncode == 0, result.stderr
-    assert "does not match the project environment" not in result.stderr
+    if current := os.environ.get("CDT_CI_SEMGREP_REPORT"):
+        reports = ROOT / current
+    else:
+        reports = tmp_path / "reports"
+        result = run_safe_command("just", ["semgrep", str(reports)], cwd=ROOT, timeout=300, check=False)
+        assert result.returncode == 0, result.stderr
+        assert "does not match the project environment" not in result.stderr
     data = json.loads((reports / "semgrep.json").read_text(encoding="utf-8"))
     assert len(data["batches"]) > 1, "The consumer regression must exercise aggregation."
+    assert any(item["path"].startswith("src/") and item["representation"] == "rust-block" for item in data["input_coverage"])
     assert {Path(name).resolve() for name in data["paths"]["scanned"]} == {(ROOT / name).resolve() for name in names}
     assert not data["errors"]
     assert not data["results"]
@@ -233,21 +243,27 @@ def test_semgrep_aggregates_the_complete_eligible_inventory(tmp_path: Path) -> N
     assert {rule["id"] for rule in run["tool"]["driver"]["rules"]} == {rule["id"] for rule in rules}
     assert run["automationDetails"]["id"] == "semgrep-repository-rules/"
     workflow = yaml.safe_load((ROOT / ".github/workflows/semgrep-sarif.yml").read_text(encoding="utf-8"))
-    upload = next(step for step in workflow["jobs"]["semgrep-sarif"]["steps"] if "upload-sarif@" in step.get("uses", ""))
+    steps = workflow["jobs"]["semgrep-sarif"]["steps"]
+    upload = next(step for step in steps if "upload-sarif@" in step.get("uses", ""))
     assert upload["with"] == {
         "sarif_file": "target/security/semgrep/semgrep.sarif",
         "category": "semgrep-repository-rules",
         "wait-for-processing": True,
     }
-    assert upload["with"]["sarif_file"] in upload["if"]
+    verify = next(step for step in steps if "semgrep check-reports --output target/security/semgrep" in step.get("run", ""))
+    scan = next(step for step in steps if step.get("id") == "semgrep")
+    assert scan["continue-on-error"] is True
+    assert steps.index(scan) < steps.index(verify) < steps.index(upload)
+    assert "success()" in upload["if"]
+    assert "continue-on-error" not in verify
+    assert any(step.get("if") == "steps.semgrep.outcome == 'failure'" and step["run"] == "exit 1" for step in steps)
 
 
 def test_registry_only_release_jobs_match_adopted_tooling() -> None:
-    """Privileged jobs install reviewed registry tooling without running checked-out code."""
+    """Checkout-free benchmark jobs use the reviewed uv bootstrap."""
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     workflow = yaml.safe_load((ROOT / ".github/workflows/release-benchmarks.yml").read_text(encoding="utf-8"))
-    cutoffs = set()
-    for name in ("validate-release", "publish-baseline"):
+    for name in ("validate-release", "verify-attachment"):
         job = workflow["jobs"][name]
         assert not any("checkout" in step.get("uses", "") for step in job["steps"])
         setup = next(step for step in job["steps"] if "setup-uv@" in step.get("uses", ""))
@@ -256,10 +272,32 @@ def test_registry_only_release_jobs_match_adopted_tooling() -> None:
         commands = [step["run"] for step in job["steps"] if "--from research-repo-tools==" in step.get("run", "")]
         assert commands
         for command in commands:
-            assert "--from research-repo-tools==" + version("research-repo-tools") in command
             assert "--no-config --isolated --managed-python --python 3.15" in command
-            cutoffs.add(command.split("--exclude-newer ", 1)[1].split()[0])
-    assert len(cutoffs) == 1
+
+
+def test_isolated_release_runtimes_match_the_adopted_supplier() -> None:
+    """Each independent controller must be able to resolve the reviewed PyPI release at its cutoff."""
+    lock = tomllib.loads((ROOT / "uv.lock").read_text(encoding="utf-8"))
+    (supplier,) = (package for package in lock["package"] if package["name"] == "research-repo-tools")
+    cutoffs = set()
+    for path in (
+        "justfile",
+        ".github/workflows/ci.yml",
+        ".github/workflows/prepare-release.yml",
+        ".github/workflows/publish-crates.yml",
+        ".github/workflows/release-benchmarks.yml",
+    ):
+        text = run_safe_command("just", ["--evaluate", "_release_tools"], cwd=ROOT).stdout if path == "justfile" else (ROOT / path).read_text(encoding="utf-8")
+        selectors = re.findall(r"""--exclude-newer\s+([\dT:.-]+Z)\s+--(?:with|from)\s+['"]?research-repo-tools==([\w.+-]+)""", text.replace("\\\n", " "))
+        assert selectors, path
+        assert len(selectors) == text.count("research-repo-tools=="), path
+        for timestamp, package_version in selectors:
+            assert package_version == supplier["version"], path
+            cutoffs.add(datetime.fromisoformat(timestamp))
+    (cutoff,) = cutoffs
+    if "registry" in supplier["source"]:
+        for artifact in (supplier["sdist"], *supplier["wheels"]):
+            assert datetime.fromisoformat(artifact["upload-time"]) <= cutoff, artifact["url"]
 
 
 def test_python_fixtures_are_in_the_ci_gate() -> None:
@@ -384,7 +422,7 @@ UPDATE_STEPS = (
     "research-repo-tools setup",
     "cargo upgrade --incompatible allow",
     "cargo update",
-    "deps update-python --all-projects",
+    "run --isolated --locked --only-group tooling research-repo-tools deps update-python --all-projects --adopt-supplier tooling",
 )
 
 
@@ -490,10 +528,14 @@ def test_security_covers_maintained_lockfiles_and_stays_opt_in() -> None:
         assert "security secrets" not in commands
 
 
-def test_changelog_recipe_forwards_explicit_release_date() -> None:
-    """CDT's release recipe forwards the supplied tag and date to the shared CLI."""
-    result = dry_run(ROOT, "changelog-release", ("v0.2.0", "2026-10-01"))
-    assert '--tag "$1" --date "$2"' in result.stderr
+@pytest.mark.parametrize("date", [(), ("2026-10-01",)])
+def test_changelog_recipe_uses_citation_or_explicit_date(date: tuple[str, ...]) -> None:
+    """Inspect the actual arguments passed to the generator in both supported forms."""
+    result = run_safe_command("just", ["--set", "_run", "echo", "changelog-release", "v0.2.0", *date], cwd=ROOT)
+    expected = ["research-repo-tools", "changelog", "generate", "--tag", "v0.2.0"]
+    assert result.stdout.split() == ([*expected, "--date", *date] if date else expected)
+    configuration = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert configuration["tool"]["research-repo-tools"]["changelog"]["date-source"] == "citation"
 
 
 def test_changelog_regeneration_rotation_and_archived_notes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -570,7 +612,7 @@ def test_benchmark_configuration_uses_current_correctness_gates() -> None:
 def test_performance_check_accepts_only_empty_initial_inventory(orphan: str | None, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Missing reports are valid before measurement, never after evidence is retained."""
     (tmp_path / "tooling").mkdir()
-    for name in ("performance-report.toml", "performance-interpretation.md"):
+    for name in ("performance-report.toml", "performance-interpretation.md", "series-report.toml"):
         (tmp_path / "tooling" / name).write_bytes((ROOT / "tooling" / name).read_bytes())
     if orphan is not None:
         path = tmp_path / orphan
@@ -588,8 +630,11 @@ def test_shared_report_and_readme_publication_use_consumer_configuration(tmp_pat
     """New evidence survives promotion and publishes the configured absolute table."""
     tooling = tmp_path / "tooling"
     tooling.mkdir()
-    for name in ("performance-report.toml", "performance-interpretation.md"):
+    for name in ("performance-report.toml", "performance-interpretation.md", "series-report.toml"):
         (tooling / name).write_bytes((ROOT / "tooling" / name).read_bytes())
+    series = Path("benchmark-series/cdt-release-signal.toml")
+    (tmp_path / series.parent).mkdir()
+    (tmp_path / series).write_bytes((ROOT / series).read_bytes())
     template = (ROOT / "tooling/performance-readme.example.toml").read_text(encoding="utf-8")
     config = tomllib.loads(template)
     baseline = Sample(tuple((row["benchmark"], Estimate(100, ConfidenceInterval(90, 110, 0.95))) for row in config["rows"]), unit=config["unit"])
