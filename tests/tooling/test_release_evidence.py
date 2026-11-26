@@ -9,7 +9,7 @@ import shlex
 import tarfile
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Never
 from unittest.mock import ANY, create_autospec
 
 import pytest
@@ -329,7 +329,11 @@ def test_registry_candidate_rejects_changed_dispatch_before_remote_io(change: st
         proof["publication"] = None
     if change == "missing-acquisition":
         del proof["acquisition"]
-    monkeypatch.setattr("research_repo_tools.release_assets.require_release_checkout", lambda *_a, **_kw: pytest.fail("invalid dispatch reached checkout"))
+
+    def unexpected_checkout(*_args: object, **_kwargs: object) -> Never:
+        pytest.fail("invalid dispatch reached checkout")
+
+    monkeypatch.setattr("research_repo_tools.release_assets.require_release_checkout", unexpected_checkout)
     script = runpy.run_path(str(ROOT / "tooling/verify_registry_candidate.py"))
     with pytest.raises(ValueError, match=r"transfer|target|acquisition|publication|invalid.*run"):
         script["verify_registry_candidate"](tmp_path, tag if change != "tag" else "v0.3.0", SHA if change != "commit" else "b" * 40, transfer, proof)
@@ -409,7 +413,10 @@ def test_registry_dispatch_authenticates_published_event(change: str, tmp_path: 
         work.mkdir()
         (work / names[0]).write_bytes(json.dumps(receipt).encode())
 
-    monkeypatch.setattr("research_repo_tools.release_validation.api", lambda endpoint, **_kw: provider[endpoint])
+    def read_endpoint(endpoint: str, **_options: object) -> object:
+        return provider[endpoint]
+
+    monkeypatch.setattr("research_repo_tools.release_validation.api", read_endpoint)
     monkeypatch.setattr("research_repo_tools.release_validation.download_artifact", download)
     script = runpy.run_path(str(ROOT / "tooling/verify_registry_candidate.py"))
     verify = script["published_event"]
@@ -590,7 +597,11 @@ def test_draft_receipt_binds_independent_native_selection(tmp_path: Path, monkey
     target = ReleaseTarget(REPOSITORY, tag, 66, SHA, tag)
     selected = hashlib.sha256(b"original native selection").hexdigest()
     receipt = DraftReceipt(target, b"draft selection", serialize_release_target(target), json.dumps({"selection_sha256": selected}).encode())
-    monkeypatch.setattr("research_repo_tools.release_receipts.retrieve_draft_receipt", lambda *_args, **_kwargs: receipt)
+
+    def retrieve(*_args: object, **_kwargs: object) -> DraftReceipt:
+        return receipt
+
+    monkeypatch.setattr("research_repo_tools.release_receipts.retrieve_draft_receipt", retrieve)
     args = [
         "--root",
         str(ROOT),
