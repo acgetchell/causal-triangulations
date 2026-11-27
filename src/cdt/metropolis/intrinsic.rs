@@ -154,11 +154,15 @@ impl IntrinsicCdtTriangulation {
     }
 
     /// Iterates over the number of spacelike edges in each labeled slice.
+    ///
+    /// See the [profile construction example](Self::from_spatial_loop_lengths).
     pub fn spatial_loop_lengths(&self) -> impl ExactSizeIterator<Item = usize> + '_ {
         self.slabs.iter().map(|slab| slab.down_after_up.len())
     }
 
     /// Counts triangle occurrences in the checked gluing.
+    ///
+    /// See the [profile construction example](Self::from_spatial_loop_lengths).
     #[must_use]
     pub const fn triangle_count(&self) -> usize {
         self.gluing.counts().2
@@ -399,6 +403,8 @@ pub struct IntrinsicCdtPlan {
 
 impl IntrinsicCdtPlan {
     /// Returns the proposed state, which has already passed geometry validation.
+    ///
+    /// See the [insertion plan example](Self::transition_probabilities).
     #[must_use]
     pub const fn proposed_state(&self) -> &IntrinsicCdtTriangulation {
         &self.proposed
@@ -407,6 +413,41 @@ impl IntrinsicCdtPlan {
     /// Returns `(q(proposed | source), q(source | proposed))` for the marked states.
     ///
     /// Each probability sums all offered atoms that realize the endpoint.
+    ///
+    /// # Examples
+    ///
+    /// An insertion-only policy offers a larger torus with positive probability.
+    /// Returning to the original state would require a removal.
+    ///
+    /// ```
+    /// use causal_triangulations::prelude::simulation::{
+    ///     CdtMoveFamilyDistribution, DelayedProposal, IntrinsicCdtProposal, IntrinsicCdtTriangulation,
+    /// };
+    /// use rand::{SeedableRng, rngs::StdRng};
+    ///
+    /// # #[derive(Debug, thiserror::Error)]
+    /// # enum ExampleError {
+    /// #     #[error(transparent)]
+    /// #     Policy(#[from] causal_triangulations::CdtMoveFamilyPolicyError),
+    /// #     #[error(transparent)]
+    /// #     Geometry(#[from] causal_triangulations::IntrinsicCdtError),
+    /// #     #[error("a minimal torus offers an insertion on every spatial edge")]
+    /// #     MissingInsertion,
+    /// # }
+    /// # fn main() -> Result<(), ExampleError> {
+    /// let state = IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[3; 3])?;
+    /// let weights = CdtMoveFamilyDistribution::from_weights([0.0, 1.0, 0.0, 0.0])?;
+    /// let mut proposal = IntrinsicCdtProposal::new(weights);
+    /// let mut rng = StdRng::seed_from_u64(17);
+    /// let plan = proposal.propose_plan(&state, &mut rng)?.ok_or(ExampleError::MissingInsertion)?;
+    /// assert_eq!(plan.proposed_state().triangle_count(), state.triangle_count() + 2);
+    /// let (forward, reverse) = plan.transition_probabilities();
+    /// assert!(forward > 0.0);
+    /// assert_eq!(reverse, 0.0);
+    /// assert_eq!(plan.log_proposal_ratio(), f64::NEG_INFINITY);
+    /// # Ok(())
+    /// # }
+    /// ```
     #[must_use]
     pub const fn transition_probabilities(&self) -> (f64, f64) {
         (self.ratio.forward_weight(), self.ratio.reverse_weight())
@@ -416,6 +457,7 @@ impl IntrinsicCdtPlan {
     ///
     /// The correction is negative infinity when the source cannot be proposed
     /// from the destination.
+    /// See the [insertion plan example](Self::transition_probabilities).
     #[must_use]
     pub fn log_proposal_ratio(&self) -> f64 {
         self.ratio.log_q_ratio()
@@ -479,6 +521,8 @@ pub struct IntrinsicCdtProposal {
 impl IntrinsicCdtProposal {
     /// Sets the fixed family distribution. Empty selected families and rejected
     /// sites produce self-loops without reweighting any other site.
+    ///
+    /// See the [insertion-only policy example](IntrinsicCdtPlan::transition_probabilities).
     #[must_use]
     pub const fn new(distribution: CdtMoveFamilyDistribution) -> Self {
         Self {
