@@ -45,8 +45,10 @@ pub enum IntrinsicCdtError {
     /// The fixing target is too small for the periodic ensemble.
     #[error(transparent)]
     VolumeFixing(#[from] VolumeFixingError),
-    /// Binary64 spacing is too coarse to resolve a single-vertex marking change.
-    #[error("intrinsic log weight {log_weight} cannot resolve a marking change of {marking_step}")]
+    /// Binary64 roundoff is too large for the one-vertex marking tolerance.
+    #[error(
+        "intrinsic log weight {log_weight} cannot resolve a marking change of {marking_step} to one part per million"
+    )]
     MarkingPrecision {
         /// Unnormalized marked log weight.
         log_weight: f64,
@@ -259,40 +261,37 @@ enum Site {
 
 /// Lists the sites before realization. All non-origin vertices above the
 /// minimum are offered to removal, including ones that fail the collapse check.
-fn offered_sites(slabs: &[Slab], family: MoveType) -> Vec<Site> {
-    let mut sites = Vec::new();
-    for (time, slab) in slabs.iter().enumerate() {
+fn offered_sites(slabs: &[Slab], family: MoveType) -> impl Iterator<Item = Site> + Clone {
+    slabs.iter().enumerate().flat_map(move |(slice, slab)| {
         let length = slab.down_after_up.len();
-        match family {
-            MoveType::Move22 | MoveType::EdgeFlip => {
-                for (run, &count) in slab.down_after_up.iter().enumerate() {
-                    if count > 0 {
-                        sites.push(Site::Flip {
-                            slab: time,
-                            run,
-                            toward_previous: true,
-                        });
-                        sites.push(Site::Flip {
-                            slab: time,
-                            run,
-                            toward_previous: false,
-                        });
+        slab.down_after_up
+            .iter()
+            .enumerate()
+            .flat_map(move |(index, &count)| {
+                match family {
+                    MoveType::Move22 | MoveType::EdgeFlip if count > 0 => {
+                        [true, false].map(|toward_previous| {
+                            Some(Site::Flip {
+                                slab: slice,
+                                run: index,
+                                toward_previous,
+                            })
+                        })
                     }
+                    MoveType::Move13Add => [Some(Site::Insert { slice, edge: index }), None],
+                    MoveType::Move31Remove if length > MINIMUM_LOOP_LENGTH && index > 0 => [
+                        Some(Site::Remove {
+                            slice,
+                            vertex: index,
+                        }),
+                        None,
+                    ],
+                    _ => [None, None],
                 }
-            }
-            MoveType::Move13Add => {
-                sites.extend((0..length).map(|edge| Site::Insert { slice: time, edge }));
-            }
-            MoveType::Move31Remove if length > MINIMUM_LOOP_LENGTH => {
-                sites.extend((1..length).map(|vertex| Site::Remove {
-                    slice: time,
-                    vertex,
-                }));
-            }
-            MoveType::Move31Remove => {}
-        }
-    }
-    sites
+                .into_iter()
+                .flatten()
+            })
+    })
 }
 
 /// Cyclic predecessor for an index already known to be in bounds.
@@ -504,7 +503,7 @@ impl IntrinsicCdtProposal {
         &self,
         state: &IntrinsicCdtTriangulation,
         family: MoveType,
-        sites: &[Site],
+        site_count: usize,
         site: Site,
     ) -> Result<Option<IntrinsicCdtPlan>, IntrinsicCdtError> {
         let mut destination = state.slabs.to_vec();
@@ -512,12 +511,12 @@ impl IntrinsicCdtProposal {
             return Ok(None);
         };
         let reverse_family = family.reverse();
-        let reverse_sites = offered_sites(&destination, reverse_family);
+        let reverse_count = offered_sites(&destination, reverse_family).count();
         let matching = count_to_f64(matching);
         let forward =
-            self.transition_family_probability(family) * (matching / count_to_f64(sites.len()));
+            self.transition_family_probability(family) * (matching / count_to_f64(site_count));
         let reverse = self.transition_family_probability(reverse_family)
-            * (matching / count_to_f64(reverse_sites.len()));
+            * (matching / count_to_f64(reverse_count));
         let ratio = DiscreteProposalRatio::from_endpoints(
             DiscreteProposalEndpoint::new(forward, 1.0, 1),
             DiscreteProposalEndpoint::new(reverse, 1.0, 1),
@@ -544,10 +543,14 @@ impl DelayedProposal<IntrinsicCdtTriangulation> for IntrinsicCdtProposal {
     ) -> Result<Option<Self::Plan>, Self::Error> {
         self.no_plan_family = None;
         let family = select_move_family_at(&self.distribution, rng.next_u64() >> 11);
-        let sites = offered_sites(&state.slabs, family);
-        let plan = match Uniform::new(0, sites.len()) {
+        let mut sites = offered_sites(&state.slabs, family);
+        let site_count = sites.clone().count();
+        let plan = match Uniform::new(0, site_count) {
             Ok(uniform) => {
-                self.plan_selected_site(state, family, &sites, sites[uniform.sample(rng)])?
+                let site = sites
+                    .nth(uniform.sample(rng))
+                    .expect("sampled index is within the counted sites");
+                self.plan_selected_site(state, family, site_count, site)?
             }
             Err(_) => None,
         };

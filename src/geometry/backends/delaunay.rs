@@ -3508,6 +3508,36 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn intrinsic_gluing_rejects_a_valid_disk_as_a_torus() {
+        let mut disk = GluingDraft::new(3);
+        let edges = [disk.edge(0, 1), disk.edge(1, 2), disk.edge(2, 0)];
+        disk.triangle(edges.map(|edge| (edge, false)));
+        let error = disk.finish().expect_err("a single triangle has a boundary");
+        assert!(
+            error.contains("expected one closed orientable torus"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn open_hilbert_chart_normalizes_extreme_and_constant_axes() {
+        let chart = ProposalLocality::Open {
+            min: [-f64::MAX, 7.0],
+            max: [f64::MAX, 7.0],
+        };
+        let unit = ProposalLocality::Open {
+            min: [0.0; 2],
+            max: [1.0; 2],
+        };
+        for (x, normalized) in [(-f64::MAX, 0.0), (0.0, 0.5), (f64::MAX, 1.0)] {
+            let expected = unit
+                .index([normalized, 0.5])
+                .expect("normalized point has an index");
+            assert_eq!(chart.index([x, 7.0]), Some(expected));
+        }
+    }
+
+    #[test]
     fn periodic_hilbert_keys_and_embedded_edges_use_lattice_lifts() {
         let space = ToroidalSpace::try_new([4.0, 3.0]).expect("valid torus chart");
         let locality = ProposalLocality::Periodic(space);

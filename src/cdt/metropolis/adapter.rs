@@ -119,8 +119,8 @@ impl CdtTarget {
     ///
     /// Returns [`IntrinsicCdtError::VolumeFixing`] if the fixing target is below
     /// six triangles per time slice, and [`IntrinsicCdtError::MarkingPrecision`]
-    /// when even a one-vertex change in the longest loop is below the resolution
-    /// of an absolute log weight. The upstream chain reports either failure as
+    /// when roundoff in the absolute log weights could exceed one part per
+    /// million of a one-vertex marking change. The upstream chain reports either failure as
     /// an invalid target value at initialization or proposal scoring.
     ///
     /// # Examples
@@ -138,13 +138,15 @@ impl CdtTarget {
         state: &IntrinsicCdtTriangulation,
     ) -> Result<f64, IntrinsicCdtError> {
         let lengths = state.spatial_loop_lengths();
+        let slices = lengths.len();
         if let Some(fixing) = self.action_config.volume_fixing() {
-            fixing.ensure_toroidal_minimum(lengths.len() as u64)?;
+            fixing.ensure_toroidal_minimum(slices as u64)?;
         }
         let (vertices, edges, triangles) = state.counts();
-        let action = self
+        let physical = self
             .action_config
-            .calculate_action(vertices, edges, triangles);
+            .physical_action(vertices, edges, triangles);
+        let fixing = self.action_config.fixing_action(triangles);
         // The raw marking set has one choice per vertex on each slice.
         let mut longest = 0;
         let mut log_markings = 0.0;
@@ -152,11 +154,21 @@ impl CdtTarget {
             longest = longest.max(length);
             log_markings += count_to_f64(length).ln();
         }
-        let scaled_action = action / self.temperature;
+        let scaled_action = (physical + fixing) / self.temperature;
         let log_weight = -scaled_action - log_markings;
-        let magnitude = log_weight.abs().max(scaled_action.abs()).max(log_markings);
+        let magnitude = log_weight
+            .abs()
+            .max(scaled_action.abs())
+            .max(physical.abs() / self.temperature)
+            .max(fixing / self.temperature);
         let marking_step = count_to_f64(longest).recip().ln_1p();
-        if magnitude.next_up() - magnitude >= marking_step {
+        // Budget half the pairwise tolerance to each endpoint. Account for the
+        // action terms before cancellation, scaling and the final subtraction.
+        // Each positive logarithm and partial marking sum is at most log_markings.
+        let action_roundoff = 8.0 * (magnitude.next_up() - magnitude);
+        let marking_roundoff =
+            (count_to_f64(slices) + 2.0) * (log_markings.next_up() - log_markings);
+        if action_roundoff + marking_roundoff > 0.5e-6 * marking_step {
             return Err(IntrinsicCdtError::MarkingPrecision {
                 log_weight,
                 marking_step,

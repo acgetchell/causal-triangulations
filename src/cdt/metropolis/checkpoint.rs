@@ -1925,6 +1925,18 @@ mod tests {
     }
 
     #[test]
+    fn unknown_checkpoint_version_is_reported_before_an_incompatible_body() {
+        let json = r#"{"format_version":4294967296,"future_payload":[]}"#;
+        assert_matches!(
+            checkpoint_json_error(json, "unsupported envelopes must report their version"),
+            CdtError::UnsupportedCheckpointVersion {
+                encountered: 4_294_967_296,
+                supported: CdtMcmcCheckpoint::FORMAT_VERSION,
+            }
+        );
+    }
+
+    #[test]
     fn checkpoint_json_wraps_malformed_document() {
         let error = checkpoint_json_error("{", "malformed checkpoint JSON should be rejected");
 

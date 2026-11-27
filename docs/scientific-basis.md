@@ -239,6 +239,10 @@ Weight each marked encoding by `exp(-S/temperature) / L`. Summing over its orbit
 factor is exactly the product of the one-marked-entrance binomial factors. At fixed total volume the slice labels remain in place and
 the action and any total-volume bias are constant. See [Ambjørn and Loll, section 2](https://arxiv.org/pdf/hep-th/9805108).
 
+The sampler compares absolute binary64 log weights. An insertion on a loop of length `l` changes the log marking factor by `-ln(1 + 1/l)`.
+Each endpoint allows a roundoff budget of half a part per million of this change on its longest loop. The check accounts for the action and
+fixing terms before cancellation and for accumulation of the slice logarithms. If either endpoint exceeds its budget, scoring stops before the move.
+
 For a finite offered-site kernel, let `p_m(C)` be the actual sampled family probability, `S_m(C)` its offered sites, and `F(C,m,s)` the complete realized
 outcome. The transition probability is the sum of all atoms producing the same intrinsic destination:
 

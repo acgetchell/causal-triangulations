@@ -189,13 +189,14 @@ fn check_transition_oracle(state: &IntrinsicCdtTriangulation) {
     for family in MoveType::REVERSIBLE_1P1 {
         let sites = offered_sites(&state.slabs, family);
         let mut expected = word_outcomes(&state.slabs, family);
-        assert_eq!(sites.len(), expected.len());
-        if sites.is_empty() {
+        let site_count = sites.clone().count();
+        assert_eq!(site_count, expected.len());
+        if site_count == 0 {
             self_loop += distribution.probability(family);
         }
-        for &site in &sites {
+        for site in sites {
             let plan = proposal
-                .plan_selected_site(state, family, &sites, site)
+                .plan_selected_site(state, family, site_count, site)
                 .expect("offered-site evaluation succeeds");
             let observed = plan.as_ref().map(|plan| plan.proposed.slabs.as_ref());
             let position = expected
@@ -239,7 +240,7 @@ fn check_transition_oracle(state: &IntrinsicCdtTriangulation) {
                     .expect("commit a plan at its source");
                 assert_eq!(committed, *next);
             } else {
-                self_loop += distribution.probability(family) / count_to_f64(sites.len());
+                self_loop += distribution.probability(family) / count_to_f64(site_count);
             }
         }
         assert_eq!(expected, []);
@@ -248,6 +249,21 @@ fn check_transition_oracle(state: &IntrinsicCdtTriangulation) {
         self_loop,
         word_probability(distribution, &state.slabs, &state.slabs),
         epsilon = 1e-15
+    );
+}
+
+#[test]
+fn intrinsic_constructor_reports_the_invalid_slice_or_time_extent() {
+    assert_matches!(
+        IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[3, 3]),
+        Err(IntrinsicCdtError::TooFewTimeSlices { actual: 2 })
+    );
+    assert_matches!(
+        IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[3, 2, 4]),
+        Err(IntrinsicCdtError::ShortSpatialLoop {
+            slice: 1,
+            length: 2
+        })
     );
 }
 
@@ -264,6 +280,11 @@ fn oversized_intrinsic_profile_returns_a_typed_error() {
     );
     assert_matches!(
         IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[length, 3, 3]),
+        Err(IntrinsicCdtError::CellCountOverflow)
+    );
+    // The vertex count fits, but the torus needs three edge occurrences per vertex.
+    assert_matches!(
+        IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[usize::MAX / 2, 3, 3]),
         Err(IntrinsicCdtError::CellCountOverflow)
     );
 }
@@ -316,9 +337,14 @@ fn evolved_seam_volume_edits_have_multiplicity_and_both_inverses() {
         IntrinsicCdtTriangulation::from_slabs(slabs).expect("valid torus with parallel edges");
     let proposal = IntrinsicCdtProposal::default();
     let family = MoveType::Move13Add;
-    let sites = offered_sites(&state.slabs, family);
+    let site_count = offered_sites(&state.slabs, family).count();
     let plan = proposal
-        .plan_selected_site(&state, family, &sites, Site::Insert { slice: 0, edge: 2 })
+        .plan_selected_site(
+            &state,
+            family,
+            site_count,
+            Site::Insert { slice: 0, edge: 2 },
+        )
         .expect("seam insertion planning succeeds")
         .expect("the seam insertion is offered");
     let (forward, reverse) = plan.transition_probabilities();
@@ -327,12 +353,12 @@ fn evolved_seam_volume_edits_have_multiplicity_and_both_inverses() {
     check_transition_oracle(&plan.proposed);
 
     let family = MoveType::Move31Remove;
-    let sites = offered_sites(&plan.proposed.slabs, family);
+    let site_count = offered_sites(&plan.proposed.slabs, family).count();
     let removal = proposal
         .plan_selected_site(
             &plan.proposed,
             family,
-            &sites,
+            site_count,
             Site::Remove {
                 slice: 0,
                 vertex: 3,
@@ -361,6 +387,10 @@ fn upstream_chain_records_zero_reverse_support_and_empty_families() {
         .propose_plan(&state, &mut rng)
         .expect("insertion planning succeeds")
         .expect("shortest torus offers insertion");
+    assert_eq!(
+        plan.proposed_state().triangle_count(),
+        state.triangle_count() + 2
+    );
     assert!(
         plan.log_proposal_ratio().is_infinite() && plan.log_proposal_ratio().is_sign_negative()
     );
@@ -525,12 +555,12 @@ fn original_coordinate_removal_is_reversible_as_an_intrinsic_transition() {
         .expect("destination projects to a valid gluing");
     let proposal = IntrinsicCdtProposal::new(distribution);
     let family = MoveType::Move31Remove;
-    let sites = offered_sites(&source.slabs, family);
+    let mut sites = offered_sites(&source.slabs, family);
+    let site_count = sites.clone().count();
     let removal = sites
-        .iter()
-        .find_map(|&site| {
+        .find_map(|site| {
             proposal
-                .plan_selected_site(&source, family, &sites, site)
+                .plan_selected_site(&source, family, site_count, site)
                 .expect("embedded projection has a valid intrinsic plan")
                 .filter(|plan| plan.proposed == destination)
         })
@@ -598,6 +628,45 @@ fn intrinsic_target_resolves_marking_change_or_reports_precision_loss() {
         );
         assert_matches!(
             Chain::new(state, &unresolved),
+            Err(crate::McmcError::NanInitialLogProb)
+        );
+    }
+}
+
+#[test]
+fn equal_extensive_actions_preserve_the_marking_ratio_or_stop_the_chain() {
+    let source =
+        IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[3; 3]).expect("minimal torus");
+    let next =
+        IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[4, 3, 3]).expect("one longer loop");
+    // For both volumes, 4k V + k(2V - 20)^2 = 40k exactly.
+    let target = |k| {
+        let action = ActionConfig::new(-4.0 * k, 0.0, 0.0)
+            .expect("finite vertex coupling")
+            .with_volume_fixing(Some(
+                VolumeFixing::quadratic_triangles(20, k).expect("legal even fixing target"),
+            ))
+            .expect("finite combined action");
+        CdtTarget::new(action, 1.0).expect("finite action at unit temperature")
+    };
+    let moderate = target(2.0_f64.powi(20));
+    let delta = moderate
+        .intrinsic_log_prob(&next)
+        .expect("resolvable insertion weight")
+        - moderate
+            .intrinsic_log_prob(&source)
+            .expect("resolvable starting weight");
+    let exact = -(4.0_f64 / 3.0).ln();
+    assert!((delta - exact).abs() <= 1e-6 * exact.abs());
+
+    let large = target(2.0_f64.powi(44));
+    for state in [source, next] {
+        assert_matches!(
+            large.intrinsic_log_prob(&state),
+            Err(IntrinsicCdtError::MarkingPrecision { .. })
+        );
+        assert_matches!(
+            Chain::new(state, &large),
             Err(crate::McmcError::NanInitialLogProb)
         );
     }

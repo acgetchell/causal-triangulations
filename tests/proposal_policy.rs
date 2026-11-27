@@ -288,6 +288,8 @@ fn positive_weight_empty_family_is_typed_self_loop_without_mutation() {
     let info = proposal_info(&mut proposal, plan.as_ref());
 
     assert!(plan.is_none());
+    assert_eq!(info.action_after(), None);
+    assert_eq!(info.delta_action(), None);
     assert_eq!(
         info.proposal_telemetry().selected_family(),
         MoveType::Move22
@@ -566,7 +568,14 @@ fn unequal_fixed_weights_match_analytic_family_and_site_ratio() -> CdtResult<()>
         })
         .expect("representative toroidal policy should realize a concrete plan");
     let scored_ratio = proposal.log_q_ratio(&proposed, &plan)?;
+    let info = proposal.info(&plan);
     proposal.commit(&mut proposed, plan.clone(), &mut rng)?;
+    let applied_action = ActionConfig::default().calculate_action(
+        proposed.vertex_count(),
+        proposed.edge_count(),
+        proposed.face_count(),
+    );
+    assert_eq!(info.action_after(), Some(applied_action));
 
     let expected_forward_family = match plan.move_type() {
         MoveType::Move13Add => 0.75,

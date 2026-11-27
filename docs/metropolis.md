@@ -258,7 +258,7 @@ Use `IntrinsicCdtTriangulation::from_spatial_loop_lengths` to start a periodic c
 `Chain::step_delayed` from `prelude::simulation`. Read the current labeled profile with `chain.state().spatial_loop_lengths()`.
 The intrinsic kernel validates topology through Delaunay's triangle gluings and handles volume fixing through the same `ActionConfig`.
 The fixing target must allow at least six triangles per slice. Use `CdtTarget::intrinsic_log_prob` for a typed diagnostic if the target is too small or
-the binary64 spacing of an absolute log weight cannot resolve a one-vertex change in the spatial marking factor.
+roundoff in the absolute log weights could exceed one part per million of a one-vertex change in the log marking factor.
 The chain reports these conditions as target errors.
 The existing file-output runner and checkpoint schema store embedded meshes. The analytic validation harness for the intrinsic path is tracked by
 [#238](https://github.com/acgetchell/causal-triangulations/issues/238).
