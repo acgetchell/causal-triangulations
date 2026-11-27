@@ -21,8 +21,7 @@ use crate::cdt::proposal_policy::{
 use crate::cdt::triangulation::{CdtTriangulation2D, TriangulationRevision};
 use crate::config::CdtTopology;
 use crate::errors::{
-    CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure, ConfigurationSetting,
-    ExpectedConstraint, MetropolisMoveApplicationFailure,
+    CdtError, CdtResult, ConfigurationSetting, ExpectedConstraint, MetropolisMoveApplicationFailure,
 };
 use crate::geometry::backends::delaunay::{DelaunayError, EmbeddedState};
 use markov_chain_monte_carlo::{
@@ -128,10 +127,11 @@ impl CdtTarget {
     ///
     /// ```
     /// use causal_triangulations::{ActionConfig, CdtTarget, IntrinsicCdtTriangulation};
-    /// let state = IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[3; 3])?;
-    /// let target = CdtTarget::new(ActionConfig::default(), 1.0).expect("valid default action");
-    /// assert!(target.intrinsic_log_prob(&state)?.is_finite());
-    /// # Ok::<(), causal_triangulations::IntrinsicCdtError>(())
+    /// let target = CdtTarget::new(ActionConfig::default(), 1.0)?;
+    /// let weight = IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[3; 3])
+    ///     .and_then(|state| target.intrinsic_log_prob(&state));
+    /// assert!(weight.is_ok_and(f64::is_finite));
+    /// # Ok::<(), causal_triangulations::CdtError>(())
     /// ```
     pub fn intrinsic_log_prob(
         &self,
@@ -168,7 +168,13 @@ impl CdtTarget {
 
 impl Target<IntrinsicCdtTriangulation> for CdtTarget {
     fn log_prob(&self, state: &IntrinsicCdtTriangulation) -> f64 {
-        self.intrinsic_log_prob(state).unwrap_or(f64::NAN)
+        self.intrinsic_log_prob(state).unwrap_or_else(|error| {
+            // Target has no error channel. The chain treats NaN as a hard
+            // scoring error before acceptance or mutation; -infinity would
+            // instead assign zero mass and silently change the ensemble.
+            log::error!("invalid intrinsic CDT target: {error}");
+            f64::NAN
+        })
     }
 }
 
@@ -1219,12 +1225,7 @@ impl From<DelaunayError> for MoveApplicationError {
     fn from(error: DelaunayError) -> Self {
         Self {
             attempt: 1,
-            source: CdtError::ValidationFailed {
-                check: CdtValidationCheck::Geometry,
-                failure: CdtValidationFailure::BackendGeometry {
-                    detail: error.to_string(),
-                },
-            },
+            source: CdtError::ProposalGeometry(error),
         }
     }
 }
@@ -1476,7 +1477,27 @@ pub(crate) fn restore_checkpoint_state(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::errors::{CdtValidationCheck, CdtValidationFailure};
+    use crate::geometry::backends::delaunay::DelaunayHandleKind;
     use std::assert_matches;
+
+    #[test]
+    fn endpoint_scoring_retains_typed_geometry_source() {
+        let stale = DelaunayError::StaleHandle {
+            kind: DelaunayHandleKind::Edge,
+            handle_generation: 1,
+            current_generation: 2,
+        };
+        let failure = MoveApplicationError::from(stale.clone());
+        assert_eq!(failure.attempt, 1);
+        let failure = MetropolisMoveApplicationFailure::from(failure.source);
+        assert_eq!(
+            failure
+                .source()
+                .and_then(|e| e.downcast_ref::<DelaunayError>()),
+            Some(&stale)
+        );
+    }
 
     #[test]
     fn realized_site_preserves_hard_failure_instead_of_counting_rejection() {

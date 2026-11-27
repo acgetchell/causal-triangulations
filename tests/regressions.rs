@@ -56,6 +56,9 @@ fn issue_316_original_removal_has_no_periodic_barycentric_reverse() {
     assert_eq!(plan.move_type(), MoveType::Move31Remove);
     assert_eq!(plan.forward_site_count(), 2);
     assert_eq!(plan.reverse_site_count(), 15);
+    let (forward, reverse) = plan.transition_probabilities();
+    assert!(forward > 0.0);
+    assert_eq!(reverse, 0.0);
     assert!(
         plan.log_proposal_ratio().is_infinite() && plan.log_proposal_ratio().is_sign_negative()
     );
