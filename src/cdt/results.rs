@@ -1051,10 +1051,12 @@ const fn validate_measurement_action(step: u32, action: f64) -> CdtResult<()> {
 /// final triangulation checkpoint. Use [`Self::write_summary_json`] when you
 /// want an analysis-friendly JSON report with configuration, aggregate
 /// statistics, step telemetry, and measurements. Deserialization validates the
-/// stored configuration, action parameters, and final evolved-CDT triangulation
+/// proposal-kernel tag, configuration, action parameters, and final evolved-CDT triangulation
 /// invariants, mapping any validation failure into the serde deserializer error.
 #[derive(Debug, Serialize)]
 pub struct SimulationResultsBackend {
+    /// The sampling semantics that produced this trajectory.
+    proposal_kernel: EmbeddedProposalKernel,
     /// Configuration used for the simulation
     config: MetropolisConfig,
     /// Action configuration used
@@ -1062,7 +1064,6 @@ pub struct SimulationResultsBackend {
     /// Metropolis-level ergodic move statistics
     move_stats: MoveStatistics,
     /// Concrete proposal-kernel telemetry
-    #[serde(default)]
     proposal_stats: ProposalStatistics,
     /// Indexed public projection of the persisted trajectory.
     #[serde(skip)]
@@ -1078,13 +1079,21 @@ pub struct SimulationResultsBackend {
     triangulation: CdtTriangulation2D,
 }
 
+/// Distinguishes endpoint-scored results from older, untagged trajectories.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum EmbeddedProposalKernel {
+    MarginalEndpoint,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SimulationResultsBackendWire {
+    #[serde(rename = "proposal_kernel")]
+    _proposal_kernel: EmbeddedProposalKernel,
     config: MetropolisConfig,
     action_config: ActionConfig,
     move_stats: MoveStatistics,
-    #[serde(default)]
     proposal_stats: ProposalStatistics,
     measurements: Vec<Measurement>,
     scalar_trace_rows: Vec<TrajectoryRecord<Vec<u32>>>,
@@ -1122,8 +1131,6 @@ impl SimulationResultsParts {
         elapsed_time: Duration,
         triangulation: CdtTriangulation2D,
     ) -> CdtResult<Self> {
-        config.validate();
-        action_config.validate();
         triangulation.validate_supported_state()?;
         validate_result_telemetry(
             &config,
@@ -2255,6 +2262,7 @@ fn seed_observables(seed: Option<u64>) -> (f64, f64, f64) {
 
 #[derive(Serialize)]
 struct SimulationSummary<'a> {
+    proposal_kernel: &'a EmbeddedProposalKernel,
     config: &'a CdtConfig,
     metropolis_config: &'a MetropolisConfig,
     action_config: &'a ActionConfig,
@@ -2393,6 +2401,7 @@ impl SimulationResultsBackend {
     /// Creates a result snapshot from components that were already validated by this crate.
     pub(crate) fn from_parts(parts: SimulationResultsParts) -> Self {
         Self {
+            proposal_kernel: EmbeddedProposalKernel::MarginalEndpoint,
             config: parts.config,
             action_config: parts.action_config,
             move_stats: parts.move_stats,
@@ -3098,6 +3107,7 @@ impl SimulationResultsBackend {
         })?;
         let vertex_time_labels = triangulation_vertex_time_labels(&self.triangulation)?;
         let summary = SimulationSummary {
+            proposal_kernel: &self.proposal_kernel,
             config: config.config(),
             metropolis_config: &self.config,
             action_config: &self.action_config,
@@ -3231,8 +3241,7 @@ mod tests {
     use super::*;
     use crate::cdt::ergodic_moves::{ErgodicsSystem, MoveResult};
     use crate::cdt::foliation::FoliationError;
-    use crate::cdt::metropolis::StepOutcome;
-    use crate::cdt::metropolis::{CdtMcmcCheckpoint, MetropolisAlgorithm};
+    use crate::cdt::metropolis::{CdtMcmcCheckpoint, MetropolisAlgorithm, StepOutcome};
     use crate::cdt::proposal_policy::CdtMoveFamilyDistribution;
     use crate::cdt::triangulation::CdtTriangulation;
     use crate::errors::{ConfigurationSetting, ExpectedConstraint, ObservedValue};
@@ -3517,6 +3526,7 @@ mod tests {
         triangulation: CdtTriangulation2D,
     ) -> SimulationResultsBackend {
         SimulationResultsBackend {
+            proposal_kernel: EmbeddedProposalKernel::MarginalEndpoint,
             config,
             action_config: ActionConfig::default(),
             move_stats: MoveStatistics::new(),
@@ -5243,7 +5253,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialization_defaults_missing_proposal_stats() {
+    fn deserialization_rejects_missing_proposal_stats() {
         let triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let results = valid_rejected_result(triangulation);
@@ -5254,11 +5264,31 @@ mod tests {
             .remove("proposal_stats");
 
         let error = from_str::<SimulationResultsBackend>(&payload.to_string())
-            .expect_err("missing proposal stats should fail result telemetry validation");
+            .expect_err("missing proposal stats should fail result deserialization");
         assert!(
-            error.to_string().contains("proposal")
-                || error.to_string().contains("move-family count mismatch"),
+            error.to_string().contains("missing field `proposal_stats`"),
             "unexpected serde error: {error}"
+        );
+    }
+
+    #[test]
+    fn deserialization_rejects_result_without_proposal_kernel() {
+        let triangulation =
+            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
+        let results = valid_rejected_result(triangulation);
+        let mut payload = to_value(&results).expect("results should serialize");
+        assert_eq!(payload["proposal_kernel"], "marginal-endpoint");
+        payload
+            .as_object_mut()
+            .expect("results payload should be an object")
+            .remove("proposal_kernel");
+
+        let error = serde_json::from_value::<SimulationResultsBackend>(payload)
+            .expect_err("results with unspecified proposal semantics must be rejected");
+        assert!(
+            error
+                .to_string()
+                .contains("missing field `proposal_kernel`")
         );
     }
 
@@ -5284,34 +5314,11 @@ mod tests {
     }
 
     #[test]
-    fn result_wire_validation_rejects_invalid_metropolis_config() {
+    fn result_wire_validation_rejects_missing_trajectory_for_configured_steps() {
         let triangulation =
             CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
         let error = SimulationResultsBackend::try_from(SimulationResultsBackendWire {
-            config: metropolis_config(1.0, 1, 0, 1),
-            action_config: ActionConfig::default(),
-            move_stats: MoveStatistics::new(),
-            proposal_stats: ProposalStatistics::new(),
-            measurements: vec![],
-            scalar_trace_rows: vec![],
-            elapsed_time: Duration::ZERO,
-            triangulation,
-        })
-        .expect_err("invalid result telemetry should be rejected");
-
-        assert_matches!(
-            error,
-            CdtError::CheckpointResumeFailed {
-                failure: CheckpointResumeFailure::StepTelemetryLengthMismatch { .. }
-            }
-        );
-    }
-
-    #[test]
-    fn result_wire_validation_rejects_invalid_action_config() {
-        let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
-        let error = SimulationResultsBackend::try_from(SimulationResultsBackendWire {
+            _proposal_kernel: EmbeddedProposalKernel::MarginalEndpoint,
             config: metropolis_config(1.0, 1, 0, 1),
             action_config: ActionConfig::default(),
             move_stats: MoveStatistics::new(),

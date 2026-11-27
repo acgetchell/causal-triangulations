@@ -3,7 +3,7 @@
 //! Borrowed, invariant-safe views for 1+1 CDT proposal policies.
 
 use crate::cdt::ergodic_moves::{MoveType, ProposalSite};
-use crate::cdt::triangulation::{CdtSimplexCounts, CdtTriangulation2D};
+use crate::cdt::triangulation::{CdtSimplexCounts, CdtTriangulation2D, TriangulationRevision};
 use crate::config::CdtTopology;
 use crate::errors::CdtResult;
 use la_stack::{BigInt, BigRational, Interval};
@@ -514,8 +514,7 @@ const fn family_index(family: MoveType) -> usize {
 pub struct CdtProposalSiteId {
     family: MoveType,
     ordinal: usize,
-    instance_id: u64,
-    modification_count: u64,
+    revision: TriangulationRevision,
 }
 
 impl CdtProposalSiteId {
@@ -544,8 +543,9 @@ impl CdtProposalSiteId {
 
     /// Returns this site's zero-based ordinal in its family view.
     ///
-    /// Ordinals are deterministic only while the inspected triangulation stays
-    /// unchanged. They are not persistent geometry identifiers.
+    /// Ordinals follow the current proposal order of the inspected state.
+    /// Embedded sites use a Hilbert order with exact geometry as the tie-breaker.
+    /// Ordinals are scoped to the live view's owner and version.
     ///
     /// # Examples
     ///
@@ -659,8 +659,7 @@ impl Error for CdtProposalSiteIdError {}
 #[derive(Debug, Clone)]
 pub struct CdtProposalSiteIds {
     family: MoveType,
-    instance_id: u64,
-    modification_count: u64,
+    revision: TriangulationRevision,
     ordinals: Range<usize>,
 }
 
@@ -671,8 +670,7 @@ impl Iterator for CdtProposalSiteIds {
         self.ordinals.next().map(|ordinal| CdtProposalSiteId {
             family: self.family,
             ordinal,
-            instance_id: self.instance_id,
-            modification_count: self.modification_count,
+            revision: self.revision,
         })
     }
 
@@ -686,8 +684,7 @@ impl DoubleEndedIterator for CdtProposalSiteIds {
         self.ordinals.next_back().map(|ordinal| CdtProposalSiteId {
             family: self.family,
             ordinal,
-            instance_id: self.instance_id,
-            modification_count: self.modification_count,
+            revision: self.revision,
         })
     }
 }
@@ -809,8 +806,7 @@ impl<'a> CdtProposalPolicyView<'a> {
     pub const fn offered_sites(&self) -> CdtProposalSiteIds {
         CdtProposalSiteIds {
             family: self.family,
-            instance_id: self.triangulation.instance_id(),
-            modification_count: self.triangulation.metadata().modification_count(),
+            revision: self.triangulation.revision(),
             ordinals: 0..self.sites.len(),
         }
     }
@@ -835,8 +831,7 @@ impl<'a> CdtProposalPolicyView<'a> {
         Ok(CdtProposalSiteId {
             family: self.family,
             ordinal,
-            instance_id: self.triangulation.instance_id(),
-            modification_count: self.triangulation.metadata().modification_count(),
+            revision: self.triangulation.revision(),
         })
     }
 
@@ -847,18 +842,18 @@ impl<'a> CdtProposalPolicyView<'a> {
     /// Returns a typed error for foreign triangulations, stale modification
     /// versions, family mismatches, or an invalid ordinal.
     pub fn validate_site(&self, site: CdtProposalSiteId) -> Result<(), CdtProposalSiteIdError> {
-        if site.instance_id != self.triangulation.instance_id() {
+        if site.revision.instance() != self.triangulation.instance_id() {
             return Err(CdtProposalSiteIdError::ForeignTriangulation {
                 family: site.family,
                 ordinal: site.ordinal,
             });
         }
         let current_version = self.triangulation.metadata().modification_count();
-        if site.modification_count != current_version {
+        if site.revision.modification() != current_version {
             return Err(CdtProposalSiteIdError::StaleState {
                 family: site.family,
                 ordinal: site.ordinal,
-                identifier_version: site.modification_count,
+                identifier_version: site.revision.modification(),
                 current_version,
             });
         }
@@ -878,9 +873,9 @@ impl<'a> CdtProposalPolicyView<'a> {
         Ok(())
     }
 
-    /// Clones one private site descriptor at a checked cache ordinal.
-    pub(crate) fn site_at(&self, ordinal: usize) -> Option<ProposalSite> {
-        self.sites.get(ordinal).cloned()
+    /// Borrows one private site descriptor at a checked cache ordinal.
+    pub(crate) fn site_at(&self, ordinal: usize) -> Option<&'a ProposalSite> {
+        self.sites.get(ordinal)
     }
 }
 

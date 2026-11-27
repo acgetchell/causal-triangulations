@@ -28,15 +28,24 @@
 //!
 //! # Feature flags
 //!
+//! - `cli` is enabled by default and builds the `cdt` binary and CLI parsing APIs.
 //! - `slow-tests` enables the repository's large toroidal checkpoint stress test.
+//!
+//! # Sampling interfaces
+//!
+//! Use [`MetropolisAlgorithm`] for embedded strips and tori with result and
+//! checkpoint support. Use [`IntrinsicCdtTriangulation`] with
+//! [`IntrinsicCdtProposal`] and [`CdtTarget`] for coordinate-independent periodic
+//! sampling through [`prelude::simulation::Chain::step_delayed`].
 //!
 //! # Checkpointing
 //!
-//! Durable simulation continuation uses the versioned, CDT-owned
-//! [`CdtMcmcCheckpoint`] JSON format. Version 4 stores each transition once and embeds Delaunay's exact Level 4
-//! geometry snapshot alongside CDT chain accounting, telemetry, elapsed time, and
-//! both RNG streams. Restoration rebuilds transient caches and validates geometry
-//! and CDT invariants before use. Older checkpoint formats are unsupported.
+//! Embedded simulation continuation uses the versioned, CDT-owned
+//! [`CdtMcmcCheckpoint`] JSON format. Version 5 stores each transition once and
+//! embeds Delaunay's exact Level 4 geometry snapshot alongside CDT chain
+//! accounting, telemetry, elapsed time, and both RNG streams. Restoration
+//! rebuilds transient caches and validates geometry and CDT invariants before
+//! use. Older checkpoint formats are unsupported.
 //! Direct Serde serialization of a standalone [`CdtTriangulation2D`] shares the
 //! geometry snapshot format but does not store the sampler state needed to resume.
 //!
@@ -51,7 +60,7 @@
 //!     .run_to_checkpoint(CdtTriangulation::from_cdt_strip(4, 3)?)?;
 //!     let json = checkpoint.to_json()?;
 //!     let restored = CdtMcmcCheckpoint::from_json(&json)?;
-//!     assert_eq!(CdtMcmcCheckpoint::FORMAT_VERSION, 4);
+//!     assert_eq!(CdtMcmcCheckpoint::FORMAT_VERSION, 5);
 //!     assert_eq!(restored.current_step().get(), 1);
 //!     Ok(())
 //! }
@@ -135,8 +144,10 @@ pub mod cdt {
     ///
     /// The module is split by API boundary:
     /// [`adapter`](crate::cdt::metropolis::adapter) exposes the CDT target and
-    /// planned proposal types used through `markov-chain-monte-carlo`,
-    /// [`runner`](crate::cdt::metropolis::runner) provides the transitional
+    /// embedded proposal types used through `markov-chain-monte-carlo`,
+    /// [`intrinsic`](crate::cdt::metropolis::intrinsic) provides the periodic
+    /// gluing state and proposal kernel,
+    /// [`runner`](crate::cdt::metropolis::runner) provides the embedded
     /// [`MetropolisAlgorithm`](crate::cdt::metropolis::MetropolisAlgorithm)
     /// facade, [`checkpoint`](crate::cdt::metropolis::checkpoint) owns
     /// resumable CDT/MCMC checkpoints, and
@@ -150,7 +161,9 @@ pub mod cdt {
         pub mod checkpoint;
         /// Shared CDT-domain helper functions for Metropolis modules.
         pub(crate) mod helpers;
-        /// Transitional Metropolis runner implementation.
+        /// Coordinate-independent periodic 1+1 CDT states and sampling.
+        pub mod intrinsic;
+        /// Embedded Metropolis runner and continuation.
         pub mod runner;
         /// Step and proposal telemetry types.
         pub mod telemetry;
@@ -203,6 +216,9 @@ pub use cdt::analysis::{
 pub use cdt::ergodic_moves::{ErgodicsSystem, MoveResult, MoveStatistics, MoveType};
 pub use cdt::foliation::{
     EdgeType, Foliation, FoliationError, SimplexType, classify_edge, classify_simplex,
+};
+pub use cdt::metropolis::intrinsic::{
+    IntrinsicCdtError, IntrinsicCdtPlan, IntrinsicCdtProposal, IntrinsicCdtTriangulation,
 };
 pub use cdt::metropolis::{
     AcceptedStepTelemetry, CdtMcmcCheckpoint, CdtProposal, CdtProposalError, CdtProposalInfo,
@@ -371,6 +387,7 @@ pub mod prelude {
     /// ```
     pub mod errors {
         pub use crate::cdt::foliation::FoliationError;
+        pub use crate::cdt::metropolis::intrinsic::IntrinsicCdtError;
         pub use crate::cdt::proposal_policy::CdtMoveFamilyPolicyError;
         pub use crate::errors::{
             BackendMutationOperation, BackendRollbackFailure, BackendRollbackFailures, CdtError,
@@ -428,6 +445,7 @@ pub mod prelude {
         pub use crate::cdt::foliation::{
             EdgeType, Foliation, FoliationError, SimplexType, classify_edge, classify_simplex,
         };
+        pub use crate::cdt::metropolis::intrinsic::IntrinsicCdtTriangulation;
         pub use crate::config::CdtTopology;
         pub use crate::errors::{CdtError, CdtResult};
         pub use crate::geometry::traits::TriangulationQuery;
@@ -496,6 +514,9 @@ pub mod prelude {
     pub mod simulation {
         pub use crate::cdt::action::{ActionConfig, compute_regge_action};
         pub use crate::cdt::ergodic_moves::MoveType;
+        pub use crate::cdt::metropolis::intrinsic::{
+            IntrinsicCdtPlan, IntrinsicCdtProposal, IntrinsicCdtTriangulation,
+        };
         pub use crate::cdt::metropolis::{
             AcceptedStepTelemetry, CdtMcmcCheckpoint, CdtProposal, CdtProposalError,
             CdtProposalInfo, CdtProposalPlan, CdtProposalPlanningOutcome, CdtTarget,
@@ -515,8 +536,8 @@ pub mod prelude {
         pub use crate::geometry::traits::TriangulationQuery;
         pub use crate::{CdtSimplexCounts, CdtTriangulation, CdtTriangulation2D, run_simulation};
         pub use markov_chain_monte_carlo::{
-            ChainCheckpoint, ChainId, DelayedProposal, DiscreteProposalRatioError, McmcError,
-            StepOutcome, Target, Trace, TraceError, TraceRecord, TraceStepOutcome,
+            Chain, ChainCheckpoint, ChainId, DelayedProposal, DiscreteProposalRatioError,
+            McmcError, StepOutcome, Target, Trace, TraceError, TraceRecord, TraceStepOutcome,
         };
     }
 

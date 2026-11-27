@@ -20,32 +20,6 @@ use serde_json::{Value, json};
 use std::assert_matches;
 use std::num::{NonZeroU32, NonZeroUsize};
 
-#[test]
-fn toroidal_seed_3291_preserves_embedding_after_five_moves() {
-    let mut triangulation =
-        CdtTriangulation::from_toroidal_cdt(4, 3).expect("original torus fixture");
-    let mut moves = ErgodicsSystem::with_seed(3291);
-    for (attempt, expected) in [
-        MoveResult::Success,
-        MoveResult::Success,
-        MoveResult::Success,
-        MoveResult::GeometricViolation,
-        MoveResult::Success,
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let result = moves.attempt_random_move(&mut triangulation);
-        assert_eq!(
-            result, expected,
-            "original move outcome at attempt {attempt}"
-        );
-        triangulation.validate().unwrap_or_else(|error| {
-            panic!("attempt {attempt} must preserve the supported embedding: {error}");
-        });
-    }
-}
-
 /// Captures coordinate bits without depending on backend handle identities.
 fn coordinate_bits(triangulation: &CdtTriangulation2D) -> Vec<[u64; 2]> {
     triangulation
@@ -64,10 +38,7 @@ fn coordinate_bits(triangulation: &CdtTriangulation2D) -> Vec<[u64; 2]> {
 #[test]
 fn issue_316_original_removal_has_no_periodic_barycentric_reverse() {
     // Preserve the original constructor, seeds, deleted coordinate and valid
-    // endpoints of #316. This is counterexample evidence, NOT a claim that the
-    // sampler is corrected: its family/site ratio currently misses this absent
-    // reverse transition. The combinatorial correction must retain this fixture
-    // and separately prove its state/measure and actual transition probabilities.
+    // endpoints of #316, including a nonempty reverse-family site set.
     let before = CdtTriangulation2D::from_toroidal_cdt(4, 4).expect("original 4x4 torus");
     before.validate().expect("valid source endpoint");
     assert_eq!(before.slice_sizes(), &[4, 4, 4, 4]);
@@ -85,6 +56,12 @@ fn issue_316_original_removal_has_no_periodic_barycentric_reverse() {
     assert_eq!(plan.move_type(), MoveType::Move31Remove);
     assert_eq!(plan.forward_site_count(), 2);
     assert_eq!(plan.reverse_site_count(), 15);
+    let (forward, reverse) = plan.transition_probabilities();
+    assert!(forward > 0.0);
+    assert_eq!(reverse, 0.0);
+    assert!(
+        plan.log_proposal_ratio().is_infinite() && plan.log_proposal_ratio().is_sign_negative()
+    );
 
     // Commit the draft directly to examine the geometric endpoint, independently
     // of whether a corrected Metropolis rule accepts this represented transition.
@@ -711,11 +688,26 @@ fn constant_observations_preserve_their_exact_action_and_slab_means() -> CdtResu
 #[test]
 fn binning_plateau_respects_the_exact_fractional_threshold() -> CdtResult<()> {
     use causal_triangulations::{
-        CdtConfig, CdtDiagnosticObservable, CdtDiagnosticPolicy, CdtTopology, ValidationChain,
-        analyze_cdt_chains, run_simulation,
+        CdtConfig, CdtDiagnosticObservable, CdtDiagnosticPolicy, CdtTopology,
+        VALIDATION_CHAIN_SCHEMA_VERSION, ValidationChain, ValidationChainData, analyze_cdt_chains,
     };
+    // Original measured profiles at steps 1 through 16, retaining every
+    // repeated observation. Proposal changes must leave this numerical
+    // regression's input intact.
+    let seed_41 = [
+        (5, [4, 4, 5, 4]),
+        (1, [5, 4, 5, 4]),
+        (5, [5, 4, 4, 4]),
+        (5, [6, 4, 4, 4]),
+    ];
+    let seed_7 = [
+        (3, [4, 4, 4, 4]),
+        (3, [4, 4, 5, 4]),
+        (2, [4, 4, 6, 4]),
+        (8, [4, 4, 7, 4]),
+    ];
     let mut chains = Vec::new();
-    for seed in [41, 7] {
+    for (seed, runs) in [(41, seed_41), (7, seed_7)] {
         let config = CdtConfig {
             topology: CdtTopology::Toroidal,
             simulate: true,
@@ -724,14 +716,41 @@ fn binning_plateau_respects_the_exact_fractional_threshold() -> CdtResult<()> {
             thermalization_steps: 1,
             measurement_frequency: 1,
             ..CdtConfig::new(16, 4)
-        }
-        .into_validated()?;
-        chains.push(ValidationChain::from_results(
-            "binning-regression",
-            &format!("chain-{seed}"),
-            &config,
-            &run_simulation(&config)?,
-        )?);
+        };
+        let action = config.clone().into_validated()?.to_action_config();
+        let measurements = (1..)
+            .zip(
+                runs.into_iter()
+                    .flat_map(|(count, profile)| std::iter::repeat_n(profile, count)),
+            )
+            .map(|(step, profile)| {
+                let vertices: u32 = profile.iter().sum();
+                let edges = 3 * vertices;
+                let triangles = 2 * vertices;
+                let physical =
+                    action.physical_action(vertices as usize, edges as usize, triangles as usize);
+                let slab = profile
+                    .into_iter()
+                    .zip(profile.into_iter().cycle().skip(1))
+                    .map(|(left, right)| left + right)
+                    .collect();
+                Measurement::try_new(step, physical, vertices, edges, triangles)?
+                    .try_with_slab_triangle_profile(slab)?
+                    .try_with_spatial_loop_lengths(profile.to_vec())
+            })
+            .collect::<CdtResult<Vec<_>>>()?;
+        chains.push(ValidationChain::try_new(ValidationChainData {
+            schema_version: VALIDATION_CHAIN_SCHEMA_VERSION,
+            crate_version: env!("CARGO_PKG_VERSION").to_owned(),
+            spatial_topology: "S1".to_owned(),
+            temporal_boundary: "periodic".to_owned(),
+            minimum_loop_length: 3,
+            action_convention: "-kappa_0*N0-kappa_2*N2+lambda_edge*N1".to_owned(),
+            run_id: "binning-regression".to_owned(),
+            chain_id: format!("chain-{seed}"),
+            configuration: config,
+            measurements,
+        })?);
     }
     // For seed 41, the relative change between the two eligible error levels is
     // exactly 285490319773395 / 1411390226616019 for the reported binary64s.

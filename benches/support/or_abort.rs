@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Shared fail-fast helpers for benchmark fixture setup.
 
 use std::fmt::Display;

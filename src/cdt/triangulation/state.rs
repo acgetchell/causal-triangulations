@@ -73,6 +73,22 @@ pub struct CdtTriangulation<B> {
 /// ```
 pub type CdtTriangulation2D = CdtTriangulation<DelaunayBackend2D>;
 
+/// Identifies one geometry owner at one modification count.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct TriangulationRevision {
+    instance: u64,
+    modification: u64,
+}
+
+impl TriangulationRevision {
+    pub(crate) const fn instance(self) -> u64 {
+        self.instance
+    }
+    pub(crate) const fn modification(self) -> u64 {
+        self.modification
+    }
+}
+
 /// Strictly positive simplex counts for a CDT triangulation.
 ///
 /// Generic geometry backends can be empty while they are being constructed,
@@ -815,6 +831,14 @@ impl<B> CdtTriangulation<B> {
     #[must_use]
     pub const fn metadata(&self) -> &CdtMetadata {
         &self.metadata
+    }
+
+    /// Captures the owner and version together before handing out a proposal site or plan.
+    pub(crate) const fn revision(&self) -> TriangulationRevision {
+        TriangulationRevision {
+            instance: self.instance_id,
+            modification: self.metadata.modification_count,
+        }
     }
 
     /// Returns the transient process-local identity used for cache invalidation.

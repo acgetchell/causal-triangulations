@@ -18,6 +18,8 @@ For a notebook-first run, start with [`notebooks/00_quickstart.ipynb`](../notebo
 - [CDT++ Construction Lesson](#cdt-construction-lesson)
 - [Effective Dimensional Observables](#effective-dimensional-observables)
 - [Move And Sampler Contract](#move-and-sampler-contract)
+  - [Hilbert Order For Embedded Proposal Sites](#hilbert-order-for-embedded-proposal-sites)
+  - [Intrinsic Periodic CDT Measure](#intrinsic-periodic-cdt-measure)
 - [Volume Fixing](#volume-fixing)
 - [User Responsibilities](#user-responsibilities)
 
@@ -33,7 +35,7 @@ The original 1+1 model is due to [Ambjørn and Loll (1998)](../REFERENCES.md#met
 This crate currently implements a validated 1+1-dimensional CDT foundation. It supports:
 
 - local `(2,2)`, `(1,3)`, and `(3,1)` CDT move proposals;
-- Metropolis-Hastings sampling through the `markov-chain-monte-carlo` backend;
+- embedded and intrinsic periodic Metropolis-Hastings kernels through the `markov-chain-monte-carlo` backend;
 - open-boundary strip initial data;
 - periodic S¹×S¹ toroidal initial data;
 - Regge-style action evaluation with configurable couplings;
@@ -53,7 +55,7 @@ Use the [published API reference](https://docs.rs/causal-triangulations/latest/c
 
 - `prelude::config` parses raw settings into `ValidatedCdtConfig`.
 - `prelude::triangulation` constructs and inspects foliated CDT states.
-- `prelude::simulation` runs and resumes chains, exposing checkpoints and telemetry.
+- `prelude::simulation` runs embedded chains with checkpoints and telemetry and exposes the intrinsic periodic kernel for direct delayed sampling.
 - `prelude::observables` measures profiles and finite-graph estimators.
 
 The [CLI guide](RUNNING.md) and [quickstart notebook](../notebooks/00_quickstart.ipynb) are runnable entry points. Detailed domain contracts stay in
@@ -69,11 +71,11 @@ empty-circumsphere predicate.
 After initialization, the simulation does not enforce the Delaunay condition as part of the Markov-chain state. The sampled ensemble is defined by CDT moves,
 foliation/topology/causality constraints, the configured action, and Metropolis-Hastings acceptance.
 
-The current simplicial backend identifies an edge by its endpoint pair. The original exact CDT transfer matrix also counts triangulations with distinct
-timelike edges joining the same vertices: of ten marked strips between two length-three loops, only seven have unique endpoint-pair edges. Restricting the
-minimum loop length to three therefore does not make the current representation match that finite-lattice ensemble.
-Delaunay 0.8.5 publishes the abstract triangle-gluing capability from [Delaunay #667](https://github.com/acgetchell/delaunay/issues/667). Integration in CDT
-must preserve the existing simplicial validation contract and keep generic topology algorithms in the geometry backend.
+The embedded periodic backend distinguishes edges by their endpoints and relative lattice displacement. The exact CDT transfer matrix counts
+abstract gluing occurrences, which can include distinct timelike edges with the same endpoints. For example, three of the ten one-entrance-marked strips
+between length-three loops contain repeated endpoint pairs. The intrinsic kernel represents each occurrence explicitly and uses the triangle-gluing
+validation published in [Delaunay 0.8.5](https://github.com/acgetchell/delaunay/issues/667). Its normalization is given in the
+[intrinsic periodic measure](#intrinsic-periodic-cdt-measure).
 
 [`delaunay`](https://docs.rs/delaunay/latest/delaunay/) owns structural geometry algorithms; its
 [bibliography](https://github.com/acgetchell/delaunay/blob/main/REFERENCES.md) owns generic geometry attribution.
@@ -100,9 +102,9 @@ This crate's historical action writes the cosmological term as `lambda_edge N1`.
 `lambda_edge = (2 / 3) ln 2` maps the edge-count convention to the standard critical triangle-volume coupling. Open-boundary strips have boundary-count
 corrections, so the same default should be treated as a practical baseline rather than an exact open-boundary critical value.
 
-The sampler targets `exp(-S / T)`. Temperature is therefore an overall action-scaling parameter, not merely an algorithmic acceptance knob: changing `T`
-changes every effective coupling to its configured value divided by `T`. The quoted critical-coupling calibration assumes `T = 1`; other temperatures require
-deliberate retuning if the same target ensemble is intended.
+The embedded target weight is `exp(-S / T)`. The intrinsic target multiplies that Boltzmann factor by its
+[marking correction](#intrinsic-periodic-cdt-measure). In both kernels, changing `T` changes every effective coupling to its configured value divided by `T`.
+The quoted critical-coupling calibration assumes `T = 1`. Retune the configured couplings to preserve the same effective values at another temperature.
 
 ## Ensemble And Volume Behavior
 
@@ -138,8 +140,7 @@ The validation contract is discrete and implementation-level. Constructors and s
 - adjacent-slice causality, including periodic time distance for toroidal runs;
 - strict Up/Down simplex classification in 1+1 dimensions;
 - rollback or rejection of local move candidates that would break CDT invariants;
-- proposal-before-mutation Metropolis ordering and proposal-family/site probability bookkeeping; the
-  [remaining reverse-support limitation](#move-and-sampler-contract) prevents a complete reversibility claim.
+- proposal-before-mutation Metropolis ordering and actual endpoint probability accounting.
 
 These checks make the implemented CDT state space and transition kernel explicit. They do not prove that a Markov chain has mixed, that a finite run is in an
 asymptotic scaling regime, or that a chosen observable analysis supports a particular physical interpretation.
@@ -157,9 +158,10 @@ asymptotic scaling regime, or that a chosen observable analysis supports a parti
 
 The [2d-cdt sphere audit](audits/2d-cdt_sphere/README.md) establishes a specific reference boundary: the pinned implementation retains a toroidal stored
 complex under `sphere=true` while modifying observable adjacency. Its advertised effective-sphere option is acknowledged but excluded from planned
-periodic 1+1 parity. That audit establishes neither full reference agreement nor comparative sampler correctness. The planned scientifically validated
-v0.2.0 release requires correction of #316, integration of the published triangle-gluing API, and completion of the exact-ensemble and external
-validation gates.
+periodic 1+1 parity. The [exact-ensemble benchmark][exact-validation] and the [external reference comparison][reference-validation] have separate
+acceptance criteria. The bounded audit supplies evidence about the reference's stored topology and observable adjacency.
+
+[exact-validation]: roadmap.md#v020-exact-11-ensemble-validation
 
 ## CDT++ Construction Lesson
 
@@ -197,32 +199,49 @@ The CDT move layer owns domain-specific proposal sites and invariant checks. The
 [Alexander/Pachner moves](../REFERENCES.md#ergodic-moves-and-alexander-moves) provide combinatorial background; they do not by themselves prove ergodicity of
 this causality-constrained move set. [Hastings](../REFERENCES.md#metropolis-hastings-algorithm-in-cdt) supplies the generic proposal-asymmetry correction.
 
-The current volume-changing proposal has a known reverse-support defect, tracked by
-[#316](https://github.com/acgetchell/causal-triangulations/issues/316). A validated removal from `from_toroidal_cdt(4, 4)` deletes a coordinate that no
-barycentric insertion can restore, yet the planner reports positive Metropolis-Hastings acceptance using the reverse family's total site count. Structural
-validation and family/site bookkeeping do not establish reversibility of the represented coordinate-bearing state. Correcting the CDT proposal requires an
-explicit state/measure contract and probabilities for the actual reverse transition; the generic MCMC acceptance formula remains unchanged. Treating
-coordinates as auxiliary requires a derivation showing that coordinate-dependent move feasibility does not bias the physical chain.
+The [#316](https://github.com/acgetchell/causal-triangulations/issues/316) regression uses the original 4×4 torus, proposal seed 1, caller seed 17,
+deleted coordinate and two valid endpoints. Its independent integer-residue calculation excludes all periodic lifts of every destination face.
+The embedded sampler uses actual transitions between realized meshes and assigns the regression's removal zero reverse probability.
+The intrinsic sampler uses the gluing measure below for the periodic ensemble in [#238](https://github.com/acgetchell/causal-triangulations/issues/238).
 
-### Correction Target For #316
+### Hilbert Order For Embedded Proposal Sites
 
-The correction must preserve the intended **combinatorial CDT distribution**. Repairing detailed balance for a counting measure over floating-point
-coordinate realizations would define a different ensemble and does not resolve the physical sampling claim. The target remains the finite periodic model
-specified by [#238](https://github.com/acgetchell/causal-triangulations/issues/238), with its explicit rooting, marking, time-origin, and symmetry mapping
-still required before analytic validation.
+The embedded sampler orders each family's offered sites by a two-dimensional Hilbert index with 16 bits per axis, using Delaunay's implementation of
+[Skilling's algorithm](../REFERENCES.md#hilbert-ordering). On a torus the fixed chart is `[0, Lx) × [0, Lt)`. Wrap each representative into that rectangle
+and divide each coordinate by its own period before indexing. A flip uses the midpoint of the actual lifted edge, an insertion uses its proposed vertex
+position, and a removal uses the vertex's position. Open meshes normalize by their vertex bounds. Exact labeled geometry, including relative periodic lifts,
+breaks index ties.
 
-Write `C` for an intrinsic causal triangle gluing with time labels and the chosen marking convention. Distinct edge occurrences must remain distinguishable
-even when they share endpoints. Backend handles, allocation order, UUIDs, drawing coordinates, and mutation history are not additional physical labels.
-If `mu(C)` denotes the reference weight derived for that convention, the desired target is
+For the same realized mesh and build, this convention gives each site a deterministic ordinal across reconstruction. Reordering changes which site a seed
+selects, while every offered site still has equal probability within its family. The intrinsic kernel has combinatorial sites and uses its own enumeration.
 
-```text
-pi(C) proportional to mu(C) exp(-S(C) / temperature).
-```
+A cache miss rebuilds the ordered family list. A future locality scan must account for wraparound at both chart seams. Incremental maintenance of eligible
+sites in the sense of [Brunekreef, Loll, and Görlich](../REFERENCES.md#cdt-simulation-implementation-and-ensembles) is a separate extension.
 
-Do not assume `mu(C) = 1` for the current backend's labeled records or silently absorb a state-dependent marking/symmetry factor into normalization.
-The existing count-based action alone does not establish that reference measure. This distinction follows the original model's sum over intrinsic
-triangulated geometries; see [Ambjørn and Loll, section 2](https://arxiv.org/pdf/hep-th/9805108) and the
-[bibliographic record](../REFERENCES.md#exact-11-cdt-benchmarks-and-coupling-calibration).
+### Intrinsic Periodic CDT Measure
+
+The time origin and direction are fixed by labels `0, …, T-1`. Each spatial circle has a common orientation, and equivalences preserve this orientation
+and all time labels. Each live state additionally marks one computational origin per slice. Edges and triangles are occurrences, so two timelike
+edges sharing both endpoints can remain distinct. Drawing coordinates and allocation identities play no role.
+
+An oriented annulus from lengths `l` to `l'` can be traversed across its timelike edges. Starting at the Up triangle on lower edge zero fixes
+the cyclic origin of the word. Its remaining positions contain `l-1` Up triangles and `l'` Down triangles. The upper vertex at the first Up
+triangle can be any of the `l'` indexed vertices independently. It specifies the relative rotation to the next slab, including the final slab
+across the time seam. This gives `l' binomial(l+l'-1,l-1)` marked realizations per slab. The ordered words and shifts reconstruct all cells and
+identifications in the supported oriented annuli.
+
+Let `L = product_t l_t`. Rotations of the computational origins act on marked encodings as the product of the cyclic groups of order `l_t`.
+The action has `L / |Aut(C)|` distinct marked representations of an unmarked gluing `C`, because the stabilizer consists of time- and
+orientation-preserving automorphisms. Fixing the spatial origins fixes each directed boundary edge. The adjacent triangle on each slab side
+is then fixed and traversal across timelike edges fixes their occurrences. This holds even when two timelike edges have the same endpoints.
+Weight each marked encoding by `exp(-S/temperature) / L`. Summing over its orbit gives
+`exp(-S/temperature) / |Aut(C)|`. At a fixed profile the product of upper lengths from all slabs cancels `L`. The resulting profile
+factor is exactly the product of the one-marked-entrance binomial factors. At fixed total volume the slice labels remain in place and
+the action and any total-volume bias are constant. See [Ambjørn and Loll, section 2](https://arxiv.org/pdf/hep-th/9805108).
+
+The sampler compares absolute binary64 log weights. An insertion on a loop of length `l` changes the log marking factor by `-ln(1 + 1/l)`.
+Each endpoint allows a roundoff budget of half a part per million of this change on its longest loop. The check accounts for the action and
+fixing terms before cancellation and for accumulation of the slice logarithms. If either endpoint exceeds its budget, scoring stops before the move.
 
 For a finite offered-site kernel, let `p_m(C)` be the actual sampled family probability, `S_m(C)` its offered sites, and `F(C,m,s)` the complete realized
 outcome. The transition probability is the sum of all atoms producing the same intrinsic destination:
@@ -232,34 +251,18 @@ q(D | C) = sum_m p_m(C) / |S_m(C)| * count{s in S_m(C): F(C,m,s) = D}.
 ```
 
 An empty family contributes its mass to the self-loop, without division by zero. A failed realization also contributes to the self-loop. Denominators
-remain the offered-site counts; neither family nor site probabilities are renormalized after failure. Any stochastic auxiliary draw requires its own
-probability factor and a sum or integral over its outcomes. Duplicate removal paths and the two flip-family names must be included when they realize
-the same transition. The forward denominator and total reverse-family count alone are insufficient to determine either transition probability.
+remain the offered-site counts. The intrinsic kernel has no stochastic placement draw. It sums duplicate volume paths and the two flip-family names
+whenever they realize the same transition.
 
-For `q(D | C) > 0`, the upstream Metropolis-Hastings backend must receive the actual correction `log q(C | D) - log q(D | C)`. Absent reverse support means
-exactly negative infinity. Target scoring must also include the derived reference weight. These requirements do not change the generic acceptance formula.
+For `q(D | C) > 0`, the upstream Metropolis-Hastings backend receives `log q(C | D) - log q(D | C)`. Absent reverse support gives exactly negative
+infinity. Delaunay validates each intrinsic gluing through the geometry adapter. Independent cyclic-word tests cover both directions, failed sites,
+parallel edges, the periodic seams, and the projection of the original #316 endpoints.
 
-Coordinates can be generated for display after sampling. If coordinates `z` instead remain stochastic auxiliaries, a valid extension needs a specified
-reference measure `nu_C` and a conditional weight `rho(z | C)` satisfying
-
-```text
-integral rho(z | C) nu_C(dz) = 1
-pi_extended(C, z) = pi(C) rho(z | C).
-```
-
-Coordinate-dependent feasibility, proposal densities, dimension-changing transformations and any Jacobians must then enter the derivation. Merely assigning
-the same action to every valid embedding generally leaves an unknown, state-dependent embedding multiplicity or volume in the marginal over `C`.
-
-The preferred implementation boundary is coordinate-independent checked topology and local edits supplied by the geometry backend, with CDT owning
-foliation, markings, action and proposal probabilities. Delaunay 0.8.5 provides parallel-edge identity and edits without mandatory Euclidean realization.
-Integrate the API through `src/geometry/` while preserving realized-mesh validation and backend ownership of structural topology algorithms.
-The parallel-edge representation gap and #316's reverse-support defect remain separate obligations.
-
-`tests/regressions.rs::issue_316_original_removal_has_no_periodic_barycentric_reverse` preserves the original 4×4 constructor, proposal seed 1, caller seed 17,
-deleted coordinate and both valid endpoints. Its independent integer-residue calculation excludes every periodic lift of every destination face. This is
-counterexample preservation, not a passing sampler-correction gate. Completion additionally requires actual transition probabilities in both directions,
-independent small-state enumeration including multiplicities and self-loops, successful volume changes, evolved/seam fixtures, and `just ci`. The #238
-preflight and analytic gates remain necessary before claiming the intended ensemble has been validated.
+At a fixed profile, interchanging adjacent unlike triangles moves individual Down triangles around the lower cycle. These interchanges generate every
+allocation of Down runs. Moving a Down triangle around the complete cycle changes the upper start by one while restoring the run lengths. Above
+the minimum length, the same interchanges can prepare a non-origin vertex for collapse by bringing together its two Up and two Down steps. Both
+orientations of volume change therefore connect all admissible profiles through the minimum profile under positive flip, add, and remove weights.
+The predeclared reachability checks and statistical comparison in #238 are still release validation gates.
 
 For details, see:
 

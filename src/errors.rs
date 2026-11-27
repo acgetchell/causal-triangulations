@@ -320,9 +320,6 @@ pub enum DelaunayGenerationFailure {
         /// Non-strict simplices remaining when filtering stopped.
         remaining_violations: usize,
     },
-    /// The deterministic toroidal candidate iterator was empty.
-    #[error("no deterministic toroidal embedding candidates were attempted")]
-    NoEmbeddingCandidates,
 }
 
 /// Identifies the CDT triangulation metadata field that failed validation.
@@ -1685,6 +1682,9 @@ pub enum CheckpointResumeFailure {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum MetropolisMoveApplicationFailure {
+    /// The geometry adapter could not resolve an embedded proposal site or endpoint.
+    #[error("proposal endpoint geometry failed: {0}")]
+    ProposalGeometry(#[source] DelaunayError),
     /// A local geometry edit failed with its adapter-owned error preserved.
     #[error("backend edit failed [{operation}] on {target}: {source}")]
     BackendEdit {
@@ -1783,6 +1783,7 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
     )]
     fn from(error: CdtError) -> Self {
         match error {
+            CdtError::ProposalGeometry(source) => Self::ProposalGeometry(source),
             CdtError::BackendEditFailed {
                 operation,
                 target,
@@ -1897,6 +1898,9 @@ impl From<CdtError> for MetropolisMoveApplicationFailure {
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum CdtError {
+    /// Failed to resolve the exact geometry needed to score an embedded proposal.
+    #[error("proposal endpoint geometry failed: {0}")]
+    ProposalGeometry(#[source] DelaunayError),
     /// Invalid cadence-aligned chain or diagnostic analysis contract.
     #[error(transparent)]
     Analysis(#[from] CdtAnalysisError),
@@ -2132,7 +2136,7 @@ pub enum CdtError {
         /// Planned move family.
         move_type: MoveType,
     },
-    /// A standalone planned proposal carried invalid family/site ratio components.
+    /// A standalone planner supplied invalid proposal probabilities or diagnostics.
     #[error("CDT proposal ratio failed for {move_type:?}: {source}")]
     ProposalRatioFailed {
         /// Selected forward family.
@@ -2140,7 +2144,7 @@ pub enum CdtError {
         /// Typed upstream ratio-construction failure.
         source: DiscreteProposalRatioError,
     },
-    /// A Metropolis run received invalid family/site ratio components.
+    /// A Metropolis run received invalid proposal probabilities or diagnostics.
     #[error("CDT proposal ratio failed for {move_type:?} at Metropolis step {step}: {source}")]
     MetropolisProposalRatioFailed {
         /// Monte Carlo step whose planned ratio was invalid.

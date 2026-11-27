@@ -6,10 +6,18 @@ use crate::cdt::action::ActionConfig;
 use crate::cdt::ergodic_moves::MoveType;
 use crate::cdt::results::Measurement;
 use crate::cdt::triangulation::CdtTriangulation2D;
-use crate::config::validate_schedule;
-use crate::errors::{CdtError, CdtResult, ConfigurationSetting, ExpectedConstraint, ObservedValue};
+use crate::errors::{CdtError, CdtResult, ConfigurationSetting, ExpectedConstraint};
 use crate::util::within_scaled_tolerance;
 use std::num::NonZeroU32;
+
+/// Converts a machine-sized count to the sampler's binary64 representation.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "binary64 covers the full count range and is the sampler's probability format"
+)]
+pub(super) const fn count_to_f64(count: usize) -> f64 {
+    count as f64
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SimplexCounts {
@@ -19,52 +27,6 @@ pub struct SimplexCounts {
     pub edges: usize,
     /// Number of triangular 2-simplices in the live CDT triangulation.
     pub triangles: usize,
-}
-
-/// Adapts shared schedule validation errors to the Metropolis-specific error variant.
-///
-/// This keeps [`MetropolisConfig::validate`](super::MetropolisConfig::validate)
-/// aligned with the shared simulation schedule validator while preserving the
-/// public Metropolis error contract.
-pub const fn invalid_sim_config(
-    setting: ConfigurationSetting,
-    provided_value: ObservedValue,
-    expected: ExpectedConstraint,
-) -> CdtError {
-    CdtError::InvalidSimulationConfiguration {
-        setting,
-        provided_value,
-        expected,
-    }
-}
-
-/// Validates simulation-specific configuration values.
-///
-/// This is the shared implementation behind
-/// [`MetropolisConfig::validate`](super::MetropolisConfig::validate) and the
-/// runner entry points, so all public Metropolis APIs reject the same invalid
-/// temperature, step-count, thermalization, and measurement schedules.
-///
-/// # Errors
-///
-/// Returns [`CdtError::InvalidSimulationConfiguration`] when `temperature` is
-/// not finite and positive with a finite reciprocal, when `steps` or
-/// `measurement_frequency` is zero,
-/// when thermalization exceeds the step count, or when the schedule cannot
-/// produce a post-thermalization measurement.
-pub fn validate_metropolis_schedule(
-    temperature: f64,
-    steps: u32,
-    thermalization_steps: u32,
-    measurement_frequency: u32,
-) -> CdtResult<()> {
-    validate_schedule(
-        temperature,
-        steps,
-        thermalization_steps,
-        measurement_frequency,
-        invalid_sim_config,
-    )
 }
 
 /// Rejects temperatures that are non-finite, non-positive, or have a non-finite reciprocal.
@@ -80,11 +42,11 @@ pub fn validate_temperature(temperature: f64) -> CdtResult<()> {
     if temperature.is_finite() && temperature > 0.0 && temperature.recip().is_finite() {
         Ok(())
     } else {
-        Err(invalid_sim_config(
-            ConfigurationSetting::Temperature,
-            temperature.into(),
-            ExpectedConstraint::PositiveFiniteReciprocal,
-        ))
+        Err(CdtError::InvalidSimulationConfiguration {
+            setting: ConfigurationSetting::Temperature,
+            provided_value: temperature.into(),
+            expected: ExpectedConstraint::PositiveFiniteReciprocal,
+        })
     }
 }
 
@@ -189,7 +151,7 @@ pub fn expected_measurement_step(
 }
 
 /// Finds the first measurement cadence at or after thermalization.
-fn first_measurement_step(
+pub(super) fn first_measurement_step(
     thermalization_steps: u32,
     measurement_frequency: NonZeroU32,
 ) -> Option<u32> {

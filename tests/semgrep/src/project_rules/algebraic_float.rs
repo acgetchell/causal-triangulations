@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 pub fn forbidden_receiver_calls(left: f64, right: f64) -> [f64; 5] {
     [
         // ruleid: causal-triangulations.rust.no-algebraic-f64-operations

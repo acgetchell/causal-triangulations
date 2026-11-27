@@ -165,6 +165,7 @@ pub struct CdtConfig {
 pub struct ValidatedCdtConfig {
     config: CdtConfig,
     metropolis_config: MetropolisConfig,
+    action_config: ActionConfig,
     vertices: NonZeroU32,
     timeslices: NonZeroU32,
     initial_spatial_vertices: ValidatedInitialSpatialVerticesData,
@@ -248,34 +249,51 @@ impl ValidatedCdtConfig {
     /// }
     /// ```
     pub fn new(config: CdtConfig) -> CdtResult<Self> {
-        config.ensure_valid()?;
-        let vertices = nonzero_config_count(ConfigurationSetting::Vertices, config.vertices)?;
-        let timeslices = nonzero_config_count(ConfigurationSetting::Timeslices, config.timeslices)?;
-        let initial_spatial_vertices = if let Some(profile) = &config.spatial_vertex_profile {
-            ValidatedInitialSpatialVerticesData::ExplicitProfile(
-                profile
-                    .iter()
-                    .copied()
-                    .map(|volume| {
-                        nonzero_config_count(ConfigurationSetting::SpatialVertexProfile, volume)
-                    })
-                    .collect::<CdtResult<Vec<_>>>()?,
-            )
-        } else {
-            let vertices_per_slice = config.vertices / config.timeslices;
-            ValidatedInitialSpatialVerticesData::Regular {
-                vertices_per_slice: nonzero_config_count(
+        let vertices = NonZeroU32::new(config.vertices)
+            .filter(|count| count.get() >= 3)
+            .ok_or_else(|| {
+                invalid_config(
                     ConfigurationSetting::Vertices,
-                    vertices_per_slice,
-                )?,
-            }
-        };
+                    config.vertices,
+                    ExpectedConstraint::AtLeast { minimum: 3 },
+                )
+            })?;
+        let timeslices = NonZeroU32::new(config.timeslices).ok_or_else(|| {
+            invalid_config(
+                ConfigurationSetting::Timeslices,
+                config.timeslices,
+                ExpectedConstraint::AtLeast { minimum: 1 },
+            )
+        })?;
+        if let Some(dim) = config.dimension
+            && dim != 2
+        {
+            return Err(invalid_config(
+                ConfigurationSetting::Dimension,
+                dim,
+                ExpectedConstraint::Exactly { value: 2 },
+            ));
+        }
+
+        let action_config = ActionConfig::new(
+            config.coupling_0,
+            config.coupling_2,
+            config.cosmological_constant,
+        )?
+        .with_volume_fixing(config.volume_fixing)?;
+        if let Some(fixing) = config.volume_fixing {
+            fixing.ensure_ensemble(config.topology, config.timeslices)?;
+        }
+
+        let initial_spatial_vertices = config.parse_initial_spatial_vertices()?;
+
         let metropolis_config = MetropolisConfig::new(
             config.temperature,
             config.steps,
             config.thermalization_steps,
             config.measurement_frequency,
         )?;
+        CdtTarget::new(action_config.clone(), config.temperature)?;
         let metropolis_config = match config.seed {
             Some(seed) => metropolis_config.with_seed(seed),
             None => metropolis_config,
@@ -283,6 +301,7 @@ impl ValidatedCdtConfig {
         Ok(Self {
             config,
             metropolis_config,
+            action_config,
             vertices,
             timeslices,
             initial_spatial_vertices,
@@ -628,13 +647,8 @@ impl ValidatedCdtConfig {
     /// }
     /// ```
     #[must_use]
-    pub const fn to_action_config(&self) -> ActionConfig {
-        ActionConfig::from_validated_parts(
-            self.config.coupling_0,
-            self.config.coupling_2,
-            self.config.cosmological_constant,
-        )
-        .with_validated_volume_fixing(self.config.volume_fixing)
+    pub fn to_action_config(&self) -> ActionConfig {
+        self.action_config.clone()
     }
 }
 
@@ -1283,29 +1297,6 @@ fn invalid_config(
     }
 }
 
-/// Builds a typed simulation-configuration error for Metropolis schedule settings.
-const fn invalid_sim_config_parts(
-    setting: ConfigurationSetting,
-    provided_value: ObservedValue,
-    expected: ExpectedConstraint,
-) -> CdtError {
-    CdtError::InvalidSimulationConfiguration {
-        setting,
-        provided_value,
-        expected,
-    }
-}
-
-/// Converts a validated positive configuration count into a [`NonZeroU32`].
-///
-/// [`ValidatedCdtConfig`] uses this helper after raw [`CdtConfig`] validation so
-/// downstream callers can preserve nonzero proof instead of rechecking raw
-/// counts.
-fn nonzero_config_count(setting: ConfigurationSetting, value: u32) -> CdtResult<NonZeroU32> {
-    NonZeroU32::new(value)
-        .ok_or_else(|| invalid_config(setting, value, ExpectedConstraint::AtLeast { minimum: 1 }))
-}
-
 /// Parses a comma-separated spatial-vertex profile from the CLI.
 #[cfg(feature = "cli")]
 fn parse_spatial_vertex_profile(raw: &str) -> Result<Vec<u32>, String> {
@@ -1339,79 +1330,6 @@ fn parse_spatial_vertex_profile(raw: &str) -> Result<Vec<u32>, String> {
     } else {
         Ok(profile)
     }
-}
-
-/// Shares schedule validation between top-level config and Metropolis config.
-pub(crate) fn validate_schedule(
-    temperature: f64,
-    steps: u32,
-    thermalization_steps: u32,
-    measurement_frequency: u32,
-    mut error_for: impl FnMut(ConfigurationSetting, ObservedValue, ExpectedConstraint) -> CdtError,
-) -> CdtResult<()> {
-    let mut invalid = |setting: ConfigurationSetting,
-                       provided_value: ObservedValue,
-                       expected: ExpectedConstraint| {
-        Err(error_for(setting, provided_value, expected))
-    };
-
-    if !temperature.is_finite() || temperature <= 0.0 || !temperature.recip().is_finite() {
-        return invalid(
-            ConfigurationSetting::Temperature,
-            temperature.into(),
-            ExpectedConstraint::PositiveFiniteReciprocal,
-        );
-    }
-
-    if steps == 0 {
-        return invalid(
-            ConfigurationSetting::Steps,
-            steps.into(),
-            ExpectedConstraint::AtLeast { minimum: 1 },
-        );
-    }
-
-    if measurement_frequency == 0 {
-        return invalid(
-            ConfigurationSetting::MeasurementFrequency,
-            measurement_frequency.into(),
-            ExpectedConstraint::AtLeast { minimum: 1 },
-        );
-    }
-
-    if measurement_frequency > steps {
-        return invalid(
-            ConfigurationSetting::MeasurementFrequency,
-            measurement_frequency.into(),
-            ExpectedConstraint::AtMostSteps { steps },
-        );
-    }
-
-    if thermalization_steps > steps {
-        return invalid(
-            ConfigurationSetting::ThermalizationSteps,
-            thermalization_steps.into(),
-            ExpectedConstraint::AtMostSteps { steps },
-        );
-    }
-
-    let first_post_thermalization_measurement = u64::from(thermalization_steps)
-        .div_ceil(u64::from(measurement_frequency))
-        * u64::from(measurement_frequency);
-
-    if first_post_thermalization_measurement > u64::from(steps) {
-        return invalid(
-            ConfigurationSetting::MeasurementSchedule,
-            ObservedValue::MeasurementSchedule {
-                steps,
-                thermalization_steps,
-                measurement_frequency,
-            },
-            ExpectedConstraint::PostThermalizationMeasurement,
-        );
-    }
-
-    Ok(())
 }
 
 impl CdtConfig {
@@ -1538,81 +1456,12 @@ impl CdtConfig {
         }
     }
 
-    /// Checks the configuration parameters without returning a validated wrapper.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CdtError::InvalidConfiguration`] if the dimension is not 2, if
-    /// action couplings are non-finite, or if topology constraints on time
-    /// slices, total vertices, or per-slice vertices are not satisfied. Regular
-    /// equal-slice initialization requires `vertices` to be divisible by
-    /// `timeslices`; explicit [`Self::spatial_vertex_profile`] initialization instead
-    /// requires the profile length and sum to match the configured counts.
-    /// Returns [`CdtError::InvalidSimulationConfiguration`] if the Metropolis
-    /// temperature or measurement schedule is invalid.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::CdtConfig;
-    ///
-    /// let config = CdtConfig::new(16, 4).into_validated()?;
-    /// assert_eq!(config.timeslices().get(), 4);
-    /// # Ok::<(), causal_triangulations::CdtError>(())
-    /// ```
-    fn ensure_valid(&self) -> CdtResult<()> {
-        if self.vertices < 3 {
-            return Err(invalid_config(
-                ConfigurationSetting::Vertices,
-                self.vertices,
-                ExpectedConstraint::AtLeast { minimum: 3 },
-            ));
-        }
-
-        if self.timeslices == 0 {
-            return Err(invalid_config(
-                ConfigurationSetting::Timeslices,
-                self.timeslices,
-                ExpectedConstraint::AtLeast { minimum: 1 },
-            ));
-        }
-
-        if let Some(dim) = self.dimension
-            && dim != 2
-        {
-            return Err(invalid_config(
-                ConfigurationSetting::Dimension,
-                dim,
-                ExpectedConstraint::Exactly { value: 2 },
-            ));
-        }
-
-        let action_config =
-            ActionConfig::new(self.coupling_0, self.coupling_2, self.cosmological_constant)?
-                .with_volume_fixing(self.volume_fixing)?;
-        if let Some(fixing) = self.volume_fixing {
-            fixing.ensure_ensemble(self.topology, self.timeslices)?;
-        }
-
-        self.validate_spatial_vertex_constraints()?;
-
-        validate_schedule(
-            self.temperature,
-            self.steps,
-            self.thermalization_steps,
-            self.measurement_frequency,
-            invalid_sim_config_parts,
-        )?;
-        CdtTarget::new(action_config, self.temperature)?;
-        Ok(())
-    }
-
     /// Validates topology-specific initial spatial-vertex constraints.
     ///
     /// Regular configurations require equal slice divisibility and minimum
     /// per-slice volume; explicit profiles are delegated to the profile-aware
     /// validator so count and shape errors remain distinguishable.
-    fn validate_spatial_vertex_constraints(&self) -> CdtResult<()> {
+    fn parse_initial_spatial_vertices(&self) -> CdtResult<ValidatedInitialSpatialVerticesData> {
         let (minimum_slices, minimum_vertices_per_slice) = match self.topology {
             CdtTopology::OpenBoundary => (2, 4),
             CdtTopology::Toroidal => (3, 3),
@@ -1631,7 +1480,8 @@ impl CdtConfig {
 
         if let Some(profile) = &self.spatial_vertex_profile {
             return self
-                .validate_explicit_spatial_vertex_profile(profile, minimum_vertices_per_slice);
+                .parse_explicit_spatial_vertex_profile(profile, minimum_vertices_per_slice)
+                .map(ValidatedInitialSpatialVerticesData::ExplicitProfile);
         }
 
         if !self.vertices.is_multiple_of(self.timeslices) {
@@ -1658,30 +1508,31 @@ impl CdtConfig {
                     },
                 )
             })?;
-        if self.vertices < min_total {
-            return Err(invalid_config(
-                ConfigurationSetting::Vertices,
-                self.vertices,
-                ExpectedConstraint::MinimumTotalVertices {
-                    vertices_per_slice: minimum_vertices_per_slice,
-                    timeslices: self.timeslices,
-                    topology: self.topology,
-                },
-            ));
-        }
-
-        Ok(())
+        let vertices_per_slice = NonZeroU32::new(self.vertices / self.timeslices)
+            .filter(|_| self.vertices >= min_total)
+            .ok_or_else(|| {
+                invalid_config(
+                    ConfigurationSetting::Vertices,
+                    self.vertices,
+                    ExpectedConstraint::MinimumTotalVertices {
+                        vertices_per_slice: minimum_vertices_per_slice,
+                        timeslices: self.timeslices,
+                        topology: self.topology,
+                    },
+                )
+            })?;
+        Ok(ValidatedInitialSpatialVerticesData::Regular { vertices_per_slice })
     }
 
-    /// Validates that an explicit spatial-vertex profile matches configured counts.
+    /// Parses an explicit spatial-vertex profile that matches configured counts.
     ///
     /// This checks profile length, per-slice minima, sum overflow, and agreement
     /// with the top-level total vertex count before construction begins.
-    fn validate_explicit_spatial_vertex_profile(
+    fn parse_explicit_spatial_vertex_profile(
         &self,
         profile: &[u32],
         minimum_vertices_per_slice: u32,
-    ) -> CdtResult<()> {
+    ) -> CdtResult<Vec<NonZeroU32>> {
         let expected_len = usize::try_from(self.timeslices).map_err(|_| {
             invalid_config(
                 ConfigurationSetting::Timeslices,
@@ -1700,20 +1551,24 @@ impl CdtConfig {
         }
 
         let mut total = 0_u32;
+        let mut lengths = Vec::with_capacity(profile.len());
         for (slice, &volume) in profile.iter().enumerate() {
-            if volume < minimum_vertices_per_slice {
-                return Err(invalid_config(
-                    ConfigurationSetting::SpatialVertexProfile,
-                    ObservedValue::ProfileSlice {
-                        index: slice,
-                        vertices: volume,
-                    },
-                    ExpectedConstraint::ProfileSliceMinimum {
-                        minimum: minimum_vertices_per_slice,
-                        topology: self.topology,
-                    },
-                ));
-            }
+            let length = NonZeroU32::new(volume)
+                .filter(|n| n.get() >= minimum_vertices_per_slice)
+                .ok_or_else(|| {
+                    invalid_config(
+                        ConfigurationSetting::SpatialVertexProfile,
+                        ObservedValue::ProfileSlice {
+                            index: slice,
+                            vertices: volume,
+                        },
+                        ExpectedConstraint::ProfileSliceMinimum {
+                            minimum: minimum_vertices_per_slice,
+                            topology: self.topology,
+                        },
+                    )
+                })?;
+            lengths.push(length);
             total = total.checked_add(volume).ok_or_else(|| {
                 invalid_config(
                     ConfigurationSetting::SpatialVertexProfile,
@@ -1731,7 +1586,7 @@ impl CdtConfig {
             ));
         }
 
-        Ok(())
+        Ok(lengths)
     }
 }
 
@@ -2157,23 +2012,30 @@ mod tests {
             })
         );
 
-        for (setting, value) in [
-            (ConfigurationSetting::Coupling0, f64::NAN),
-            (ConfigurationSetting::Coupling2, f64::INFINITY),
+        let base = CdtConfig::new(36, 3);
+        for (setting, invalid_action_coupling) in [
+            (
+                ConfigurationSetting::Coupling0,
+                CdtConfig {
+                    coupling_0: f64::NAN,
+                    ..base.clone()
+                },
+            ),
+            (
+                ConfigurationSetting::Coupling2,
+                CdtConfig {
+                    coupling_2: f64::INFINITY,
+                    ..base.clone()
+                },
+            ),
             (
                 ConfigurationSetting::CosmologicalConstant,
-                f64::NEG_INFINITY,
+                CdtConfig {
+                    cosmological_constant: f64::NEG_INFINITY,
+                    ..base
+                },
             ),
         ] {
-            let mut invalid_action_coupling = CdtConfig::new(36, 3);
-            match setting {
-                ConfigurationSetting::Coupling0 => invalid_action_coupling.coupling_0 = value,
-                ConfigurationSetting::Coupling2 => invalid_action_coupling.coupling_2 = value,
-                ConfigurationSetting::CosmologicalConstant => {
-                    invalid_action_coupling.cosmological_constant = value;
-                }
-                _ => unreachable!("test case should name a known action coupling"),
-            }
             assert_matches!(
                 invalid_action_coupling.into_validated(),
                 Err(CdtError::InvalidConfiguration {

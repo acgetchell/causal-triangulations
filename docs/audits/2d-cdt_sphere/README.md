@@ -24,8 +24,8 @@ The planned [#240 reference comparison][parity] covers periodic 1+1 CDT with cir
 compatibility and genuine S² support. S² would require a separately justified topology, move, boundary-amplitude, and analytic-validation contract. The
 toroidal transfer-matrix trace is not a spherical oracle. This decision does not affect the distinct 2+1 model with S² **spatial slices** in `3d-cdt`.
 
-No ensemble agreement, mixing, timing advantage, or relative scientific superiority is inferred here. Our own [#316 reverse-support defect][support] and
-[#238 exact-ensemble gate][exact] remain unresolved. The intended continuum or coarse-grained meaning of the reference authors' adjective remains unknown.
+No ensemble agreement, mixing, timing advantage, or relative scientific superiority is inferred here. CDT's [#316 proposal-support changes][support] and
+[#238 exact-ensemble gate][exact] have separate evidence. The intended continuum or coarse-grained meaning of the reference authors' adjective remains unknown.
 
 ## Source Paths
 
@@ -160,7 +160,7 @@ The combinatorial proposal factors cancel when comparing the implemented flux ra
 uses the same eligible insertion/deletion pair, equal family weights, and the paper's temperature-one convention; it does not substitute a different
 proposal kernel. These are derived values, not measurements. The retained harness uses target 96, so it is not an execution of this target-26 example.
 No estimate of stationary bias, mixing, or finite-run error is asserted. The independent topology census remains valid, while equilibrium comparisons must
-account for this acceptance-law discrepancy. Our own [#316][support] and [#238][exact] obligations remain separate and unresolved.
+account for this acceptance-law discrepancy.
 
 ## Harness Limitations
 

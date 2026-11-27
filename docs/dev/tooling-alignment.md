@@ -12,6 +12,9 @@ positive and negative examples. The SARIF workflow verifies the completed scan's
 The portable CI job checks the complete input inventory, rule set and SARIF wiring against the reports from that same scan.
 Standalone Python tests generate their own reports. Native CI runs the remaining Python tests on each platform.
 
+CDT also uses RRT's tracked and nonignored file selector in the tooling tests to check the first line of every Rust file, including test fixtures and
+new modules. Cargo enforces the unsafe-code lint during compilation. The separate source check keeps the explicit declaration visible in each file.
+
 ## Release commands and hosted CI
 
 MCMC, Delaunay and la-stack prepare the citation with the target tag, then let RRT generate the changelog from that date. CDT uses the same commands
@@ -752,8 +755,8 @@ It does not need the full Rust/Cargo toolchain. The scan, strict failure status,
 
 The sections below are historical decision records superseded where noted by the September 2026 adoption above.
 
-This note records the issue #112 comparison between `causal-triangulations` and the sibling `markov-chain-monte-carlo` repository. Keep it current when changing
-repository tooling so future updates can be deliberate rather than copied wholesale.
+The issue #112 comparison below records the original alignment with `markov-chain-monte-carlo`. For current commands and requirements, use the
+[development guide](DEVELOPING.md) and [tooling inventory](../../tooling/README.md).
 
 ## Current Parity
 

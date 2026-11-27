@@ -5,7 +5,7 @@
 use super::helpers::action_delta_matches;
 use crate::cdt::ergodic_moves::MoveType;
 use crate::errors::{CdtError, CdtResult, CheckpointResumeFailure};
-use markov_chain_monte_carlo::{DiscreteProposalEndpoint, DiscreteProposalRatio, StepOutcome};
+use markov_chain_monte_carlo::{DiscreteProposalRatio, StepOutcome};
 use serde::{Deserialize, Deserializer, Serialize, de::Error as DeError};
 use std::error::Error;
 use std::fmt;
@@ -16,6 +16,12 @@ use std::num::NonZeroU32;
 /// The public classification uses `()` for a realized plan. A planner that
 /// has established proposal absence can use `CdtProposalPlanningOutcome<!>`
 /// to retain its rejection reason without admitting a concrete plan.
+///
+/// ```compile_fail,E0308
+/// use causal_triangulations::CdtProposalPlanningOutcome;
+///
+/// let _: CdtProposalPlanningOutcome<!> = CdtProposalPlanningOutcome::ConcretePlan(());
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CdtProposalPlanningOutcome<P = ()> {
@@ -35,8 +41,8 @@ pub enum CdtProposalPlanningOutcome<P = ()> {
 
 /// Family and offered-site telemetry for one CDT proposal attempt.
 ///
-/// Successful plans expose the complete forward and reverse components used by
-/// Metropolis-Hastings. Self-loop attempts retain the selected family,
+/// Successful plans expose the actual transition probabilities and the
+/// selected family's diagnostics. Self-loop attempts retain the selected family,
 /// pre-state probability, original offered-site denominator, and typed local
 /// rejection reason; reverse-state fields are absent because no proposed state
 /// exists. Pair this record with [`MonteCarloStep::outcome`] to distinguish
@@ -48,8 +54,12 @@ pub struct ProposalKernelTelemetry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-enum ProposalDensity {
-    Concrete(DiscreteProposalRatio),
+pub(super) enum ProposalDensity<A = ()> {
+    Concrete {
+        actions: A,
+        selected: DiscreteProposalRatio,
+        transition: DiscreteProposalRatio,
+    },
     NoPlan {
         reason: NoPlanReason,
         probability: f64,
@@ -73,32 +83,40 @@ impl NoPlanReason {
 }
 
 impl ProposalKernelTelemetry {
-    pub(crate) const fn concrete(selected_family: MoveType, ratio: DiscreteProposalRatio) -> Self {
-        Self {
-            selected_family,
-            density: ProposalDensity::Concrete(ratio),
-        }
-    }
-
-    pub(crate) const fn no_plan(
+    /// Projects sampler evidence onto the density-only telemetry retained with each step.
+    pub(super) const fn from_density<A: Copy>(
         selected_family: MoveType,
-        reason: NoPlanReason,
-        probability: f64,
-        sites: usize,
+        density: ProposalDensity<A>,
     ) -> Self {
-        Self {
-            selected_family,
-            density: ProposalDensity::NoPlan {
+        let density = match density {
+            ProposalDensity::Concrete {
+                selected,
+                transition,
+                ..
+            } => ProposalDensity::Concrete {
+                actions: (),
+                selected,
+                transition,
+            },
+            ProposalDensity::NoPlan {
+                reason,
+                probability,
+                sites,
+            } => ProposalDensity::NoPlan {
                 reason,
                 probability,
                 sites,
             },
+        };
+        Self {
+            selected_family,
+            density,
         }
     }
 
     const fn ratio(self) -> Option<DiscreteProposalRatio> {
         match self.density {
-            ProposalDensity::Concrete(ratio) => Some(ratio),
+            ProposalDensity::Concrete { selected, .. } => Some(selected),
             ProposalDensity::NoPlan { .. } => None,
         }
     }
@@ -176,7 +194,7 @@ impl ProposalKernelTelemetry {
     #[must_use]
     pub const fn forward_family_probability(self) -> f64 {
         match self.density {
-            ProposalDensity::Concrete(r) => r.forward_weight(),
+            ProposalDensity::Concrete { selected, .. } => selected.forward_weight(),
             ProposalDensity::NoPlan { probability, .. } => probability,
         }
     }
@@ -232,7 +250,7 @@ impl ProposalKernelTelemetry {
     #[must_use]
     pub const fn forward_site_count(self) -> usize {
         match self.density {
-            ProposalDensity::Concrete(r) => r.forward_site_count(),
+            ProposalDensity::Concrete { selected, .. } => selected.forward_site_count(),
             ProposalDensity::NoPlan { sites, .. } => sites,
         }
     }
@@ -297,71 +315,23 @@ impl ProposalKernelTelemetry {
     #[must_use]
     pub const fn planning_outcome(self) -> CdtProposalPlanningOutcome {
         match self.density {
-            ProposalDensity::Concrete(_) => CdtProposalPlanningOutcome::ConcretePlan(()),
+            ProposalDensity::Concrete { .. } => CdtProposalPlanningOutcome::ConcretePlan(()),
             ProposalDensity::NoPlan { reason, .. } => reason.outcome(),
         }
     }
 
-    /// Returns the family-probability log-ratio component for a concrete plan.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::simulation::*;
-    ///
-    /// # fn main() -> CdtResult<()> {
-    /// let results = MetropolisAlgorithm::new(
-    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
-    ///     ActionConfig::default(),
-    /// )
-    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
-    /// let Some(telemetry) = results.steps()[0].proposal_telemetry() else {
-    ///     return Ok(());
-    /// };
-    /// assert!(telemetry.log_family_probability_ratio().is_none_or(f64::is_finite));
-    /// # Ok(())
-    /// # }
-    /// ```
+    /// Returns marginal forward and reverse proposal probabilities for a plan.
     #[must_use]
-    pub fn log_family_probability_ratio(self) -> Option<f64> {
-        let reverse = self.reverse_family_probability()?;
-        DiscreteProposalRatio::from_endpoints(
-            DiscreteProposalEndpoint::new(self.forward_family_probability(), 1.0, 1),
-            DiscreteProposalEndpoint::new(reverse, 1.0, 1),
-        )
-        .ok()
-        .map(DiscreteProposalRatio::log_q_ratio)
+    pub const fn transition_probabilities(self) -> Option<(f64, f64)> {
+        match self.density {
+            ProposalDensity::Concrete { transition, .. } => {
+                Some((transition.forward_weight(), transition.reverse_weight()))
+            }
+            ProposalDensity::NoPlan { .. } => None,
+        }
     }
 
-    /// Returns the offered-site-count log-ratio component for a concrete plan.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::simulation::*;
-    ///
-    /// # fn main() -> CdtResult<()> {
-    /// let results = MetropolisAlgorithm::new(
-    ///     MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(7),
-    ///     ActionConfig::default(),
-    /// )
-    /// .run(CdtTriangulation::from_cdt_strip(4, 3)?)?;
-    /// let Some(telemetry) = results.steps()[0].proposal_telemetry() else {
-    ///     return Ok(());
-    /// };
-    /// assert!(telemetry.log_site_count_ratio().is_none_or(f64::is_finite));
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[must_use]
-    pub fn log_site_count_ratio(self) -> Option<f64> {
-        let reverse = self.reverse_site_count()?;
-        DiscreteProposalRatio::from_counts(self.forward_site_count(), reverse)
-            .ok()
-            .map(DiscreteProposalRatio::log_q_ratio)
-    }
-
-    /// Returns the complete family-plus-site log Hastings correction.
+    /// Returns the log Hastings correction for the realized transition.
     ///
     /// # Examples
     ///
@@ -378,18 +348,16 @@ impl ProposalKernelTelemetry {
     ///     return Ok(());
     /// };
     /// let total = telemetry.log_proposal_ratio();
-    /// let family = telemetry.log_family_probability_ratio();
-    /// let sites = telemetry.log_site_count_ratio();
-    /// assert_eq!(total.is_some(), family.is_some() && sites.is_some());
-    /// if let (Some(total), Some(family), Some(sites)) = (total, family, sites) {
-    ///     approx::assert_relative_eq!(total, family + sites, epsilon = 1e-12);
-    /// }
+    /// assert!(total.is_none_or(|ratio| ratio < f64::INFINITY));
     /// # Ok(())
     /// # }
     /// ```
     #[must_use]
     pub fn log_proposal_ratio(self) -> Option<f64> {
-        self.ratio().map(DiscreteProposalRatio::log_q_ratio)
+        match self.density {
+            ProposalDensity::Concrete { transition, .. } => Some(transition.log_q_ratio()),
+            ProposalDensity::NoPlan { .. } => None,
+        }
     }
 }
 

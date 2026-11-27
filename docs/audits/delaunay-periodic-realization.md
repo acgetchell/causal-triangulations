@@ -4,8 +4,9 @@
 
 Delaunay 0.8.4 supplies the upstream #668 correction. On 3 November 2026, both original consumer regressions pass after adopting that published dependency:
 the seed-3291 five-move regression and the random-move invariant property test retain their original inputs, successful outcomes and complete validation.
-The diagnosis below records the original 0.8.3 failure and exact arithmetic evidence. The separate #316 proposal-support and upstream #667 abstract-gluing
-obligations remain unresolved; this correction does not establish exact-ensemble sampling.
+The diagnosis below records the original 0.8.3 failure and exact arithmetic evidence. The current
+[sampler contract](../scientific-basis.md#move-and-sampler-contract) and [exact-ensemble gate](../roadmap.md#v020-exact-11-ensemble-validation) have separate
+evidence.
 
 The passing source is [CDT revision `2d03f2d`](https://github.com/acgetchell/causal-triangulations/commit/2d03f2d66c0e6ef09d245847b704f2262bd84d8a), whose
 committed Cargo lock resolves Delaunay 0.8.4. Its
@@ -19,8 +20,9 @@ The repository review on 26 October 2026 found a blocking discrepancy in the pin
 read-only `2d-cdt` reference audit and from the ensemble/reverse-support limitation in issue #316. No dependency source was changed.
 
 The existing property test minimized the failure to `seed = 3291`, `attempts = 5`, `toroidal = true`, starting from `from_toroidal_cdt(4, 3)`.
-The retained Proptest regression and `tests/regressions.rs::toroidal_seed_3291_preserves_embedding_after_five_moves` preserve those inputs and the requirement
-that successful moves pass complete evolved-state validation. The following opt-in commands create separate historical worktrees and use their committed
+The retained Proptest regression preserves those inputs. The exact original move sites are now replayed in
+`src/cdt/ergodic_moves.rs::toroidal_seed_3291_preserves_embedding_after_five_moves`, where each successful move must pass complete evolved-state validation.
+The following opt-in commands create separate historical worktrees and use their committed
 lockfiles and declared Rust toolchain. They leave the current checkout intact.
 
 To reproduce the expected **0.8.3 failure**, use
@@ -96,10 +98,5 @@ The published source revision is `3fa8a9907101c523574a0d17991a1f652b5419dc`. Its
 first lifts simplex coordinates and subsequently translates the realized simplex. The
 [translation operation](https://github.com/acgetchell/delaunay/blob/3fa8a9907101c523574a0d17991a1f652b5419dc/src/geometry/realization.rs)
 uses `shift.mul_add(period, already_lifted_coordinate)`. This source path and the exact arithmetic witness support a periodic-rounding false positive.
-The additional discrepancy between the local successful edit check and later global validation still needs upstream investigation.
-
-A repair belongs in Delaunay's periodic realization representation/predicates: preserve canonical coordinates plus integer offsets through a shared chart
-construction or equivalent exact arithmetic, make equivalent lifted identities agree, and retain rejection of actual overlapping controls. Verify both
-local and global validation against the unchanged fixture and publish the corrected dependency before normal adoption here.
-CDT must not copy the intersection algorithm, change these coordinates to an easier fixture, skip full validation, or turn the supported successful move
-into an accepted failure to obtain a green suite. The published 0.8.4 correction resolves this discrepancy; the retained regressions guard its adoption.
+The error surfaced after a locally successful edit during whole-embedding validation. The published 0.8.4 correction resolves that discrepancy. The
+retained regressions require the original edits to succeed and the resulting meshes to pass full validation.

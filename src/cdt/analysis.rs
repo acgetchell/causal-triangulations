@@ -47,8 +47,8 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::io::{Read, Write};
 
-/// First public cadence-aligned chain interchange schema.
-pub const VALIDATION_CHAIN_SCHEMA_VERSION: u32 = 1;
+/// Cadence-aligned chain schema for the corrected embedded proposal kernel.
+pub const VALIDATION_CHAIN_SCHEMA_VERSION: u32 = 2;
 
 /// Stream operation retained when chain/report JSON transport fails.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -1094,7 +1094,9 @@ fn observable_units(observable: &CdtDiagnosticObservable) -> String {
             "spacelike-links"
         }
         CdtDiagnosticObservable::LoopProduct { .. } => "spacelike-links-squared",
-        _ => "indicator",
+        CdtDiagnosticObservable::ProfileIndicator { .. }
+        | CdtDiagnosticObservable::TargetVolumeIndicator { .. }
+        | CdtDiagnosticObservable::TargetProfileIndicator { .. } => "indicator",
     }
     .to_owned()
 }

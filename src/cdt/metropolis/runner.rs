@@ -18,7 +18,7 @@ use super::checkpoint::{
     checkpoint_resume_failed, validate_resume_compatible,
 };
 use super::helpers::{
-    action_for, actions_match, measurement_for, measurement_is_due, validate_metropolis_schedule,
+    action_for, actions_match, first_measurement_step, measurement_for, measurement_is_due,
     validate_temperature,
 };
 use super::telemetry::{MonteCarloStep, MonteCarloStepOutcome, ProposalStatistics};
@@ -29,7 +29,7 @@ use crate::cdt::results::{CdtScalarTraceRow, Measurement, SimulationResultsBacke
 use crate::cdt::triangulation::CdtTriangulation2D;
 use crate::errors::{
     CdtError, CdtResult, CheckpointResumeFailure, ConfigurationSetting, ExpectedConstraint,
-    ProposalFailureStage,
+    ObservedValue, ProposalFailureStage,
 };
 use markov_chain_monte_carlo::{
     Chain, ChainCheckpoint, DelayedStep, DelayedStepError, Sampler, StepOutcome,
@@ -98,9 +98,9 @@ impl Default for MetropolisConfig {
     fn default() -> Self {
         Self::from_validated_parts(
             1.0,
-            default_step_count(),
+            NonZeroU32::new(1000).expect("positive default step count"),
             100,
-            default_measurement_frequency(),
+            NonZeroU32::new(10).expect("positive default cadence"),
             None,
         )
     }
@@ -153,12 +153,7 @@ impl MetropolisConfig {
         measurement_frequency: u32,
         seed: Option<u64>,
     ) -> CdtResult<Self> {
-        validate_metropolis_schedule(
-            temperature,
-            steps,
-            thermalization_steps,
-            measurement_frequency,
-        )?;
+        validate_temperature(temperature)?;
         let Some(steps) = NonZeroU32::new(steps) else {
             return Err(CdtError::InvalidSimulationConfiguration {
                 setting: ConfigurationSetting::Steps,
@@ -173,6 +168,33 @@ impl MetropolisConfig {
                 expected: ExpectedConstraint::AtLeast { minimum: 1 },
             });
         };
+        if measurement_frequency > steps {
+            return Err(CdtError::InvalidSimulationConfiguration {
+                setting: ConfigurationSetting::MeasurementFrequency,
+                provided_value: measurement_frequency.get().into(),
+                expected: ExpectedConstraint::AtMostSteps { steps: steps.get() },
+            });
+        }
+        if thermalization_steps > steps.get() {
+            return Err(CdtError::InvalidSimulationConfiguration {
+                setting: ConfigurationSetting::ThermalizationSteps,
+                provided_value: thermalization_steps.into(),
+                expected: ExpectedConstraint::AtMostSteps { steps: steps.get() },
+            });
+        }
+        if first_measurement_step(thermalization_steps, measurement_frequency)
+            .is_none_or(|first| first > steps.get())
+        {
+            return Err(CdtError::InvalidSimulationConfiguration {
+                setting: ConfigurationSetting::MeasurementSchedule,
+                provided_value: ObservedValue::MeasurementSchedule {
+                    steps: steps.get(),
+                    thermalization_steps,
+                    measurement_frequency: measurement_frequency.get(),
+                },
+                expected: ExpectedConstraint::PostThermalizationMeasurement,
+            });
+        }
         Ok(Self::from_validated_parts(
             temperature,
             steps,
@@ -182,12 +204,8 @@ impl MetropolisConfig {
         ))
     }
 
-    /// Builds a Metropolis configuration after raw schedule validation.
-    ///
-    /// This helper is used when a higher-level validated config already proved
-    /// the temperature and schedule invariants, allowing conversion without a
-    /// second fallible branch.
-    pub(crate) const fn from_validated_parts(
+    /// Stores a checked schedule or the fixed default schedule.
+    const fn from_validated_parts(
         temperature: f64,
         steps: NonZeroU32,
         thermalization_steps: u32,
@@ -316,78 +334,6 @@ impl MetropolisConfig {
     #[must_use]
     pub fn beta(&self) -> f64 {
         1.0 / self.temperature
-    }
-
-    /// Rechecks the stored simulation-specific configuration invariants.
-    ///
-    /// Constructors and deserialization already run the same validation before a
-    /// [`MetropolisConfig`] can be observed. This method exists for callers that
-    /// want an explicit runtime validation hook when handling a stored config.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`CdtError::InvalidSimulationConfiguration`] if stored values no
-    /// longer satisfy the Metropolis temperature or sampling-schedule contract.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::MetropolisConfig;
-    ///
-    /// let config = MetropolisConfig::new(1.0, 100, 10, 5)?;
-    /// config.try_validate()?;
-    /// # Ok::<(), causal_triangulations::CdtError>(())
-    /// ```
-    pub fn try_validate(&self) -> CdtResult<()> {
-        validate_temperature(self.temperature)?;
-        validate_metropolis_schedule(
-            self.temperature,
-            self.steps.get(),
-            self.thermalization_steps,
-            self.measurement_frequency.get(),
-        )
-    }
-
-    /// Debug-checks that stored simulation-specific configuration values are valid.
-    ///
-    /// This method is kept for code that wants a common validation hook across
-    /// configuration-like types. Because [`MetropolisConfig`] validates before
-    /// storage, it is an infallible debug assertion of the stored invariant; use
-    /// [`Self::try_validate`] when a fallible runtime check is needed.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::MetropolisConfig;
-    ///
-    /// let config = MetropolisConfig::new(1.0, 100, 10, 5)?;
-    /// config.validate(); // debug-only invariant check
-    /// config.try_validate()?;
-    /// # Ok::<(), causal_triangulations::CdtError>(())
-    /// ```
-    pub fn validate(&self) {
-        debug_assert!(
-            self.temperature.is_finite()
-                && self.temperature > 0.0
-                && self.temperature.recip().is_finite()
-        );
-        debug_assert!(self.thermalization_steps <= self.steps.get());
-    }
-}
-
-/// Returns the built-in nonzero Metropolis step count.
-const fn default_step_count() -> NonZeroU32 {
-    match NonZeroU32::new(1000) {
-        Some(steps) => steps,
-        None => NonZeroU32::MIN,
-    }
-}
-
-/// Returns the built-in nonzero measurement cadence.
-const fn default_measurement_frequency() -> NonZeroU32 {
-    match NonZeroU32::new(10) {
-        Some(measurement_frequency) => measurement_frequency,
-        None => NonZeroU32::MIN,
     }
 }
 
@@ -678,9 +624,6 @@ where
         &self,
         triangulation: CdtTriangulation2D,
     ) -> CdtResult<CdtMcmcCheckpoint> {
-        self.config.try_validate()?;
-        self.action_config.validate();
-
         let state = self.initial_state(triangulation)?;
         let state = self.run_steps(state, self.config.steps)?;
         state.into_checkpoint(self.config.clone(), self.action_config.clone())
@@ -840,8 +783,6 @@ where
         checkpoint: CdtMcmcCheckpoint,
         additional_steps: NonZeroU32,
     ) -> CdtResult<CdtMcmcCheckpoint> {
-        self.config.try_validate()?;
-        self.action_config.validate();
         validate_resume_compatible(self, &checkpoint)?;
 
         let mut result_config = checkpoint.config().clone();
@@ -1102,7 +1043,6 @@ fn record_planned_step<P>(
         step,
         PlannedStepRecord {
             outcome: planned_step.outcome(),
-            log_prob_after: planned_step.log_prob_after(),
             info,
             proposal_stats,
             triangulation,
@@ -1112,15 +1052,10 @@ fn record_planned_step<P>(
 
 /// CDT-owned state needed to translate one upstream planned step.
 ///
-/// Keeping these fields together lets production code and regression tests run
-/// the same translation path while preserving the relationship between
-/// reconstructed `action_after` values and public `delta_action` telemetry.
-/// Accepted records must carry either CDT's `action_after` or the upstream
-/// `log_prob_after` needed to reconstruct it.
+/// A realized plan supplies both actions. A planning self-loop supplies its rejection reason.
 #[derive(Clone, Copy)]
 struct PlannedStepRecord<'a> {
     outcome: StepOutcome,
-    log_prob_after: Option<f64>,
     info: CdtProposalInfo,
     proposal_stats: &'a ProposalStatistics,
     triangulation: &'a CdtTriangulation2D,
@@ -1128,33 +1063,26 @@ struct PlannedStepRecord<'a> {
 
 /// Builds validated public step telemetry outcome from upstream planned-step data.
 fn step_outcome_for_trace(
-    config: &MetropolisConfig,
     step: NonZeroU32,
     trace_outcome: StepOutcome,
     action_before: f64,
-    log_prob_after: Option<f64>,
     info: &CdtProposalInfo,
 ) -> CdtResult<MonteCarloStepOutcome> {
-    match trace_outcome {
-        StepOutcome::Accepted => {
-            let applied_action = info
-                .action_after
-                .or_else(|| {
-                    log_prob_after.map(|log_prob_after| -config.temperature() * log_prob_after)
-                })
-                .ok_or_else(|| missing_planned_step_info(step.get()))?;
-            MonteCarloStepOutcome::accepted_transition(
-                step,
-                action_before,
-                applied_action,
-                applied_action - action_before,
-            )
+    match (trace_outcome, info.proposed_actions()) {
+        (StepOutcome::Accepted, Some(actions)) => MonteCarloStepOutcome::accepted_transition(
+            step,
+            action_before,
+            actions.after,
+            actions.after - action_before,
+        ),
+        (StepOutcome::RejectedProposal, Some(actions)) => {
+            MonteCarloStepOutcome::rejected_proposal(step, Some(actions.delta))
         }
-        StepOutcome::RejectedProposal => {
-            MonteCarloStepOutcome::rejected_proposal(step, info.delta_action)
+        (StepOutcome::NoProposal, None) => Ok(MonteCarloStepOutcome::NoProposal),
+        (StepOutcome::Accepted | StepOutcome::RejectedProposal, None) => {
+            Err(missing_planned_step_info(step.get()))
         }
-        StepOutcome::NoProposal => Ok(MonteCarloStepOutcome::NoProposal),
-        outcome => Err(CdtError::UnexpectedPlannedStepOutcome {
+        (outcome, _) => Err(CdtError::UnexpectedPlannedStepOutcome {
             step: step.get(),
             outcome,
         }),
@@ -1163,11 +1091,7 @@ fn step_outcome_for_trace(
 
 /// Apply one planned-step record to CDT run state and public telemetry.
 ///
-/// Accepted steps may reconstruct `action_after` from upstream log-probability
-/// data. When that happens, the public [`MonteCarloStep`] receives a matching
-/// `delta_action` derived from the same reconstructed action. Missing
-/// accepted-step action evidence is rejected before any run state or telemetry
-/// is mutated.
+/// Reject inconsistent upstream outcomes before mutating state or recording telemetry.
 fn record_planned_step_parts<P>(
     algorithm: &MetropolisAlgorithm<P>,
     state: &mut MetropolisRunTelemetry,
@@ -1176,21 +1100,13 @@ fn record_planned_step_parts<P>(
 ) -> CdtResult<()> {
     let PlannedStepRecord {
         outcome,
-        log_prob_after,
         info,
         proposal_stats,
         triangulation,
     } = record;
     let move_type = info.proposal_telemetry().selected_family();
     let action_before = state.current_action;
-    let step_outcome = step_outcome_for_trace(
-        &algorithm.config,
-        step,
-        outcome,
-        action_before,
-        log_prob_after,
-        &info,
-    )?;
+    let step_outcome = step_outcome_for_trace(step, outcome, action_before, &info)?;
     let action_after = step_outcome.action_after();
     let attach_initial_slab_triangle_profile =
         step.get() == 1 && state.initial_slab_triangle_profile.is_some();
@@ -1368,20 +1284,22 @@ fn simulation_rng(seed: Option<u64>) -> Xoshiro256PlusPlus {
 mod tests {
     use super::*;
     use crate::cdt::action::CDT_1P1_CRITICAL_TRIANGLE_COSMOLOGICAL_CONSTANT;
-    use crate::cdt::ergodic_moves::{MoveType, proposal_site_count};
+    use crate::cdt::ergodic_moves::MoveType;
     use crate::cdt::foliation::FoliationError;
     use crate::cdt::metropolis::{
-        adapter::{CdtProposalPlan, ConcretePlanAttempt, propose_concrete_plan},
-        checkpoint::validate_checkpoint_counters,
+        adapter::{
+            CdtProposalPlan, ConcretePlanAttempt, ProposedActions, no_plan_info,
+            propose_concrete_plan,
+        },
+        checkpoint::{take_validation_step_inputs, validate_checkpoint_counters},
         helpers::{SimplexCounts, proposed_delta_action, simplex_counts},
-        telemetry::{CdtProposalPlanningOutcome, CdtProposalSiteRejection},
+        telemetry::{CdtProposalPlanningOutcome, CdtProposalSiteRejection, NoPlanReason},
     };
     use crate::cdt::proposal_policy::CdtMoveFamilyPolicyError;
     use crate::cdt::results::{SimulationEvent, SimulationHistory};
     use crate::cdt::triangulation::CdtTriangulation;
     use crate::errors::{
         BackendMutationOperation, CheckpointMoveCounter, MetropolisMoveApplicationFailure,
-        ObservedValue,
     };
     use crate::geometry::traits::TriangulationQuery;
     use approx::assert_relative_eq;
@@ -1397,18 +1315,17 @@ mod tests {
     fn concrete_proposal_info(
         move_type: MoveType,
         action_before: f64,
-        action_after: Option<f64>,
-        delta_action: Option<f64>,
+        after: f64,
+        delta: f64,
     ) -> CdtProposalInfo {
-        CdtProposalInfo {
+        let density = DiscreteProposalRatio::from_counts(1, 1).expect("positive sites");
+        CdtProposalInfo::concrete(
+            move_type,
             action_before,
-            action_after,
-            delta_action,
-            kernel: super::super::telemetry::ProposalKernelTelemetry::concrete(
-                move_type,
-                DiscreteProposalRatio::from_counts(1, 1).expect("positive sites"),
-            ),
-        }
+            ProposedActions { after, delta },
+            density,
+            density,
+        )
     }
 
     /// Applies the Metropolis acceptance rule to a proposed action change.
@@ -2132,9 +2049,8 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![2, 4]
         );
-        let continued_json: Value = serde_json::from_str(&continued.to_json().unwrap()).unwrap();
-        let uninterrupted_json: Value =
-            serde_json::from_str(&uninterrupted.to_json().unwrap()).unwrap();
+        let continued_json: Value = from_str(&continued.to_json().unwrap()).unwrap();
+        let uninterrupted_json: Value = from_str(&uninterrupted.to_json().unwrap()).unwrap();
         for field in [
             "measurements",
             "scalar_trace_rows",
@@ -2153,7 +2069,6 @@ mod tests {
 
     #[test]
     fn in_memory_chunks_submit_only_new_telemetry_to_validation() {
-        use super::super::checkpoint::take_validation_step_inputs;
         let algorithm = MetropolisAlgorithm::new(
             seeded_metropolis_config(1.0, 4, 2, 2, 19),
             ActionConfig::default(),
@@ -2240,7 +2155,7 @@ mod tests {
     }
 
     #[test]
-    fn serialized_checkpoint_missing_proposal_stats_rejects_nonempty_checkpoint() {
+    fn serialized_checkpoint_requires_explicit_consistent_proposal_stats() {
         let checkpoint = serializable_rejected_checkpoint(ActionConfig::default());
         let mut payload = to_value(&checkpoint).expect("checkpoint should serialize");
         payload
@@ -2251,7 +2166,15 @@ mod tests {
         let Err(error) = from_str::<CdtMcmcCheckpoint>(&payload.to_string()) else {
             panic!("nonempty checkpoint missing proposal stats should be rejected");
         };
+        assert!(
+            error.to_string().contains("missing field `proposal_stats`"),
+            "{error}"
+        );
 
+        payload["proposal_stats"] = to_value(ProposalStatistics::new()).expect("zero counters");
+        let Err(error) = from_str::<CdtMcmcCheckpoint>(&payload.to_string()) else {
+            panic!("zero counters cannot describe a nonempty checkpoint");
+        };
         assert!(
             error
                 .to_string()
@@ -3115,7 +3038,6 @@ mod tests {
             &mut proposal_stats,
             &action_config,
             MoveType::Move31Remove,
-            action_before,
         )
         .expect("site rejection is an ordinary proposal outcome");
 
@@ -3218,7 +3140,7 @@ mod tests {
             .expect("initial state should build");
         let action = state.current_action;
         let move_type = MoveType::Move22;
-        let info = concrete_proposal_info(move_type, action, Some(action), Some(0.0));
+        let info = concrete_proposal_info(move_type, action, action, 0.0);
         let proposal_stats = ProposalStatistics::from_validated_parts(1, 0, 0, 0, 0, 0, 0, 0, 0);
 
         record_planned_step_parts(
@@ -3227,7 +3149,6 @@ mod tests {
             step_number(1),
             PlannedStepRecord {
                 outcome: StepOutcome::Accepted,
-                log_prob_after: Some(-action),
                 info,
                 proposal_stats: &proposal_stats,
                 triangulation: &committed,
@@ -3265,49 +3186,20 @@ mod tests {
     }
 
     #[test]
-    fn accepted_planned_step_reconstructs_missing_action_after_from_log_prob() {
-        let temperature = 2.0;
-        let config = seeded_metropolis_config(temperature, 1, 0, 1, 2);
-        let algorithm = MetropolisAlgorithm::new(config, ActionConfig::default());
-        let triangulation =
-            CdtTriangulation::from_cdt_strip(4, 3).expect("Delaunay strip should build");
-        let committed = triangulation.clone();
-        let mut state = algorithm
-            .initial_state(triangulation)
-            .expect("initial state should build");
-        let action_before = state.current_action;
-        let reconstructed_action = action_before + 0.25;
-        let move_type = MoveType::Move22;
-        let proposal_stats = ProposalStatistics::from_validated_parts(1, 0, 0, 0, 0, 0, 0, 0, 0);
-
-        record_planned_step_parts(
-            &algorithm,
-            &mut state,
-            step_number(1),
-            PlannedStepRecord {
-                outcome: StepOutcome::Accepted,
-                log_prob_after: Some(-reconstructed_action / temperature),
-                info: concrete_proposal_info(move_type, action_before, None, None),
-                proposal_stats: &proposal_stats,
-                triangulation: &committed,
-            },
-        )
-        .expect("accepted planned step should record fallback action");
-
-        assert_relative_eq!(state.current_action, reconstructed_action, epsilon = 1e-12);
-        assert_relative_eq!(
-            state.history.steps()[0]
-                .action_after()
-                .expect("accepted step should record reconstructed action"),
-            reconstructed_action,
-            epsilon = 1e-12
+    fn upstream_outcome_must_agree_with_planning_evidence() {
+        let step = step_number(1);
+        let concrete = concrete_proposal_info(MoveType::Move22, 1.0, 1.25, 0.25);
+        let absent = no_plan_info(MoveType::Move22, 1.0, 0.25, 0, NoPlanReason::NoOfferedSite);
+        assert_matches!(
+            step_outcome_for_trace(step, StepOutcome::NoProposal, 1.0, &concrete),
+            Err(CdtError::UnexpectedPlannedStepOutcome {
+                step: 1,
+                outcome: StepOutcome::NoProposal
+            })
         );
-        assert_relative_eq!(
-            state.history.steps()[0]
-                .delta_action()
-                .expect("accepted step should record reconstructed action change"),
-            reconstructed_action - action_before,
-            epsilon = 1e-12
+        assert_matches!(
+            step_outcome_for_trace(step, StepOutcome::RejectedProposal, 1.0, &absent),
+            Err(CdtError::PlannedProposalTelemetryMissing { step: 1 })
         );
     }
 
@@ -3332,13 +3224,7 @@ mod tests {
             step_number(1),
             PlannedStepRecord {
                 outcome: StepOutcome::Accepted,
-                log_prob_after: None,
-                info: concrete_proposal_info(
-                    MoveType::Move22,
-                    action_before,
-                    Some(action_after),
-                    Some(999.0),
-                ),
+                info: concrete_proposal_info(MoveType::Move22, action_before, action_after, 999.0),
                 proposal_stats: &proposal_stats,
                 triangulation: &committed,
             },
@@ -3379,8 +3265,13 @@ mod tests {
             step_number(23),
             PlannedStepRecord {
                 outcome: StepOutcome::Accepted,
-                log_prob_after: None,
-                info: concrete_proposal_info(MoveType::Move22, action_before, None, None),
+                info: no_plan_info(
+                    MoveType::Move22,
+                    action_before,
+                    0.25,
+                    0,
+                    NoPlanReason::NoOfferedSite,
+                ),
                 proposal_stats: &proposal_stats,
                 triangulation: &committed,
             },
@@ -3430,13 +3321,7 @@ mod tests {
             step_number(1),
             PlannedStepRecord {
                 outcome: StepOutcome::Accepted,
-                log_prob_after: Some(-action_before),
-                info: concrete_proposal_info(
-                    MoveType::Move22,
-                    action_before,
-                    Some(action_before),
-                    Some(0.0),
-                ),
+                info: concrete_proposal_info(MoveType::Move22, action_before, action_before, 0.0),
                 proposal_stats: &proposal_stats,
                 triangulation: &invalid_candidate,
             },
@@ -3854,7 +3739,7 @@ mod tests {
             plan.move_type()
         );
         assert_relative_eq!(
-            info.delta_action
+            info.delta_action()
                 .expect("concrete plan info should include action delta"),
             plan.delta_action(),
             epsilon = 1e-12
@@ -3876,63 +3761,14 @@ mod tests {
             &mut stats,
             &action,
             MoveType::Move13Add,
-            action_for(&action, &triangulation),
         )
         .expect("planning should not fail") else {
             panic!("the seeded fixture must yield an insertion plan");
         };
         // Exact integer identity: -a - 2a + 3a = 0; both toroidal actions vanish.
-        assert_relative_eq!(plan.action_before(), 0.0, epsilon = 0.0);
-        assert_relative_eq!(plan.action_after(), 0.0, epsilon = 0.0);
-        assert_relative_eq!(plan.delta_action(), 0.0, epsilon = 0.0);
-        assert_relative_eq!(
-            CdtProposal::new(action)
-                .info(&plan)
-                .delta_action
-                .expect("plan has an action delta"),
-            0.0,
-            epsilon = 0.0
-        );
-    }
-
-    #[test]
-    fn cdt_proposal_log_q_ratio_uses_forward_and_reverse_site_counts() {
-        let action_config = ActionConfig::default();
-        let triangulation =
-            CdtTriangulation::from_toroidal_cdt(4, 3).expect("toroidal CDT should build");
-        let mut moves = ErgodicsSystem::with_seed(19);
-        let mut proposal_stats = ProposalStatistics::new();
-        let action_before = action_for(&action_config, &triangulation);
-        let ConcretePlanAttempt::Planned(plan) = propose_concrete_plan(
-            &triangulation,
-            &mut moves,
-            &mut proposal_stats,
-            &action_config,
-            MoveType::Move13Add,
-            action_before,
-        )
-        .expect("planning should not hard-fail") else {
-            panic!("toroidal triangulation should have a volume-add proposal");
-        };
-
-        let forward_sites = proposal_site_count(&triangulation, MoveType::Move13Add);
-        let reverse_sites = proposal_site_count(&plan.proposed_state, MoveType::Move31Remove);
-        assert!(forward_sites > 0);
-        assert!(reverse_sites > 0);
-
-        let expected = DiscreteProposalRatio::from_counts(forward_sites, reverse_sites)
-            .expect("positive forward proposal sites should build a ratio")
-            .log_q_ratio();
-        assert_relative_eq!(plan.log_proposal_ratio(), expected, epsilon = 1e-12);
-
-        let proposal = CdtProposal::new(action_config);
-        assert_relative_eq!(
-            proposal
-                .log_q_ratio(&triangulation, &plan)
-                .expect("proposal-ratio scoring should not fail"),
-            expected,
-            epsilon = 1e-12
-        );
+        assert_relative_eq!(action_for(&action, &triangulation), 0.0, epsilon = 0.0);
+        assert_relative_eq!(plan.action_after, 0.0, epsilon = 0.0);
+        assert_relative_eq!(plan.delta_action, 0.0, epsilon = 0.0);
     }
 
     #[test]
@@ -3942,15 +3778,12 @@ mod tests {
             CdtTriangulation::from_toroidal_cdt(4, 3).expect("toroidal CDT should build");
         let mut moves = ErgodicsSystem::with_seed(19);
         let mut proposal_stats = ProposalStatistics::new();
-        let action_before = action_for(&action_config, &triangulation);
-
         let ConcretePlanAttempt::Planned(_plan) = propose_concrete_plan(
             &triangulation,
             &mut moves,
             &mut proposal_stats,
             &action_config,
             MoveType::Move13Add,
-            action_before,
         )
         .expect("planning should not hard-fail") else {
             panic!("toroidal triangulation should have a volume-add proposal");
@@ -3970,12 +3803,14 @@ mod tests {
         let triangulation = CdtTriangulation::from_seeded_points(5, 1, 2, 53).expect("Failed");
         let action_before = action_for(&ActionConfig::default(), &triangulation);
         let plan = CdtProposalPlan {
-            source: (&triangulation).into(),
+            source: triangulation.revision(),
             move_type: MoveType::Move31Remove,
             action_before,
             action_after: action_before,
             delta_action: 0.0,
             density: DiscreteProposalRatio::from_counts(1, 0).expect("zero reverse support"),
+            endpoint_density: DiscreteProposalRatio::from_counts(1, 0)
+                .expect("zero reverse support"),
             proposed_state: triangulation.clone(),
         };
 
@@ -4031,12 +3866,14 @@ mod tests {
         let action_before = action_for(&action_config, &triangulation);
         let action_after = action_for(&action_config, &proposed_state);
         let plan = CdtProposalPlan {
-            source: (&triangulation).into(),
+            source: triangulation.revision(),
             move_type: MoveType::Move13Add,
             action_before,
             action_after,
             delta_action: action_after - action_before,
             density: DiscreteProposalRatio::from_counts(1, 1).expect("symmetric density"),
+            endpoint_density: DiscreteProposalRatio::from_counts(1, 1)
+                .expect("symmetric transition"),
             proposed_state,
         };
         let mut rng = StdRng::seed_from_u64(11);
@@ -4066,7 +3903,7 @@ mod tests {
             assert_eq!(simplex_counts(state), original_counts);
         }
         let plan = CdtProposalPlan {
-            source: (&triangulation).into(),
+            source: triangulation.revision(),
             ..plan
         };
         triangulation.set_delaunay_check_interval(NonZeroUsize::new(3));

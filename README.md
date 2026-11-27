@@ -65,7 +65,7 @@ See the [CDT model][scientific-model] for supported geometries, boundary conditi
 | Measure profiles and finite-graph observables | [`prelude::observables`][api-observables] |
 | Run or resume a simulation | [`prelude::simulation`][api-simulation] |
 
-The [API reference][api] describes the latest published crate; `just doc-check` builds the reference for this checkout.
+The [API reference][api] describes the latest published crate. For a local API build, see the [development guide][doc-validation].
 
 ## ✨ Features
 
@@ -89,9 +89,9 @@ non-goals.
 
 ## 🚀 Quickstart
 
-For Rust library use, add `causal-triangulations = { version = "0.1.1", default-features = false }` to Cargo dependencies. This retains simulation and analysis
-APIs without Clap or the CLI logger. The default-enabled `cli` feature provides the `cdt` binary and `CdtConfig::{from_args, try_from_args}`; normal repository
-commands below enable it automatically.
+For Rust library use, run `cargo add causal-triangulations` to add the published crate. When using this checkout as a path dependency, set
+`default-features = false` for a library-only build without Clap or the CLI logger. The checkout's default `cli` feature provides the `cdt` binary and
+`CdtConfig::{from_args, try_from_args}`.
 
 From a repository checkout, follow [prerequisite setup][repo-contributing-mdgetting-started], then run a small seeded simulation:
 
@@ -119,8 +119,9 @@ OnDemand.
 ## 🧪 Scientific Basis
 
 The [scientific basis][repo-docs-scientific-basis-md] owns [action calibration][scientific-action], [ensemble and volume behavior][scientific-ensemble],
-[validation limits][scientific-validation], and [downstream analysis responsibilities][scientific-responsibilities]. Move semantics and detailed-balance
-notes live in [the move guide][repo-docs-moves-md] and [the sampler guide][repo-docs-metropolis-md].
+[Hilbert order for embedded proposal sites][scientific-hilbert], [validation limits][scientific-validation], and
+[downstream analysis responsibilities][scientific-responsibilities]. Move semantics and detailed-balance notes live in
+[the move guide][repo-docs-moves-md] and [the sampler guide][repo-docs-metropolis-md].
 
 ## 🗺️ Documentation Map
 
@@ -253,6 +254,8 @@ This project is licensed under the [BSD 3-Clause License][repo-license].
 
 [repo-license]: https://github.com/acgetchell/causal-triangulations/blob/main/LICENSE
 [repo-docs-scientific-basis-md]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md
+[doc-validation]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/dev/DEVELOPING.md#documentation-validation
+[scientific-hilbert]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md#hilbert-order-for-embedded-proposal-sites
 [scientific-model]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md#cdt-model
 [scientific-action]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md#action-calibration
 [scientific-ensemble]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md#ensemble-and-volume-behavior

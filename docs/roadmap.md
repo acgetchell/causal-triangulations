@@ -10,8 +10,8 @@ The v0.1.0 foundation release centers on validated 1+1 CDT construction, includi
 nonuniform initial spatial-vertex profiles, upstream-backed MCMC sampler mechanics, trace/summary exports, resumable checkpoints, and CI-aligned validation
 tooling.
 
-Current scope: higher-dimensional CDT, production volume fixing, automated λ scans, visualization/export workflows, and full ensemble-analysis tooling remain
-roadmap work.
+The foundation release focused on construction, sampling, and basic outputs. Later milestones cover volume fixing, richer analysis workflows, automated λ
+scans, and higher-dimensional CDT.
 
 Completed foundation work:
 
@@ -46,8 +46,8 @@ Completed maturity work includes:
 
 - [x] Delaunay 0.8.1 topology-aware Level 1–4 reconstruction for evolved and restored non-Delaunay states, while fresh initializers retain Level 1–5
   evidence.
-- [x] Exact proposal-family and offered-site Hastings accounting for uniform, unequal fixed, and state-dependent policies, including zero reverse support and
-  distinct `Move22`/`EdgeFlip` mixture components.
+- [x] Proposal-family and offered-site probability accounting for uniform, unequal fixed, and state-dependent policies, including distinct
+  `Move22`/`EdgeFlip` components. This release checked offered-site counts without verifying that a return atom reproduced the source.
 - [x] Per-kernel spatial- and temporal-seam tests, exact `(1,3)`/`(3,1)` inverse evidence, minimum-slice guards, and seeded mixed-move invariant checks.
 - [x] Full action recomputation across every successful move family, ordinary and extreme finite couplings, and the documented edge-to-triangle cosmological
   convention boundary.
@@ -60,14 +60,13 @@ Completed maturity work includes:
 
 ## v0.2.0 Simulation And Analysis Foundation
 
-The implementation provides optional volume control, spatial-loop measurements, reproducible chain artifacts, dependence-aware diagnostics, and the current
-tooling standards on published Delaunay 0.8.5 and MCMC 0.5.3. The [#258 audit](audits/2d-cdt_sphere/README.md) records the scope of the external reference.
-Release preparation retains native/package checks and benchmark provenance. Current engineering checks do not establish an analytically validated
-equilibrium ensemble, mixing, full Brunekreef parity, or a correction of [#316](https://github.com/acgetchell/causal-triangulations/issues/316).
+The implementation provides optional volume control, spatial-loop measurements, reproducible chain artifacts, and dependence-aware diagnostics. The
+[#316 changes](https://github.com/acgetchell/causal-triangulations/issues/316) use actual endpoint probabilities for the embedded runner and integrate
+the periodic intrinsic sampler through Delaunay 0.8.5. The [#258 audit](audits/2d-cdt_sphere/README.md) defines the scope of the external reference.
 
-The scientifically validated v0.2.0 release requires the exact gate, reverse-support correction, remaining #165/#166 benchmark evidence, and #276 external
-validation bundle, with their acceptance criteria intact. It also requires integrating the intrinsic triangle-gluing API published in Delaunay 0.8.5.
-The merged diagnostics and review PR #319 do not complete those release gates.
+The [v0.2.0 release tracker](https://github.com/acgetchell/causal-triangulations/issues/335) owns readiness, including #316 review and integration,
+the [#238 exact-ensemble gate](#v020-exact-11-ensemble-validation), the required #165/#166 benchmark evidence, the
+[#276 external validation bundle](https://github.com/acgetchell/causal-triangulations/issues/276), and native package and provenance checks.
 
 <!-- Preserve the earlier exact-validation release-plan deep link. -->
 <!-- rumdl-disable-next-line MD033 -->
@@ -96,17 +95,16 @@ The release gate is tracked by the exact transfer-matrix validation issue
 ([#143](https://github.com/acgetchell/causal-triangulations/issues/143)) and public topology/boundary API separation
 ([#236](https://github.com/acgetchell/causal-triangulations/issues/236)) are v0.2.1 follow-ups.
 
-The analytic gate depends on integrating the parallel-edge triangle-gluing representation from [Delaunay #667][delaunay-gluings]
-and correcting reverse-transition support in [#316](https://github.com/acgetchell/causal-triangulations/issues/316).
-The [scientific contract](scientific-basis.md#geometry-backend-role) explains the representation mismatch, and the
-[sampler contract](scientific-basis.md#move-and-sampler-contract) records the reverse-support counterexample. These prerequisites leave #238 open and
-retain its original paper ensemble and statistical acceptance criteria.
+The periodic validation chain uses the intrinsic triangle-gluing representation from [Delaunay #667][delaunay-gluings] and the
+transition probabilities from [#316](https://github.com/acgetchell/causal-triangulations/issues/316). The
+[intrinsic target](scientific-basis.md#intrinsic-periodic-cdt-measure) accounts for profile and marking weights.
+Issue #238 owns the preflight, benchmarks, and statistical acceptance criteria for the paper ensemble.
 
 [delaunay-gluings]: https://github.com/acgetchell/delaunay/issues/667
 
-Upstream implementation, native validation and crates.io publication of the bounded capability must precede normal CDT adoption through `src/geometry/`.
-The upstream release does not depend on completing CDT's benchmark. After adopting the published API and correcting proposal support, rerun compatibility
-checks before the full analytic benchmark. Resolving these prerequisites alone does not establish the release's distributional claim.
+The intrinsic kernel is callable via the Rust delayed sampler. The current CLI, checkpoints, and validation-chain export operate on embedded runs.
+The [#238 harness](https://github.com/acgetchell/causal-triangulations/issues/238) must acquire intrinsic measurements and the
+[#276 bundle](https://github.com/acgetchell/causal-triangulations/issues/276) must expose reproducible external invocation and artifacts.
 
 ### Validation hierarchy
 
@@ -149,7 +147,7 @@ spatial volume. It is not the existing slab-triangle profile `N2(t)`, which coun
 This exact finite-state distribution is preferable to a continuum-limit curve as the primary release gate: it is directly measurable, exercises the full
 statistical ensemble, can be enumerated at several lattice sizes, and does not require extrapolating away finite-size effects. Secondary cross-checks should
 include the exact critical vertex-order distribution `p(j) = (j - 3) / 2^(j - 2)` for `j >= 4` from J. Ambjørn, K. N. Anagnostopoulos, and R. Loll,
-“A new perspective on matter coupling in 2d quantum gravity,” Physical Review D 60 (1999),
+“New perspective on matter coupling in 2D quantum gravity,” Physical Review D 60 (1999),
 [doi:10.1103/PhysRevD.60.104035](https://doi.org/10.1103/PhysRevD.60.104035), after verifying that the observable and ensemble conventions match.
 Grand-canonical volume probabilities derived from the same transfer matrix provide a coupling-sensitive secondary benchmark.
 That comparison is tracked by [#143](https://github.com/acgetchell/causal-triangulations/issues/143) for v0.2.1 because the fixed-volume primary distribution

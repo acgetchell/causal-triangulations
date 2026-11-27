@@ -5,6 +5,6 @@ analytic ensemble validation. Name audit directories after the reference reposit
 
 - [2d-cdt sphere mode](2d-cdt_sphere/README.md): issue #258, stored topology, observable adjacency, and the boundary of 1+1 parity claims.
 - [Delaunay periodic realization](delaunay-periodic-realization.md): a minimized native regression and exact-rational evidence for a periodic-rounding
-  false positive in Delaunay 0.8.3; full validation remains blocking.
+  false positive in Delaunay 0.8.3 and passing evidence for the published 0.8.4 correction.
 
 Future `3d-cdt` and `CDT-plusplus` investigations belong here when their scopes are defined.
