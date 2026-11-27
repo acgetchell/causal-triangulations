@@ -53,8 +53,8 @@ together between chunks.
 `CdtMcmcCheckpoint::to_json()` writes version 5 for embedded runs using the corrected proposal kernel. Each trajectory row carries one tagged transition. The
 reader derives public step telemetry from those rows. Rows inherit the run seed and encode a slab profile on its first occurrence and after each change.
 Restore computes the post-step action from the transition and the log probability from that action and the recorded temperature.
-The top-level `format_version` and `proposal_stats` fields are mandatory. The JSON reader rejects repeated fields in the CDT checkpoint records,
-including repeated version tags and schedule parameters.
+The checkpoint envelope must be a JSON object with named `format_version` and `proposal_stats` fields.
+The JSON reader rejects repeated fields in CDT checkpoint records, including repeated version tags and schedule parameters.
 Unknown tags return `CdtError::UnsupportedCheckpointVersion` with both the encountered and
 supported versions, allowing callers to distinguish an upgrade requirement from malformed state.
 
@@ -257,6 +257,9 @@ reverse transition is absent. The same two combinatorial endpoints have positive
 Use `IntrinsicCdtTriangulation::from_spatial_loop_lengths` to start a periodic chain and `IntrinsicCdtProposal` with `CdtTarget` and
 `Chain::step_delayed` from `prelude::simulation`. Read the current labeled profile with `chain.state().spatial_loop_lengths()`.
 The intrinsic kernel validates topology through Delaunay's triangle gluings and handles volume fixing through the same `ActionConfig`.
+The fixing target must allow at least six triangles per slice. Use `CdtTarget::intrinsic_log_prob` for a typed diagnostic if the target is too small or
+the binary64 spacing of an absolute log weight cannot resolve a one-vertex change in the spatial marking factor.
+The chain reports these conditions as target errors.
 The existing file-output runner and checkpoint schema store embedded meshes. The analytic validation harness for the intrinsic path is tracked by
 [#238](https://github.com/acgetchell/causal-triangulations/issues/238).
 

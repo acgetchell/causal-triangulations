@@ -5,6 +5,7 @@
 use super::helpers::count_to_f64;
 use crate::cdt::ergodic_moves::{MoveType, select_move_family_at};
 use crate::cdt::proposal_policy::CdtMoveFamilyDistribution;
+use crate::cdt::volume_fixing::VolumeFixingError;
 use crate::geometry::backends::delaunay::{GluingDraft, IntrinsicGluing};
 use markov_chain_monte_carlo::{
     DelayedProposal, DiscreteProposalEndpoint, DiscreteProposalRatio, DiscreteProposalRatioError,
@@ -41,6 +42,17 @@ pub enum IntrinsicCdtError {
     /// The proposed cell counts exceed the platform's addressable storage.
     #[error("intrinsic CDT cell counts exceed the platform's addressable storage")]
     CellCountOverflow,
+    /// The fixing target is too small for the periodic ensemble.
+    #[error(transparent)]
+    VolumeFixing(#[from] VolumeFixingError),
+    /// Binary64 spacing is too coarse to resolve a single-vertex marking change.
+    #[error("intrinsic log weight {log_weight} cannot resolve a marking change of {marking_step}")]
+    MarkingPrecision {
+        /// Unnormalized marked log weight.
+        log_weight: f64,
+        /// Smallest logarithmic marking change from lengthening one loop.
+        marking_step: f64,
+    },
     /// The geometry backend could not validate the generated torus.
     #[error("intrinsic CDT gluing validation failed: {detail}")]
     InvalidGluing {
@@ -245,16 +257,6 @@ enum Site {
     },
 }
 
-impl Site {
-    /// Identifies the time slice or slab whose change distinguishes a transition.
-    const fn time(self) -> usize {
-        match self {
-            Self::Flip { slab, .. } => slab,
-            Self::Insert { slice, .. } | Self::Remove { slice, .. } => slice,
-        }
-    }
-}
-
 /// Lists the sites before realization. All non-origin vertices above the
 /// minimum are offered to removal, including ones that fail the collapse check.
 fn offered_sites(slabs: &[Slab], family: MoveType) -> Vec<Site> {
@@ -298,9 +300,32 @@ const fn previous(index: usize, length: usize) -> usize {
     if index == 0 { length - 1 } else { index - 1 }
 }
 
-/// Realizes one local edit in the marked encoding. A rejected collapse leaves
-/// the offered-site denominator intact.
-fn apply_site(slabs: &mut [Slab], site: Site) -> Option<()> {
+/// Counts edges of the smaller loop yielding the same split. Inserting a zero
+/// gives the same outgoing word anywhere across adjacent zero entries. The
+/// incoming word must increment the same run and shift its origin identically.
+/// Splitting edge e and collapsing vertex e+1 pair these atoms bijectively.
+fn split_multiplicity(outgoing: &[usize], incoming: &Slab, edge: usize, run: usize) -> usize {
+    let first = outgoing[..edge]
+        .iter()
+        .rposition(|&n| n != 0)
+        .map_or(0, |i| i + 1);
+    let last = outgoing[edge..]
+        .iter()
+        .position(|&n| n != 0)
+        .map_or(outgoing.len() - 1, |i| edge + i);
+    let start = incoming.down_after_up[..run].iter().sum::<usize>();
+    (start..start + incoming.down_after_up[run])
+        .map(|offset| (incoming.upper_start + offset) % outgoing.len())
+        .filter(|&candidate| {
+            (first..=last).contains(&candidate)
+                && (candidate < incoming.upper_start) == (edge < incoming.upper_start)
+        })
+        .count()
+}
+
+/// Realizes one edit and returns its multiplicity in both directions.
+/// A rejected collapse leaves the offered-site denominator intact.
+fn apply_site(slabs: &mut [Slab], site: Site) -> Option<usize> {
     match site {
         Site::Flip {
             slab,
@@ -324,15 +349,21 @@ fn apply_site(slabs: &mut [Slab], site: Site) -> Option<()> {
             };
             runs[run] -= 1;
             runs[target] += 1;
+            // At length three or greater these two changed entries identify
+            // the source run and direction uniquely, including at the seam.
+            Some(1)
         }
         Site::Insert { slice, edge } => {
             let upper_length = slabs[slice].down_after_up.len();
             let incoming = previous(slice, slabs.len());
             let run = slabs[incoming].run_for_upper_edge(edge, upper_length)?;
+            let matching =
+                split_multiplicity(&slabs[slice].down_after_up, &slabs[incoming], edge, run);
             let incoming = &mut slabs[incoming];
             incoming.down_after_up[run] += 1;
             incoming.upper_start += usize::from(incoming.upper_start > edge);
             slabs[slice].down_after_up.insert(edge, 0);
+            Some(matching)
         }
         Site::Remove { slice, vertex } => {
             let upper_length = slabs[slice].down_after_up.len();
@@ -345,45 +376,17 @@ fn apply_site(slabs: &mut [Slab], site: Site) -> Option<()> {
             {
                 return None;
             }
-            let incoming = &mut slabs[incoming];
-            incoming.down_after_up[run] -= 1;
-            incoming.upper_start -= usize::from(incoming.upper_start > vertex);
+            slabs[incoming].down_after_up[run] -= 1;
+            slabs[incoming].upper_start -= usize::from(slabs[incoming].upper_start > vertex);
             slabs[slice].down_after_up.remove(vertex - 1);
+            Some(split_multiplicity(
+                &slabs[slice].down_after_up,
+                &slabs[incoming],
+                vertex - 1,
+                run,
+            ))
         }
     }
-    Some(())
-}
-
-/// Sums all atoms giving one marked destination. A flip changes only its own
-/// slab and a volume change changes one specific loop length, so sites at other
-/// times cannot reach that same destination.
-fn transition_probability(
-    source: &[Slab],
-    destination: &[Slab],
-    sites: &[Site],
-    time: usize,
-    family_probability: f64,
-) -> f64 {
-    if sites.is_empty() || family_probability == 0.0 {
-        return 0.0;
-    }
-    let incoming = previous(time, source.len());
-    let mut draft = source.to_vec();
-    let matching = sites
-        .iter()
-        .filter(|&&site| {
-            if site.time() != time {
-                return false;
-            }
-            let matches = apply_site(&mut draft, site).is_some()
-                && draft[time] == destination[time]
-                && draft[incoming] == destination[incoming];
-            draft[time].clone_from(&source[time]);
-            draft[incoming].clone_from(&source[incoming]);
-            matches
-        })
-        .count();
-    family_probability * (count_to_f64(matching) / count_to_f64(sites.len()))
 }
 
 /// A concrete transition and its marginal proposal mass in each direction.
@@ -431,7 +434,8 @@ impl IntrinsicCdtPlan {
 
 /// Planned local proposals on coordinate-independent periodic CDT states.
 ///
-/// Use with [`crate::CdtTarget`] and the upstream delayed sampler. A fixed
+/// Use with [`crate::CdtTarget`] and the upstream delayed sampler. A quadratic
+/// fixing target must allow at least six triangles per time slice. A fixed
 /// family distribution supplies the family weights and sites are sampled
 /// uniformly within the selected family. The default gives all four families
 /// equal weight.
@@ -504,25 +508,16 @@ impl IntrinsicCdtProposal {
         site: Site,
     ) -> Result<Option<IntrinsicCdtPlan>, IntrinsicCdtError> {
         let mut destination = state.slabs.to_vec();
-        if apply_site(&mut destination, site).is_none() {
+        let Some(matching) = apply_site(&mut destination, site) else {
             return Ok(None);
-        }
+        };
         let reverse_family = family.reverse();
         let reverse_sites = offered_sites(&destination, reverse_family);
-        let forward = transition_probability(
-            &state.slabs,
-            &destination,
-            sites,
-            site.time(),
-            self.transition_family_probability(family),
-        );
-        let reverse = transition_probability(
-            &destination,
-            &state.slabs,
-            &reverse_sites,
-            site.time(),
-            self.transition_family_probability(reverse_family),
-        );
+        let matching = count_to_f64(matching);
+        let forward =
+            self.transition_family_probability(family) * (matching / count_to_f64(sites.len()));
+        let reverse = self.transition_family_probability(reverse_family)
+            * (matching / count_to_f64(reverse_sites.len()));
         let ratio = DiscreteProposalRatio::from_endpoints(
             DiscreteProposalEndpoint::new(forward, 1.0, 1),
             DiscreteProposalEndpoint::new(reverse, 1.0, 1),

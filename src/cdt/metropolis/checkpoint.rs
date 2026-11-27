@@ -24,11 +24,13 @@ use crate::errors::{
 };
 use markov_chain_monte_carlo::ChainCheckpoint;
 use rand::rngs::Xoshiro256PlusPlus;
+use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError, ser::Error as SerError,
 };
 use std::num::NonZeroU32;
 use std::time::Duration;
+use std::{fmt, marker::PhantomData};
 
 const CHECKPOINT_FORMAT_VERSION: u32 = 5;
 
@@ -300,7 +302,11 @@ impl<'de> Deserialize<'de> for CdtMcmcCheckpoint {
     where
         D: Deserializer<'de>,
     {
-        let wire = CdtMcmcCheckpointWire::deserialize(deserializer)?;
+        let wire = if deserializer.is_human_readable() {
+            CheckpointObject::deserialize(deserializer)?.0
+        } else {
+            CdtMcmcCheckpointWire::deserialize(deserializer)?
+        };
         Self::from_wire(wire).map_err(DeError::custom)
     }
 }
@@ -343,7 +349,7 @@ impl CdtMcmcCheckpoint {
     /// [`CdtError::CheckpointSerializationFailed`]. Restored-state invariant
     /// failures retain their specific [`CdtError`] variants.
     pub fn from_json(json: &str) -> CdtResult<Self> {
-        let wire = serde_json::from_str(json)
+        let CheckpointObject(wire) = serde_json::from_str(json)
             .map_err(|error| checkpoint_json_decode_error(json, &error))?;
         Self::from_wire(wire)
     }
@@ -913,6 +919,29 @@ impl CdtMcmcCheckpoint {
     }
 }
 
+/// Deserialize named fields directly from the map so duplicate keys remain visible.
+struct CheckpointObject<T>(T);
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for CheckpointObject<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct ObjectVisitor<T>(PhantomData<T>);
+
+        impl<'de, T: Deserialize<'de>> Visitor<'de> for ObjectVisitor<T> {
+            type Value = CheckpointObject<T>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("a checkpoint object with named fields")
+            }
+
+            fn visit_map<M: MapAccess<'de>>(self, map: M) -> Result<Self::Value, M::Error> {
+                T::deserialize(MapAccessDeserializer::new(map)).map(CheckpointObject)
+            }
+        }
+
+        deserializer.deserialize_map(ObjectVisitor(PhantomData))
+    }
+}
+
 /// On a wire error, distinguish unsupported envelopes without presuming their body layout.
 fn checkpoint_json_decode_error(json: &str, error: &serde_json::Error) -> CdtError {
     #[derive(Deserialize)]
@@ -920,7 +949,7 @@ fn checkpoint_json_decode_error(json: &str, error: &serde_json::Error) -> CdtErr
         format_version: Option<u64>,
     }
 
-    match serde_json::from_str::<VersionTag>(json) {
+    match serde_json::from_str::<CheckpointObject<VersionTag>>(json).map(|object| object.0) {
         Ok(VersionTag {
             format_version: Some(encountered),
         }) if encountered != u64::from(CdtMcmcCheckpoint::FORMAT_VERSION) => {
@@ -1900,6 +1929,38 @@ mod tests {
         let error = checkpoint_json_error("{", "malformed checkpoint JSON should be rejected");
 
         assert_checkpoint_deserialization_detail(&error, "EOF while parsing");
+    }
+
+    #[test]
+    fn checkpoint_envelope_requires_named_fields() {
+        let payload = one_step_checkpoint_payload();
+        let fields = [
+            "format_version",
+            "triangulation",
+            "accepted",
+            "rejected",
+            "config",
+            "action_config",
+            "current_step",
+            "current_action",
+            "move_stats",
+            "proposal_stats",
+            "measurements",
+            "scalar_trace_rows",
+            "elapsed_time",
+            "acceptance_rng",
+            "ergodics",
+        ];
+        let positional = Value::Array(fields.map(|field| payload[field].clone()).into());
+        for array in [json!([4]), positional] {
+            let json = array.to_string();
+            let error = checkpoint_json_error(&json, "positional checkpoint must fail");
+            assert_checkpoint_deserialization_detail(&error, "checkpoint object");
+            assert!(
+                serde_json::from_str::<CdtMcmcCheckpoint>(&json)
+                    .is_err_and(|error| error.to_string().contains("checkpoint object"))
+            );
+        }
     }
 
     #[test]

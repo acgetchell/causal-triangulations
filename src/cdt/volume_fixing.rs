@@ -169,13 +169,17 @@ impl VolumeFixing {
         if topology != CdtTopology::Toroidal {
             return Err(VolumeFixingError::UnsupportedTopology { topology }.into());
         }
-        let minimum = 6 * u64::from(timeslices);
+        Ok(self.ensure_toroidal_minimum(u64::from(timeslices))?)
+    }
+
+    /// Each periodic slice has at least three vertices and six triangles.
+    pub(crate) fn ensure_toroidal_minimum(self, timeslices: u64) -> Result<(), VolumeFixingError> {
+        let minimum = timeslices.saturating_mul(6);
         if u64::from(self.target.get()) < minimum {
             return Err(VolumeFixingError::TargetBelowMinimum {
                 target: self.target.get(),
                 minimum,
-            }
-            .into());
+            });
         }
         Ok(())
     }

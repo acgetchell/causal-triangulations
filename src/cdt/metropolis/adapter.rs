@@ -5,7 +5,7 @@
 use super::helpers::{
     action_for, count_to_f64, proposed_delta_action, simplex_counts, validate_temperature,
 };
-use super::intrinsic::IntrinsicCdtTriangulation;
+use super::intrinsic::{IntrinsicCdtError, IntrinsicCdtTriangulation};
 use super::telemetry::{
     CdtProposalSiteRejection, NoPlanReason, ProposalDensity, ProposalKernelTelemetry,
     ProposalStatistics,
@@ -113,18 +113,62 @@ impl Target<CdtTriangulation2D> for CdtTarget {
     }
 }
 
-impl Target<IntrinsicCdtTriangulation> for CdtTarget {
-    fn log_prob(&self, state: &IntrinsicCdtTriangulation) -> f64 {
+impl CdtTarget {
+    /// Computes the marked intrinsic log weight, including any total-volume bias.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IntrinsicCdtError::VolumeFixing`] if the fixing target is below
+    /// six triangles per time slice, and [`IntrinsicCdtError::MarkingPrecision`]
+    /// when even a one-vertex change in the longest loop is below the resolution
+    /// of an absolute log weight. The upstream chain reports either failure as
+    /// an invalid target value at initialization or proposal scoring.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::{ActionConfig, CdtTarget, IntrinsicCdtTriangulation};
+    /// let state = IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[3; 3])?;
+    /// let target = CdtTarget::new(ActionConfig::default(), 1.0).expect("valid default action");
+    /// assert!(target.intrinsic_log_prob(&state)?.is_finite());
+    /// # Ok::<(), causal_triangulations::IntrinsicCdtError>(())
+    /// ```
+    pub fn intrinsic_log_prob(
+        &self,
+        state: &IntrinsicCdtTriangulation,
+    ) -> Result<f64, IntrinsicCdtError> {
+        let lengths = state.spatial_loop_lengths();
+        if let Some(fixing) = self.action_config.volume_fixing() {
+            fixing.ensure_toroidal_minimum(lengths.len() as u64)?;
+        }
         let (vertices, edges, triangles) = state.counts();
         let action = self
             .action_config
             .calculate_action(vertices, edges, triangles);
         // The raw marking set has one choice per vertex on each slice.
-        let log_markings = state
-            .spatial_loop_lengths()
-            .map(|length| count_to_f64(length).ln())
-            .sum::<f64>();
-        -action / self.temperature - log_markings
+        let mut longest = 0;
+        let mut log_markings = 0.0;
+        for length in lengths {
+            longest = longest.max(length);
+            log_markings += count_to_f64(length).ln();
+        }
+        let scaled_action = action / self.temperature;
+        let log_weight = -scaled_action - log_markings;
+        let magnitude = log_weight.abs().max(scaled_action.abs()).max(log_markings);
+        let marking_step = count_to_f64(longest).recip().ln_1p();
+        if magnitude.next_up() - magnitude >= marking_step {
+            return Err(IntrinsicCdtError::MarkingPrecision {
+                log_weight,
+                marking_step,
+            });
+        }
+        Ok(log_weight)
+    }
+}
+
+impl Target<IntrinsicCdtTriangulation> for CdtTarget {
+    fn log_prob(&self, state: &IntrinsicCdtTriangulation) -> f64 {
+        self.intrinsic_log_prob(state).unwrap_or(f64::NAN)
     }
 }
 

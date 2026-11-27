@@ -3,6 +3,7 @@
 //! Independent cyclic-word enumeration of marked CDT transitions.
 
 use super::*;
+use crate::cdt::volume_fixing::VolumeFixing;
 use crate::{
     ActionConfig, CdtProposal, CdtTarget, CdtTriangulation2D, StepOutcome, TriangulationQuery,
 };
@@ -541,6 +542,92 @@ fn original_coordinate_removal_is_reversible_as_an_intrinsic_transition() {
         word_probability(distribution, &destination.slabs, &source.slabs),
         epsilon = 1e-15
     );
+}
+
+#[test]
+fn intrinsic_target_checks_volume_fixing_even_at_zero_strength() {
+    let state = IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[3; 4])
+        .expect("valid four-slice torus");
+    for strength in [0.0, 0.5] {
+        let action = ActionConfig::default()
+            .with_volume_fixing(Some(
+                VolumeFixing::quadratic_triangles(22, strength).expect("positive even target"),
+            ))
+            .expect("finite action range");
+        let target = CdtTarget::new(action, 1.0).expect("finite scaled action");
+        assert_matches!(
+            target.intrinsic_log_prob(&state),
+            Err(IntrinsicCdtError::VolumeFixing(
+                VolumeFixingError::TargetBelowMinimum {
+                    target: 22,
+                    minimum: 24
+                }
+            ))
+        );
+        assert_matches!(
+            Chain::new(state.clone(), &target),
+            Err(crate::McmcError::NanInitialLogProb)
+        );
+    }
+}
+
+#[test]
+fn intrinsic_target_resolves_marking_change_or_reports_precision_loss() {
+    let source =
+        IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[3, 3, 3]).expect("minimal torus");
+    let next =
+        IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[4, 3, 3]).expect("one longer loop");
+    // At V=9 and V=10, -2V + (2V-18)^2/2 is exactly -18.
+    let action = ActionConfig::new(2.0, 0.0, 0.0)
+        .expect("finite vertex coupling")
+        .with_volume_fixing(Some(
+            VolumeFixing::quadratic_triangles(18, 0.5).expect("legal minimum volume"),
+        ))
+        .expect("finite combined action");
+    let resolved = CdtTarget::new(action.clone(), 1.0).expect("unit temperature");
+    assert_relative_eq!(
+        (resolved.log_prob(&next) - resolved.log_prob(&source)).exp(),
+        0.75,
+        epsilon = 2e-15
+    );
+    let unresolved = CdtTarget::new(action, 1e-20).expect("finite scaled action");
+    for state in [source, next] {
+        assert_matches!(
+            unresolved.intrinsic_log_prob(&state),
+            Err(IntrinsicCdtError::MarkingPrecision { .. })
+        );
+        assert_matches!(
+            Chain::new(state, &unresolved),
+            Err(crate::McmcError::NanInitialLogProb)
+        );
+    }
+}
+
+#[test]
+fn unresolved_proposed_marking_stops_chain_before_commit() {
+    let state =
+        IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[3; 3]).expect("minimal torus");
+    let action = ActionConfig::new(0.0, 0.0, 0.0)
+        .expect("zero physical action")
+        .with_volume_fixing(Some(
+            VolumeFixing::quadratic_triangles(18, 0.5).expect("legal minimum volume"),
+        ))
+        .expect("finite action range");
+    let target = CdtTarget::new(action, 1e-20).expect("finite scaled action");
+    let mut chain = Chain::new(state.clone(), &target).expect("zero initial fixing action");
+    let mut proposal = IntrinsicCdtProposal::new(
+        CdtMoveFamilyDistribution::from_weights([0.0, 1.0, 0.0, 0.0])
+            .expect("insertion-only policy"),
+    );
+    let mut rng = StdRng::seed_from_u64(316);
+    assert_matches!(
+        chain.step_delayed(&target, &mut proposal, &mut rng),
+        Err(markov_chain_monte_carlo::DelayedStepError::Mcmc(
+            crate::McmcError::NanProposedLogProb
+        ))
+    );
+    assert_eq!(chain.state(), &state);
+    assert_eq!(chain.total_steps(), 0);
 }
 
 #[test]
