@@ -38,19 +38,20 @@ log weight = -S_combined / temperature
 Delta S_fix = epsilon * d * (2 * (N2 - target) + d), d = Delta N2
 ```
 
-CDT supplies physical and fixing components to upstream `AdditiveTarget`; the existing MCMC backend owns acceptance and family/site Hastings correction.
+CDT supplies physical and fixing components to upstream `AdditiveTarget` and computes the marginal endpoint probabilities. The MCMC backend uses those
+probabilities in the Hastings correction and owns the acceptance draw.
 The quadratic bias and its move delta scale exact integer count expressions and round once to binary64. Volume-preserving moves have zero fixing delta.
 No hard clamp, extra rejection rule, or state-dependent measurement cadence is introduced.
 Measurements, summary JSON, and scalar trace CSV distinguish `physical_action`, `fixing_action`, and the combined `action`. The new CSV component columns
 follow the existing slab-profile columns, preserving earlier column positions.
 
-Version 4 checkpoints preserve bare and volume-fixed runs in one format. Validation-chain export checks the declared start against the recorded trajectory.
+Version 5 checkpoints preserve bare and volume-fixed runs using the corrected embedded proposal kernel. Validation-chain export checks the declared start
+against the recorded trajectory.
 Checkpoints retain the bias configuration and action components. Changing target, strength, or enabled/disabled mode cannot silently resume the same chain.
-JSON float round trips preserve parameter bits. Proposal sites use canonical labeled-coordinate order, preserved by exact snapshots, so incidence-table rebuilds
-retain their random ordinals.
-Exact continuation covers RNG streams, counters, measurements, and canonical geometry; new backend UUIDv4 identities are independent of the sampler seed.
-Canonical proposal ordering changes seeded trajectories relative to older binaries. Keep the original software version when reproducing an earlier study;
-reading an older checkpoint does not promise the older binary's future proposal sequence.
+JSON float round trips preserve parameter bits. Exact geometry snapshots preserve the inputs to the
+[Hilbert proposal-site order](scientific-basis.md#hilbert-order-for-embedded-proposal-sites), so rebuilding incidence tables preserves site ordinals.
+Exact continuation covers RNG streams, counters, measurements, and canonical geometry. New backend UUIDv4 identities are independent of the sampler seed.
+Version 5 rejects earlier checkpoint formats. Keep the original executable and lockfile to reproduce an earlier seeded study.
 
 ## Spatial loop measurements
 
@@ -72,7 +73,10 @@ The existing slab-triangle profile remains a separate observable.
 ## Chain artifacts
 
 `ValidationChain::from_results(run_id, chain_id, &configuration, &results)` captures canonical scheduled measurements plus initialization metadata.
-`write_json` exports schema version 1; `read_json` reparses the complete contract without Python, Parquet, notebooks, or private Rust APIs.
+`write_json` exports schema version 2 for the corrected embedded proposal kernel. `read_json` rejects schema 1 because those chains used different sampling
+semantics. Keep the producing revision with older data when interpreting it.
+This export takes embedded `SimulationResultsBackend`. The intrinsic periodic kernel exposes its live profile through
+`IntrinsicCdtTriangulation::spatial_loop_lengths()`.
 
 The JSON contains:
 

@@ -43,9 +43,8 @@ contains prohibited operations alongside permitted IEEE operations, prose and st
 
 ## Safety
 
-Unsafe Rust is forbidden.
-
-The crate enforces:
+Cargo forbids unsafe Rust throughout the package. Start every repository-owned Rust file with the same declaration, including tests, examples,
+benchmarks, and lint fixtures.
 
 ```rust
 #![forbid(unsafe_code)]

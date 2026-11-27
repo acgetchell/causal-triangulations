@@ -232,30 +232,25 @@ fn bench_ergodic_moves(c: &mut Criterion) {
         CdtTriangulation2D::from_cdt_strip(4, 3).or_abort(SetupOperation::BuildCdtBenchmarkStrip);
     let insertion_fixture = CdtTriangulation2D::from_toroidal_cdt(8, 8)
         .or_abort(SetupOperation::BuildCdtBenchmarkStrip);
-    let successful_seed = |triangulation: &CdtTriangulation2D, move_type| {
-        (0_u64..=SUCCESSFUL_MOVE_SEED_SEARCH_LIMIT)
-            .find(|&seed| {
-                let mut probe = triangulation.clone();
-                let mut ergodics = ErgodicsSystem::with_seed(seed);
-                let result = match move_type {
-                    MoveType::Move13Add => ergodics.attempt_13_move(&mut probe),
-                    MoveType::Move31Remove => ergodics.attempt_31_move(&mut probe),
-                    MoveType::Move22 | MoveType::EdgeFlip => None.or_abort(format!(
-                        "successful volume-move seed search does not support {move_type:?}"
-                    )),
-                };
-                result == MoveResult::Success
-            })
-            .or_abort("find a successful deterministic volume-move benchmark seed")
-    };
-    let insertion_seed = successful_seed(&insertion_fixture, MoveType::Move13Add);
+    let successful_seed =
+        |triangulation: &CdtTriangulation2D,
+         apply: fn(&mut ErgodicsSystem, &mut CdtTriangulation2D) -> MoveResult| {
+            (0_u64..=SUCCESSFUL_MOVE_SEED_SEARCH_LIMIT)
+                .find(|&seed| {
+                    let mut probe = triangulation.clone();
+                    let mut ergodics = ErgodicsSystem::with_seed(seed);
+                    apply(&mut ergodics, &mut probe) == MoveResult::Success
+                })
+                .or_abort("find a successful deterministic volume-move benchmark seed")
+        };
+    let insertion_seed = successful_seed(&insertion_fixture, ErgodicsSystem::attempt_13_move);
     let mut removal_fixture = insertion_fixture.clone();
     let mut insertion = ErgodicsSystem::with_seed(insertion_seed);
     let insertion_result = insertion.attempt_13_move(&mut removal_fixture);
     (insertion_result == MoveResult::Success)
         .then_some(())
         .or_abort("apply the verified insertion benchmark seed");
-    let removal_seed = successful_seed(&removal_fixture, MoveType::Move31Remove);
+    let removal_seed = successful_seed(&removal_fixture, ErgodicsSystem::attempt_31_move);
 
     // Benchmark different move types
     let move_types = [

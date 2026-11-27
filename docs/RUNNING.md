@@ -6,7 +6,8 @@ This page collects `cdt` command-line patterns for users who want scriptable run
 The examples use the installed `cdt` binary. From a repository clone, build with `cargo build --release` and replace `cdt` with `./target/release/cdt`.
 
 > **Current simulation status:** commands with `--simulate` run the Metropolis-Hastings loop over the 2D CDT move kernels. Omit `--simulate` when you only want
-> triangulation generation and the initial measurement.
+> triangulation generation and the initial measurement. The CLI uses embedded meshes. For the intrinsic periodic kernel, see the
+> [Rust sampling interface](metropolis.md#intrinsic-periodic-sampling).
 
 ## Argument Groups
 
@@ -123,8 +124,8 @@ cdt \
   --output-json summary.json
 ```
 
-The CSV trace records one row per completed Metropolis step. The JSON file records configuration, summary statistics, move/proposal statistics, scheduled
-measurements, and the final triangulation state.
+The CSV trace records one row per completed Metropolis step. The JSON file records the `proposal_kernel` identifier, configuration, summary statistics,
+move/proposal statistics, scheduled measurements, and the final triangulation state.
 
 Hidden filenames ending in `.causal-triangulations.lock`, `.causal-triangulations.tmp`, or `.causal-triangulations.backup` are reserved for output
 coordination, staging, and recovery. These suffixes are matched without ASCII case sensitivity, including on case-insensitive filesystems; configured

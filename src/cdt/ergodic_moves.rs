@@ -10,7 +10,9 @@
 //! - edge flips: retained as an API-compatible alias for the 2D (2,2) move
 
 use crate::cdt::proposal_policy::{CdtMoveFamilyDistribution, CdtProposalPolicyView};
-use crate::cdt::triangulation::{CdtTriangulation2D, LocalMoveBaseline, LocalMoveDelta};
+use crate::cdt::triangulation::{
+    CdtTriangulation2D, LocalMoveBaseline, LocalMoveDelta, TriangulationRevision,
+};
 use crate::config::CdtTopology;
 use crate::errors::{
     BackendMutationOperation, CdtError, CdtResult, CdtValidationCheck, CdtValidationFailure,
@@ -18,17 +20,20 @@ use crate::errors::{
 };
 use crate::geometry::backends::delaunay::{
     DelaunayEdgeHandle, DelaunayError, DelaunayFaceHandle, DelaunayFaceStableId,
-    DelaunayVertexHandle,
+    DelaunayVertexHandle, EmbeddedEdge, EmbeddedFaceCorners, EmbeddedState, EmbeddedVertex,
+    ProposalLocality,
 };
 use crate::geometry::traits::{
     EdgeAdjacentFaces, TriangulationMut, TriangulationQuery, exactly_three,
 };
+use rand::distr::{Distribution, Uniform};
 use rand::{RngExt, SeedableRng, rngs::Xoshiro256PlusPlus};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::array;
 use std::collections::HashSet;
 use std::fmt::Display;
 use std::mem;
+use std::num::NonZeroUsize;
 use std::slice;
 
 /// Types of ergodic moves available in 2D CDT.
@@ -729,8 +734,8 @@ struct MoveSiteCache {
 /// provenance; accepted plans can reuse their speculative entry directly.
 #[derive(Clone, Default)]
 struct MoveFamilyCache {
-    current: MoveFamilySites,
-    previous: MoveFamilySites,
+    current: Option<MoveFamilySites>,
+    previous: Option<MoveFamilySites>,
 }
 
 /// Cached sampleable sites for one move family on one triangulation instance version.
@@ -739,45 +744,40 @@ struct MoveFamilyCache {
 /// values whose modification counters happen to match. The modification count
 /// keeps ordinary self-loop proposal outcomes cheap while accepted mutations
 /// force the next sample to rebuild stale local handles.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct MoveFamilySites {
-    instance_id: Option<u64>,
-    modification_count: Option<u64>,
+    revision: TriangulationRevision,
     sites: Vec<ProposalSite>,
     geometric_candidate_seen: bool,
 }
 
 impl MoveSiteCache {
     /// Rebuilds the selected move-family cache for a new triangulation version.
-    fn ensure_current(&mut self, triangulation: &CdtTriangulation2D, move_type: MoveType) {
-        let instance_id = triangulation.instance_id();
-        let modification_count = triangulation.metadata().modification_count();
+    fn sites_for(
+        &mut self,
+        triangulation: &CdtTriangulation2D,
+        move_type: MoveType,
+    ) -> &MoveFamilySites {
+        let revision = triangulation.revision();
         let cache = self.family_mut(move_type);
-        let matches = |family: &MoveFamilySites| {
-            family.instance_id == Some(instance_id)
-                && family.modification_count == Some(modification_count)
-        };
-        if matches(&cache.current) {
-            return;
+        if cache
+            .current
+            .as_ref()
+            .is_none_or(|sites| sites.revision != revision)
+        {
+            if cache
+                .previous
+                .as_ref()
+                .is_some_and(|sites| sites.revision == revision)
+            {
+                mem::swap(&mut cache.current, &mut cache.previous);
+            } else {
+                cache.previous = cache.current.take();
+            }
         }
-        if matches(&cache.previous) {
-            mem::swap(&mut cache.current, &mut cache.previous);
-        } else {
-            cache.previous = mem::replace(
-                &mut cache.current,
-                Self::collect_family(triangulation, move_type, instance_id, modification_count),
-            );
-        }
-    }
-
-    /// Returns cached sites for one move family.
-    const fn family(&self, move_type: MoveType) -> &MoveFamilySites {
-        match move_type {
-            MoveType::Move22 => &self.move_22.current,
-            MoveType::Move13Add => &self.move_13_add.current,
-            MoveType::Move31Remove => &self.move_31_remove.current,
-            MoveType::EdgeFlip => &self.edge_flip.current,
-        }
+        cache
+            .current
+            .get_or_insert_with(|| Self::collect_family(triangulation, move_type))
     }
 
     /// Returns mutable cached sites for one move family.
@@ -791,22 +791,16 @@ impl MoveSiteCache {
     }
 
     /// Materializes every sampleable site for one move family.
-    fn collect_family(
-        triangulation: &CdtTriangulation2D,
-        move_type: MoveType,
-        instance_id: u64,
-        modification_count: u64,
-    ) -> MoveFamilySites {
+    fn collect_family(triangulation: &CdtTriangulation2D, move_type: MoveType) -> MoveFamilySites {
         let mut sites = Vec::new();
         let geometric_candidate_seen =
             visit_proposal_sites(triangulation, move_type, |site| sites.push(site));
-        // Exact checkpoints preserve vertex data but rebuild incidence tables.
-        // Give each site a stable ordinal without changing the offered universe
-        // or its uniform sampling probabilities.
-        sites.sort_by_cached_key(|site| site.ordering_key(triangulation));
+        if sites.len() > 1 {
+            let locality = triangulation.geometry().proposal_locality();
+            sites.sort_by_cached_key(|site| site.ordering_key(triangulation, &locality));
+        }
         MoveFamilySites {
-            instance_id: Some(instance_id),
-            modification_count: Some(modification_count),
+            revision: triangulation.revision(),
             sites,
             geometric_candidate_seen,
         }
@@ -817,7 +811,7 @@ impl MoveSiteCache {
 ///
 /// Unfoliated triangulations do not carry vertex time labels, while foliated
 /// proposals must write the selected causal slice label before validation.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum InsertionLabel {
     Unfoliated,
     Label(u32),
@@ -827,7 +821,7 @@ pub(crate) enum InsertionLabel {
 ///
 /// The candidate keeps both backend operations together: subdivide the chosen
 /// face at `point`, label the new vertex, then flip the original spacelike edge.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct FoliatedInsertionCandidate {
     edge: DelaunayEdgeHandle,
     face: DelaunayFaceHandle,
@@ -839,7 +833,7 @@ pub(crate) struct FoliatedInsertionCandidate {
 ///
 /// The vertex cannot be collapsed directly in foliated CDT; the stored edge is
 /// flipped first to expose the inverse local volume move.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FoliatedRemovalCandidate {
     vertex: DelaunayVertexHandle,
     flip_edge: DelaunayEdgeHandle,
@@ -850,7 +844,7 @@ pub(crate) struct FoliatedRemovalCandidate {
 /// Metropolis planning samples one of these after counting the same site
 /// universe used in the Hastings correction, so selection and denominator
 /// semantics remain aligned.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) enum ProposalSite {
     EdgeFlip(DelaunayEdgeHandle),
     FaceSubdivision {
@@ -863,8 +857,43 @@ pub(crate) enum ProposalSite {
     FoliatedRemoval(FoliatedRemovalCandidate),
 }
 
+/// Exact secondary key for sites that quantize to the same Hilbert cell.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ProposalSiteKey {
+    Edge(EmbeddedEdge),
+    Face(EmbeddedFaceCorners),
+    Vertex(EmbeddedVertex),
+    Collapse(EmbeddedVertex, EmbeddedEdge),
+}
+
 impl ProposalSite {
-    /// Orders local sites by labeled coordinates preserved by geometry snapshots.
+    /// Rejects atoms whose compulsory vertex or edge change rules out a match.
+    pub(crate) fn could_reach(
+        &self,
+        source: &CdtTriangulation2D,
+        target: &EmbeddedState,
+    ) -> Result<bool, DelaunayError> {
+        let geometry = source.geometry();
+        Ok(match self {
+            Self::EdgeFlip(edge) => !target.contains_edge(&geometry.embedded_edge(edge)?),
+            Self::FaceSubdivision { point, label, .. } => {
+                let label = match label {
+                    InsertionLabel::Unfoliated => None,
+                    InsertionLabel::Label(label) => Some(*label),
+                };
+                target.contains_vertex(&(point.map(f64::to_bits), label))
+            }
+            Self::FoliatedInsertion(candidate) => {
+                target.contains_vertex(&(candidate.point.map(f64::to_bits), Some(candidate.label)))
+            }
+            Self::VertexRemoval(vertex)
+            | Self::FoliatedRemoval(FoliatedRemovalCandidate { vertex, .. }) => {
+                !target.contains_vertex(&geometry.embedded_vertex(vertex)?)
+            }
+        })
+    }
+
+    /// Orders sites spatially, breaking Hilbert-cell ties by exact labeled geometry.
     ///
     /// Runtime owner IDs and incidence iteration order cannot identify a site's
     /// random ordinal across checkpoint hydration. Invalid handles retain a
@@ -872,46 +901,45 @@ impl ProposalSite {
     fn ordering_key(
         &self,
         triangulation: &CdtTriangulation2D,
-    ) -> Option<[(Option<u32>, [u64; 2]); 3]> {
+        locality: &ProposalLocality,
+    ) -> (Option<u128>, Option<ProposalSiteKey>) {
+        let exact = self.exact_site_key(triangulation);
+        let point = match (&exact, self) {
+            (Some(ProposalSiteKey::Edge(edge)), Self::EdgeFlip(_)) => {
+                Some(locality.edge_midpoint(edge))
+            }
+            (
+                Some(
+                    ProposalSiteKey::Vertex((position, _))
+                    | ProposalSiteKey::Collapse((position, _), _),
+                ),
+                _,
+            ) => Some(position.map(f64::from_bits)),
+            (_, Self::FoliatedInsertion(candidate)) => Some(candidate.point),
+            (_, Self::FaceSubdivision { point, .. }) => Some(*point),
+            _ => None,
+        };
+        (point.and_then(|point| locality.index(point)), exact)
+    }
+
+    /// Distinguishes sites that quantize to the same cell, without owner IDs.
+    fn exact_site_key(&self, triangulation: &CdtTriangulation2D) -> Option<ProposalSiteKey> {
         let geometry = triangulation.geometry();
-        let vertex_key = |vertex: &DelaunayVertexHandle| {
-            let coordinates = geometry.vertex_coordinates(vertex).ok()?;
-            let [x, y] = coordinates else { return None };
-            Some((
-                geometry.vertex_data_by_key(vertex.vertex_key()),
-                [x.to_bits(), y.to_bits()],
-            ))
-        };
-        let edge_keys = |edge: &DelaunayEdgeHandle| {
-            let (left, right) = geometry.edge_endpoints(edge).ok()?;
-            let mut keys = [vertex_key(&left)?, vertex_key(&right)?];
-            keys.sort_unstable();
-            Some(keys)
-        };
-        let empty = (None, [0, 0]);
         match self {
-            Self::EdgeFlip(edge) => {
-                let [left, right] = edge_keys(edge)?;
-                Some([left, right, empty])
+            Self::EdgeFlip(edge)
+            | Self::FoliatedInsertion(FoliatedInsertionCandidate { edge, .. }) => {
+                geometry.embedded_edge(edge).ok().map(ProposalSiteKey::Edge)
             }
-            Self::FoliatedInsertion(candidate) => {
-                let [left, right] = edge_keys(&candidate.edge)?;
-                Some([left, right, empty])
-            }
-            Self::VertexRemoval(vertex) => Some([vertex_key(vertex)?, empty, empty]),
-            Self::FoliatedRemoval(candidate) => {
-                let [left, right] = edge_keys(&candidate.flip_edge)?;
-                Some([vertex_key(&candidate.vertex)?, left, right])
-            }
+            Self::VertexRemoval(vertex) => geometry
+                .embedded_vertex(vertex)
+                .ok()
+                .map(ProposalSiteKey::Vertex),
+            Self::FoliatedRemoval(candidate) => Some(ProposalSiteKey::Collapse(
+                geometry.embedded_vertex(&candidate.vertex).ok()?,
+                geometry.embedded_edge(&candidate.flip_edge).ok()?,
+            )),
             Self::FaceSubdivision { face, .. } => {
-                let mut vertices = geometry.face_vertices(face).ok()?;
-                let mut keys = [
-                    vertex_key(&vertices.next()?)?,
-                    vertex_key(&vertices.next()?)?,
-                    vertex_key(&vertices.next()?)?,
-                ];
-                keys.sort_unstable();
-                Some(keys)
+                geometry.embedded_face(face).ok().map(ProposalSiteKey::Face)
             }
         }
     }
@@ -967,15 +995,25 @@ impl ProposalSite {
     }
 }
 
-/// Result of sampling a move family over its concrete local site universe.
-///
-/// `site_count` is the forward proposal denominator, `site` is the sampled site
-/// when one exists, and `geometric_candidate_seen` distinguishes empty geometry
-/// from causally rejected geometry for public move-result reporting.
-pub(crate) struct ProposalSiteSelection {
-    pub(crate) site_count: usize,
-    pub(crate) site: Option<ProposalSite>,
-    geometric_candidate_seen: bool,
+/// A sampled site and its positive denominator, or the reason no site was offered.
+#[derive(Debug)]
+pub(crate) enum ProposalSiteSelection {
+    Sampled {
+        site: ProposalSite,
+        count: NonZeroUsize,
+    },
+    NoGeometry,
+    CausalityFiltered,
+}
+
+impl ProposalSiteSelection {
+    /// Counts the uniformly offered sites before applying the selected move.
+    pub(crate) const fn site_count(&self) -> usize {
+        match self {
+            Self::Sampled { count, .. } => count.get(),
+            Self::NoGeometry | Self::CausalityFiltered => 0,
+        }
+    }
 }
 
 impl ErgodicsSystem {
@@ -1047,15 +1085,6 @@ impl ErgodicsSystem {
         }
     }
 
-    /// Replaces move statistics after an internal speculative operation.
-    ///
-    /// This keeps public callers from mutating sampler accounting independently
-    /// of actual move execution while allowing proposal planning to roll back
-    /// temporary counters after applying a candidate to a cloned state.
-    pub(crate) const fn replace_stats(&mut self, stats: MoveStatistics) -> MoveStatistics {
-        mem::replace(&mut self.stats, stats)
-    }
-
     /// Selects a random move type.
     ///
     /// # Examples
@@ -1121,12 +1150,8 @@ impl ErgodicsSystem {
         triangulation: &'a CdtTriangulation2D,
         move_type: MoveType,
     ) -> CdtProposalPolicyView<'a> {
-        self.site_cache.ensure_current(triangulation, move_type);
-        CdtProposalPolicyView::new(
-            triangulation,
-            move_type,
-            &self.site_cache.family(move_type).sites,
-        )
+        let family = self.site_cache.sites_for(triangulation, move_type);
+        CdtProposalPolicyView::new(triangulation, move_type, &family.sites)
     }
 
     /// Samples one concrete proposal site from the same cached universe used for proposal counts.
@@ -1139,22 +1164,19 @@ impl ErgodicsSystem {
         triangulation: &CdtTriangulation2D,
         move_type: MoveType,
     ) -> ProposalSiteSelection {
-        let site_count = self
-            .proposal_policy_view(triangulation, move_type)
-            .offered_site_count();
-        let selected_site = if site_count == 0 {
-            None
-        } else {
-            let index = self.rng.random_range(0..site_count);
-            let view = self.proposal_policy_view(triangulation, move_type);
-            view.site_at(index)
+        let family = self.site_cache.sites_for(triangulation, move_type);
+        let Some(count) = NonZeroUsize::new(family.sites.len()) else {
+            return if family.geometric_candidate_seen && triangulation.has_foliation() {
+                ProposalSiteSelection::CausalityFiltered
+            } else {
+                ProposalSiteSelection::NoGeometry
+            };
         };
-        let geometric_candidate_seen = self.site_cache.family(move_type).geometric_candidate_seen;
-
-        ProposalSiteSelection {
-            site_count,
-            site: selected_site,
-            geometric_candidate_seen,
+        let distribution = Uniform::new(0, count.get()).expect("positive site count");
+        let index = distribution.sample(&mut self.rng);
+        ProposalSiteSelection::Sampled {
+            site: family.sites[index].clone(),
+            count,
         }
     }
 
@@ -1170,36 +1192,39 @@ impl ErgodicsSystem {
         site: ProposalSite,
     ) -> MoveResult {
         let snapshot = triangulation.rollback_snapshot();
-        let result = self.apply_proposal_site_to_draft(triangulation, move_type, site);
-        rollback_if_failed(triangulation, snapshot, result)
+        let result = Self::apply_proposal_site_to_draft(triangulation, move_type, site);
+        let result = rollback_if_failed(triangulation, snapshot, result);
+        if matches!(result, MoveResult::Success) {
+            self.stats.record_success(move_type);
+        }
+        result
     }
 
     /// Applies one proposal inside a caller-owned transaction.
     ///
     /// The Metropolis adapter already applies proposals to a speculative clone,
     /// so it uses this path to avoid cloning that draft again. Direct move APIs
-    /// use [`Self::apply_proposal_site`], which owns the rollback snapshot.
+    /// use [`Self::apply_proposal_site`], which owns rollback and move counters.
     pub(crate) fn apply_proposal_site_to_draft(
-        &mut self,
         triangulation: &mut CdtTriangulation2D,
         move_type: MoveType,
         site: ProposalSite,
     ) -> MoveResult {
         match (move_type, site) {
             (MoveType::Move22 | MoveType::EdgeFlip, ProposalSite::EdgeFlip(edge)) => {
-                self.apply_edge_flip_site(triangulation, move_type, &edge)
+                Self::apply_edge_flip_site(triangulation, &edge)
             }
             (MoveType::Move13Add, ProposalSite::FaceSubdivision { face, point, label }) => {
-                self.apply_face_subdivision_site(triangulation, face, point, label)
+                Self::apply_face_subdivision_site(triangulation, face, point, label)
             }
             (MoveType::Move13Add, ProposalSite::FoliatedInsertion(candidate)) => {
-                self.apply_foliated_insertion_site(triangulation, candidate)
+                Self::apply_foliated_insertion_site(triangulation, candidate)
             }
             (MoveType::Move31Remove, ProposalSite::VertexRemoval(vertex)) => {
-                self.apply_vertex_removal_site(triangulation, &vertex)
+                Self::apply_vertex_removal_site(triangulation, &vertex)
             }
             (MoveType::Move31Remove, ProposalSite::FoliatedRemoval(candidate)) => {
-                self.apply_foliated_removal_site(triangulation, &candidate)
+                Self::apply_foliated_removal_site(triangulation, &candidate)
             }
             (
                 MoveType::Move22 | MoveType::EdgeFlip,
@@ -1262,7 +1287,7 @@ impl ErgodicsSystem {
     /// ```
     pub fn attempt_22_move(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         self.stats.record_attempt(MoveType::Move22);
-        let result = self.attempt_causal_edge_flip(triangulation, MoveType::Move22);
+        let result = self.attempt_selected_site(triangulation, MoveType::Move22);
         self.record_hard_failure_if_needed(MoveType::Move22, result)
     }
 
@@ -1306,23 +1331,8 @@ impl ErgodicsSystem {
     /// ```
     pub fn attempt_13_move(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         self.stats.record_attempt(MoveType::Move13Add);
-        let result = self.attempt_13_move_mutating(triangulation);
+        let result = self.attempt_selected_site(triangulation, MoveType::Move13Add);
         self.record_hard_failure_if_needed(MoveType::Move13Add, result)
-    }
-
-    /// Rollback boundary for an accepted (1,3) move application.
-    ///
-    /// Clones a snapshot, subdivides the selected face, applies the inserted
-    /// vertex label, and finishes CDT bookkeeping. Once the snapshot exists,
-    /// every early return must pass a [`MoveResult`] through
-    /// [`rollback_if_failed`] or restore state itself.
-    fn attempt_13_move_mutating(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
-        let selection = self.select_proposal_site(triangulation, MoveType::Move13Add);
-        let Some(site) = selection.site else {
-            return rejected_empty_selection(triangulation, &selection);
-        };
-
-        self.apply_proposal_site(triangulation, MoveType::Move13Add, site)
     }
 
     /// Attempts a (3,1) move on the triangulation.
@@ -1368,22 +1378,8 @@ impl ErgodicsSystem {
     /// ```
     pub fn attempt_31_move(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         self.stats.record_attempt(MoveType::Move31Remove);
-        let result = self.attempt_31_move_mutating(triangulation);
+        let result = self.attempt_selected_site(triangulation, MoveType::Move31Remove);
         self.record_hard_failure_if_needed(MoveType::Move31Remove, result)
-    }
-
-    /// Rollback boundary for an accepted (3,1) move application.
-    ///
-    /// Clones a snapshot, removes the selected vertex, and finishes CDT
-    /// bookkeeping. Once the snapshot exists, every early return must pass a
-    /// [`MoveResult`] through [`rollback_if_failed`] or restore state itself.
-    fn attempt_31_move_mutating(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
-        let selection = self.select_proposal_site(triangulation, MoveType::Move31Remove);
-        let Some(site) = selection.site else {
-            return rejected_empty_selection(triangulation, &selection);
-        };
-
-        self.apply_proposal_site(triangulation, MoveType::Move31Remove, site)
     }
 
     /// Attempts an edge flip move on the triangulation.
@@ -1425,7 +1421,7 @@ impl ErgodicsSystem {
     /// ```
     pub fn attempt_edge_flip(&mut self, triangulation: &mut CdtTriangulation2D) -> MoveResult {
         self.stats.record_attempt(MoveType::EdgeFlip);
-        let result = self.attempt_causal_edge_flip(triangulation, MoveType::EdgeFlip);
+        let result = self.attempt_selected_site(triangulation, MoveType::EdgeFlip);
         self.record_hard_failure_if_needed(MoveType::EdgeFlip, result)
     }
 
@@ -1472,19 +1468,19 @@ impl ErgodicsSystem {
         }
     }
 
-    /// Applies the shared 2D k=2 edge-flip implementation for
-    /// [`MoveType::Move22`] and [`MoveType::EdgeFlip`].
-    fn attempt_causal_edge_flip(
+    /// Applies the selected site or reports why the family had none.
+    fn attempt_selected_site(
         &mut self,
         triangulation: &mut CdtTriangulation2D,
         move_type: MoveType,
     ) -> MoveResult {
-        let selection = self.select_proposal_site(triangulation, move_type);
-        let Some(site) = selection.site else {
-            return rejected_empty_selection(triangulation, &selection);
-        };
-
-        self.apply_proposal_site(triangulation, move_type, site)
+        match self.select_proposal_site(triangulation, move_type) {
+            ProposalSiteSelection::Sampled { site, .. } => {
+                self.apply_proposal_site(triangulation, move_type, site)
+            }
+            ProposalSiteSelection::NoGeometry => MoveResult::GeometricViolation,
+            ProposalSiteSelection::CausalityFiltered => MoveResult::CausalityViolation,
+        }
     }
 
     /// Applies a selected edge-flip site inside the active transaction.
@@ -1492,9 +1488,7 @@ impl ErgodicsSystem {
     /// This is shared by [`MoveType::Move22`] and [`MoveType::EdgeFlip`], which
     /// are public names for the same 2D k=2 bistellar flip kernel.
     fn apply_edge_flip_site(
-        &mut self,
         triangulation: &mut CdtTriangulation2D,
-        move_type: MoveType,
         edge: &DelaunayEdgeHandle,
     ) -> MoveResult {
         let adjacent = match triangulation.geometry().edge_adjacent_faces(edge) {
@@ -1516,9 +1510,8 @@ impl ErgodicsSystem {
         let flip_result = triangulation.flip_edge_in_caller_transaction(edge);
 
         match flip_result {
-            Ok(result) => self.finish_mutated_move(
+            Ok(result) => Self::finish_mutated_move(
                 triangulation,
-                move_type,
                 baseline,
                 &result.affected_faces,
                 LocalMoveDelta::Flip,
@@ -1534,7 +1527,6 @@ impl ErgodicsSystem {
     /// The mutation is finalized only after optional vertex labeling,
     /// foliation synchronization, and evolved-CDT validation all succeed.
     fn apply_face_subdivision_site(
-        &mut self,
         triangulation: &mut CdtTriangulation2D,
         face: DelaunayFaceHandle,
         point: [f64; 2],
@@ -1578,9 +1570,8 @@ impl ErgodicsSystem {
             }
         }
 
-        self.finish_mutated_move(
+        Self::finish_mutated_move(
             triangulation,
-            MoveType::Move13Add,
             baseline,
             &subdivision.new_faces,
             LocalMoveDelta::Insert { label: label_value },
@@ -1593,7 +1584,6 @@ impl ErgodicsSystem {
     /// face subdivision with an immediate flip of the original spacelike link.
     /// The intermediate same-slice triangle is never finalized as CDT state.
     fn apply_foliated_insertion_site(
-        &mut self,
         triangulation: &mut CdtTriangulation2D,
         candidate: FoliatedInsertionCandidate,
     ) -> MoveResult {
@@ -1673,9 +1663,8 @@ impl ErgodicsSystem {
             Ok(result) => {
                 let mut affected_faces = surviving_faces(triangulation, &subdivision_faces);
                 affected_faces.extend(result.affected_faces);
-                self.finish_mutated_move(
+                Self::finish_mutated_move(
                     triangulation,
-                    MoveType::Move13Add,
                     baseline,
                     &affected_faces,
                     LocalMoveDelta::Insert {
@@ -1697,7 +1686,6 @@ impl ErgodicsSystem {
     /// preconditions; this function owns the backend edit, validation, and
     /// rollback boundary.
     fn apply_vertex_removal_site(
-        &mut self,
         triangulation: &mut CdtTriangulation2D,
         vertex: &DelaunayVertexHandle,
     ) -> MoveResult {
@@ -1725,9 +1713,8 @@ impl ErgodicsSystem {
         let removal = triangulation.remove_vertex_in_caller_transaction(vertex);
 
         match removal {
-            Ok(result) => self.finish_mutated_move(
+            Ok(result) => Self::finish_mutated_move(
                 triangulation,
-                MoveType::Move31Remove,
                 baseline,
                 &result.new_faces,
                 LocalMoveDelta::Remove { label },
@@ -1742,7 +1729,6 @@ impl ErgodicsSystem {
 
     /// Applies a foliated inverse volume move as flip-then-collapse.
     fn apply_foliated_removal_site(
-        &mut self,
         triangulation: &mut CdtTriangulation2D,
         candidate: &FoliatedRemovalCandidate,
     ) -> MoveResult {
@@ -1824,9 +1810,8 @@ impl ErgodicsSystem {
             Ok(result) => {
                 let mut affected_faces = surviving_faces(triangulation, &flip_faces);
                 affected_faces.extend(result.new_faces);
-                self.finish_mutated_move(
+                Self::finish_mutated_move(
                     triangulation,
-                    MoveType::Move31Remove,
                     baseline,
                     &affected_faces,
                     LocalMoveDelta::Remove { label },
@@ -1842,9 +1827,7 @@ impl ErgodicsSystem {
 
     /// Completes a move after the backend mutation has already succeeded.
     fn finish_mutated_move(
-        &mut self,
         triangulation: &mut CdtTriangulation2D,
-        move_type: MoveType,
         baseline: LocalMoveBaseline,
         affected_faces: &[DelaunayFaceHandle],
         delta: LocalMoveDelta,
@@ -1856,7 +1839,6 @@ impl ErgodicsSystem {
             return MoveResult::HardFailure(err);
         }
 
-        self.stats.record_success(move_type);
         MoveResult::Success
     }
 
@@ -1891,22 +1873,6 @@ fn rollback_if_failed(
 
     *triangulation = snapshot;
     result
-}
-
-/// Converts an empty sampled site set into the public move-result category.
-///
-/// Seeing geometric candidates but no sampleable foliated sites means causality
-/// filtered every candidate; no geometric candidates means the move is
-/// unavailable for topological/backend shape reasons.
-fn rejected_empty_selection(
-    triangulation: &CdtTriangulation2D,
-    selection: &ProposalSiteSelection,
-) -> MoveResult {
-    if selection.geometric_candidate_seen && triangulation.has_foliation() {
-        MoveResult::CausalityViolation
-    } else {
-        MoveResult::GeometricViolation
-    }
 }
 
 /// Captures stable identity for faces that may survive a later primitive edit.
@@ -2170,25 +2136,24 @@ fn foliated_insertion_candidate(
     let opposite_1_label = triangulation
         .geometry()
         .vertex_data_by_key(opposite_1.vertex_key())?;
-    if !labels_bracket_slice(
-        triangulation,
-        endpoint_0_label,
-        opposite_0_label,
-        opposite_1_label,
-    ) {
-        return None;
-    }
+    let (previous, next) = neighboring_time_labels(triangulation, endpoint_0_label)?;
+    let face = match (opposite_0_label, opposite_1_label) {
+        labels if labels == (previous, next) => &adjacent.faces.0,
+        labels if labels == (next, previous) => &adjacent.faces.1,
+        _ => return None,
+    };
     if !cdt_vertex_triple(triangulation, [endpoint_0, endpoint_1, opposite_0])
         || !cdt_vertex_triple(triangulation, [endpoint_0, endpoint_1, opposite_1])
     {
         return None;
     }
 
-    let face = adjacent.faces.0.clone();
-    let point = triangulation.geometry().face_barycenter(&face).ok()?;
+    // Anchor to the past slab. Rebuilding a mesh's adjacency may change
+    // which incident facet the geometry backend happens to return first.
+    let point = triangulation.geometry().proposal_barycenter(face).ok()?;
     Some(FoliatedInsertionCandidate {
         edge,
-        face,
+        face: face.clone(),
         point,
         label: endpoint_0_label,
     })
@@ -2527,9 +2492,7 @@ pub(crate) fn proposal_site_count(
     move_type: MoveType,
 ) -> usize {
     let mut cache = MoveSiteCache::default();
-    cache.ensure_current(triangulation, move_type);
-    CdtProposalPolicyView::new(triangulation, move_type, &cache.family(move_type).sites)
-        .offered_site_count()
+    cache.sites_for(triangulation, move_type).sites.len()
 }
 
 /// Visits every sampleable proposal site for one move family.
@@ -2584,7 +2547,7 @@ fn insertion_sites(
 
     let mut geometric_candidate_seen = false;
     for face in triangulation.geometry().faces() {
-        let Ok(point) = triangulation.geometry().face_barycenter(&face) else {
+        let Ok(point) = triangulation.geometry().proposal_barycenter(&face) else {
             continue;
         };
         geometric_candidate_seen = true;
@@ -2667,7 +2630,10 @@ fn removal_sites(triangulation: &CdtTriangulation2D, visit: &mut impl FnMut(Prop
 /// [`CdtMoveFamilyDistribution`] guarantees that the four masses partition the
 /// complete draw range, so the final branch is an internal invariant fallback
 /// rather than unreported probability assigned to one family.
-fn select_move_family_at(distribution: &CdtMoveFamilyDistribution, draw: u64) -> MoveType {
+pub(crate) fn select_move_family_at(
+    distribution: &CdtMoveFamilyDistribution,
+    draw: u64,
+) -> MoveType {
     debug_assert!(draw < (1_u64 << 53));
     let mut cumulative = 0_u64;
     for family in MoveType::REVERSIBLE_1P1 {
@@ -2698,6 +2664,16 @@ mod tests {
     use crate::geometry::generators::{build_delaunay2_from_simplices, build_delaunay2_with_data};
     use approx::assert_relative_eq;
     use std::assert_matches;
+
+    impl MoveSiteCache {
+        /// Observes the current stamp without warming or promoting a cache entry.
+        fn cached_revision(&mut self, family: MoveType) -> Option<TriangulationRevision> {
+            self.family_mut(family)
+                .current
+                .as_ref()
+                .map(|sites| sites.revision)
+        }
+    }
 
     #[test]
     fn standalone_move_system_rejects_zero_rng_and_preserves_valid_sequence() {
@@ -2936,10 +2912,19 @@ mod tests {
                     return false;
                 }
 
-                let face = &adjacent.faces.0;
+                let past = if endpoint_0_label == 0 {
+                    total_slices - 1
+                } else {
+                    endpoint_0_label - 1
+                };
+                let face = if opposite_0_label == past {
+                    &adjacent.faces.0
+                } else {
+                    &adjacent.faces.1
+                };
                 triangulation
                     .geometry()
-                    .face_barycenter(face)
+                    .proposal_barycenter(face)
                     .is_ok_and(|point| triangulation.geometry().can_subdivide_face(face, &point))
             })
             .count()
@@ -3120,12 +3105,7 @@ mod tests {
             MoveType::Move31Remove,
             MoveType::EdgeFlip,
         ] {
-            let family = MoveSiteCache::collect_family(
-                triangulation,
-                move_type,
-                triangulation.instance_id(),
-                triangulation.metadata().modification_count(),
-            );
+            let family = MoveSiteCache::collect_family(triangulation, move_type);
             let counted = proposal_site_count(triangulation, move_type);
             let view = system.proposal_policy_view(triangulation, move_type);
             let viewed = view.offered_site_count();
@@ -3146,11 +3126,12 @@ mod tests {
                 "policy-view enumeration drift for {move_type:?}"
             );
             assert_eq!(
-                sampled.site_count, counted,
+                sampled.site_count(),
+                counted,
                 "sampling drift for {move_type:?}"
             );
             assert_eq!(
-                sampled.site.is_some(),
+                matches!(sampled, ProposalSiteSelection::Sampled { .. }),
                 counted > 0,
                 "sample presence drift for {move_type:?}"
             );
@@ -3626,7 +3607,7 @@ mod tests {
             .expect("triangle face");
         let point = triangulation
             .geometry()
-            .face_barycenter(&face)
+            .proposal_barycenter(&face)
             .expect("triangle barycenter");
         triangulation
             .subdivide_face_in_caller_transaction(face, &point)
@@ -3688,12 +3669,7 @@ mod tests {
         ];
 
         for move_type in MoveType::REVERSIBLE_1P1 {
-            let family = MoveSiteCache::collect_family(
-                &original,
-                move_type,
-                original.instance_id(),
-                original.metadata().modification_count(),
-            );
+            let family = MoveSiteCache::collect_family(&original, move_type);
             assert!(
                 !family.sites.is_empty(),
                 "representative torus should expose {move_type:?} sites"
@@ -3897,17 +3873,24 @@ mod tests {
 
         let empty_selection =
             system.select_proposal_site(&empty_triangulation, MoveType::Move31Remove);
-        assert_eq!(empty_selection.site_count, 0);
-        assert!(empty_selection.site.is_none());
+        assert_eq!(empty_selection.site_count(), 0);
+        assert_matches!(
+            empty_selection,
+            ProposalSiteSelection::NoGeometry | ProposalSiteSelection::CausalityFiltered
+        );
 
         let mut triangulation =
             CdtTriangulation2D::from_cdt_strip(4, 3).expect("open-boundary strip should build");
         let insertion_selection = system.select_proposal_site(&triangulation, MoveType::Move13Add);
         assert_eq!(
-            insertion_selection.site_count,
+            insertion_selection.site_count(),
             proposal_site_count(&triangulation, MoveType::Move13Add)
         );
-        let Some(insertion_site) = insertion_selection.site else {
+        let ProposalSiteSelection::Sampled {
+            site: insertion_site,
+            ..
+        } = insertion_selection
+        else {
             panic!("nonempty insertion selection should include a concrete site");
         };
 
@@ -3917,10 +3900,10 @@ mod tests {
 
         let removal_selection = system.select_proposal_site(&triangulation, MoveType::Move31Remove);
         assert_eq!(
-            removal_selection.site_count,
+            removal_selection.site_count(),
             proposal_site_count(&triangulation, MoveType::Move31Remove)
         );
-        assert!(removal_selection.site.is_some());
+        assert_matches!(removal_selection, ProposalSiteSelection::Sampled { .. });
     }
 
     #[test]
@@ -4027,18 +4010,22 @@ mod tests {
         );
 
         let empty_selection = system.select_proposal_site(&triangulation, MoveType::Move31Remove);
-        assert_eq!(empty_selection.site_count, 0);
-        assert!(empty_selection.site.is_none());
-        let cached_family = system.site_cache.family(MoveType::Move31Remove);
-        assert_eq!(cached_family.instance_id, Some(triangulation.instance_id()));
+        assert_eq!(empty_selection.site_count(), 0);
+        assert_matches!(
+            empty_selection,
+            ProposalSiteSelection::NoGeometry | ProposalSiteSelection::CausalityFiltered
+        );
         assert_eq!(
-            cached_family.modification_count,
-            Some(triangulation.metadata().modification_count())
+            system.site_cache.cached_revision(MoveType::Move31Remove),
+            Some(triangulation.revision())
         );
 
         let retry_selection = system.select_proposal_site(&triangulation, MoveType::Move31Remove);
-        assert_eq!(retry_selection.site_count, 0);
-        assert!(retry_selection.site.is_none());
+        assert_eq!(retry_selection.site_count(), 0);
+        assert_matches!(
+            retry_selection,
+            ProposalSiteSelection::NoGeometry | ProposalSiteSelection::CausalityFiltered
+        );
         assert_eq!(
             (
                 triangulation.vertex_count(),
@@ -4051,8 +4038,8 @@ mod tests {
         assert_eq!(
             system
                 .site_cache
-                .family(MoveType::Move31Remove)
-                .modification_count,
+                .cached_revision(MoveType::Move31Remove)
+                .map(TriangulationRevision::modification),
             Some(counts_before.3)
         );
     }
@@ -4068,12 +4055,12 @@ mod tests {
         assert_eq!(
             system
                 .site_cache
-                .family(MoveType::Move13Add)
-                .modification_count,
+                .cached_revision(MoveType::Move13Add)
+                .map(TriangulationRevision::modification),
             Some(initial_modification_count)
         );
-        assert!(insertion_selection.site_count > 0);
-        assert!(insertion_selection.site.is_some());
+        assert!(insertion_selection.site_count() > 0);
+        assert_matches!(insertion_selection, ProposalSiteSelection::Sampled { .. });
         let face = triangulation
             .geometry()
             .faces()
@@ -4081,7 +4068,7 @@ mod tests {
             .expect("strip fixture should contain a face");
         let point = triangulation
             .geometry()
-            .face_barycenter(&face)
+            .proposal_barycenter(&face)
             .expect("triangle barycenter should resolve");
         let label = causal_insertion_label(&triangulation, &face)
             .expect("labeled face should admit a deliberately incomplete link split");
@@ -4097,8 +4084,8 @@ mod tests {
         assert_eq!(
             system
                 .site_cache
-                .family(MoveType::Move13Add)
-                .modification_count,
+                .cached_revision(MoveType::Move13Add)
+                .map(TriangulationRevision::modification),
             Some(initial_modification_count),
             "rolled-back mutations leave the old cache current"
         );
@@ -4107,15 +4094,18 @@ mod tests {
         assert_eq!(
             system
                 .site_cache
-                .family(MoveType::Move31Remove)
-                .modification_count,
+                .cached_revision(MoveType::Move31Remove)
+                .map(TriangulationRevision::modification),
             Some(initial_modification_count)
         );
         assert_eq!(
-            removal_selection.site_count,
+            removal_selection.site_count(),
             proposal_site_count(&triangulation, MoveType::Move31Remove)
         );
-        assert!(removal_selection.site.is_none());
+        assert_matches!(
+            removal_selection,
+            ProposalSiteSelection::NoGeometry | ProposalSiteSelection::CausalityFiltered
+        );
     }
 
     #[test]
@@ -4131,13 +4121,17 @@ mod tests {
         );
 
         let insertion_selection = system.select_proposal_site(&triangulation, MoveType::Move13Add);
-        let Some(insertion_site) = insertion_selection.site else {
+        let ProposalSiteSelection::Sampled {
+            site: insertion_site,
+            count: insertion_count,
+        } = insertion_selection
+        else {
             panic!("open-boundary strip should expose an insertion site");
         };
         let cached_modification_count = system
             .site_cache
-            .family(MoveType::Move13Add)
-            .modification_count;
+            .cached_revision(MoveType::Move13Add)
+            .map(TriangulationRevision::modification);
 
         let result =
             system.apply_proposal_site(&mut triangulation, MoveType::Move22, insertion_site);
@@ -4156,12 +4150,12 @@ mod tests {
         assert_eq!(
             system
                 .site_cache
-                .family(MoveType::Move13Add)
-                .modification_count,
+                .cached_revision(MoveType::Move13Add)
+                .map(TriangulationRevision::modification),
             cached_modification_count
         );
-        assert_eq!(retry_selection.site_count, insertion_selection.site_count);
-        assert!(retry_selection.site.is_some());
+        assert_eq!(retry_selection.site_count(), insertion_count.get());
+        assert_matches!(retry_selection, ProposalSiteSelection::Sampled { .. });
     }
 
     #[test]
@@ -4174,11 +4168,15 @@ mod tests {
         assert_eq!(
             system
                 .site_cache
-                .family(MoveType::Move13Add)
-                .modification_count,
+                .cached_revision(MoveType::Move13Add)
+                .map(TriangulationRevision::modification),
             Some(original.metadata().modification_count())
         );
-        let Some(insertion_site) = insertion_selection.site else {
+        let ProposalSiteSelection::Sampled {
+            site: insertion_site,
+            count: insertion_count,
+        } = insertion_selection
+        else {
             panic!("open-boundary strip should expose one insertion site");
         };
 
@@ -4199,24 +4197,21 @@ mod tests {
         assert_eq!(
             system
                 .site_cache
-                .family(MoveType::Move31Remove)
-                .modification_count,
+                .cached_revision(MoveType::Move31Remove)
+                .map(TriangulationRevision::modification),
             Some(proposed_state.metadata().modification_count())
         );
-        assert!(proposed_selection.site.is_some());
+        assert_matches!(proposed_selection, ProposalSiteSelection::Sampled { .. });
 
         let original_selection = system.select_proposal_site(&original, MoveType::Move13Add);
         assert_eq!(
             system
                 .site_cache
-                .family(MoveType::Move13Add)
-                .modification_count,
+                .cached_revision(MoveType::Move13Add)
+                .map(TriangulationRevision::modification),
             Some(original.metadata().modification_count())
         );
-        assert_eq!(
-            original_selection.site_count,
-            insertion_selection.site_count
-        );
+        assert_eq!(original_selection.site_count(), insertion_count.get());
     }
 
     #[test]
@@ -4234,25 +4229,28 @@ mod tests {
         let first_selection = system.select_proposal_site(&first, MoveType::Move13Add);
         let first_instance_id = system
             .site_cache
-            .family(MoveType::Move13Add)
-            .instance_id
+            .cached_revision(MoveType::Move13Add)
+            .map(TriangulationRevision::instance)
             .expect("selection should populate cache instance identity");
-        assert!(first_selection.site_count > 0);
+        assert!(first_selection.site_count() > 0);
 
         let second_selection = system.select_proposal_site(&second, MoveType::Move13Add);
         assert_eq!(
-            system.site_cache.family(MoveType::Move13Add).instance_id,
+            system
+                .site_cache
+                .cached_revision(MoveType::Move13Add)
+                .map(TriangulationRevision::instance),
             Some(second.instance_id())
         );
         assert_ne!(
             first_instance_id,
             system
                 .site_cache
-                .family(MoveType::Move13Add)
-                .instance_id
+                .cached_revision(MoveType::Move13Add)
+                .map(TriangulationRevision::instance)
                 .expect("second selection should populate cache instance identity")
         );
-        assert_eq!(second_selection.site_count, first_selection.site_count);
+        assert_eq!(second_selection.site_count(), first_selection.site_count());
     }
 
     #[test]
@@ -4269,27 +4267,203 @@ mod tests {
 
         let toroidal_selection = system.select_proposal_site(&toroidal, MoveType::Move13Add);
         assert_eq!(
-            system.site_cache.family(MoveType::Move13Add).instance_id,
+            system
+                .site_cache
+                .cached_revision(MoveType::Move13Add)
+                .map(TriangulationRevision::instance),
             Some(toroidal.instance_id())
         );
-        let Some(toroidal_site) = toroidal_selection.site else {
+        let ProposalSiteSelection::Sampled {
+            site: toroidal_site,
+            ..
+        } = toroidal_selection
+        else {
             panic!("toroidal fixture should expose insertion sites");
         };
         assert_matches!(toroidal_site, ProposalSite::FoliatedInsertion(_));
 
         let strip_selection = system.select_proposal_site(&strip, MoveType::Move13Add);
         assert_eq!(
-            system.site_cache.family(MoveType::Move13Add).instance_id,
+            system
+                .site_cache
+                .cached_revision(MoveType::Move13Add)
+                .map(TriangulationRevision::instance),
             Some(strip.instance_id())
         );
         assert_eq!(
-            strip_selection.site_count,
+            strip_selection.site_count(),
             proposal_site_count(&strip, MoveType::Move13Add)
         );
-        let Some(strip_site) = strip_selection.site else {
+        let ProposalSiteSelection::Sampled {
+            site: strip_site, ..
+        } = strip_selection
+        else {
             panic!("open-boundary strip fixture should expose insertion sites");
         };
         assert_matches!(strip_site, ProposalSite::FoliatedInsertion(_));
+    }
+
+    #[test]
+    fn toroidal_seed_3291_preserves_embedding_after_five_moves() {
+        // The original seeded sites, recorded by exact coordinate bits.
+        // Replay these atoms independently of the current site ordering.
+        let removed = [0x400f_ee2f_814c_4e4e, 0x4007_d592_b25e_2698];
+        let trace = [
+            (
+                MoveType::Move22,
+                Some([removed, [0x3fef_7966_ed92_70d8, 0x4000_3a3f_47df_3822]]),
+            ),
+            (
+                MoveType::Move22,
+                Some([
+                    [0x4007_de59_bb6a_cc06, 0x3ff0_68fd_1f99_b239],
+                    [0x3fff_e991_277f_0ad8, 0x3fff_fe8f_d200_af2d],
+                ]),
+            ),
+            (
+                MoveType::Move31Remove,
+                Some([removed, [0x3f8b_0d32_0850_8800, 0x3fef_9592_b230_59ca]]),
+            ),
+            (MoveType::Move31Remove, None),
+            (
+                MoveType::Move22,
+                Some([
+                    [0x4008_317c_0a6e_c9c8, 0x3f92_564a_cf74_a140],
+                    [0x400f_c7ea_e2e0_d312, 0x3fff_ea6d_4d9e_cd0e],
+                ]),
+            ),
+        ];
+        let mut state = CdtTriangulation2D::from_toroidal_cdt(4, 3).expect("original torus");
+        let mut moves = ErgodicsSystem::with_seed(3291);
+        for (index, (family, recorded_edge)) in trace.into_iter().enumerate() {
+            assert_eq!(
+                moves.select_random_move(),
+                family,
+                "original family at attempt {index}"
+            );
+            if let Some(mut expected) = recorded_edge {
+                expected.sort_unstable();
+                let geometry = state.geometry();
+                let mut site_count = 0;
+                let mut matching = Vec::new();
+                visit_proposal_sites(&state, family, |site| {
+                    site_count += 1;
+                    let edge = match &site {
+                        ProposalSite::EdgeFlip(edge) => edge,
+                        ProposalSite::FoliatedRemoval(candidate) => &candidate.flip_edge,
+                        _ => return,
+                    };
+                    let endpoints = geometry.edge_endpoints(edge).expect("live edge");
+                    let mut positions = <[_; 2]>::from(endpoints).map(|vertex| {
+                        let [x, y] = geometry.vertex_coordinates(&vertex).expect("live vertex")
+                        else {
+                            panic!("the trace uses two-dimensional coordinates");
+                        };
+                        [x.to_bits(), y.to_bits()]
+                    });
+                    positions.sort_unstable();
+                    if positions == expected {
+                        matching.push(site);
+                    }
+                });
+                let [site] = matching
+                    .try_into()
+                    .expect("one offered atom at the recorded edge");
+                // Preserve the original family RNG stream between replayed atoms.
+                let _ = Uniform::new(0, site_count)
+                    .expect("nonempty original site set")
+                    .sample(&mut moves.rng);
+                assert_eq!(
+                    moves.apply_proposal_site(&mut state, family, site),
+                    MoveResult::Success
+                );
+            } else {
+                assert_eq!(
+                    moves.attempt_31_move(&mut state),
+                    MoveResult::GeometricViolation
+                );
+            }
+            state.validate().unwrap_or_else(|error| {
+                panic!("attempt {index} invalidated the embedding: {error}")
+            });
+        }
+        assert_eq!(state.slice_sizes(), &[3, 4, 4]);
+    }
+
+    #[test]
+    fn hilbert_site_order_survives_rehydration_and_reversed_discovery() {
+        let torus = CdtTriangulation2D::from_toroidal_cdt(4, 4).expect("valid torus");
+        let encoded = serde_json::to_string(&torus).expect("encode the realized mesh");
+        let restored = serde_json::from_str::<CdtTriangulation2D>(&encoded)
+            .expect("hydrate the same geometry under fresh handles");
+        for family in MoveType::REVERSIBLE_1P1 {
+            let keys = |state: &CdtTriangulation2D, reverse_discovery| {
+                let locality = state.geometry().proposal_locality();
+                let mut keys = Vec::new();
+                visit_proposal_sites(state, family, |site| {
+                    keys.push(site.ordering_key(state, &locality));
+                });
+                if reverse_discovery {
+                    keys.reverse();
+                }
+                keys.sort_unstable();
+                keys
+            };
+            let original = keys(&torus, false);
+            assert_eq!(
+                original,
+                keys(&torus, true),
+                "discovery order for {family:?}"
+            );
+            assert_eq!(original, keys(&restored, true), "restored {family:?}");
+            assert!(
+                original
+                    .iter()
+                    .all(|(hilbert, identity)| hilbert.is_some() && identity.is_some())
+            );
+            assert!(
+                original.windows(2).all(|pair| pair[0] < pair[1]),
+                "distinct sites have distinct total keys"
+            );
+            let offered = MoveSiteCache::collect_family(&torus, family);
+            let locality = torus.geometry().proposal_locality();
+            assert_eq!(
+                offered
+                    .sites
+                    .iter()
+                    .map(|site| site.ordering_key(&torus, &locality))
+                    .collect::<Vec<_>>(),
+                original,
+            );
+        }
+    }
+
+    #[test]
+    fn foliated_insertion_is_independent_of_facet_anchor() {
+        let triangulation =
+            CdtTriangulation2D::from_toroidal_cdt(4, 4).expect("the regression torus should build");
+        let geometry = triangulation.geometry();
+        let (edge, adjacent, first) = geometry
+            .edges()
+            .find_map(|edge| {
+                let adjacent = geometry.edge_adjacent_faces(&edge).ok()??;
+                let candidate =
+                    foliated_insertion_candidate(&triangulation, edge.clone(), &adjacent)?;
+                Some((edge, adjacent, candidate))
+            })
+            .expect("the fixture has a bracketed spatial link");
+        let swapped = EdgeAdjacentFaces::new(
+            adjacent.endpoints,
+            (adjacent.faces.1, adjacent.faces.0),
+            (adjacent.opposite_vertices.1, adjacent.opposite_vertices.0),
+        );
+        let second = foliated_insertion_candidate(&triangulation, edge, &swapped)
+            .expect("swapping the backend anchor leaves the site eligible");
+        assert_eq!(first.face, second.face);
+        assert_eq!(
+            first.point.map(f64::to_bits),
+            second.point.map(f64::to_bits)
+        );
     }
 
     #[test]
@@ -4306,17 +4480,26 @@ mod tests {
 
         let original_selection = system.select_proposal_site(&original, MoveType::Move13Add);
         assert_eq!(
-            system.site_cache.family(MoveType::Move13Add).instance_id,
+            system
+                .site_cache
+                .cached_revision(MoveType::Move13Add)
+                .map(TriangulationRevision::instance),
             Some(original.instance_id())
         );
-        assert!(original_selection.site_count > 0);
+        assert!(original_selection.site_count() > 0);
 
         let cloned_selection = system.select_proposal_site(&cloned, MoveType::Move13Add);
         assert_eq!(
-            system.site_cache.family(MoveType::Move13Add).instance_id,
+            system
+                .site_cache
+                .cached_revision(MoveType::Move13Add)
+                .map(TriangulationRevision::instance),
             Some(cloned.instance_id())
         );
-        assert_eq!(cloned_selection.site_count, original_selection.site_count);
+        assert_eq!(
+            cloned_selection.site_count(),
+            original_selection.site_count()
+        );
     }
 
     #[test]
@@ -4340,7 +4523,11 @@ mod tests {
             .expect("fixture must expose a public insertion ID");
 
         let insertion_selection = system.select_proposal_site(&triangulation, MoveType::Move13Add);
-        let Some(insertion_site) = insertion_selection.site else {
+        let ProposalSiteSelection::Sampled {
+            site: insertion_site,
+            ..
+        } = insertion_selection
+        else {
             panic!("open-boundary strip should expose one insertion site");
         };
 
@@ -4411,12 +4598,7 @@ mod tests {
         let original = CdtTriangulation2D::from_toroidal_cdt(8, 8).expect("build toroidal CDT");
 
         for move_type in [MoveType::Move22, MoveType::EdgeFlip] {
-            let family = MoveSiteCache::collect_family(
-                &original,
-                move_type,
-                original.instance_id(),
-                original.metadata().modification_count(),
-            );
+            let family = MoveSiteCache::collect_family(&original, move_type);
             for (seam_name, crosses_seam) in [
                 (
                     "spatial",
@@ -4660,19 +4842,13 @@ mod tests {
                 original.edge_count(),
                 original.face_count(),
             );
-            let insertion_family = MoveSiteCache::collect_family(
-                &original,
-                MoveType::Move13Add,
-                original.instance_id(),
-                original.metadata().modification_count(),
-            );
-            assert!(!insertion_family.sites.is_empty());
+            let insertion_family = MoveSiteCache::collect_family(&original, MoveType::Move13Add);
+            assert_ne!(insertion_family.sites, []);
             let mut successful_round_trips = 0;
 
             for insertion_site in insertion_family.sites {
-                assert_matches!(insertion_site, ProposalSite::FoliatedInsertion(_));
                 let ProposalSite::FoliatedInsertion(candidate) = &insertion_site else {
-                    unreachable!()
+                    panic!("expected a foliated insertion, got {insertion_site:?}");
                 };
                 let crosses_spatial_seam = edge_crosses_spatial_seam(&original, &candidate.edge);
                 let touches_temporal_seam = insertion_touches_temporal_seam(&original, candidate);
@@ -4724,12 +4900,8 @@ mod tests {
                     panic!("one insertion should create exactly one stable vertex identity");
                 };
 
-                let removal_family = MoveSiteCache::collect_family(
-                    &triangulation,
-                    MoveType::Move31Remove,
-                    triangulation.instance_id(),
-                    triangulation.metadata().modification_count(),
-                );
+                let removal_family =
+                    MoveSiteCache::collect_family(&triangulation, MoveType::Move31Remove);
                 let inverse_sites = removal_family
                     .sites
                     .into_iter()

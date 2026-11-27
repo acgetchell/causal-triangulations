@@ -101,11 +101,13 @@ Measures CDT move proposal and application paths:
 - random move selection and attempt paths.
 
 The CI suite also includes `cdt_proposal_site_move_attempts_2d` and `cdt_single_metropolis_proposal_2d`. These exercise explicit proposal-site iteration,
-cloned proposed-state mutation, and reverse-site counting for the Hastings ratio.
+draft mutation, and scoring of marginal endpoint probabilities for the Hastings ratio.
 
 `cdt_persistent_proposals_2d` adds cold/warm family views and seeded 32-attempt batches with one planner per batch. Concrete plans are either discarded or
 committed, followed by live-state inspection. Fixture construction and initial cache warming are outside the batch measurement; ordinary local rejections
 remain part of the measured proposal workload. These cases isolate cache reuse from driver setup, trace output, and terminal validation.
+On the 512-vertex `toroidal_probe` fixture, `cold_view` measures family enumeration, feasibility checks, and Hilbert sorting together. `warm_view` measures
+reuse of the cached order. This pair supports regression checks on cache construction and inspection. A sort-only measurement would require its own workload.
 
 `cdt_local_finalization_by_slices_2d` measures successful inverse volume moves at 8, 16, 32, and 64 time slices. Each fixture starts from 256 toroidal vertices
 and performs one insertion during setup, so the measured removal sees 257 vertices at every slice count. Existing benchmark workloads remain unchanged.

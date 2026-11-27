@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Volume fixing, circular-loop measurement, chain artifacts, and MCMC diagnostic adapters.
 
 use approx::assert_relative_eq;
@@ -17,7 +19,7 @@ use markov_chain_monte_carlo::{
 };
 use num_traits::ToPrimitive;
 use rand::{RngExt, SeedableRng, rngs::StdRng};
-use serde_json::{Value, json};
+use serde_json::{Value, from_slice, from_str, from_value, json, to_string, to_value, to_vec};
 use std::{
     assert_matches,
     f64::consts::LN_2,
@@ -119,7 +121,7 @@ fn synthetic_chain(seed: u64, lengths: &[u32]) -> ValidationChain {
 #[test]
 fn chain_json_preserves_typed_measurement_failures() {
     let chain = synthetic_chain(7, &[4, 4]);
-    let valid = serde_json::to_value(chain.data()).expect("valid transport");
+    let valid = to_value(chain.data()).expect("valid transport");
     for (key, expected_field) in [
         ("vertices", MeasurementCountField::Vertices),
         ("edges", MeasurementCountField::Edges),
@@ -127,7 +129,7 @@ fn chain_json_preserves_typed_measurement_failures() {
     ] {
         let mut invalid = valid.clone();
         invalid["measurements"][0][key] = json!(0);
-        let bytes = serde_json::to_vec(&invalid).expect("syntactically valid JSON");
+        let bytes = to_vec(&invalid).expect("syntactically valid JSON");
         assert_matches!(
             ValidationChain::read_json(bytes.as_slice()),
             Err(CdtError::InvalidMeasurementCount { field, provided_value: 0 })
@@ -136,7 +138,7 @@ fn chain_json_preserves_typed_measurement_failures() {
     }
     let mut invalid = valid;
     invalid["measurements"][0]["slab_triangle_profile"] = json!([33, 0, 0, 0]);
-    let bytes = serde_json::to_vec(&invalid).expect("syntactically valid JSON");
+    let bytes = to_vec(&invalid).expect("syntactically valid JSON");
     assert_matches!(
         ValidationChain::read_json(bytes.as_slice()),
         Err(CdtError::InvalidMeasurementSlabTriangleProfile {
@@ -151,6 +153,18 @@ fn chain_json_preserves_typed_measurement_failures() {
             operation: AnalysisArtifactOperation::Read,
             ..
         }))
+    );
+}
+
+#[test]
+fn chain_json_rejects_pre_endpoint_sampling_artifacts() {
+    let chain = synthetic_chain(7, &[4, 4]);
+    let mut legacy = to_value(chain.data()).expect("valid transport");
+    legacy["schema_version"] = json!(1);
+    let bytes = to_vec(&legacy).expect("legacy transport");
+    assert_matches!(
+        ValidationChain::read_json(bytes.as_slice()),
+        Err(CdtError::Analysis(CdtAnalysisError::Schema { version: 1 }))
     );
 }
 
@@ -184,12 +198,12 @@ fn quadratic_bias_is_opt_in_validated_and_independently_recomputed() {
             .action(36),
         0.0
     );
-    let encoded = serde_json::to_string(&fixing).expect("encode bias");
-    let restored: VolumeFixing = serde_json::from_str(&encoded).expect("validated decoding");
+    let encoded = to_string(&fixing).expect("encode bias");
+    let restored: VolumeFixing = from_str(&encoded).expect("validated decoding");
     assert_eq!(restored.target(), fixing.target());
     assert_relative_eq!(restored.strength(), fixing.strength());
     assert!(
-        serde_json::from_value::<VolumeFixing>(
+        from_value::<VolumeFixing>(
             json!({"mode":"quadratic-triangles","target":31,"strength":0.1})
         )
         .is_err()
@@ -199,8 +213,8 @@ fn quadratic_bias_is_opt_in_validated_and_independently_recomputed() {
 #[test]
 fn action_configuration_json_preserves_every_floating_point_bit() {
     let original = fixed_action();
-    let encoded = serde_json::to_string(&original).expect("encode action");
-    let restored: ActionConfig = serde_json::from_str(&encoded).expect("decode action");
+    let encoded = to_string(&original).expect("encode action");
+    let restored: ActionConfig = from_str(&encoded).expect("decode action");
     assert_eq!(
         original.cosmological_constant().to_bits(),
         restored.cosmological_constant().to_bits()
@@ -589,7 +603,7 @@ fn blocked_errors_and_mean_mcse_scale_in_original_units_and_exclude_incomplete_b
 
 fn checkpoint_without_time(checkpoint: &CdtMcmcCheckpoint) -> Value {
     let mut value: Value =
-        serde_json::from_str(&checkpoint.to_json().expect("checkpoint JSON")).expect("JSON object");
+        from_str(&checkpoint.to_json().expect("checkpoint JSON")).expect("JSON object");
     value
         .as_object_mut()
         .expect("checkpoint object")
@@ -686,7 +700,7 @@ fn fixed_checkpoint_restores_exact_trajectory() {
         .run_to_checkpoint(state)
         .expect("prefix run");
     let mut downgraded: Value =
-        serde_json::from_str(&prefix.to_json().expect("complete checkpoint")).expect("valid JSON");
+        from_str(&prefix.to_json().expect("complete checkpoint")).expect("valid JSON");
     assert_eq!(
         downgraded["format_version"],
         CdtMcmcCheckpoint::FORMAT_VERSION
@@ -705,8 +719,8 @@ fn fixed_checkpoint_restores_exact_trajectory() {
         .resume_to_checkpoint(prefix.clone())
         .expect("in-memory continuation");
     assert_checkpoint_json_matches(
-        &serde_json::to_value(full.steps()).expect("full steps"),
-        &serde_json::to_value(in_memory.steps()).expect("in-memory steps"),
+        &to_value(full.steps()).expect("full steps"),
+        &to_value(in_memory.steps()).expect("in-memory steps"),
         "/in-memory-steps",
     );
     assert_checkpoint_json_matches(
@@ -715,16 +729,16 @@ fn fixed_checkpoint_restores_exact_trajectory() {
         "/restored-prefix",
     );
     assert_checkpoint_json_matches(
-        &serde_json::to_value(&full.steps()[..16]).expect("full prefix steps"),
-        &serde_json::to_value(prefix.steps()).expect("prefix steps"),
+        &to_value(&full.steps()[..16]).expect("full prefix steps"),
+        &to_value(prefix.steps()).expect("prefix steps"),
         "/prefix-steps",
     );
     let resumed = MetropolisAlgorithm::new(config(16), action)
         .resume_to_checkpoint(restored)
         .expect("exact continuation");
     assert_checkpoint_json_matches(
-        &serde_json::to_value(full.steps()).expect("full steps"),
-        &serde_json::to_value(resumed.steps()).expect("resumed steps"),
+        &to_value(full.steps()).expect("full steps"),
+        &to_value(resumed.steps()).expect("resumed steps"),
         "/steps",
     );
     assert_eq!(
@@ -817,8 +831,8 @@ fn checkpoint_continuation_preserves_per_chain_and_multi_chain_diagnostics() -> 
             );
         }
         assert_eq!(
-            serde_json::to_value(&continued).expect("resumed report"),
-            serde_json::to_value(&full).expect("uninterrupted report")
+            to_value(&continued).expect("resumed report"),
+            to_value(&full).expect("uninterrupted report")
         );
     }
     Ok(())
@@ -853,7 +867,7 @@ fn fixed_checkpoint_rejects_changed_bias_and_forged_components() {
         );
     }
     let mut corrupted: Value =
-        serde_json::from_str(&prefix.to_json().expect("complete checkpoint")).expect("valid JSON");
+        from_str(&prefix.to_json().expect("complete checkpoint")).expect("valid JSON");
     corrupted["measurements"][0]["fixing_action"] = json!(100.0);
     assert_matches!(
         CdtMcmcCheckpoint::from_json(&corrupted.to_string()).map(drop),
@@ -885,14 +899,13 @@ fn review_regression_restore_rejects_forged_loops_through_unchanged_volume_spans
                 .collect::<Vec<_>>(),
             [0, 2, 4]
         );
-        let checkpoint_json: Value =
-            serde_json::from_str(&checkpoint.to_json().expect("checkpoint JSON"))
-                .expect("checkpoint transport");
+        let checkpoint_json: Value = from_str(&checkpoint.to_json().expect("checkpoint JSON"))
+            .expect("checkpoint transport");
         CdtMcmcCheckpoint::from_json(&checkpoint_json.to_string())
             .expect("valid profiles must round trip");
         let results = checkpoint.into_results().expect("validated results");
-        let results_json = serde_json::to_value(&results).expect("results transport");
-        serde_json::from_value::<SimulationResultsBackend>(results_json.clone())
+        let results_json = to_value(&results).expect("results transport");
+        from_value::<SimulationResultsBackend>(results_json.clone())
             .expect("valid result profiles must round trip");
 
         for index in 0..3 {
@@ -908,7 +921,7 @@ fn review_regression_restore_rejects_forged_loops_through_unchanged_volume_spans
 
             let mut forged_results = results_json.clone();
             forged_results["measurements"][index]["spatial_loop_lengths"] = json!([3, 5, 3, 5]);
-            let error = serde_json::from_value::<SimulationResultsBackend>(forged_results)
+            let error = from_value::<SimulationResultsBackend>(forged_results)
                 .expect_err("unchanged-volume measurements must match canonical slice sizes");
             assert!(
                 error.to_string().contains("invalid loop profile"),
@@ -1083,7 +1096,7 @@ fn independent_chain_diagnostics_preserve_upstream_identity_counts_and_units() {
     report
         .write_json(&mut json)
         .expect("diagnostic report export");
-    let value: Value = serde_json::from_slice(&json).expect("external report parser");
+    let value: Value = from_slice(&json).expect("external report parser");
     assert_eq!(
         value["upstream_estimator_contract"],
         "markov-chain-monte-carlo 0.5.3 public diagnostics"
@@ -1093,7 +1106,7 @@ fn independent_chain_diagnostics_preserve_upstream_identity_counts_and_units() {
     assert_eq!(value["schema_version"], 2);
     let mut unsupported = value;
     unsupported["schema_version"] = json!(1);
-    serde_json::from_value::<CdtDiagnosticReport>(unsupported).expect_err("retired report schema");
+    from_value::<CdtDiagnosticReport>(unsupported).expect_err("retired report schema");
 }
 
 #[test]
@@ -1343,16 +1356,12 @@ fn metadata_policy_and_timing_do_not_silently_change_the_workload() {
 #[test]
 fn artifact_metadata_and_serde_conversions_preserve_the_validated_boundary() {
     let chain = synthetic_chain(17, &[4, 5, 4, 5]);
-    let expected = serde_json::to_value(chain.data()).expect("raw transport");
-    let decoded: ValidationChain = serde_json::from_value(
-        serde_json::to_value(&chain).expect("validated chain serialization"),
-    )
-    .expect("validated chain deserialization");
+    let expected = to_value(chain.data()).expect("raw transport");
+    let decoded: ValidationChain =
+        from_value(to_value(&chain).expect("validated chain serialization"))
+            .expect("validated chain deserialization");
     let transported: ValidationChainData = decoded.into();
-    assert_eq!(
-        serde_json::to_value(&transported).expect("transport"),
-        expected
-    );
+    assert_eq!(to_value(&transported).expect("transport"), expected);
     ValidationChain::try_from(transported).expect("raw conversion reparses invariants");
 
     for field in ["run_id", "chain_id", "crate_version", "seed"] {
@@ -1362,13 +1371,12 @@ fn artifact_metadata_and_serde_conversions_preserve_the_validated_boundary() {
         } else {
             bad[field] = json!("");
         }
-        let data = serde_json::from_value(bad.clone()).expect("raw metadata transport");
+        let data = from_value(bad.clone()).expect("raw metadata transport");
         assert_matches!(
             ValidationChain::try_new(data),
             Err(CdtError::Analysis(CdtAnalysisError::MissingIdentity))
         );
-        serde_json::from_value::<ValidationChain>(bad)
-            .expect_err("Serde must not bypass identity validation");
+        from_value::<ValidationChain>(bad).expect_err("Serde must not bypass identity validation");
     }
     for (field, value) in [
         ("spatial_topology", json!("S2")),
@@ -1379,7 +1387,7 @@ fn artifact_metadata_and_serde_conversions_preserve_the_validated_boundary() {
         let mut bad = expected.clone();
         bad[field] = value;
         assert_matches!(
-            ValidationChain::try_new(serde_json::from_value(bad).expect("raw conventions")),
+            ValidationChain::try_new(from_value(bad).expect("raw conventions")),
             Err(CdtError::Analysis(CdtAnalysisError::IncompatibleCondition { chain }))
                 if chain == "chain-17"
         );
@@ -1395,12 +1403,12 @@ fn artifact_metadata_and_serde_conversions_preserve_the_validated_boundary() {
 #[test]
 fn artifact_rows_reject_detached_counts_profiles_and_action_conventions() {
     let chain = synthetic_chain(17, &[4, 5, 4, 5]);
-    let transport = serde_json::to_value(chain.data()).expect("raw transport");
+    let transport = to_value(chain.data()).expect("raw transport");
     for (field, value, vertices, edges) in [("vertices", 17, 17, 48), ("edges", 49, 16, 49)] {
         let mut bad = transport.clone();
         bad["measurements"][0][field] = json!(value);
         assert_matches!(
-            ValidationChain::try_new(serde_json::from_value(bad).expect("raw counts")),
+            ValidationChain::try_new(from_value(bad).expect("raw counts")),
             Err(CdtError::Analysis(CdtAnalysisError::Counts {
                 chain, row: 0, vertices: actual_vertices, edges: actual_edges, triangles: 32,
             })) if chain == "chain-17" && actual_vertices == vertices && actual_edges == edges
@@ -1415,7 +1423,7 @@ fn artifact_rows_reject_detached_counts_profiles_and_action_conventions() {
         let mut bad = transport.clone();
         bad["measurements"][0][field] = value;
         assert_matches!(
-            ValidationChain::try_new(serde_json::from_value(bad).expect("raw profile")),
+            ValidationChain::try_new(from_value(bad).expect("raw profile")),
             Err(CdtError::Analysis(CdtAnalysisError::Profile { chain, row: 0 }))
                 if chain == "chain-17"
         );
@@ -1658,9 +1666,8 @@ fn artifact_output_failures_keep_the_write_operation_and_error() {
 fn overflowing_second_moments_remain_unavailable_instead_of_passing_diagnostics() {
     let chains: Vec<_> = (1..=2)
         .map(|seed| {
-            let mut transport =
-                serde_json::to_value(synthetic_chain(seed, &[3, 4, 5, 6, 3, 4, 5, 6]).data())
-                    .expect("raw chain");
+            let mut transport = to_value(synthetic_chain(seed, &[3, 4, 5, 6, 3, 4, 5, 6]).data())
+                .expect("raw chain");
             transport["configuration"]["cosmological_constant"] = json!(1e200);
             for measurement in transport["measurements"].as_array_mut().expect("rows") {
                 let edges = measurement["edges"].as_u64().expect("small integer count");
@@ -1668,7 +1675,7 @@ fn overflowing_second_moments_remain_unavailable_instead_of_passing_diagnostics(
                 measurement["action"] = json!(action);
                 measurement["physical_action"] = json!(action);
             }
-            ValidationChain::try_new(serde_json::from_value(transport).expect("finite transport"))
+            ValidationChain::try_new(from_value(transport).expect("finite transport"))
                 .expect("finite actions remain valid even when their second moments overflow")
         })
         .collect();
@@ -1704,9 +1711,9 @@ fn measurement_builders_reject_invalid_ring_profiles_and_detached_bare_action() 
             Err(CdtError::SpatialLoop(SpatialLoopError::InvalidProfile { profile: actual, triangles: 32 }))
                 if actual == profile
         );
-        let mut encoded = serde_json::to_value(&measurement).expect("measurement transport");
+        let mut encoded = to_value(&measurement).expect("measurement transport");
         encoded["spatial_loop_lengths"] = json!(profile);
-        serde_json::from_value::<Measurement>(encoded)
+        from_value::<Measurement>(encoded)
             .expect_err("deserialization must revalidate the ring profile");
     }
 }
@@ -1769,10 +1776,8 @@ fn volume_fixing_runner_and_checkpoint_restore_enforce_ensemble_boundaries() {
     let bare = MetropolisAlgorithm::new(schedule, ActionConfig::default())
         .run_to_checkpoint(open)
         .expect("bare open chains remain supported");
-    let mut encoded: Value =
-        serde_json::from_str(&bare.to_json().expect("checkpoint")).expect("transport");
-    encoded["action_config"]["volume_fixing"] =
-        serde_json::to_value(fixing).expect("bias transport");
+    let mut encoded: Value = from_str(&bare.to_json().expect("checkpoint")).expect("transport");
+    encoded["action_config"]["volume_fixing"] = to_value(fixing).expect("bias transport");
     assert_matches!(
         CdtMcmcCheckpoint::from_json(&encoded.to_string()).map(drop),
         Err(CdtError::VolumeFixing(

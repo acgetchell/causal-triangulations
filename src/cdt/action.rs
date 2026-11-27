@@ -239,11 +239,8 @@ impl ActionConfig {
         ))
     }
 
-    /// Builds an action configuration after the caller has already checked coupling finiteness.
-    ///
-    /// This keeps validated higher-level configuration conversion infallible
-    /// without opening a second public path that could store invalid couplings.
-    pub(crate) const fn from_validated_parts(
+    /// Stores couplings checked together by the constructor or fixed by the default.
+    const fn from_validated_parts(
         coupling_0: f64,
         coupling_2: f64,
         cosmological_constant: f64,
@@ -254,15 +251,6 @@ impl ActionConfig {
             coupling_2,
             cosmological_constant,
         }
-    }
-
-    /// Retains the bias already range-checked by `ValidatedCdtConfig`.
-    pub(crate) const fn with_validated_volume_fixing(
-        mut self,
-        fixing: Option<VolumeFixing>,
-    ) -> Self {
-        self.volume_fixing = fixing;
-        self
     }
 
     /// Returns the vertex coupling (κ₀).
@@ -314,30 +302,6 @@ impl ActionConfig {
     #[must_use]
     pub const fn cosmological_constant(&self) -> f64 {
         self.cosmological_constant
-    }
-
-    /// Confirms that stored action couplings are finite.
-    ///
-    /// This method is kept for code that wants a common validation hook across
-    /// configuration-like types. Because [`ActionConfig`] validates before
-    /// storage, it is an infallible debug assertion of the stored invariant.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use causal_triangulations::prelude::action::ActionConfig;
-    ///
-    /// ActionConfig::default().validate();
-    /// assert!(ActionConfig::new(f64::NAN, 1.0, 0.1).is_err());
-    /// ```
-    pub fn validate(&self) {
-        debug_assert!(self.coupling_0.is_finite());
-        debug_assert!(self.coupling_2.is_finite());
-        debug_assert!(self.cosmological_constant.is_finite());
-        debug_assert!(
-            maximum_action_magnitude(self.coupling_0, self.coupling_2, self.cosmological_constant)
-                .is_some()
-        );
     }
 
     /// Calculates the action for given simplex counts.

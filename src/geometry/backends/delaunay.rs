@@ -2,9 +2,7 @@
 
 //! Delaunay backend - wraps the delaunay crate.
 //!
-//! Together with `src/geometry/generators.rs`, this module is one of only
-//! two places that directly import from the `delaunay` crate.  All modules
-//! outside `src/geometry/` access Delaunay functionality through the trait
+//! All modules outside `src/geometry/` access Delaunay functionality through the trait
 //! abstractions and handle types defined here
 //! (see `docs/dev/rust.md § Geometry Backend Isolation`).
 // cspell:ignore vkey
@@ -18,20 +16,25 @@ use delaunay::flips::{BistellarFlips, FlipContextError, FlipError};
 use delaunay::geometry::kernel::{AdaptiveKernel, ExactPredicates};
 use delaunay::prelude::collections::Uuid;
 use delaunay::prelude::export::{VisualizationData, VisualizationExportError};
+use delaunay::prelude::ordering::{HilbertBitDepth, try_hilbert_index};
+use delaunay::prelude::topology::triangle_gluing::{
+    Cells, Edge, EdgeId, EdgeUse, Triangle, TriangleGluing, TriangleId, VertexId,
+};
 use delaunay::prelude::{DataSerialize, DataType};
 use delaunay::tds::{EdgeKey, EdgeKeyError, FacetHandle, SimplexKey, Vertex, VertexKey};
-use delaunay::topology::traits::{GlobalTopology, TopologyKind};
+use delaunay::topology::spaces::ToroidalSpace;
+use delaunay::topology::traits::{GlobalTopology, TopologyKind, ToroidalConstructionMode};
 use delaunay::{
     DelaunayCheckPolicy, DelaunayRefinementBuilder, DelaunayTriangulation,
     DelaunayTriangulationBuilder, InsertionError, InsertionTopologyValidationContext,
-    SimplexBarycenterError, Triangulation, TriangulationEditError,
-    TriangulationRealizationValidationError, TriangulationSnapshot, TriangulationValidationError,
+    Triangulation, TriangulationEditError, TriangulationRealizationValidationError,
+    TriangulationSnapshot, TriangulationValidationError,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
-use std::collections::HashMap;
 use std::fmt;
 use std::num::NonZeroUsize;
 use std::ops::{Deref, DerefMut};
+use std::{alloc::Layout, collections::HashMap};
 
 type DelaunayKernel = AdaptiveKernel<f64>;
 type RawTriangulation<VertexData, SimplexData, const D: usize> =
@@ -39,6 +42,366 @@ type RawTriangulation<VertexData, SimplexData, const D: usize> =
 type RawVertex<VertexData, const D: usize> = Vertex<VertexData, D>;
 /// Upstream stable mesh-interchange value used by CDT summary exports.
 pub(crate) type DelaunayMeshExport<const D: usize> = VisualizationData<D>;
+
+/// Index of an edge occurrence in the draft, independent of its endpoints.
+#[derive(Clone, Copy)]
+pub(crate) struct GluingEdge(EdgeId);
+
+/// Collects oriented cell records for upstream validation as a closed torus.
+pub(crate) struct GluingDraft(Cells);
+
+impl GluingDraft {
+    /// Checks whether the backing arrays of a closed torus can be indexed.
+    pub(crate) const fn torus_storage_fits(vertices: usize) -> bool {
+        let Some(edges) = vertices.checked_mul(3) else {
+            return false;
+        };
+        // A closed triangulated torus with V vertices has 3V edges and 2V faces.
+        Layout::array::<VertexId>(vertices).is_ok()
+            && Layout::array::<Edge>(edges).is_ok()
+            && Layout::array::<Triangle>(edges - vertices).is_ok()
+    }
+
+    /// Allocates distinct vertex identities for the CDT slice vertices.
+    pub(crate) fn new(vertices: usize) -> Self {
+        Self(Cells {
+            vertices: (0..vertices as u64).map(VertexId).collect(),
+            ..Cells::default()
+        })
+    }
+
+    /// Allocates a distinct edge occurrence, even if its endpoints repeat.
+    pub(crate) fn edge(&mut self, from: usize, to: usize) -> GluingEdge {
+        let id = EdgeId(self.0.edges.len() as u64);
+        self.0.edges.push(Edge {
+            id,
+            endpoints: [VertexId(from as u64), VertexId(to as u64)],
+        });
+        GluingEdge(id)
+    }
+
+    /// Adds a triangle with the supplied cyclic edge traversal.
+    pub(crate) fn triangle(&mut self, sides: [(GluingEdge, bool); 3]) {
+        self.0.triangles.push(Triangle {
+            id: TriangleId(self.0.triangles.len() as u64),
+            sides: sides.map(|(GluingEdge(edge), reversed)| EdgeUse { edge, reversed }),
+        });
+    }
+
+    /// Delegates incidence, vertex links, orientation, and topology to Delaunay.
+    pub(crate) fn finish(self) -> Result<IntrinsicGluing, String> {
+        let gluing = TriangleGluing::try_new(self.0).map_err(|error| error.to_string())?;
+        match gluing.components() {
+            [component]
+                if component.orientable
+                    && component.euler_characteristic == 0
+                    && component.boundary_count == 0 =>
+            {
+                Ok(IntrinsicGluing(gluing))
+            }
+            components => Err(format!(
+                "expected one closed orientable torus, found {components:?}"
+            )),
+        }
+    }
+}
+
+/// Upstream-validated intrinsic geometry, without a Euclidean realization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct IntrinsicGluing(TriangleGluing);
+
+impl IntrinsicGluing {
+    /// Returns counts of distinct vertex, edge, and triangle occurrences.
+    pub(crate) const fn counts(&self) -> (usize, usize, usize) {
+        let cells = self.0.cells();
+        (
+            cells.vertices.len(),
+            cells.edges.len(),
+            cells.triangles.len(),
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn edges_with_endpoints(&self, endpoints: [usize; 2]) -> usize {
+        let endpoints = endpoints.map(|vertex| VertexId(vertex as u64));
+        self.0
+            .cells()
+            .edges
+            .iter()
+            .filter(|edge| edge.endpoints == endpoints)
+            .count()
+    }
+}
+
+/// A realized vertex's position and payload, without allocation identity.
+pub(crate) type EmbeddedVertex = ([u64; 2], Option<u32>);
+
+/// An embedded edge with canonical endpoint order and its relative lattice lift.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct EmbeddedEdge {
+    endpoints: [EmbeddedVertex; 2],
+    displacement: [i16; 2],
+}
+
+impl EmbeddedEdge {
+    /// Canonicalizes the displacement along with the endpoint orientation.
+    fn new(a: EmbeddedVertex, b: EmbeddedVertex, displacement: [i16; 2]) -> Self {
+        if a > b {
+            Self {
+                endpoints: [b, a],
+                displacement: displacement.map(|value| -value),
+            }
+        } else {
+            Self {
+                endpoints: [a, b],
+                displacement,
+            }
+        }
+    }
+}
+
+/// A face's canonically ordered, lifted corners without storage-local identity.
+pub(crate) type EmbeddedFaceCorners = [(EmbeddedVertex, [i16; 2]); 3];
+type EmbeddedFace = (EmbeddedFaceCorners, Option<i32>);
+
+/// Realized CDT proposal state with handles and storage iteration order erased.
+#[derive(PartialEq, Eq)]
+pub(crate) struct EmbeddedState {
+    vertices: Vec<EmbeddedVertex>,
+    edges: Vec<EmbeddedEdge>,
+    faces: Vec<EmbeddedFace>,
+}
+
+impl EmbeddedState {
+    /// Tests whether a vertex with these exact coordinates and label survives.
+    pub(crate) fn contains_vertex(&self, vertex: &EmbeddedVertex) -> bool {
+        self.vertices.binary_search(vertex).is_ok()
+    }
+
+    /// Tests for the particular oriented lift, including across periodic seams.
+    pub(crate) fn contains_edge(&self, edge: &EmbeddedEdge) -> bool {
+        self.edges.binary_search(edge).is_ok()
+    }
+}
+
+/// Fixed spatial chart used for the Hilbert order of embedded proposal sites.
+pub(crate) enum ProposalLocality {
+    /// The torus uses its fundamental rectangle, with a fixed seam at zero.
+    Periodic(ToroidalSpace<2>),
+    /// Open meshes normalize each axis by their vertex bounds.
+    Open { min: [f64; 2], max: [f64; 2] },
+}
+
+impl ProposalLocality {
+    /// Maps a site point to the upstream two-dimensional Hilbert curve.
+    pub(crate) fn index(&self, mut point: [f64; 2]) -> Option<u128> {
+        for (axis, value) in point.iter_mut().enumerate() {
+            *value = match self {
+                Self::Periodic(space) => {
+                    space.wrap_coord(axis, *value)? / space.domain().periods()[axis]
+                }
+                Self::Open { min, max } => {
+                    let (lower, upper) = (min[axis], max[axis]);
+                    let span = upper - lower;
+                    if span.is_infinite() {
+                        // Scale extreme opposite-signed endpoints before subtraction.
+                        value.mul_add(0.5, -lower * 0.5) / upper.mul_add(0.5, -lower * 0.5)
+                    } else if span > 0.0 {
+                        (*value - lower) / span
+                    } else {
+                        0.5
+                    }
+                }
+            };
+        }
+        try_hilbert_index(&point, (0.0, 1.0), HilbertBitDepth::try_new(16).ok()?).ok()
+    }
+
+    /// Locates an edge at its lifted midpoint, wrapped into the chosen chart.
+    pub(crate) fn edge_midpoint(&self, edge: &EmbeddedEdge) -> [f64; 2] {
+        let [a, b] = edge.endpoints;
+        let mut midpoint = std::array::from_fn(|axis| {
+            f64::from_bits(a.0[axis]).midpoint(f64::from_bits(b.0[axis]))
+        });
+        if let Self::Periodic(space) = self {
+            let periods = space.domain().periods();
+            for (axis, value) in midpoint.iter_mut().enumerate() {
+                // Modulo one period, either sign of an odd lift difference adds
+                // half a period. Do the wrapped addition without overflow.
+                if edge.displacement[axis] % 2 != 0 {
+                    let half = periods[axis] * 0.5;
+                    *value = if *value < half {
+                        *value + half
+                    } else {
+                        *value - half
+                    };
+                }
+            }
+        }
+        midpoint
+    }
+}
+
+impl DelaunayBackend<u32, i32, 2> {
+    /// Builds a chart independent of entity ordering and proposal family.
+    pub(crate) fn proposal_locality(&self) -> ProposalLocality {
+        if let GlobalTopology::Toroidal { domain, .. } = self.dt.global_topology() {
+            return ProposalLocality::Periodic(ToroidalSpace::new(domain));
+        }
+        let mut min = [f64::INFINITY; 2];
+        let mut max = [f64::NEG_INFINITY; 2];
+        for (_, vertex) in self.dt.vertices() {
+            for (axis, coordinate) in vertex.point().coords().iter().copied().enumerate() {
+                min[axis] = min[axis].min(coordinate);
+                max[axis] = max[axis].max(coordinate);
+            }
+        }
+        ProposalLocality::Open { min, max }
+    }
+
+    /// Identifies a live edge without allocation order or periodic chart origin.
+    pub(crate) fn embedded_edge(
+        &self,
+        edge: &DelaunayEdgeHandle,
+    ) -> Result<EmbeddedEdge, DelaunayError> {
+        let key = self.validate_edge_handle(edge)?;
+        let (a, b) = key.endpoints();
+        Ok(EmbeddedEdge::new(
+            self.embedded_vertex_by_key(a)?,
+            self.embedded_vertex_by_key(b)?,
+            key.displacement(),
+        ))
+    }
+
+    /// Identifies the geometric face, including its relative periodic lifts.
+    pub(crate) fn embedded_face(
+        &self,
+        face: &DelaunayFaceHandle,
+    ) -> Result<EmbeddedFaceCorners, DelaunayError> {
+        self.embedded_face_corners(self.validate_face_handle(face)?)
+    }
+
+    /// Identifies a vertex independently of its backend owner and handle.
+    pub(crate) fn embedded_vertex(
+        &self,
+        vertex: &DelaunayVertexHandle,
+    ) -> Result<EmbeddedVertex, DelaunayError> {
+        self.embedded_vertex_by_key(self.validate_vertex_handle(vertex)?)
+    }
+
+    /// Resolves an ordered chart corner from stable vertex content.
+    fn embedded_vertex_by_key(&self, key: VertexKey) -> Result<EmbeddedVertex, DelaunayError> {
+        let vertex = self
+            .dt
+            .vertex(key)
+            .ok_or(DelaunayError::InvalidVertex { key })?;
+        Ok((
+            vertex.point().coords().map(f64::to_bits),
+            vertex.data().copied(),
+        ))
+    }
+
+    /// Records the realized cells independently of storage and chart origins.
+    pub(crate) fn embedded_state(&self) -> Result<EmbeddedState, DelaunayError> {
+        let mut vertices = self
+            .dt
+            .vertices()
+            .map(|(key, _)| self.embedded_vertex_by_key(key))
+            .collect::<Result<Vec<_>, _>>()?;
+        vertices.sort_unstable();
+        let mut faces = Vec::with_capacity(self.dt.number_of_simplices());
+        for (key, simplex) in self.dt.simplices() {
+            faces.push((self.embedded_face_corners(key)?, simplex.data().copied()));
+        }
+        faces.sort_unstable();
+        let mut edges = faces
+            .iter()
+            .flat_map(|&([a, b, c], _)| {
+                [(a, b), (b, c), (a, c)].map(|((a, a_lift), (b, b_lift))| {
+                    EmbeddedEdge::new(a, b, [b_lift[0] - a_lift[0], b_lift[1] - a_lift[1]])
+                })
+            })
+            .collect::<Vec<_>>();
+        edges.sort_unstable();
+        edges.dedup();
+        Ok(EmbeddedState {
+            vertices,
+            edges,
+            faces,
+        })
+    }
+
+    /// Uses one canonical lift for both state equality and proposal realization.
+    fn embedded_face_corners(&self, key: SimplexKey) -> Result<EmbeddedFaceCorners, DelaunayError> {
+        let simplex = self
+            .dt
+            .simplex(key)
+            .ok_or(DelaunayError::InvalidFace { key })?;
+        let &[a, b, c] = simplex.vertices() else {
+            return Err(DelaunayError::InvalidFace { key });
+        };
+        let offsets = match simplex.periodic_vertex_offsets() {
+            Some(offsets) => offsets
+                .try_into()
+                .map_err(|_| DelaunayError::InvalidFace { key })?,
+            _ => [[0_i8; 2]; 3],
+        };
+        let mut corners = [
+            (self.embedded_vertex_by_key(a)?, offsets[0]),
+            (self.embedded_vertex_by_key(b)?, offsets[1]),
+            (self.embedded_vertex_by_key(c)?, offsets[2]),
+        ];
+        corners.sort_unstable();
+        let origin = corners[0].1.map(i16::from);
+        Ok(corners
+            .map(|(vertex, [x, y])| (vertex, [i16::from(x) - origin[0], i16::from(y) - origin[1]])))
+    }
+
+    /// A barycentric proposal point in canonical corner order and relative
+    /// chart, so checkpoint hydration cannot change insertion support by one ulp.
+    pub(crate) fn proposal_barycenter(
+        &self,
+        face: &DelaunayFaceHandle,
+    ) -> Result<[f64; 2], DelaunayError> {
+        let key = self.validate_face_handle(face)?;
+        let space = match self.dt.global_topology() {
+            GlobalTopology::Toroidal { domain, .. } => Some(ToroidalSpace::new(domain)),
+            _ => None,
+        };
+        let periods = match self.dt.global_topology() {
+            GlobalTopology::Toroidal {
+                domain,
+                mode: ToroidalConstructionMode::PeriodicImagePoint,
+            } => *domain.periods(),
+            _ => [0.0; 2],
+        };
+        let mut point = [0.0; 2];
+        for ((coords, _), offsets) in self.embedded_face_corners(key)? {
+            for (axis, coordinate) in point.iter_mut().enumerate() {
+                let lifted =
+                    f64::from(offsets[axis]).mul_add(periods[axis], f64::from_bits(coords[axis]));
+                *coordinate += lifted / 3.0;
+            }
+        }
+        for (axis, coordinate) in point.iter_mut().enumerate() {
+            if !coordinate.is_finite() {
+                return Err(DelaunayError::FaceBarycenterFailed {
+                    key,
+                    detail: format!("nonfinite barycenter on axis {axis}"),
+                });
+            }
+            if let Some(space) = &space {
+                *coordinate = space.wrap_coord(axis, *coordinate).ok_or_else(|| {
+                    DelaunayError::FaceBarycenterFailed {
+                        key,
+                        detail: format!("cannot wrap barycenter on axis {axis}"),
+                    }
+                })?;
+            }
+        }
+        Ok(point)
+    }
+}
 
 /// Delaunay backend wrapping the delaunay crate's triangulation (f64 coordinates).
 ///
@@ -1646,28 +2009,6 @@ impl<VertexData, SimplexData, const D: usize> DelaunayBackend<VertexData, Simple
         }
     }
 
-    /// Computes the upstream topology-aware barycenter of a live face.
-    ///
-    /// Periodic triangulations use the simplex's stored lift offsets before
-    /// canonicalizing the result back into the fundamental domain.
-    pub(crate) fn face_barycenter(
-        &self,
-        face: &DelaunayFaceHandle,
-    ) -> Result<[f64; D], DelaunayError> {
-        let key = self.validate_face_handle(face)?;
-        let point = self
-            .dt
-            .simplex_barycenter(key)
-            .map_err(|error| match error {
-                SimplexBarycenterError::MissingSimplex { .. } => DelaunayError::InvalidFace { key },
-                error => DelaunayError::FaceBarycenterFailed {
-                    key,
-                    detail: error.to_string(),
-                },
-            })?;
-        Ok(*point.coords())
-    }
-
     /// Returns Delaunay's stable mesh export with CDT's existing producer identity.
     pub(crate) fn mesh_export(&self) -> Result<DelaunayMeshExport<D>, VisualizationExportError> {
         let mut export = self.dt.to_visualization_data()?;
@@ -2523,13 +2864,12 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize> TriangulationM
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::CdtError;
     use crate::geometry::DelaunayBackend2D;
     use crate::geometry::generators::{
         DelaunayTriangulation2D, build_delaunay2_from_simplices, build_delaunay2_with_data,
         generate_delaunay2, random_delaunay2, seeded_delaunay2,
     };
-    use crate::{CdtTriangulation, CdtValidationProfile};
+    use crate::{CdtError, CdtTriangulation, CdtValidationProfile};
     use approx::assert_relative_eq;
     use delaunay::prelude::construction::ConstructionOptions;
     use delaunay::prelude::validation::{TopologyGuarantee, ValidationPolicy};
@@ -2705,7 +3045,9 @@ pub(crate) mod tests {
                             })
                 })
                 .expect("Euclidean face or toroidal seam face");
-            let point = backend.face_barycenter(&face).expect("lifted barycenter");
+            let point = backend
+                .proposal_barycenter(&face)
+                .expect("lifted barycenter");
             let subdivision = backend
                 .subdivide_face(face, &point)
                 .expect("direct Level 4 subdivision");
@@ -2764,7 +3106,9 @@ pub(crate) mod tests {
         assert_eq!(backend.vertices().collect::<Vec<_>>(), handles);
 
         let face = backend.faces().next().expect("torus has faces");
-        let point = backend.face_barycenter(&face).expect("lifted barycenter");
+        let point = backend
+            .proposal_barycenter(&face)
+            .expect("lifted barycenter");
         let subdivision = backend
             .subdivide_face(face, &point)
             .expect("local insertion");
@@ -3164,6 +3508,42 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn periodic_hilbert_keys_and_embedded_edges_use_lattice_lifts() {
+        let space = ToroidalSpace::try_new([4.0, 3.0]).expect("valid torus chart");
+        let locality = ProposalLocality::Periodic(space);
+        let canonical = locality.index([0.125, 0.375]).expect("valid Hilbert key");
+        assert_eq!(locality.index([4.125, -2.625]), Some(canonical));
+
+        let a = ([0.125_f64.to_bits(), 0.125_f64.to_bits()], Some(0));
+        let b = ([3.875_f64.to_bits(), 2.875_f64.to_bits()], Some(2));
+        let across_seams = EmbeddedEdge::new(a, b, [-1, -1]);
+        let inside = EmbeddedEdge::new(a, b, [0, 0]);
+        assert_eq!(EmbeddedEdge::new(b, a, [1, 1]), across_seams);
+        assert_ne!(inside, across_seams);
+        assert_eq!(
+            locality.edge_midpoint(&across_seams).map(f64::to_bits),
+            [0, 0]
+        );
+        assert_ne!(
+            locality.index(locality.edge_midpoint(&across_seams)),
+            locality.index(locality.edge_midpoint(&inside)),
+        );
+        let state = EmbeddedState {
+            vertices: vec![a, b],
+            edges: vec![across_seams],
+            faces: Vec::new(),
+        };
+        assert!(state.contains_edge(&across_seams));
+        assert!(!state.contains_edge(&inside));
+        let torus = CdtTriangulation::from_toroidal_cdt(4, 3).expect("validated torus");
+        let geometry = torus.geometry();
+        let snapshot = geometry.embedded_state().expect("embedded torus");
+        for edge in geometry.edges() {
+            assert!(snapshot.contains_edge(&geometry.embedded_edge(&edge).expect("live edge")));
+        }
+    }
+
+    #[test]
     fn face_barycenter_matches_euclidean_triangle_centroid() {
         let dt = build_delaunay2_with_data(&[([0.0, 0.0], 0), ([1.0, 0.0], 0), ([0.0, 1.0], 1)])
             .expect("triangle fixture should build");
@@ -3174,7 +3554,7 @@ pub(crate) mod tests {
             .expect("triangle fixture should contain a face");
 
         let point = backend
-            .face_barycenter(&face)
+            .proposal_barycenter(&face)
             .expect("Euclidean face barycenter should resolve");
 
         assert_relative_eq!(point[0], 1.0 / 3.0, epsilon = 1e-15);
@@ -3189,7 +3569,7 @@ pub(crate) mod tests {
         let bogus_key = SimplexKey::from(KeyData::from_ffi(u64::MAX));
         let invalid_handle = backend.face_handle(bogus_key);
 
-        let error = backend.face_barycenter(&invalid_handle).unwrap_err();
+        let error = backend.proposal_barycenter(&invalid_handle).unwrap_err();
 
         assert_matches!(error, DelaunayError::InvalidFace { key } if key == bogus_key);
     }
@@ -3255,7 +3635,7 @@ pub(crate) mod tests {
         }
 
         let point = backend
-            .face_barycenter(&face)
+            .proposal_barycenter(&face)
             .expect("periodic face barycenter should resolve");
 
         assert_relative_eq!(point[0], expected[0], epsilon = 1e-12);
@@ -4322,7 +4702,7 @@ pub(crate) mod tests {
         let mut backend = validated_backend(dt);
         let face = backend.faces().next().expect("fixture has a face");
         let point = backend
-            .face_barycenter(&face)
+            .proposal_barycenter(&face)
             .expect("face barycenter should resolve");
         let subdivision = backend
             .subdivide_face(face, &point)

@@ -20,14 +20,11 @@ For each step:
    - `(2,2)` / edge flip: `ΔN0 = 0`, `ΔN1 = 0`, `ΔN2 = 0`
    - `(1,3)`: `ΔN0 = +1`, `ΔN1 = +3`, `ΔN2 = +2`
    - `(3,1)`: `ΔN0 = -1`, `ΔN1 = -3`, `ΔN2 = -2`
-4. Apply the selected site once on a cloned proposed state. Ordinary causal, geometric, or backend edit failures are self-loop proposal outcomes; the live
+4. Apply the selected site on a cloned proposed state. Ordinary causal, geometric, or backend edit failures are self-loop proposal outcomes; the live
    triangulation is unchanged.
-5. Count the forward sites from the cached selected move-family set. Re-evaluate the policy on the planned post-move state and count the reverse sites for the
-   inverse family from the same canonical cache implementation.
-6. Build the path-conditioned weighted family/site correction with `markov-chain-monte-carlo::DiscreteProposalRatio` and accept successful transitions with
-   `min(1, exp(-ΔS / T + log(q(current | proposed) / q(proposed | current))))`. For equal move-family weights this adds
-   `log(forward_site_count / reverse_site_count)` to the ordinary action term. Unequal or state-dependent policies additionally contribute
-   `log(p(reverse(m) | y) / p(m | x))`.
+5. Re-evaluate the family policy on the planned post-move state. The sampled family and its named inverse supply the offered-site diagnostics.
+6. Sum the probabilities of sites that realize each concrete transition, including both flip-family names. Submit the two endpoint probabilities to
+   `markov-chain-monte-carlo::DiscreteProposalRatio` for the acceptance decision.
 7. Only after acceptance, replace the live triangulation with the planned proposed state.
 8. If a proposal hits a hard backend or invariant failure, return `CdtError::MetropolisProposalApplicationFailed` with the step, failure stage, move type,
    attempt number, and typed lower-level failure. Planning errors occur before acceptance; the commit stage occurs after acceptance.
@@ -40,34 +37,10 @@ outcomes, sampled-site failures, Metropolis rejections, and accepted transitions
 
 ## Scientific Calibration And Geometry Backend Role
 
-The Delaunay backend is an implementation substrate, not the sampled physics ensemble. It gives the crate a robust way to construct an initial piecewise-linear
-manifold, validate topology and adjacency, and perform checked local edit primitives. After initialization, the simulation does not enforce the Delaunay
-condition as part of the Markov-chain state. The sampled ensemble is defined by the CDT move set, foliation/topology/causality validation, the configured
-action, and the Metropolis-Hastings acceptance rule.
-
-The default action constants are calibrated for the non-volume-fixed 1+1 CDT baseline. In pure 1+1 gravity the curvature/Newton term is topological at fixed
-topology, so the default vertex and triangle couplings are zero:
-
-```text
-kappa_0 = 0
-kappa_2 = 0
-```
-
-The exactly solved 2D CDT model has critical cosmological coupling `lambda_c = ln 2` in the triangle-volume convention where configurations are weighted by
-`exp(-lambda N2)`. This crate's historical action writes the cosmological term as `lambda_edge N1`. For closed toroidal 1+1 triangulations,
-`N1 = 3 N2 / 2`, so the default edge-count coupling is
-
-```text
-lambda_edge = (2 / 3) ln 2 ~= 0.46209812037329684
-```
-
-With these defaults, toroidal 1+1 runs map the edge-count action convention to the standard critical triangle-volume coupling. Non-volume-fixed finite runs may
-still drift because the critical point is a continuum-limit statement. Explicit quadratic triangle-volume fixing adds a separate modified-ensemble action
-through upstream `AdditiveTarget`; the existing sampler retains the complete family/site Hastings ratio. See [chain analysis](ANALYZING.md).
-
-The calibration is based on Ambjørn and Loll's original 2D CDT construction and the Ambjørn, Görlich, Jurkiewicz, and Loll review. The
-volume-fixing mode follows the higher-dimensional CDT simulation literature where quadratic fixing terms are added deliberately. See
-[REFERENCES.md](../REFERENCES.md) for the full citations.
+Delaunay provides construction, structural validation, and local edit primitives. Evolved embedded states use the structural validation contract defined
+under [Geometry Backend Role](scientific-basis.md#geometry-backend-role). [Action Calibration](scientific-basis.md#action-calibration) gives the default
+couplings and the conversion from edge counts to triangle counts. Quadratic volume fixing changes the target action through upstream `AdditiveTarget` while
+leaving the proposal kernel intact. See [chain analysis](ANALYZING.md) for the run contract.
 
 ## Chunked Sweeps
 
@@ -77,10 +50,11 @@ together between chunks.
 
 ### Serialized Checkpoint Compatibility
 
-`CdtMcmcCheckpoint::to_json()` writes version 4 for both bare and volume-fixed ensembles. Each trajectory row carries one tagged transition. The
+`CdtMcmcCheckpoint::to_json()` writes version 5 for embedded runs using the corrected proposal kernel. Each trajectory row carries one tagged transition. The
 reader derives public step telemetry from those rows. Rows inherit the run seed and encode a slab profile on its first occurrence and after each change.
 Restore computes the post-step action from the transition and the log probability from that action and the recorded temperature.
-The top-level `format_version` tag is mandatory.
+The top-level `format_version` and `proposal_stats` fields are mandatory. The JSON reader rejects repeated fields in the CDT checkpoint records,
+including repeated version tags and schedule parameters.
 Unknown tags return `CdtError::UnsupportedCheckpointVersion` with both the encountered and
 supported versions, allowing callers to distinguish an upgrade requirement from malformed state.
 
@@ -105,8 +79,9 @@ format receives a new version tag. Serialization borrows the geometry and payloa
 Checkpoint JSON is an exact stochastic-continuation artifact, not the preferred long-term analysis format. Use trace CSV for rectangular per-step diagnostics
 and the simulation-summary JSON for durable cross-version results and metadata. Those exports intentionally omit resumable RNG and live geometry state.
 
-Serde snapshots of `SimulationResultsBackend` now rebuild steps from the canonical `scalar_trace_rows`. The reader rejects the retired top-level
-`steps` field. To recover data from an older result snapshot, load it with the build that wrote it and export trace CSV or simulation-summary JSON.
+Serde snapshots of `SimulationResultsBackend` include `proposal_kernel: "marginal-endpoint"` and rebuild steps from the canonical `scalar_trace_rows`.
+The reader requires this tag so pre-correction results cannot be re-exported as current validation chains. Load an older snapshot with its producing build
+to export trace CSV or simulation-summary JSON.
 
 Chunk execution is implemented through `markov-chain-monte-carlo::Sampler::step_delayed` on the CDT proposal-plan adapter. The upstream sampler owns the
 Metropolis-Hastings accept/reject draw, log-probability cache, chain counters, and checkpoint-compatible continuation view. CDT keeps domain-specific state
@@ -145,26 +120,18 @@ The Metropolis-Hastings proposal-ratio correction depends on transition probabil
 q(current | proposed) / q(proposed | current)
 ```
 
-The implementation computes a selected-family/site score. Under the default `UniformCdtMoveFamilyPolicy`, move families are selected with equal probability,
-then a site is chosen uniformly from that family's offered sites:
+Each offered site has weight `P(family) / N_family`, where `N_family` is counted at the endpoint supplying the proposal. The implementation sums
+the weights of all successful sites that realize the other endpoint, including the two names for flip proposals.
 
 ```text
-forward_atom_weight = P(forward move family) / N_forward
-assumed_reverse_atom_weight = P(reverse move family) / N_reverse
+q(y | x) = sum over families m of P(m | x) * matches(x, m, y) / N_m(x)
+log_q_ratio = log(q(x | y)) - log(q(y | x))
 ```
 
-The reverse weight assumes a matching atom that returns exactly to the source state. Positive reverse-family site counts do not establish that pairing;
-[#316](scientific-basis.md#move-and-sampler-contract) gives a coordinate-state counterexample. These weights therefore cannot currently be identified with
-the endpoint transition probabilities above. For the default policy, equal family weights cancel in the implemented score:
-
-```text
-assumed_reverse_atom_weight / forward_atom_weight = N_forward / N_reverse
-log_q_ratio = log(N_forward) - log(N_reverse)
-```
-
-`N_forward` is the number of offered local sites for the selected move type in the current triangulation. `N_reverse` is the number of offered local sites for
-the inverse move type in the proposed triangulation. For example, a `(1,3)` proposal counts offered `(1,3)` sites before the move and offered reverse `(3,1)`
-sites after the move. This is family/site probability bookkeeping; a valid reverse-support derivation remains necessary for a detailed-balance claim.
+An empty family contributes only to the diagonal. A realized endpoint without a return atom receives negative infinity and is rejected by Metropolis-Hastings.
+The offered family/site counts remain available in telemetry for inspection. For embedded runs, coordinate bits, time labels, cell incidences, and relative
+periodic lifts distinguish the endpoints. The intrinsic sampler uses rooted cyclic annuli and the measure derived in
+[Scientific Basis](scientific-basis.md#intrinsic-periodic-cdt-measure).
 
 The proposal-site universe must be the same for sampling and counting. If the sampler can choose a site, that site belongs in the denominator used for the
 proposal probability, even if applying it later returns an ordinary geometric, causal, or backend rejection.
@@ -180,9 +147,8 @@ current state. These exact deterministic preflights come from
 [`delaunay#419`](https://github.com/acgetchell/delaunay/issues/419) and avoid clone-and-try scans. They do not replace CDT's causal or topology checks, nor do
 they promise that the later primitive in a composite foliated move or post-mutation CDT finalization cannot produce an ordinary self-loop rejection.
 
-Hastings' original Markov-chain sampling paper gives the acceptance rule for actual proposal probabilities, and Brunekreef, Loll, and Görlich describe CDT
-Monte Carlo moves together with their detailed-balance equations. Those derivations do not establish the missing reverse pairing for this implementation.
-See [REFERENCES.md](../REFERENCES.md) for the full citations.
+[Hastings' acceptance rule](../REFERENCES.md#metropolis-hastings-algorithm-in-cdt) uses actual proposal probabilities. The embedded implementation checks
+return support on the realized meshes, including cases where the named inverse has sites but none reproduce the source coordinates and lifts.
 
 The integration test `test_toroidal_metropolis_accepts_periodic_moves_and_preserves_topology` supplies structural evidence by running a seeded S¹×S¹ simulation,
 requiring at least one accepted periodic move, and checking final topology, foliation, causality, simplex classification, and Euler characteristic. It does
@@ -197,6 +163,9 @@ A CDT proposal is represented by an explicit local site selected from the curren
 3. Select one site uniformly and apply that exact site to the cloned proposed state.
 4. Treat ordinary local or backend rejections as self-loop proposals, not hard failures.
 5. Score successful transitions with the Metropolis-Hastings proposal ratio for the actual proposal kernel.
+
+Site ordinals follow the [embedded Hilbert convention](scientific-basis.md#hilbert-order-for-embedded-proposal-sites). Rebuilding the same realized mesh
+under the same build preserves the ordered site list.
 
 ### Borrowed Proposal-Policy View
 
@@ -216,9 +185,8 @@ stable family order and identifiers are:
 | `Move31Remove` | `move-3-1-remove` | `Move13Add` |
 | `EdgeFlip` | `edge-flip` | `EdgeFlip` |
 
-`Move22` and `EdgeFlip` remain distinct policy identifiers for compatibility with the conventional four-family distribution, although both use the same 2D
-k=2 flip kernel and therefore expose the same site universe. The sampler treats them as distinct auxiliary mixture components and conditions acceptance on
-the family/site path that was actually selected.
+`Move22` and `EdgeFlip` are distinct policy identifiers that use the same k=2 flip kernel and offered-site universe. Their probabilities add when
+calculating the mass of a realized flip.
 
 ### Injected Family Policies
 
@@ -235,9 +203,8 @@ The same integer masses drive family sampling and the reported Hastings probabil
 
 Individual zero family weights are allowed. All-zero output is `CdtMoveFamilyPolicyError::EmptySupport`; negative or non-finite output and non-finite
 normalization totals are separate typed errors. A positive-weight family with zero offered sites remains in the family distribution and becomes a typed
-`NoOfferedSite` self-loop if selected. CDT never conditions the family distribution on site availability after selection. For a successful forward plan,
-zero reverse-family probability or zero reverse offered-site count is valid input to the MCMC ratio and yields a `-∞` log correction, so the transition is
-rejected without mutating the chain.
+`NoOfferedSite` self-loop if selected. CDT never conditions the family distribution on site availability after selection. Each reverse family with zero
+weight or zero offered sites contributes zero. A successful forward plan is rejected when the sum over all return atoms is zero.
 
 Use `CdtProposal::new(action).with_seed(seed).with_policy(policy)` with an upstream delayed chain directly. The production facade binds the policy once through
 `MetropolisAlgorithm::with_policy()`, after which `run()`, `run_with_checkpoint()`, `run_to_checkpoint()`, `resume_from_checkpoint()`,
@@ -260,8 +227,8 @@ allocate nothing. A detached site ID records triangulation identity and modifica
 receive a typed foreign-state, stale-state, family-mismatch, or ordinal error when it is no longer valid. Accepted mutations make earlier IDs stale for that
 state; clones, deserialized values, and replacement triangulations have a different identity and reject those IDs as foreign.
 
-The conventional sampler now reads counts and selected private site descriptors through this view over `MoveSiteCache`; there is no second site-enumeration
-implementation for policy consumers.
+The conventional sampler and policy view use the same ordered slice in `MoveSiteCache`. Sampling a site carries the slice's positive length forward as its
+proposal denominator. An empty slice retains the reason the move was unavailable.
 
 #### Offered Sites Versus Eligible Sites
 
@@ -281,34 +248,17 @@ For state `x`, move family `m`, and a sampleable site set `S_m(x)`, one sampled 
 q_c(x -> y) = p(m | x) / |S_m(x)|
 ```
 
-The implementation conditions its acceptance calculation on this selected atom and assumes one matching reverse-family atom. Under that assumption it uses:
+The adapter reevaluates family weights and offered sites at `y` and realizes possible return atoms on isolated drafts. The
+[#316](https://github.com/acgetchell/causal-triangulations/issues/316) regression retains a removal whose reverse family is nonempty and whose actual
+reverse transition is absent. The same two combinatorial endpoints have positive probabilities in both directions in the intrinsic kernel.
 
-```text
-q_reverse(c)(y -> x) = p(reverse(m) | y) / |S_reverse(m)(y)|
-```
+## Intrinsic Periodic Sampling
 
-The reverse-family weight and offered-site count are evaluated from the realized planned state `y`. They do not independently establish that a reverse atom
-exists. The implemented correction is:
-
-```text
-log_q_ratio =
-    log(p(reverse(m) | y)) - log(p(m | x))
-  + log(|S_m(x)|) - log(|S_reverse(m)(y)|)
-```
-
-For equal move-family weights, this reduces to the familiar site-count correction:
-
-```text
-log_q_ratio = log(|S_forward(x)|) - log(|S_reverse(y)|)
-```
-
-Multiple auxiliary atoms may reach the same endpoint `y`, including a flip exposed through both `Move22` and `EdgeFlip`. A proved involutive pairing with
-correct auxiliary probabilities would permit a pathwise balance argument; an endpoint-based kernel instead needs probabilities summed over all contributing
-atoms. The current per-plan correction does not perform that sum, and its assumed pairing is not established. In particular,
-[#316](https://github.com/acgetchell/causal-triangulations/issues/316) retains a removal whose represented source cannot be restored by any destination-face
-barycentric insertion, despite a positive reverse-family count. Ratio-algebra tests therefore do not prove detailed balance of actual transitions.
-Resolving this requires the intrinsic state/measure and reverse-support work described in [Scientific Basis](scientific-basis.md); neither a finite site count
-nor a citation to the Metropolis-Hastings rule discharges that obligation.
+Use `IntrinsicCdtTriangulation::from_spatial_loop_lengths` to start a periodic chain and `IntrinsicCdtProposal` with `CdtTarget` and
+`Chain::step_delayed` from `prelude::simulation`. Read the current labeled profile with `chain.state().spatial_loop_lengths()`.
+The intrinsic kernel validates topology through Delaunay's triangle gluings and handles volume fixing through the same `ActionConfig`.
+The existing file-output runner and checkpoint schema store embedded meshes. The analytic validation harness for the intrinsic path is tracked by
+[#238](https://github.com/acgetchell/causal-triangulations/issues/238).
 
 ## Ordinary Rejections
 
@@ -327,10 +277,13 @@ contract failure into ordinary rejection probability. Typed adapter errors remai
 
 ## Proposal Statistics
 
-Each fresh in-memory `MonteCarloStep` also exposes `ProposalKernelTelemetry` through `proposal_telemetry()`. Successful plans report selected and reverse
-families, both family probabilities, both canonical offered-site counts, the independently inspectable family and site log-ratio components, and the complete
-Hastings correction. Self-loops retain the selected family, pre-state probability, original denominator, and typed `CdtProposalPlanningOutcome`. Pair this
+Each fresh in-memory `MonteCarloStep` also exposes `ProposalKernelTelemetry` through `proposal_telemetry()`. Successful plans report the selected family and
+its named inverse, their family probabilities and offered-site counts, both marginal endpoint probabilities, and the resulting log Hastings correction.
+Planning self-loops retain the selected family, pre-state probability, original denominator, and typed `CdtProposalPlanningOutcome`. Pair this
 with `MonteCarloStepOutcome` to distinguish planning rejection, Metropolis rejection, and acceptance without parsing strings or accessing private state.
+
+Only a realized plan supplies the proposed action and scored action change. The runner checks that the upstream decision agrees with that evidence
+before it updates the history or move counters.
 
 Policy/model persistence and external audit logging remain outside the timed transition. Callers that serialize checkpoints should therefore persist required
 policy state and per-step policy telemetry in their experiment artifact layer; serialized CDT step records do not embed the optional
@@ -349,12 +302,9 @@ in-memory proposal audit field.
 These counters explain chain stickiness and backend behavior. They do not establish detailed balance, which requires correct transition probabilities and
 reverse support at each step.
 
-`tests/proposal_policy.rs` independently reconstructs forward and assumed reverse family/site weights for concrete uniform and unequal-weight transitions,
-checks the resulting flux algebra under a matching-reverse hypothesis, and compares a fixed-policy checkpoint/resume run with its uninterrupted seeded
-trajectory. These are score-algebra and same-build reproducibility checks. They do not settle #316 or establish detailed balance, ergodicity, mixing quality,
-or physical convergence.
+`tests/proposal_policy.rs` checks offered-site accounting and fixed-policy replay across checkpoint restoration. The intrinsic tests independently
+enumerate the actual endpoint distributions and detailed-balance fluxes on small tori.
 
-The explicit-site model avoids dry-run cloning every candidate during site counting. Planned Metropolis acceptance creates one proposed-state clone; direct
-move attempts create one rollback snapshot. Both paths pass caller-owned rollback into the primitive backend edits, so applying a selected site does not clone
-the full backend again, including for composite mutations whose intermediate steps can partially commit. Standalone `TriangulationMut` calls retain their
-backend-owned rollback guard because they have no enclosing CDT transaction.
+Embedded scoring first rules out atoms with a different required vertex or edge change. The selected edit and each remaining candidate use isolated
+drafts. Direct move attempts create one rollback snapshot. These paths pass caller-owned rollback into the primitive edits. Standalone
+`TriangulationMut` calls own their rollback guard.

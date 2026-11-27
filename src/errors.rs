@@ -320,9 +320,6 @@ pub enum DelaunayGenerationFailure {
         /// Non-strict simplices remaining when filtering stopped.
         remaining_violations: usize,
     },
-    /// The deterministic toroidal candidate iterator was empty.
-    #[error("no deterministic toroidal embedding candidates were attempted")]
-    NoEmbeddingCandidates,
 }
 
 /// Identifies the CDT triangulation metadata field that failed validation.
@@ -2132,7 +2129,7 @@ pub enum CdtError {
         /// Planned move family.
         move_type: MoveType,
     },
-    /// A standalone planned proposal carried invalid family/site ratio components.
+    /// A standalone planner supplied invalid proposal probabilities or diagnostics.
     #[error("CDT proposal ratio failed for {move_type:?}: {source}")]
     ProposalRatioFailed {
         /// Selected forward family.
@@ -2140,7 +2137,7 @@ pub enum CdtError {
         /// Typed upstream ratio-construction failure.
         source: DiscreteProposalRatioError,
     },
-    /// A Metropolis run received invalid family/site ratio components.
+    /// A Metropolis run received invalid proposal probabilities or diagnostics.
     #[error("CDT proposal ratio failed for {move_type:?} at Metropolis step {step}: {source}")]
     MetropolisProposalRatioFailed {
         /// Monte Carlo step whose planned ratio was invalid.

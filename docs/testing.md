@@ -7,7 +7,7 @@ in `docs/dev/testing.md` and `docs/dev/DEVELOPING.md`.
 
 - **Library unit tests**: `cargo test --lib` currently runs the core Rust test suite across CDT, geometry, configuration, and utility modules.
 - **Integration tests**: `tests/integration_tests.rs`, `tests/cli.rs`, `tests/proposal_policy.rs`, `tests/proptest_foliation.rs`,
-  `tests/proptest_metropolis.rs`, and `tests/proptest_config.rs` cover public workflows, CLI validation, independent family/site score reconstruction, foliation
+  `tests/proptest_metropolis.rs`, and `tests/proptest_config.rs` cover public workflows, CLI validation, proposal endpoint probabilities, foliation
   invariants, Metropolis scoring, and property-test configuration precedence.
 - **Python tooling tests**: `tests/tooling/` covers the installed shared tooling and CDT configuration, including benchmark, example, notebook, and
   release contracts.
@@ -24,10 +24,13 @@ split into equal-size spatial slices.
 
 The v0.1.1 capstone evidence includes focused spatial- and temporal-seam applications for both k=2 identifiers, exact `(1,3)`/`(3,1)` seam-local round trips,
 full action recomputation for every successful move family under ordinary and extreme finite couplings, serialization-equivalent rollback evidence including
-derived profiles and action, and independent family/site score algebra for uniform, unequal fixed, and state-dependent family policies. Those algebra checks
-assume matching reverse proposal atoms; they do not establish endpoint return support or detailed balance. The
-[#316 counterexample](scientific-basis.md#move-and-sampler-contract) remains unresolved. The fixed-mixture tests exercise `Move22` and `EdgeFlip` as distinct
-proposal components even though both currently realize the same geometric k=2 edit.
+derived profiles and action, and family/site score algebra for uniform, unequal fixed, and state-dependent family policies. The original algebra checks
+assumed matching return atoms.
+
+The current suite replays the [#316 counterexample](scientific-basis.md#move-and-sampler-contract) and requires zero embedded return probability. Fixed-mixture
+tests sum the two policy components `Move22` and `EdgeFlip` when they realize the same edit. Intrinsic cyclic-word tests independently enumerate small-torus
+transition rows and detailed-balance fluxes. The Hilbert-order regression compares family order after exact geometry reconstruction and reversed site
+discovery. The [statistical ensemble gate](roadmap.md#v020-analytic-acceptance-criteria) remains separate.
 
 ## Property-Test Case Controls
 
@@ -45,7 +48,6 @@ and for every other configuration default.
 
 ### Ergodic Move Sampling
 
-- Weight move-type selection by available application sites instead of sampling move types uniformly.
 - Exercise more negative cases where a geometrically editable site must be rejected because it would break CDT invariants.
 
 ### Geometry Trait Operations

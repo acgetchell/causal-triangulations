@@ -27,11 +27,10 @@ use rand::rngs::Xoshiro256PlusPlus;
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError, ser::Error as SerError,
 };
-use serde_json::Value;
 use std::num::NonZeroU32;
 use std::time::Duration;
 
-const CHECKPOINT_FORMAT_VERSION: u32 = 4;
+const CHECKPOINT_FORMAT_VERSION: u32 = 5;
 
 #[cfg(test)]
 thread_local! {
@@ -161,7 +160,7 @@ impl CheckpointAction {
 ///
 /// # Serialization compatibility
 ///
-/// Version 4 records each transition once for bare and biased runs.
+/// Version 5 records runs after the embedded proposal-support correction.
 /// The geometry schema follows the upstream persistence
 /// contract; chain fields remain independent of the MCMC crate's checkpoint
 /// representation. [`Self::from_json`] rejects other format versions with
@@ -212,7 +211,7 @@ pub struct CdtMcmcCheckpoint {
     prefix_validated: bool,
 }
 
-/// Borrowed top-level record shared by the version 4 checkpoint envelope.
+/// Borrowed top-level record shared by the version 5 checkpoint envelope.
 #[derive(Serialize)]
 struct CdtMcmcCheckpointWireRef<'a> {
     format_version: u32,
@@ -233,7 +232,7 @@ struct CdtMcmcCheckpointWireRef<'a> {
     ergodics: ErgodicsCheckpointRecordRef<'a>,
 }
 
-/// Owned top-level record accepted for the version 4 checkpoint envelope.
+/// Owned top-level record accepted for the version 5 checkpoint envelope.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CdtMcmcCheckpointWire {
@@ -246,7 +245,6 @@ struct CdtMcmcCheckpointWire {
     current_step: u32,
     current_action: f64,
     move_stats: MoveStatisticsWire,
-    #[serde(default)]
     proposal_stats: ProposalStatisticsWire,
     measurements: Vec<MeasurementWire>,
     scalar_trace_rows: Vec<TrajectoryRecord<Vec<u32>>>,
@@ -340,24 +338,13 @@ impl CdtMcmcCheckpoint {
     /// # Errors
     ///
     /// Returns [`CdtError::UnsupportedCheckpointVersion`] when the envelope names
-    /// a version other than version 4. Malformed JSON and
+    /// a version other than version 5. Malformed JSON and
     /// missing or invalid version tags return
     /// [`CdtError::CheckpointSerializationFailed`]. Restored-state invariant
     /// failures retain their specific [`CdtError`] variants.
     pub fn from_json(json: &str) -> CdtResult<Self> {
-        let value: Value = serde_json::from_str(json).map_err(|error| {
-            checkpoint_serialization_failed(CheckpointOperation::Deserialize, error.to_string())
-        })?;
-        let encountered = checkpoint_format_version(&value)?;
-        if encountered != u64::from(Self::FORMAT_VERSION) {
-            return Err(CdtError::UnsupportedCheckpointVersion {
-                encountered,
-                supported: Self::FORMAT_VERSION,
-            });
-        }
-        let wire: CdtMcmcCheckpointWire = serde_json::from_value(value).map_err(|error| {
-            checkpoint_serialization_failed(CheckpointOperation::Deserialize, error.to_string())
-        })?;
+        let wire = serde_json::from_str(json)
+            .map_err(|error| checkpoint_json_decode_error(json, &error))?;
         Self::from_wire(wire)
     }
 
@@ -926,18 +913,30 @@ impl CdtMcmcCheckpoint {
     }
 }
 
-/// Reads the numeric version tag before attempting to decode a version payload.
-fn checkpoint_format_version(value: &Value) -> CdtResult<u64> {
-    value
-        .get("format_version")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| {
-            checkpoint_serialization_failed(
-                CheckpointOperation::Deserialize,
-                "missing or non-integer `format_version` tag; unversioned checkpoints are not supported"
-                    .to_string(),
-            )
-        })
+/// On a wire error, distinguish unsupported envelopes without presuming their body layout.
+fn checkpoint_json_decode_error(json: &str, error: &serde_json::Error) -> CdtError {
+    #[derive(Deserialize)]
+    struct VersionTag {
+        format_version: Option<u64>,
+    }
+
+    match serde_json::from_str::<VersionTag>(json) {
+        Ok(VersionTag {
+            format_version: Some(encountered),
+        }) if encountered != u64::from(CdtMcmcCheckpoint::FORMAT_VERSION) => {
+            CdtError::UnsupportedCheckpointVersion {
+                encountered,
+                supported: CdtMcmcCheckpoint::FORMAT_VERSION,
+            }
+        }
+        Ok(VersionTag {
+            format_version: None,
+        }) => checkpoint_serialization_failed(
+            CheckpointOperation::Deserialize,
+            "missing or null format_version; unversioned checkpoints are not supported".to_owned(),
+        ),
+        _ => checkpoint_serialization_failed(CheckpointOperation::Deserialize, error.to_string()),
+    }
 }
 
 /// Wraps an encoding diagnostic in the public checkpoint I/O error contract.
@@ -1134,8 +1133,6 @@ pub(crate) fn validate_checkpoint_counters(checkpoint: &CdtMcmcCheckpoint) -> Cd
 
 /// Checks aggregate checkpoint state without replaying its telemetry streams.
 fn validate_checkpoint_summary(checkpoint: &CdtMcmcCheckpoint) -> CdtResult<()> {
-    checkpoint.config.validate();
-    checkpoint.action_config.validate();
     if let Some(fixing) = checkpoint.action_config.volume_fixing() {
         fixing.ensure_ensemble(
             checkpoint.triangulation().metadata().topology(),
@@ -1651,12 +1648,15 @@ pub(crate) fn chain_counters(move_stats: &MoveStatistics) -> CdtResult<(usize, u
 mod tests {
     use super::*;
     use crate::cdt::foliation::FoliationError;
+    use crate::cdt::metropolis::MonteCarloStepOutcome;
+    use crate::cdt::proposal_policy::CdtMoveFamilyDistribution;
     use crate::cdt::triangulation::CdtTriangulation;
+    use crate::cdt::volume_fixing::VolumeFixingError;
     use crate::errors::{
         ConfigurationSetting, ExpectedConstraint, MeasurementCountField, ObservedValue,
     };
     use crate::geometry::backends::delaunay::tests::backend_state_value;
-    use serde_json::{json, to_value};
+    use serde_json::{Value, json, to_value};
     use std::assert_matches;
     use std::num::NonZeroUsize;
 
@@ -1673,9 +1673,6 @@ mod tests {
 
     #[test]
     fn resumed_no_proposal_cannot_change_the_prefix_slab_profile() -> CdtResult<()> {
-        use crate::cdt::metropolis::MonteCarloStepOutcome;
-        use crate::cdt::proposal_policy::CdtMoveFamilyDistribution;
-
         let sampler = MetropolisAlgorithm::new(
             MetropolisConfig::new(1.0, 1, 0, 1)?.with_seed(0),
             ActionConfig::default(),
@@ -1856,7 +1853,7 @@ mod tests {
         let json = checkpoint.to_json().expect("checkpoint should serialize");
         let payload: Value = serde_json::from_str(&json).expect("checkpoint JSON should parse");
 
-        assert_eq!(payload["format_version"], json!(4));
+        assert_eq!(payload["format_version"], json!(5));
         assert!(payload.get("steps").is_none());
         assert!(payload.get("chain").is_none());
         let geometry = &payload["triangulation"]["geometry"];
@@ -1869,7 +1866,7 @@ mod tests {
         assert!(payload["ergodics"]["rng"]["state"].is_array());
 
         let restored =
-            CdtMcmcCheckpoint::from_json(&json).expect("version 4 checkpoint should deserialize");
+            CdtMcmcCheckpoint::from_json(&json).expect("version 5 checkpoint should deserialize");
         let restored_payload: Value = serde_json::from_str(
             &restored
                 .to_json()
@@ -1884,7 +1881,7 @@ mod tests {
         let checkpoint = one_step_checkpoint();
         let mut payload = to_value(checkpoint.wire().expect("wire projection should work"))
             .expect("wire should serialize");
-        payload["format_version"] = json!(5);
+        payload["format_version"] = json!(4);
 
         let Err(error) = CdtMcmcCheckpoint::from_json(&payload.to_string()) else {
             panic!("unsupported checkpoint version should be rejected");
@@ -1892,7 +1889,7 @@ mod tests {
         assert_matches!(
             error,
             CdtError::UnsupportedCheckpointVersion {
-                encountered: 5,
+                encountered: 4,
                 supported: CdtMcmcCheckpoint::FORMAT_VERSION,
             }
         );
@@ -1906,25 +1903,46 @@ mod tests {
     }
 
     #[test]
+    fn checkpoint_json_rejects_duplicate_fields_at_each_depth() {
+        let json = one_step_checkpoint().to_json().expect("serialize fixture");
+        for (field, extra) in [
+            ("format_version", "4"),
+            ("accepted", "17"),
+            ("temperature", "0"),
+        ] {
+            let key = format!("\"{field}\":");
+            let duplicate = json.replacen(&key, &format!("{key}{extra},{key}"), 1);
+            let detail = format!("duplicate field `{field}`");
+            let error = checkpoint_json_error(&duplicate, "ambiguous checkpoint must fail");
+            assert_checkpoint_deserialization_detail(&error, &detail);
+            assert!(
+                serde_json::from_str::<CdtMcmcCheckpoint>(&duplicate)
+                    .is_err_and(|error| error.to_string().contains(&detail))
+            );
+        }
+    }
+
+    #[test]
     fn checkpoint_json_wraps_malformed_body() {
-        let mut payload = one_step_checkpoint_payload();
-        payload
-            .as_object_mut()
-            .expect("wire should be a JSON object")
-            .remove("accepted");
-
-        let error = checkpoint_json_error(
-            &payload.to_string(),
-            "incomplete version 4 body should be rejected",
-        );
-
-        assert_checkpoint_deserialization_detail(&error, "missing field `accepted`");
+        let original = one_step_checkpoint_payload();
+        for field in ["accepted", "proposal_stats"] {
+            let mut payload = original.clone();
+            payload
+                .as_object_mut()
+                .expect("wire should be an object")
+                .remove(field);
+            let error = checkpoint_json_error(
+                &payload.to_string(),
+                "incomplete version 5 body should be rejected",
+            );
+            assert_checkpoint_deserialization_detail(&error, &format!("missing field `{field}`"));
+        }
     }
 
     #[test]
     fn checkpoint_serde_rejects_unknown_version() {
         let mut payload = one_step_checkpoint_payload();
-        payload["format_version"] = json!(5);
+        payload["format_version"] = json!(4);
 
         let Err(error) = serde_json::from_value::<CdtMcmcCheckpoint>(payload) else {
             panic!("Serde entry point should enforce the wire version");
@@ -1933,7 +1951,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("Unsupported MCMC checkpoint format version 5")
+                .contains("Unsupported MCMC checkpoint format version 4")
         );
     }
 
@@ -2009,7 +2027,6 @@ mod tests {
 
     #[test]
     fn checkpoint_invalid_fixing_preserves_domain_error() {
-        use crate::cdt::volume_fixing::VolumeFixingError;
         for target in [0, 31] {
             let mut payload = one_step_checkpoint_payload();
             payload["action_config"]["volume_fixing"] =

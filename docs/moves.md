@@ -108,12 +108,12 @@ CDT cannot apply arbitrary geometric k-flips directly. A CDT move must also pres
 maps Delaunay's local edit primitives into foliation-preserving CDT proposals:
 
 - `Move22` / `EdgeFlip` use the k=2 edge flip only when the replacement diagonal preserves adjacent-slice causality and simplex classification.
-- Foliated `Move13Add` is realized as a spacelike-link split: subdivide an adjacent face, label the new vertex on the link's slice, then flip the original
-  spacelike link away. Open-boundary sites require both adjacent time slabs; toroidal sites wrap time.
+- Foliated `Move13Add` splits a spacelike link. Subdivide its past-side face, label the new vertex on the link's slice, then flip the original
+  spacelike link away. Open-boundary sites require both adjacent time slabs. The first toroidal slice takes its past-side face from the last slab.
 - Foliated `Move31Remove` uses a flip-then-collapse configuration and preserves open-path or closed-S¹ slice minima as appropriate. This local combinatorial
-  pattern does not establish exact reverse proposal support; see the [known #316 limitation](scientific-basis.md#move-and-sampler-contract).
+  pattern can remove a vertex that barycentric insertion cannot reproduce. The embedded sampler requires an actual return atom. See the
+  [#316 regression](scientific-basis.md#move-and-sampler-contract).
 - Unfoliated geometry experiments use the bare k=1 insertion and degree-3 removal primitives without claiming a CDT causal transition.
-- Toroidal `Move31Remove` uses the inverse flip-then-collapse path for degree-4 configurations produced by the spacelike-link split.
 
 This is why the public move API is expressed in CDT/Pachner language while the backend layer is expressed in Delaunay k-flip language. The local geometric
 operation is necessary but not sufficient; the CDT layer supplies the foliation, causality, topology, and proposal-ratio bookkeeping needed for a valid
@@ -126,7 +126,7 @@ site was geometrically editable but would break the periodic CDT contract.
 
 The Metropolis loop first selects an explicit local proposal site, clones the current triangulation, and applies that exact site on the cloned proposed state;
 see `src/cdt/metropolis/runner.rs` and `src/cdt/metropolis/adapter.rs`. The CDT proposal adapter scores the planned move with its action change and
-forward/reverse local-site ratio, then the upstream `markov-chain-monte-carlo` sampler owns the Metropolis-Hastings accept/reject draw and generic chain
+forward/reverse endpoint probabilities, then the upstream `markov-chain-monte-carlo` sampler owns the Metropolis-Hastings accept/reject draw and generic chain
 counters; see `docs/metropolis.md`. Only accepted proposals swap the cloned, mutated state into the live simulation. Ordinary causal, geometric, or recognized
 backend candidate failures on the cloned state are self-loop proposal outcomes recorded in `ProposalStatistics`; hard backend mutation or invariant-refresh
 failures return `CdtError::MetropolisProposalApplicationFailed` with the failing stage. Because the cloned proposed state already provides isolation, this path

@@ -67,6 +67,12 @@ that crate and its bibliography for detailed computational-geometry citations:
 - Getchell, Adam. "delaunay: A d-dimensional Delaunay triangulation library." Zenodo, 2026. DOI:
   [10.5281/zenodo.16931097](https://doi.org/10.5281/zenodo.16931097). Repository: <https://github.com/acgetchell/delaunay>
 
+### Hilbert Ordering
+
+- Skilling, J. "Programming the Hilbert curve." _AIP Conference Proceedings_ 707, no. 1 (2004): 381–387. DOI:
+  [10.1063/1.1751381](https://doi.org/10.1063/1.1751381). Delaunay implements this index for the
+  [embedded proposal-site order](docs/scientific-basis.md#hilbert-order-for-embedded-proposal-sites).
+
 ## Discrete Approaches to General Relativity
 
 ### Lattice Approaches to Quantum Gravity
@@ -173,9 +179,8 @@ improvements to the `markov-chain-monte-carlo` crate. Refer to that crate and it
 
 ### Exact 1+1 CDT Benchmarks and Coupling Calibration
 
-- Ambjørn, J., Anagnostopoulos, K. N., and Loll, R. "A new perspective on matter coupling in 2d quantum gravity." _Physical Review D_ 60, no. 10 (1999):
-  104035. DOI: [10.1103/PhysRevD.60.104035](https://doi.org/10.1103/PhysRevD.60.104035). arXiv:
-  [hep-th/9904012](https://arxiv.org/abs/hep-th/9904012)
+- Ambjørn, J., Anagnostopoulos, K. N., and Loll, R. "New perspective on matter coupling in 2D quantum gravity." _Physical Review D_ 60 (1999): 104035.
+  DOI: [10.1103/PhysRevD.60.104035](https://doi.org/10.1103/PhysRevD.60.104035). arXiv: [hep-th/9904012](https://arxiv.org/abs/hep-th/9904012)
 
 See also Ambjørn and Loll (1998) under [Metropolis-Hastings Algorithm in CDT](#metropolis-hastings-algorithm-in-cdt) and Ambjørn et al. (2012) under
 [Comprehensive Reviews](#comprehensive-reviews). The conversion from their triangle-volume coupling to this crate's edge-count action, including the

@@ -26,6 +26,16 @@ from research_repo_tools.semgrep_tool import constraints
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_rust_files_forbid_unsafe_code() -> None:
+    """Check the explicit safety header in tracked and newly added Rust files."""
+    missing = []
+    for name in select_files(ROOT, include=("*.rs",)):
+        with (ROOT / name).open(encoding="utf-8") as source:
+            if source.readline().rstrip("\n") != "#![forbid(unsafe_code)]":
+                missing.append(name)
+    assert not missing, f"Missing Rust safety header in {', '.join(missing)}"
+
+
 @pytest.fixture
 def shell_workflow_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Execute the real workflows with cheap, deterministic process boundaries."""

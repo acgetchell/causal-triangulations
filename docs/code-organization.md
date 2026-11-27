@@ -55,8 +55,6 @@ causal-triangulations/
 │   │   └── changelog/
 │   │       └── 0.0.md
 │   ├── assets/
-│   │   ├── cdt_spacetime.png
-│   │   ├── cdt_spacetime.svg
 │   │   └── foliated-spacetime.svg
 │   ├── audits/
 │   │   ├── 2d-cdt_sphere/
@@ -95,6 +93,7 @@ causal-triangulations/
 │   │   │   ├── README.md
 │   │   │   ├── SHA256SUMS
 │   │   │   └── source.tar.gz
+│   │   ├── delaunay-periodic-realization.md
 │   │   └── README.md
 │   ├── dev/
 │   │   ├── DEVELOPING.md
@@ -139,9 +138,12 @@ causal-triangulations/
 ├── src/
 │   ├── cdt/
 │   │   ├── metropolis/
+│   │   │   ├── intrinsic/
+│   │   │   │   └── tests.rs
 │   │   │   ├── adapter.rs
 │   │   │   ├── checkpoint.rs
 │   │   │   ├── helpers.rs
+│   │   │   ├── intrinsic.rs
 │   │   │   ├── runner.rs
 │   │   │   └── telemetry.rs
 │   │   ├── triangulation/
@@ -368,18 +370,20 @@ The implementation lives under `src/cdt/triangulation/` and is wired from `src/l
 
 `MetropolisAlgorithm::run()` is the current CDT production runner for proposal-before-mutation sampling. It proposes a move type, samples an explicit local
 proposal site from the same universe used for proposal counts, plans that site on a cloned triangulation, computes `ΔS` and the forward/reverse
-Metropolis-Hastings family-probability and site-count ratio, accepts or rejects the concrete proposal, and only replaces the live triangulation after
+Metropolis-Hastings ratio from all atoms realizing the actual embedded endpoints, accepts or rejects the concrete proposal, and only replaces the live
+triangulation after
 acceptance. Ordinary causal, geometric, and backend edit failures are self-loop proposal outcomes recorded in `ProposalStatistics`; hard backend failures
 remain structured errors. `MetropolisAlgorithm::with_policy()` binds a family policy once so fresh-run, result-plus-checkpoint, checkpoint-only, and resume
 terminals share one orthogonal execution surface rather than separate policy-suffixed methods.
 Toroidal move finalization rejects and rolls back candidate sites that would violate χ = 0 or the closed-S¹ per-slice foliation invariant.
 
-The module tree is declared from `src/lib.rs` to avoid the `metropolis.rs` plus `metropolis/` layout pattern. `adapter.rs` is the single CDT adapter boundary
-for `markov-chain-monte-carlo` proposal and target traits. `runner.rs` owns `MetropolisAlgorithm::run_steps`, which rebuilds the upstream `Chain`/`Sampler`
+The module tree is declared from `src/lib.rs` to avoid the `metropolis.rs` plus `metropolis/` layout pattern. `adapter.rs` owns the shared CDT target and
+the coordinate-bearing proposal adapter. `runner.rs` owns `MetropolisAlgorithm::run_steps`, which rebuilds the upstream `Chain`/`Sampler`
 continuation view, delegates generic acceptance, proposal-ratio application, chain counters, and planned-proposal commit ordering to the upstream MCMC crate,
-then consumes the chain state back into the CDT result without cloning topology per step or per chunk. CDT-owned telemetry and RNG state travel beside that
-single canonical triangulation owner. `checkpoint.rs` owns resumable state, the versioned CDT-owned JSON envelope, dependency-neutral RNG/duration adapters,
-and resume validation. Version 4 stores each transition once and delegates exact geometry persistence to Delaunay's Level 4 owner snapshot.
+then moves the chain state back into the CDT result. Proposal planning uses isolated mesh drafts, and the continuation handoff moves ownership of the live
+mesh. CDT-owned telemetry and RNG state travel beside it. `checkpoint.rs` owns resumable state, the versioned CDT-owned JSON envelope, RNG/duration adapters,
+and resume validation. Version 5 identifies runs using actual embedded transition probabilities and delegates exact geometry persistence to Delaunay's
+Level 4 owner snapshot.
 `telemetry.rs` owns public step/proposal telemetry, and `helpers.rs` holds shared CDT-domain calculations.
 
 Checkpoint JSON first decodes raw CDT records, then runs the same typed constructors used by standalone configuration and telemetry APIs. Domain errors retain
@@ -387,6 +391,13 @@ their variants; malformed encodings remain serialization errors. RNG errors iden
 planning, scoring, ratio, or commit stage. Local backend edits preserve adapter errors and only recognized candidate failures become ordinary rejections.
 
 See `docs/metropolis.md` for the current planned-proposal ordering and enforced MCMC backend boundary.
+
+### `cdt/metropolis/intrinsic.rs` — Marked periodic CDT gluings
+
+The intrinsic state encodes each oriented annulus as a cyclic word of Up and Down triangles with a spatial origin on each boundary.
+`geometry/backends/delaunay.rs` assigns independent cell-occurrence IDs and delegates closed-torus validation to Delaunay. The CDT kernel sums the atoms
+reaching each endpoint and uses the upstream delayed sampler. The intrinsic target divides the Boltzmann weight by the number of choices of slice
+origins. See [Scientific Basis](scientific-basis.md#intrinsic-periodic-cdt-measure) for the measure.
 
 ### `cdt/results.rs` — Simulation outputs
 
@@ -416,8 +427,10 @@ See `docs/metropolis.md` for the current planned-proposal ordering and enforced 
   accounting. These sites belong to the actual proposal support but are not an eligible/executable-site mask: later backend edits or CDT validation may still
   reject an offered site as an ordinary self-loop proposal.
 - Each family retains two entries with owner and modification provenance, allowing speculative reverse inspection without evicting the live entry.
-- `tests/proposal_policy.rs` verifies the public boundary, including empty families, ordering, state facts, invalidation, independent concrete-pair
-  detailed-balance calculations, fixed-policy checkpoint reproducibility, and representative accepted toroidal inverse moves.
+- Embedded cache entries store sites in [Hilbert order](scientific-basis.md#hilbert-order-for-embedded-proposal-sites). The ordinal is local to the
+  family's ordered list; the ID also carries owner and revision provenance.
+- `tests/proposal_policy.rs` verifies the public boundary, including empty families, ordering, state facts, invalidation, marginal transition probabilities,
+  fixed-policy checkpoint reproducibility, and representative accepted toroidal inverse moves.
 
 ### `cdt/observables.rs` — User-facing estimators
 

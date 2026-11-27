@@ -514,21 +514,18 @@ const TOROIDAL_EMBEDDING_ATTEMPTS: u8 = 14;
 /// the one-based ordinal of the candidate actually tried. On exhaustion, the final failure is
 /// returned with that ordinal intact.
 fn first_valid_toroidal_candidate<T>(
-    candidates: impl IntoIterator<Item = u8>,
+    first: u8,
+    remaining: std::ops::Range<u8>,
     mut build: impl FnMut(u8, u32) -> CdtResult<T>,
-    no_candidates: impl FnOnce() -> CdtError,
 ) -> CdtResult<T> {
-    let mut attempt = 0_u32;
-    let mut last_error = None;
-    for candidate in candidates {
-        attempt = attempt.saturating_add(1);
-        match build(candidate, attempt) {
-            Ok(value) => return Ok(value),
-            Err(error) => last_error = Some(error),
+    let mut result = build(first, 1);
+    for (attempt, candidate) in (2_u32..).zip(remaining) {
+        if result.is_ok() {
+            break;
         }
+        result = build(candidate, attempt);
     }
-
-    Err(last_error.unwrap_or_else(no_candidates))
+    result
 }
 
 /// Returns a small periodic offset that puts a toroidal lattice in generic position.
@@ -1657,7 +1654,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         let domain = [n_f, t_f];
         let coordinate_range = (0.0, n_f.max(t_f) - 1.0);
         let backend = first_valid_toroidal_candidate(
-            0..TOROIDAL_EMBEDDING_ATTEMPTS,
+            0,
+            1..TOROIDAL_EMBEDDING_ATTEMPTS,
             |candidate, attempt| {
                 vertex_specs.clear();
                 for t in 0..num_slices {
@@ -1680,7 +1678,6 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     attempt,
                 )
             },
-            || generation_failed(0, DelaunayGenerationFailure::NoEmbeddingCandidates),
         )?;
 
         let slice_sizes = vec![n; t_count];
@@ -1774,7 +1771,8 @@ impl CdtTriangulation<DelaunayBackend2D> {
         };
 
         let backend = first_valid_toroidal_candidate(
-            1..TOROIDAL_EMBEDDING_ATTEMPTS,
+            1,
+            2..TOROIDAL_EMBEDDING_ATTEMPTS,
             |candidate, attempt| {
                 let vertex_specs = toroidal_profile_vertices(
                     spatial_vertex_profile,
@@ -1793,7 +1791,6 @@ impl CdtTriangulation<DelaunayBackend2D> {
                     attempt,
                 )
             },
-            || generation_failed(0, DelaunayGenerationFailure::NoEmbeddingCandidates),
         )?;
 
         let slice_sizes =
@@ -1981,38 +1978,10 @@ mod tests {
     #[test]
     fn toroidal_candidate_retry_returns_first_success_with_actual_attempt() {
         let mut attempted = Vec::new();
-        let result = first_valid_toroidal_candidate(
-            4..8,
-            |candidate, attempt| {
-                attempted.push((candidate, attempt));
-                if attempt < 3 {
-                    Err(toroidal_generation_error(
-                        12,
-                        (0.0, 3.0),
-                        attempt,
-                        DelaunayGenerationFailure::Upstream {
-                            stage: DelaunayGenerationStage::TriangulationConstruction,
-                            detail: format!("candidate {candidate} failed"),
-                        },
-                    ))
-                } else {
-                    Ok((candidate, attempt))
-                }
-            },
-            || unreachable!("nonempty candidate range should be attempted"),
-        )
-        .expect("third candidate should succeed");
-
-        assert_eq!(result, (6, 3));
-        assert_eq!(attempted, vec![(4, 1), (5, 2), (6, 3)]);
-    }
-
-    #[test]
-    fn toroidal_candidate_exhaustion_preserves_final_attempt_and_cause() {
-        let error = first_valid_toroidal_candidate(
-            4..7,
-            |candidate, attempt| {
-                Err::<(), _>(toroidal_generation_error(
+        let result = first_valid_toroidal_candidate(4, 5..8, |candidate, attempt| {
+            attempted.push((candidate, attempt));
+            if attempt < 3 {
+                Err(toroidal_generation_error(
                     12,
                     (0.0, 3.0),
                     attempt,
@@ -2021,10 +1990,29 @@ mod tests {
                         detail: format!("candidate {candidate} failed"),
                     },
                 ))
-            },
-            || unreachable!("nonempty candidate range should be attempted"),
-        )
-        .expect_err("all candidates should fail");
+            } else {
+                Ok((candidate, attempt))
+            }
+        })
+        .expect("third candidate should succeed");
+
+        assert_eq!(result, (6, 3));
+        assert_eq!(attempted, vec![(4, 1), (5, 2), (6, 3)]);
+    }
+
+    #[test]
+    fn toroidal_candidate_exhaustion_preserves_final_attempt_and_cause() {
+        let Err(error) = first_valid_toroidal_candidate(4, 5..7, |candidate, attempt| {
+            Err::<!, _>(toroidal_generation_error(
+                12,
+                (0.0, 3.0),
+                attempt,
+                DelaunayGenerationFailure::Upstream {
+                    stage: DelaunayGenerationStage::TriangulationConstruction,
+                    detail: format!("candidate {candidate} failed"),
+                },
+            ))
+        });
 
         assert_matches!(
             error,

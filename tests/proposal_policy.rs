@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 //! Public-contract tests for the borrowed CDT proposal-policy view.
 
 use approx::assert_relative_eq;
@@ -389,54 +391,7 @@ fn uniform_injected_runner_reproduces_seeded_conventional_trajectory() -> CdtRes
 }
 
 #[test]
-fn uniform_policy_volume_pair_satisfies_independent_detailed_balance() -> CdtResult<()> {
-    let triangulation = CdtTriangulation::from_toroidal_cdt(4, 4)?;
-    let mut proposal = CdtProposal::new(ActionConfig::default()).with_seed(83);
-    let mut rng = StdRng::seed_from_u64(89);
-    let mut proposed = triangulation.clone();
-    let plan = (0..64)
-        .find_map(|_| {
-            proposal
-                .propose_plan(&proposed, &mut rng)
-                .expect("uniform planning should not fail")
-                .filter(|plan| {
-                    matches!(
-                        plan.move_type(),
-                        MoveType::Move13Add | MoveType::Move31Remove
-                    )
-                })
-        })
-        .expect("representative uniform policy should realize a concrete volume plan");
-    proposal.commit(&mut proposed, plan.clone(), &mut rng)?;
-
-    let mut inspection = ErgodicsSystem::new();
-    let forward_sites = inspection
-        .proposal_policy_view(&triangulation, plan.move_type())
-        .offered_site_count();
-    let reverse_sites = inspection
-        .proposal_policy_view(&proposed, plan.reverse_move_type())
-        .offered_site_count();
-    let forward_sites =
-        u32::try_from(forward_sites).expect("test fixture forward count should fit u32");
-    let reverse_sites =
-        u32::try_from(reverse_sites).expect("test fixture reverse count should fit u32");
-    let forward_q = 0.25 / f64::from(forward_sites);
-    let reverse_q = 0.25 / f64::from(reverse_sites);
-    let expected_ratio = reverse_q.ln() - forward_q.ln();
-
-    assert_relative_eq!(plan.log_proposal_ratio(), expected_ratio, epsilon = 1e-12);
-
-    let log_target_forward = plan.action_before() - plan.action_after();
-    let log_accept_forward = (log_target_forward + expected_ratio).min(0.0);
-    let log_accept_reverse = (-log_target_forward - expected_ratio).min(0.0);
-    let log_forward_flux = -plan.action_before() + forward_q.ln() + log_accept_forward;
-    let log_reverse_flux = -plan.action_after() + reverse_q.ln() + log_accept_reverse;
-    assert_relative_eq!(log_forward_flux, log_reverse_flux, epsilon = 1e-12);
-    Ok(())
-}
-
-#[test]
-fn distinct_flip_mixture_components_satisfy_independent_detailed_balance() -> CdtResult<()> {
+fn distinct_flip_family_weights_are_both_included_in_endpoint_mass() -> CdtResult<()> {
     let triangulation = CdtTriangulation::from_toroidal_cdt(8, 8)?;
     let policy = CdtMoveFamilyDistribution::from_weights([1.0, 0.0, 0.0, 3.0])
         .expect("fixed flip-family weights should be valid");
@@ -452,10 +407,11 @@ fn distinct_flip_mixture_components_satisfy_independent_detailed_balance() -> Cd
         let Some(plan) = proposal.propose_plan(&proposed, &mut rng)? else {
             continue;
         };
-        assert!(matches!(
-            plan.move_type(),
-            MoveType::Move22 | MoveType::EdgeFlip
-        ));
+        match plan.move_type() {
+            MoveType::Move22 => observed_move_22 = true,
+            MoveType::EdgeFlip => observed_edge_flip = true,
+            family => panic!("zero-weight family {family:?} produced a plan"),
+        }
         proposal.commit(&mut proposed, plan.clone(), &mut rng)?;
 
         let mut inspection = ErgodicsSystem::new();
@@ -472,8 +428,8 @@ fn distinct_flip_mixture_components_satisfy_independent_detailed_balance() -> Cd
             u32::try_from(reverse_sites).expect("test fixture reverse count should fit u32"),
         );
         let family_probability = policy.probability(plan.move_type());
-        let forward_q = family_probability / forward_sites_f64;
-        let reverse_q = family_probability / reverse_sites_f64;
+        let forward_q = 1.0 / forward_sites_f64;
+        let reverse_q = 1.0 / reverse_sites_f64;
         let expected_ratio = reverse_q.ln() - forward_q.ln();
 
         assert_eq!(plan.forward_site_count(), forward_sites);
@@ -489,19 +445,10 @@ fn distinct_flip_mixture_components_satisfy_independent_detailed_balance() -> Cd
             epsilon = f64::EPSILON
         );
         assert_relative_eq!(plan.log_proposal_ratio(), expected_ratio, epsilon = 1e-12);
+        let (actual_forward, actual_reverse) = plan.transition_probabilities();
+        assert_relative_eq!(actual_forward, forward_q, epsilon = 1e-15);
+        assert_relative_eq!(actual_reverse, reverse_q, epsilon = 1e-15);
 
-        let log_target_forward = plan.action_before() - plan.action_after();
-        let log_accept_forward = (log_target_forward + expected_ratio).min(0.0);
-        let log_accept_reverse = (-log_target_forward - expected_ratio).min(0.0);
-        let log_forward_flux = -plan.action_before() + forward_q.ln() + log_accept_forward;
-        let log_reverse_flux = -plan.action_after() + reverse_q.ln() + log_accept_reverse;
-        assert_relative_eq!(log_forward_flux, log_reverse_flux, epsilon = 1e-12);
-
-        match plan.move_type() {
-            MoveType::Move22 => observed_move_22 = true,
-            MoveType::EdgeFlip => observed_edge_flip = true,
-            MoveType::Move13Add | MoveType::Move31Remove => unreachable!(),
-        }
         if observed_move_22 && observed_edge_flip {
             break;
         }
@@ -648,8 +595,6 @@ fn unequal_fixed_weights_match_analytic_family_and_site_ratio() -> CdtResult<()>
         .expect("test fixture reverse count should fit u32");
     let forward_q = expected_forward_family / f64::from(forward_sites);
     let reverse_q = expected_reverse_family / f64::from(reverse_sites);
-    let expected_family = (expected_reverse_family / expected_forward_family).ln();
-    let expected_sites = (f64::from(forward_sites) / f64::from(reverse_sites)).ln();
     let expected_ratio = reverse_q.ln() - forward_q.ln();
 
     assert_eq!(plan.forward_site_count(), independently_counted_forward);
@@ -665,12 +610,9 @@ fn unequal_fixed_weights_match_analytic_family_and_site_ratio() -> CdtResult<()>
         epsilon = f64::EPSILON
     );
 
-    assert_relative_eq!(
-        plan.log_family_probability_ratio(),
-        expected_family,
-        epsilon = 1e-12
-    );
-    assert_relative_eq!(plan.log_site_count_ratio(), expected_sites, epsilon = 1e-12);
+    let (actual_forward, actual_reverse) = plan.transition_probabilities();
+    assert_relative_eq!(actual_forward, forward_q, epsilon = 1e-15);
+    assert_relative_eq!(actual_reverse, reverse_q, epsilon = 1e-15);
     assert_relative_eq!(plan.log_proposal_ratio(), expected_ratio, epsilon = 1e-12);
     assert_relative_eq!(scored_ratio, expected_ratio, epsilon = 1e-12);
 
@@ -954,23 +896,20 @@ fn algorithm_exposes_typed_policy_audit_telemetry_after_each_step() -> CdtResult
 
         if telemetry.planning_outcome() == CdtProposalPlanningOutcome::ConcretePlan(()) {
             assert!(telemetry.forward_site_count() > 0);
-            let family = telemetry
-                .log_family_probability_ratio()
-                .expect("concrete plan should expose its family component");
-            let sites = telemetry
-                .log_site_count_ratio()
-                .expect("concrete plan should expose its site component");
-            assert_relative_eq!(
-                telemetry
-                    .log_proposal_ratio()
-                    .expect("concrete plan should expose its complete ratio"),
-                family + sites,
-                epsilon = 1e-12
-            );
+            let (forward, reverse) = telemetry.transition_probabilities().expect("endpoint mass");
+            assert!(forward > 0.0);
+            let ratio = telemetry.log_proposal_ratio().expect("scored transition");
+            if reverse == 0.0 {
+                assert!(ratio.is_infinite() && ratio.is_sign_negative());
+                assert!(!step.accepted());
+            } else {
+                assert_relative_eq!(ratio, (reverse / forward).ln(), epsilon = 1e-12);
+            }
         } else {
             assert_eq!(telemetry.reverse_family_probability(), None);
             assert_eq!(telemetry.reverse_site_count(), None);
             assert_eq!(telemetry.log_proposal_ratio(), None);
+            assert_eq!(telemetry.transition_probabilities(), None);
         }
     }
     Ok(())
