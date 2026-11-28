@@ -116,7 +116,8 @@ fn main() {
             "version": package.version,
             "sha256": sha256(&read(archive)),
         },
-        "binary_sha256": sha256(&read(binary)),
+        "cli_executable_sha256": sha256(&read(binary)),
+        "consumer_executable_sha256": sha256(&read(&std::env::current_exe().expect("consumer executable path"))),
         "build": original_metadata["build"],
         "fixtures": conditions,
         "same_seed_replay": "configuration, measurements, transitions and untimed metadata match",
@@ -348,29 +349,58 @@ fn negative_cases(
         fs::copy(original.join(filename), partial.join(filename)).expect("copy fixture artifact");
     }
     fs::write(partial.join("metadata.json"), &metadata).expect("copy completion record");
-    let trace = partial.join("measurements.jsonl");
-    let full_trace = read(&trace);
-    fs::write(&trace, &full_trace[..full_trace.len() - 1]).expect("truncate trace");
-    invoke(binary, None, &partial, 4, "invalid_bundle");
-    fs::write(&trace, full_trace).expect("restore trace");
+    let original_metadata = read_json(&partial.join("metadata.json"));
+    let full_trace = read(&partial.join("measurements.jsonl"));
     let transitions = partial.join("transitions.csv");
-    fs::write(&transitions, b"outcome\nNNNNNNNN\n").expect("write oversized transition");
+    let full_transitions = read(&transitions);
+    let transition_text = std::str::from_utf8(&full_transitions).expect("transition CSV");
+    let remaining = transition_text
+        .splitn(3, '\n')
+        .nth(2)
+        .expect("remaining transitions");
+    let oversized_transition = format!("outcome\nNNNNNNNN\n{remaining}");
+    for (file, field, valid, damaged) in [
+        (
+            "measurements.jsonl",
+            "measurements_sha256",
+            full_trace.as_slice(),
+            &full_trace[..full_trace.len() - 1],
+        ),
+        (
+            "transitions.csv",
+            "transitions_sha256",
+            full_transitions.as_slice(),
+            oversized_transition.as_bytes(),
+        ),
+    ] {
+        let mut invalid = original_metadata.clone();
+        invalid[field] = json!(sha256(damaged));
+        fs::write(partial.join(file), damaged).expect("write malformed trace");
+        write_json(&partial.join("metadata.json"), &invalid);
+        invoke(binary, None, &partial, 4, "invalid_bundle");
+        fs::write(partial.join(file), valid).expect("restore valid trace");
+        write_json(&partial.join("metadata.json"), &original_metadata);
+    }
+    let mut stale_checksum = original_metadata.clone();
+    stale_checksum["measurements_sha256"] = json!("0".repeat(64));
+    write_json(&partial.join("metadata.json"), &stale_checksum);
     invoke(binary, None, &partial, 4, "invalid_bundle");
     let steps = usize::try_from(WARMUP + MEASUREMENTS * CADENCE).expect("fixture step count");
     let all_self_loops = format!("outcome\n{}", "N\n".repeat(steps));
     fs::write(&transitions, &all_self_loops).expect("replace outcomes with self-loops");
-    let mut inconsistent = read_json(&partial.join("metadata.json"));
+    let mut inconsistent = original_metadata.clone();
     inconsistent["transitions_sha256"] = json!(sha256(all_self_loops.as_bytes()));
     write_json(&partial.join("metadata.json"), &inconsistent);
     invoke(binary, None, &partial, 4, "invalid_bundle");
-    let mut unsupported = read_json(&partial.join("metadata.json"));
+    fs::write(&transitions, full_transitions).expect("restore transition file");
+    let mut unsupported = original_metadata;
     unsupported["artifact_schema_version"] = json!(2);
     write_json(&partial.join("metadata.json"), &unsupported);
     invoke(binary, None, &partial, 5, "incompatible_schema");
     json!({
         "corrupt_configuration": 2, "zero_cadence": 2, "configuration_schema": 5,
         "failed_chain_initialization": 3, "missing_completion_manifest": 4, "existing_output": 4,
-        "truncated_trace": 4, "oversized_transition_row": 4, "inconsistent_self_loops": 4,
+        "truncated_trace": 4, "oversized_transition_row": 4, "inconsistent_self_loops": 4, "checksum_mismatch": 4,
         "artifact_schema": 5,
     })
 }
@@ -499,8 +529,9 @@ fn read_json(path: &Path) -> Value {
 }
 
 fn write_json(path: &Path, value: &Value) {
-    fs::write(path, serde_json::to_vec(value).expect("serialize JSON"))
-        .expect("write fixture JSON");
+    let mut bytes = serde_json::to_vec(value).expect("serialize JSON");
+    bytes.push(b'\n');
+    fs::write(path, bytes).expect("write fixture JSON");
 }
 
 fn sha256(bytes: &[u8]) -> String {

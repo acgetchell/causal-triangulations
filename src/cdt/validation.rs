@@ -11,12 +11,15 @@ use crate::cdt::metropolis::intrinsic::{MINIMUM_LOOP_LENGTH, MINIMUM_TIME_SLICES
 use crate::cdt::metropolis::{Chain, DelayedStepError};
 use crate::{
     ActionConfig, CdtError, CdtTarget, IntrinsicCdtError, IntrinsicCdtProposal,
-    IntrinsicCdtTriangulation, McmcError, StepOutcome, VolumeFixing,
+    IntrinsicCdtTriangulation, McmcError, StepOutcome, VolumeFixing, VolumeFixingError,
 };
 use rand::{SeedableRng, rngs::Xoshiro256PlusPlus};
-use serde::{Deserialize, Serialize};
+use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
+use serde::{Deserialize, Deserializer, Serialize};
+use std::fmt;
 use std::fs;
 use std::io;
+use std::marker::PhantomData;
 use std::path::Path;
 use std::time::Instant;
 use thiserror::Error;
@@ -33,6 +36,15 @@ pub enum ValidationError {
     /// The input could not be read or validated.
     #[error("invalid configuration: {0}")]
     Configuration(String),
+    /// The configured Regge action is invalid.
+    #[error("invalid validation action: {0}")]
+    InvalidAction(#[source] CdtError),
+    /// The configured total-volume bias is invalid.
+    #[error("invalid validation volume fixing: {0}")]
+    InvalidVolumeFixing(#[source] VolumeFixingError),
+    /// The configured sampling target cannot be constructed.
+    #[error("invalid validation target: {0}")]
+    InvalidTarget(#[source] CdtError),
     /// The requested contract or artifact schema is unsupported.
     #[error("incompatible validation schema: {0}")]
     Schema(String),
@@ -76,7 +88,10 @@ impl ValidationError {
     #[must_use]
     pub const fn exit_status(&self) -> u8 {
         match self {
-            Self::Configuration(_) => 2,
+            Self::Configuration(_)
+            | Self::InvalidAction(_)
+            | Self::InvalidVolumeFixing(_)
+            | Self::InvalidTarget(_) => 2,
             Self::InitialState(_) | Self::Chain(_) | Self::Transition { .. } | Self::Outcome(_) => {
                 3
             }
@@ -89,7 +104,10 @@ impl ValidationError {
     #[must_use]
     pub const fn code(&self) -> &'static str {
         match self {
-            Self::Configuration(_) => "invalid_configuration",
+            Self::Configuration(_)
+            | Self::InvalidAction(_)
+            | Self::InvalidVolumeFixing(_)
+            | Self::InvalidTarget(_) => "invalid_configuration",
             Self::InitialState(_) | Self::Chain(_) => "chain_initialization_failed",
             Self::Transition { .. } | Self::Outcome(_) => "transition_failed",
             Self::Io { .. } => "artifact_io_failed",
@@ -206,16 +224,17 @@ impl Configuration {
             .and_then(|post_warmup| self.warmup_steps.checked_add(post_warmup))
             .ok_or_else(|| invalid("require positive measurements and cadence and a total step count that fits u32"))?;
         let fixing = VolumeFixing::quadratic_triangles(target_n2, strength)
-            .map_err(|error| ValidationError::Configuration(error.to_string()))?;
+            .map_err(ValidationError::InvalidVolumeFixing)?;
         let Action::ReggeCounts {
             coupling_0,
             coupling_2,
             edge_cosmological_constant,
         } = self.action;
-        let target = ActionConfig::new(coupling_0, coupling_2, edge_cosmological_constant)
+        let action = ActionConfig::new(coupling_0, coupling_2, edge_cosmological_constant)
             .and_then(|action| action.with_volume_fixing(Some(fixing)))
-            .and_then(|action| CdtTarget::new(action, self.temperature))
-            .map_err(|error: CdtError| ValidationError::Configuration(error.to_string()))?;
+            .map_err(ValidationError::InvalidAction)?;
+        let target =
+            CdtTarget::new(action, self.temperature).map_err(ValidationError::InvalidTarget)?;
         Ok((target, steps, seed))
     }
 }
@@ -236,9 +255,9 @@ pub fn run(config_path: &Path, output: &Path) -> Result<(), ValidationError> {
         ValidationError::Configuration(format!("{}: {error}", config_path.display()))
     })?;
     let config_error = |error: serde_json::Error| ValidationError::Configuration(error.to_string());
-    let probe: ContractProbe = serde_json::from_slice(&input).map_err(config_error)?;
+    let probe: ContractProbe = decode_object(&input).map_err(config_error)?;
     check_contract(&probe.contract_version)?;
-    let config: Configuration = serde_json::from_slice(&input).map_err(config_error)?;
+    let config: Configuration = decode_object(&input).map_err(config_error)?;
     let (target, steps, seed) = config.validate()?;
     let setup_start = Instant::now();
     let state =
@@ -283,4 +302,35 @@ fn check_contract(version: &str) -> Result<(), ValidationError> {
             "expected {CONTRACT_VERSION}, received {version}"
         )))
     }
+}
+
+/// Decodes one JSON object and checks that the input ends after it.
+fn decode_object<'de, T: Deserialize<'de>>(input: &'de [u8]) -> serde_json::Result<T> {
+    let mut deserializer = serde_json::Deserializer::from_slice(input);
+    let record = deserialize_object(&mut deserializer)?;
+    deserializer.end()?;
+    Ok(record)
+}
+
+/// Disallows positional records while leaving field checks to the target type.
+fn deserialize_object<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    struct Object<T>(PhantomData<T>);
+
+    impl<'de, T: Deserialize<'de>> Visitor<'de> for Object<T> {
+        type Value = T;
+
+        fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+            formatter.write_str("a JSON object")
+        }
+
+        fn visit_map<A: MapAccess<'de>>(self, map: A) -> Result<T, A::Error> {
+            T::deserialize(MapAccessDeserializer::new(map))
+        }
+    }
+
+    deserializer.deserialize_map(Object(PhantomData))
 }

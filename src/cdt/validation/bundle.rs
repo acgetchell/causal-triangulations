@@ -4,6 +4,7 @@
 
 use super::{
     CONTRACT_VERSION, Configuration, IntrinsicCdtTriangulation, ValidationError, check_contract,
+    decode_object, deserialize_object,
 };
 use crate::cdt::metropolis::intrinsic::MINIMUM_LOOP_LENGTH;
 use serde::{Deserialize, Serialize};
@@ -34,11 +35,14 @@ struct Metadata {
     artifact_schema_version: u32,
     oracle_compatibility: String,
     seed_policy: String,
+    #[serde(deserialize_with = "deserialize_object")]
     configuration: Configuration,
     configuration_sha256: String,
     measurements_sha256: String,
     transitions_sha256: String,
+    #[serde(deserialize_with = "deserialize_object")]
     build: Build,
+    #[serde(deserialize_with = "deserialize_object")]
     timing_ns: Timing,
 }
 
@@ -283,7 +287,12 @@ impl<'a> Writer<'a> {
 pub fn verify(directory: &Path) -> Result<(), ValidationError> {
     let raw_metadata =
         fs::read(directory.join(METADATA)).map_err(io_error("read metadata.json"))?;
-    let version: MetadataVersion = serde_json::from_slice(&raw_metadata)?;
+    if !raw_metadata.ends_with(b"\n") {
+        return Err(ValidationError::Bundle(
+            "metadata.json must end with LF".to_owned(),
+        ));
+    }
+    let version: MetadataVersion = decode_object(&raw_metadata)?;
     check_contract(&version.contract_version)?;
     if version.artifact_schema_version != ARTIFACT_SCHEMA_VERSION {
         return Err(ValidationError::Schema(format!(
@@ -291,7 +300,17 @@ pub fn verify(directory: &Path) -> Result<(), ValidationError> {
             version.artifact_schema_version
         )));
     }
-    let metadata: Metadata = serde_json::from_slice(&raw_metadata)?;
+    let metadata: Metadata = decode_object(&raw_metadata)?;
+    let dependencies = &metadata.build.release_lock_dependencies;
+    if dependencies.len() != SAMPLER_DEPENDENCIES.len()
+        || !SAMPLER_DEPENDENCIES
+            .iter()
+            .all(|name| dependencies.contains_key(*name))
+    {
+        return Err(ValidationError::Bundle(
+            "metadata release lock must identify all four sampler dependencies".to_owned(),
+        ));
+    }
     check_contract(&metadata.configuration.contract_version)?;
     if metadata.oracle_compatibility != ORACLE || metadata.seed_policy != SEED_POLICY {
         return Err(ValidationError::Schema(
@@ -345,7 +364,7 @@ fn verify_traces(directory: &Path, metadata: &Metadata, steps: u32) -> Result<()
             }
         }
         if config.measurement_due(step) {
-            let row: Measurement = serde_json::from_slice(measurements.line(measurement_bytes)?)?;
+            let row: Measurement = decode_object(measurements.line(measurement_bytes)?)?;
             row.validate(step, config.time_slices)?;
             if !accepted_since_measurement && row.spatial_loop_lengths != previous {
                 return Err(ValidationError::Bundle(format!(
