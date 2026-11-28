@@ -2,7 +2,7 @@
 
 //! Copy into a standalone Cargo project with a path dependency on the unpacked archive.
 
-use causal_triangulations::cdt::validation;
+use causal_triangulations::prelude::simulation::validation;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};

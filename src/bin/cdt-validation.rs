@@ -2,7 +2,9 @@
 
 //! Non-interactive runner and verifier for external 1+1 validation bundles.
 
-use causal_triangulations::cdt::validation::{self, CONTRACT_VERSION, ValidationError};
+use causal_triangulations::prelude::simulation::validation::{
+    self, CONTRACT_VERSION, ValidationError,
+};
 use clap::{Parser, Subcommand, error::ErrorKind};
 use serde::Serialize;
 use std::io::{self, Write};

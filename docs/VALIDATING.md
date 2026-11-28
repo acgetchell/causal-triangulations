@@ -7,7 +7,7 @@
 
 `cdt-validation` runs one intrinsic periodic 1+1 chain with the conventional policy used in the
 [finite-volume transfer-matrix comparison](finite-volume-validation.md#sampling-protocol). The default `cli` feature includes the executable
-and the Rust entry points in `causal_triangulations::cdt::validation`.
+and the Rust entry points in `causal_triangulations::prelude::simulation::validation`.
 
 ## Run one chain
 

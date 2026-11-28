@@ -8,11 +8,11 @@
 mod bundle;
 
 use crate::cdt::metropolis::intrinsic::{MINIMUM_LOOP_LENGTH, MINIMUM_TIME_SLICES};
+use crate::cdt::metropolis::{Chain, DelayedStepError};
 use crate::{
     ActionConfig, CdtError, CdtTarget, IntrinsicCdtError, IntrinsicCdtProposal,
     IntrinsicCdtTriangulation, McmcError, StepOutcome, VolumeFixing,
 };
-use markov_chain_monte_carlo::{Chain, DelayedStepError};
 use rand::{SeedableRng, rngs::Xoshiro256PlusPlus};
 use serde::{Deserialize, Serialize};
 use std::fs;
