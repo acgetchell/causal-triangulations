@@ -18,6 +18,7 @@ Start with [the project README](../README.md) to choose a workflow and run a sma
 - [Typed error diagnostics](error-diagnostics.md): structured matching, human-readable output, and migration from string payloads.
 - [Analysis notebook](../notebooks/02_analysis_caches.ipynb): Polars caches and exploratory diagnostics.
 - [Chain analysis](ANALYZING.md): explicit volume fixing, circular-loop artifacts, and dependence-aware diagnostics.
+- [External 1+1 validation](VALIDATING.md) defines the batch runner, bundle format, and packaged consumer test.
 
 ## Scientific contracts
 

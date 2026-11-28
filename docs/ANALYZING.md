@@ -136,7 +136,7 @@ cargo run --release --example validation_diagnostics -- target/validation-diagno
 
 The [example](../examples/validation_diagnostics.rs) runs one flat and one nonuniform short chain, writes and reloads separate JSON artifacts, and writes
 `diagnostics.json`. Its small workloads demonstrate the interface and deliberately do not satisfy the eight-chain production policy. They establish
-no mixing or ensemble-agreement claim. The external bundle/process contract will be frozen separately in #276.
+no mixing or ensemble-agreement claim. The [external validation command](VALIDATING.md) runs the intrinsic chain and produces a separate versioned bundle.
 
 ## Exact transfer-matrix comparison
 

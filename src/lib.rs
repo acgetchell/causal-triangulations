@@ -217,6 +217,9 @@ pub mod cdt {
     /// CDT triangulation state.
     #[path = "triangulation/state.rs"]
     pub mod triangulation;
+    /// Versioned periodic 1+1 validation bundles for external consumers.
+    #[cfg(feature = "cli")]
+    pub mod validation;
     /// Explicit modified-ensemble triangle-volume bias.
     pub mod volume_fixing;
 }

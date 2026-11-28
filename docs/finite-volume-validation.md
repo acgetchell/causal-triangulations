@@ -14,7 +14,14 @@ in 72,351,744 scheduled measurements. A visit counts each scheduled observation 
 The [final confirmation report](../benches/finite_volume/final-confirmation-report.json) records the seed ranges, executable and input hashes,
 chain diagnostics, and outcomes under the [frozen rule](#frozen-rule-for-the-final-confirmation).
 
-TV denotes total-variation distance. Each reported TV upper bound applies to one torus.
+TV stands for total variation distance. For each admissible spatial-loop profile $\ell$, let $P(\ell)$ be its exact probability
+at the target triangle count and $\widehat P(\ell)$ be its observed fraction among the pooled target visits. The observed distance is
+
+$$
+d_{\mathrm{TV}}(\widehat P,P)=\tfrac12\sum_\ell|\widehat P(\ell)-P(\ell)|.
+$$
+
+The sum includes every admissible profile, including profiles with zero observed visits. Each 95% TV upper bound applies to one torus.
 
 | Slices | Triangles | Target visits | Observed TV | 95% TV upper bound | Raw / calibrated Holm p | Moments passing | Result |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
@@ -111,13 +118,13 @@ $Z_{8,64}=4{,}207{,}880{,}073{,}023{,}875$. Inserting $\ell_2\ell_3$ in the peri
 $67{,}158{,}448{,}320{,}793{,}750$. Each labeled slice has mean $64/(2\cdot8)=4$ by time-translation symmetry. Therefore
 
 $$
-\operatorname{Cov}(\ell_2,\ell_3)=\frac{67{,}158{,}448{,}320{,}793{,}750}{4{,}207{,}880{,}073{,}023{,}875}-4^2
+\mathrm{Cov}(\ell_2,\ell_3)=\frac{67{,}158{,}448{,}320{,}793{,}750}{4{,}207{,}880{,}073{,}023{,}875}-4^2
 =-\frac{1{,}341{,}062{,}780{,}706}{33{,}663{,}040{,}584{,}191}\approx -0.03983784.
 $$
 
 The measured values come from the Rust chains. With $H$ pooled target-volume visits and slice indices starting at zero, the estimator is
 $H^{-1}\sum_{h=1}^{H}\ell_{h,i}\ell_{h,j}-\bar\ell_i\bar\ell_j$, where $\bar\ell_i$ is the mean over those same visits. Thus
-$\operatorname{Cov}(\ell_2,\ell_3)$ pairs the third and fourth slices of each triangulation. Dependence between successive Markov-chain
+$\mathrm{Cov}(\ell_2,\ell_3)$ pairs the third and fourth slices of each triangulation. Dependence between successive Markov-chain
 observations enters the uncertainty estimate through block resampling.
 The [known-answer tests](../tests/finite_volume/validation.rs) check the support, normalizer and labeled covariance at all four sizes.
 
@@ -177,8 +184,7 @@ differences in location or scale. Bulk effective sample size (ESS) estimates how
 observations after accounting for serial dependence. The frozen protocol applied both diagnostics to the full-cadence total volume and
 slice lengths. The later audit also checked [information within the target sector](#supplementary-checks-specified-after-confirmation).
 
-Let $P$ be the exact conditional law and $\widehat P$ the histogram of pooled target visits. The observed TV distance is
-$\tfrac12\sum_\ell |\widehat P(\ell)-P(\ell)|$, the largest probability difference for any set of profiles. The
+The [observed total variation distance](#results) is the largest probability difference for any set of profiles. The
 [bootstrap](../benches/finite_volume/bootstrap.rs) resamples nonoverlapping blocks of 256 scheduled measurements (4,096 proposals) within each
 chain, with replacement. Blocks are formed before conditioning, so stretches away from the target keep their place in the sampling design.
 Each of 1,999 replicates recomputes its target-hit denominator, conditional histogram, and labeled moments. In ascending triangle count the frozen

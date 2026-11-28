@@ -5,6 +5,7 @@ authors = [ "Adam Getchell <adam@adamgetchell.org>" ]
 categories = [ "science", "mathematics", "algorithms", "simulation" ]
 edition = "2024"
 build = "benches/finite_volume/build.rs"
+default-run = "cdt"
 documentation = "https://docs.rs/causal-triangulations"
 keywords = [
     "quantum-gravity",
@@ -24,6 +25,11 @@ description = "Validated 1+1 Causal Dynamical Triangulations for quantum gravity
 [[bin]]
 name = "cdt"
 path = "src/main.rs"
+required-features = [ "cli" ]
+
+[[bin]]
+name = "cdt-validation"
+path = "src/bin/cdt-validation.rs"
 required-features = [ "cli" ]
 
 [[test]]
@@ -56,7 +62,7 @@ bench = false
 
 [features]
 default = [ "cli" ]
-cli = [ "dep:clap", "dep:env_logger" ]
+cli = [ "dep:clap", "dep:env_logger", "dep:sha2" ]
 slow-tests = [  ]
 
 [package.metadata.docs.rs]
@@ -82,6 +88,7 @@ num-traits = "0.2.19"
 rand = { version = "0.10.4", features = [ "serde" ] }
 serde = { version = "1.0.229", features = [ "derive", "rc" ] }
 serde_json = { version = "1.0.154", features = [ "float_roundtrip" ] }
+sha2 = { version = "0.11.2", optional = true }
 thiserror = "2.0.21"
 
 [dev-dependencies]
