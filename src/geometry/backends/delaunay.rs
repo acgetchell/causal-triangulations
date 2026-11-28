@@ -27,7 +27,7 @@ use delaunay::topology::traits::{GlobalTopology, TopologyKind, ToroidalConstruct
 use delaunay::{
     DelaunayCheckPolicy, DelaunayRefinementBuilder, DelaunayTriangulation,
     DelaunayTriangulationBuilder, InsertionError, InsertionTopologyValidationContext,
-    Triangulation, TriangulationEditError, TriangulationRealizationValidationError,
+    InvariantError, Triangulation, TriangulationEditError, TriangulationRealizationValidationError,
     TriangulationSnapshot, TriangulationValidationError,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as DeError};
@@ -2591,8 +2591,7 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
             self.local_edges_for_simplices(&removed_simplices, DelaunayOperation::FlipK2)?;
         let mut mutation = self.mutation(rollback);
         let info = mutation.dt.flip_k2(facet).map_err(|err| {
-            flip_error(
-                DelaunayOperation::FlipK2,
+            mutation.edge_flip_error(
                 format!(
                     "edge {:?} -- {:?} via facet {:?}",
                     edge.key.v0(),
@@ -2652,6 +2651,29 @@ impl<VertexData: DataType, SimplexData: DataType, const D: usize>
         let result = FlipResult::new(mutation.edge_handle(replacement_edge), affected_faces);
         mutation.commit();
         Ok(result)
+    }
+
+    /// Treats a degenerate replacement as a rejected proposal after upstream rollback.
+    ///
+    /// The mandatory postcondition checks the new simplices before the optional
+    /// realization audit. A witness still present in the restored mesh could
+    /// indicate existing damage, so it retains the hard-failure classification.
+    fn edge_flip_error(&self, target: String, error: &FlipError) -> DelaunayError {
+        if let FlipError::InvariantValidation { source } = error
+            && let InvariantError::Realization {
+                source:
+                    TriangulationRealizationValidationError::DegenerateSimplex { simplex_key, .. },
+            } = source.as_ref()
+            && self.dt.simplex(*simplex_key).is_none()
+        {
+            return DelaunayError::CandidateRejected {
+                operation: DelaunayOperation::FlipK2,
+                target,
+                reason: DelaunayCandidateRejection::DegenerateReplacement,
+                detail: error.to_string(),
+            };
+        }
+        flip_error(DelaunayOperation::FlipK2, target, error)
     }
 
     /// Subdivides one face with either backend- or caller-owned rollback.
@@ -2917,6 +2939,57 @@ pub(crate) mod tests {
             saw_seam,
             "the fixture must exercise nonzero lattice displacement"
         );
+    }
+
+    #[test]
+    fn edge_flip_rejects_only_degenerate_witnesses_absent_after_rollback() {
+        use delaunay::TriangulationRealizationSimplexDetail;
+
+        let backend = validated_backend(seeded_delaunay2(8, (0.0, 10.0), 99));
+        let (live, simplex) = backend.dt.simplices().next().expect("live simplex");
+        let replacement = SimplexKey::default();
+        assert!(backend.dt.simplex(replacement).is_none());
+        for key in [replacement, live] {
+            let uuid = simplex.uuid();
+            let failure = FlipError::InvariantValidation {
+                source: Box::new(InvariantError::Realization {
+                    source: TriangulationRealizationValidationError::DegenerateSimplex {
+                        simplex_key: key,
+                        simplex_uuid: uuid,
+                        detail: Box::new(TriangulationRealizationSimplexDetail {
+                            key,
+                            uuid,
+                            vertices: simplex.vertices().iter().copied().collect(),
+                            vertex_uuids: simplex
+                                .vertices()
+                                .iter()
+                                .map(|&key| backend.dt.vertex(key).expect("live vertex").uuid())
+                                .collect(),
+                        }),
+                        dimension: 2,
+                    },
+                }),
+            };
+            let actual = backend.edge_flip_error("edge".to_owned(), &failure);
+            if key == replacement {
+                assert_matches!(
+                    actual,
+                    DelaunayError::CandidateRejected {
+                        operation: DelaunayOperation::FlipK2,
+                        reason: DelaunayCandidateRejection::DegenerateReplacement,
+                        ..
+                    }
+                );
+            } else {
+                assert_matches!(
+                    actual,
+                    DelaunayError::FlipFailed {
+                        operation: DelaunayOperation::FlipK2,
+                        ..
+                    }
+                );
+            }
+        }
     }
 
     #[test]

@@ -140,6 +140,7 @@ The chains recorded 17,203,373 visits to the target volumes in 72,351,744 schedu
 All four distance bounds met the 0.05 limit. All 86 labeled means, variances, and covariances met their point tolerances and their joint 95% intervals
 covered the exact values. At 64 triangles the covariance of slices 2 and 3 was −0.039590 against −0.039838 exact, a 0.62% error within the 5% limit.
 See the [transfer-matrix prediction][scientific-transfer] and the [validation results, protocol history, and reproduction steps][finite-volume-report].
+The [external validation guide][external-validation-guide] defines the non-interactive chain runner and its versioned raw artifacts.
 
 ## 🗺️ Documentation Map
 
@@ -280,6 +281,7 @@ This project is licensed under the [BSD 3-Clause License][repo-license].
 [scientific-validation]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md#what-the-crate-validates
 [scientific-transfer]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md#finite-volume-transfer-matrix-benchmark
 [finite-volume-report]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/finite-volume-validation.md
+[external-validation-guide]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/VALIDATING.md
 [ambjorn-loll-transfer]: https://arxiv.org/pdf/hep-th/9805108#page=6
 [scientific-responsibilities]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md#user-responsibilities
 [scientific-backends]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md#geometry-backend-role

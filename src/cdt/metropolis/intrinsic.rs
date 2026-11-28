@@ -20,8 +20,8 @@ use rand::{
 use std::sync::Arc;
 use thiserror::Error;
 
-const MINIMUM_LOOP_LENGTH: usize = 3;
-const MINIMUM_TIME_SLICES: usize = 3;
+pub(crate) const MINIMUM_LOOP_LENGTH: usize = 3;
+pub(crate) const MINIMUM_TIME_SLICES: usize = 3;
 
 /// Failure to construct or sample a periodic intrinsic CDT gluing.
 #[derive(Debug, Error)]

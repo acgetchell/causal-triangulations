@@ -34,6 +34,12 @@ fn main() -> io::Result<()> {
         ));
     }
     fs::write(out.join("finite_volume_rustc.txt"), version.stdout)?;
+    for variable in ["TARGET", "PROFILE", "OPT_LEVEL", "DEBUG"] {
+        let value = env::var(variable).map_err(|error| {
+            io::Error::other(format!("Cargo did not supply {variable}: {error}"))
+        })?;
+        println!("cargo::rustc-env=CDT_BUILD_{variable}={value}");
+    }
 
     // Only the benchmark and its bounded tests compile the generated includes.
     // rustc tracks their contents. The directory watches above cover new and removed files.

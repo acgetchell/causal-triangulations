@@ -118,6 +118,9 @@ just release-preflight
 just publish-check
 ```
 
+For v0.2.0, run the [packaged external 1+1 consumer test](VALIDATING.md#test-the-release-candidate) on the same reviewed source.
+Record the package identity, contract version and report in [#335](https://github.com/acgetchell/causal-triangulations/issues/335) before tagging.
+
 If preflight or packaging fails, [recover the release commit checks](RECOVERING_RELEASES.md#recover-the-release-commit-checks).
 
 ### 8. Run the push gates

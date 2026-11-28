@@ -129,7 +129,8 @@ causal-triangulations/
 │   ├── RUNNING-ON-HPC.md
 │   ├── RUNNING.md
 │   ├── scientific-basis.md
-│   └── testing.md
+│   ├── testing.md
+│   └── VALIDATING.md
 ├── examples/
 │   ├── scripts/
 │   │   ├── basic_simulation.sh
@@ -150,6 +151,8 @@ causal-triangulations/
 │       └── triangulation/
 │           └── state.txt
 ├── src/
+│   ├── bin/
+│   │   └── cdt-validation.rs
 │   ├── cdt/
 │   │   ├── metropolis/
 │   │   │   ├── intrinsic/
@@ -166,6 +169,8 @@ causal-triangulations/
 │   │   │   ├── moves.rs
 │   │   │   ├── state.rs
 │   │   │   └── validation.rs
+│   │   ├── validation/
+│   │   │   └── bundle.rs
 │   │   ├── action.rs
 │   │   ├── analysis.rs
 │   │   ├── ergodic_moves.rs
@@ -173,6 +178,7 @@ causal-triangulations/
 │   │   ├── observables.rs
 │   │   ├── proposal_policy.rs
 │   │   ├── results.rs
+│   │   ├── validation.rs
 │   │   └── volume_fixing.rs
 │   ├── geometry/
 │   │   ├── backends/
@@ -223,6 +229,8 @@ causal-triangulations/
 │   │   └── test_shared_tooling.py
 │   ├── finite_volume/
 │   │   └── validation.rs
+│   ├── packaged-validation/
+│   │   └── smoke.rs
 │   ├── cli.rs
 │   ├── error_diagnostics.rs
 │   ├── integration_tests.rs

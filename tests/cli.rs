@@ -27,6 +27,474 @@ fn cdt_command() -> Command {
     Command::new(assert_cmd::cargo::cargo_bin!("cdt"))
 }
 
+mod validation {
+    use super::{Value, fs, json, temp_output_dir};
+    use assert_cmd::prelude::*;
+    use causal_triangulations::prelude::action::VolumeFixingError;
+    use causal_triangulations::prelude::simulation::{
+        CdtError,
+        validation::{CONTRACT_VERSION, ValidationError, run, verify},
+    };
+    use sha2::{Digest, Sha256};
+    use std::fmt::Write;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    const MANIFEST: &str = "metadata.json";
+    const MEASUREMENTS: &str = "measurements.jsonl";
+    const TRANSITIONS: &str = "transitions.csv";
+
+    struct Fixture {
+        root: PathBuf,
+        config: PathBuf,
+        output: PathBuf,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let root = temp_output_dir("validation");
+            fs::create_dir(&root).expect("fresh validation directory");
+            let fixture = Self {
+                config: root.join("input.json"),
+                output: root.join("bundle"),
+                root,
+            };
+            write_json(&fixture.config, &configuration());
+            fixture
+        }
+
+        fn acquire(&self) -> Value {
+            run(&self.config, &self.output).expect("seeded validation chain");
+            read_json(&self.output.join(MANIFEST))
+        }
+
+        fn metadata(&self, metadata: &Value) {
+            write_json(&self.output.join(MANIFEST), metadata);
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn configuration() -> Value {
+        json!({
+            "contract_version": CONTRACT_VERSION,
+            "topology": "periodic_time_spatial_circle",
+            "time_slices": 4,
+            "minimum_loop_length": 3,
+            "initial_spatial_loop_lengths": [4, 4, 4, 4],
+            "action": {
+                "convention": "regge_counts_v1",
+                "coupling_0": 0.0,
+                "coupling_2": 0.0,
+                "edge_cosmological_constant": 0.462_098_120_373_296_84
+            },
+            "temperature": 1.0,
+            "move_policy": "uniform_move_family",
+            "volume_fixing": {"kind": "quadratic_triangles", "target_n2": 32, "strength": 0.05},
+            "warmup_steps": 2,
+            "measurement_cadence": 3,
+            "measurements": 32,
+            "run_id": "validation-ci",
+            "chain_id": "flat",
+            "seed": "320101"
+        })
+    }
+
+    fn command() -> Command {
+        Command::new(assert_cmd::cargo::cargo_bin!("cdt-validation"))
+    }
+
+    fn read_json(path: &Path) -> Value {
+        serde_json::from_slice(&fs::read(path).expect("read JSON record"))
+            .expect("parse JSON record")
+    }
+
+    fn write_json(path: &Path, value: &Value) {
+        let mut contents = serde_json::to_vec(value).expect("serialize fixture");
+        contents.push(b'\n');
+        fs::write(path, contents).expect("write JSON record");
+    }
+
+    fn assert_cli_failure(command: &mut Command, status: i32, code: &str) {
+        let result = command.output().expect("run validation command");
+        assert_eq!(result.status.code(), Some(status), "{:?}", result.stderr);
+        assert_eq!(result.stdout.as_slice(), b"");
+        let diagnostic: Value = serde_json::from_slice(&result.stderr).expect("JSON diagnostic");
+        assert_eq!(diagnostic["contract_version"], CONTRACT_VERSION);
+        assert_eq!(diagnostic["code"], code);
+        assert!(
+            diagnostic["message"]
+                .as_str()
+                .is_some_and(|message| !message.is_empty())
+        );
+    }
+
+    #[test]
+    fn validation_cli_emits_seeded_traces_and_rejects_overwrite() {
+        let fixture = Fixture::new();
+        command()
+            .arg("--help")
+            .assert()
+            .success()
+            .stdout(predicates::str::contains("verify"));
+        assert_cli_failure(command().arg("run"), 2, "invalid_arguments");
+        let mut invocation = command();
+        invocation
+            .arg("run")
+            .arg("--config")
+            .arg(&fixture.config)
+            .arg("--output")
+            .arg(&fixture.output);
+        invocation.assert().success().stdout("").stderr("");
+        command()
+            .arg("verify")
+            .arg("--output")
+            .arg(&fixture.output)
+            .assert()
+            .success()
+            .stdout("")
+            .stderr("");
+        let metadata = read_json(&fixture.output.join(MANIFEST));
+        assert_eq!(metadata["artifact_schema_version"], 1);
+        assert_eq!(metadata["configuration"], configuration());
+        let transitions =
+            fs::read_to_string(fixture.output.join(TRANSITIONS)).expect("proposal outcomes");
+        assert_eq!(transitions.lines().count(), 99, "header and 98 proposals");
+        for outcome in ['A', 'N', 'R'] {
+            assert!(
+                transitions
+                    .lines()
+                    .skip(1)
+                    .any(|row| row.starts_with(outcome))
+            );
+        }
+        let measurements =
+            fs::read_to_string(fixture.output.join(MEASUREMENTS)).expect("cadence measurements");
+        let rows: Vec<Value> = measurements
+            .lines()
+            .map(|row| serde_json::from_str(row).expect("measurement record"))
+            .collect();
+        assert_eq!(rows.len(), 32);
+        assert_eq!(rows[0]["step"], 5);
+        assert_eq!(rows[31]["step"], 98);
+        assert!(rows.iter().any(|row| row["n2"] == 32));
+        assert!(rows.iter().any(|row| row["n2"] != 32));
+        assert_cli_failure(&mut invocation, 4, "artifact_io_failed");
+        assert_eq!(read_json(&fixture.output.join(MANIFEST)), metadata);
+        assert_eq!(
+            fs::read_to_string(fixture.output.join(MEASUREMENTS)).expect("original measurements"),
+            measurements
+        );
+    }
+
+    #[test]
+    fn validation_rejects_malformed_configuration_before_writing() {
+        let fixture = Fixture::new();
+        for (field, bad) in [
+            ("initial_spatial_loop_lengths", json!([2, 4, 4, 4])),
+            ("time_slices", json!(5)),
+            ("run_id", json!(" ")),
+            ("seed", json!("0320101")),
+            ("measurement_cadence", json!(0)),
+            ("warmup_steps", json!(u32::MAX)),
+            ("unknown", json!(true)),
+            ("topology", json!({"periodic_time_spatial_circle": null})),
+            ("move_policy", json!({"uniform_move_family": null})),
+            ("action", json!(["regge_counts_v1", 0.0, 0.0, 0.0])),
+            ("volume_fixing", json!(["quadratic_triangles", 32, 0.05])),
+        ] {
+            let mut config = configuration();
+            config[field] = bad;
+            write_json(&fixture.config, &config);
+            assert!(
+                matches!(
+                    run(&fixture.config, &fixture.output),
+                    Err(ValidationError::Configuration(_))
+                ),
+                "{field}"
+            );
+            assert!(!fixture.output.exists(), "{field}");
+        }
+        for invalid in ["{", r#"["cdt/periodic-1p1-validation/v1"]"#] {
+            fs::write(&fixture.config, invalid).expect("write malformed input");
+            assert!(matches!(
+                run(&fixture.config, &fixture.output),
+                Err(ValidationError::Configuration(_))
+            ));
+        }
+        let mut config = configuration();
+        config["volume_fixing"]["target_n2"] = json!(34);
+        write_json(&fixture.config, &config);
+        assert!(matches!(
+            run(&fixture.config, &fixture.output),
+            Err(ValidationError::Configuration(_))
+        ));
+        config["contract_version"] = json!("cdt/periodic-1p1-validation/v2");
+        write_json(&fixture.config, &config);
+        assert_cli_failure(
+            command()
+                .arg("run")
+                .arg("--config")
+                .arg(&fixture.config)
+                .arg("--output")
+                .arg(&fixture.output),
+            5,
+            "incompatible_schema",
+        );
+        assert!(!fixture.output.exists());
+    }
+
+    #[test]
+    fn validation_preserves_typed_configuration_failures() {
+        let fixture = Fixture::new();
+        for (field, value) in [
+            ("temperature", json!(0.0)),
+            (
+                "action",
+                json!({"convention":"regge_counts_v1", "coupling_0":1e300, "coupling_2":0.0, "edge_cosmological_constant":0.0}),
+            ),
+            (
+                "volume_fixing",
+                json!({"kind":"quadratic_triangles", "target_n2":32, "strength":-1.0}),
+            ),
+        ] {
+            let mut config = configuration();
+            config[field] = value;
+            write_json(&fixture.config, &config);
+            let error =
+                run(&fixture.config, &fixture.output).expect_err("invalid numerical setting");
+            assert_eq!(
+                (error.exit_status(), error.code()),
+                (2, "invalid_configuration")
+            );
+            assert!(matches!(
+                (field, error),
+                (
+                    "temperature",
+                    ValidationError::InvalidTarget(CdtError::InvalidSimulationConfiguration { .. })
+                ) | (
+                    "action",
+                    ValidationError::InvalidAction(CdtError::InvalidConfiguration { .. })
+                ) | (
+                    "volume_fixing",
+                    ValidationError::InvalidVolumeFixing(VolumeFixingError::InvalidStrength { .. })
+                )
+            ));
+            assert!(!fixture.output.exists());
+        }
+        let mut config = configuration();
+        config["temperature"] = json!(1e-30);
+        write_json(&fixture.config, &config);
+        assert_cli_failure(
+            command()
+                .arg("run")
+                .arg("--config")
+                .arg(&fixture.config)
+                .arg("--output")
+                .arg(&fixture.output),
+            3,
+            "chain_initialization_failed",
+        );
+        assert!(!fixture.output.exists());
+    }
+
+    #[test]
+    fn validation_verifies_the_completion_manifest_schema() {
+        let fixture = Fixture::new();
+        let original = fixture.acquire();
+        let manifest = fixture.output.join(MANIFEST);
+        let bytes = fs::read(&manifest).expect("completed manifest");
+        fs::write(
+            &manifest,
+            bytes.strip_suffix(b"\n").expect("LF-terminated manifest"),
+        )
+        .expect("remove final LF");
+        assert!(matches!(
+            verify(&fixture.output),
+            Err(ValidationError::Bundle(_))
+        ));
+        let mut crlf = bytes.strip_suffix(b"\n").expect("manifest body").to_vec();
+        crlf.extend_from_slice(b"\r\n");
+        fs::write(&manifest, crlf).expect("write CRLF manifest");
+        assert!(matches!(
+            verify(&fixture.output),
+            Err(ValidationError::Bundle(_))
+        ));
+        for field in ["build", "configuration", "timing_ns"] {
+            let mut metadata = original.clone();
+            let positional = metadata[field]
+                .as_object()
+                .expect("record fields")
+                .values()
+                .cloned()
+                .collect();
+            metadata[field] = Value::Array(positional);
+            fixture.metadata(&metadata);
+            assert!(
+                matches!(
+                    verify(&fixture.output),
+                    Err(ValidationError::ArtifactJson(_))
+                ),
+                "{field}"
+            );
+        }
+        for dependencies in [
+            json!({}),
+            json!({"delaunay":"0.8.5","la-stack":"0.5.4","markov-chain-monte-carlo":"0.5.3","unknown":"0.1.0"}),
+            json!(["0.8.5", "0.5.4", "0.5.3", "0.10.4"]),
+        ] {
+            let mut metadata = original.clone();
+            metadata["build"]["release_lock_dependencies"] = dependencies;
+            fixture.metadata(&metadata);
+            assert!(matches!(
+                verify(&fixture.output),
+                Err(ValidationError::ArtifactJson(_))
+            ));
+        }
+        let manifest_text = std::str::from_utf8(&bytes).expect("UTF-8 manifest");
+        let duplicate = manifest_text.replacen(
+            r#""release_lock_dependencies":{"#,
+            r#""release_lock_dependencies":{"delaunay":"0.8.6","#,
+            1,
+        );
+        assert_ne!(duplicate, manifest_text);
+        fs::write(&manifest, duplicate).expect("write duplicate sampler dependency");
+        assert!(matches!(
+            verify(&fixture.output),
+            Err(ValidationError::ArtifactJson(_))
+        ));
+        for version in ["", " \t"] {
+            let mut metadata = original.clone();
+            metadata["build"]["release_lock_dependencies"]["delaunay"] = json!(version);
+            fixture.metadata(&metadata);
+            assert!(matches!(
+                verify(&fixture.output),
+                Err(ValidationError::Bundle(_))
+            ));
+        }
+        let mut metadata = original.clone();
+        metadata["build"]["release_lock_dependencies"]["delaunay"] = json!("0.8.6");
+        fixture.metadata(&metadata);
+        verify(&fixture.output).expect("accept provenance from a different supplier build");
+        metadata["artifact_schema_version"] = json!(2);
+        fixture.metadata(&metadata);
+        assert!(matches!(
+            verify(&fixture.output),
+            Err(ValidationError::Schema(_))
+        ));
+        metadata = original;
+        metadata["seed_policy"] = json!("unknown");
+        fixture.metadata(&metadata);
+        assert!(matches!(
+            verify(&fixture.output),
+            Err(ValidationError::Schema(_))
+        ));
+        fs::remove_file(manifest).expect("remove completion manifest");
+        assert_cli_failure(
+            command().arg("verify").arg("--output").arg(&fixture.output),
+            4,
+            "artifact_io_failed",
+        );
+    }
+
+    #[test]
+    fn validation_rejects_inconsistent_or_incomplete_traces() {
+        let fixture = Fixture::new();
+        let original = fixture.acquire();
+        let transitions = fixture.output.join(TRANSITIONS);
+        let valid_transitions = fs::read(&transitions).expect("valid transition file");
+        let mut extra_transition = valid_transitions.clone();
+        extra_transition.extend_from_slice(b"N\n");
+        for invalid in [
+            b"invalid\n".as_slice(),
+            b"outcome\nX\n",
+            b"outcome\nNNNN\n",
+            &valid_transitions[..valid_transitions.len() - 1],
+            &extra_transition,
+        ] {
+            fs::write(&transitions, invalid).expect("replace transition file");
+            assert!(matches!(
+                verify(&fixture.output),
+                Err(ValidationError::Bundle(_))
+            ));
+        }
+        let all_holds = format!("outcome\n{}", "N\n".repeat(98));
+        let mut metadata = original.clone();
+        metadata["transitions_sha256"] = json!(digest(all_holds.as_bytes()));
+        fs::write(&transitions, all_holds).expect("replace all transitions with holds");
+        fixture.metadata(&metadata);
+        assert!(
+            matches!(verify(&fixture.output), Err(ValidationError::Bundle(message)) if message.contains("profile changed"))
+        );
+        fs::write(&transitions, valid_transitions).expect("restore transition file");
+        fixture.metadata(&original);
+        let measurements = fixture.output.join(MEASUREMENTS);
+        let valid_measurements = fs::read_to_string(&measurements).expect("valid measurements");
+        let (first, remaining) = valid_measurements
+            .split_once('\n')
+            .expect("first measurement");
+        let spaced = format!(" {first}\n{remaining}");
+        fs::write(&measurements, &spaced).expect("write noncompact measurement");
+        metadata = original.clone();
+        metadata["measurements_sha256"] = json!(digest(spaced.as_bytes()));
+        fixture.metadata(&metadata);
+        verify(&fixture.output).expect("accept whitespace within the measurement line limit");
+        let row: Value = serde_json::from_str(first).expect("first measurement JSON");
+        let positional = json!([
+            row["step"],
+            row["n0"],
+            row["n1"],
+            row["n2"],
+            row["spatial_loop_lengths"]
+        ]);
+        let bad_row = format!("{positional}\n{remaining}");
+        fs::write(&measurements, &bad_row).expect("replace a measurement with a positional array");
+        metadata = original.clone();
+        metadata["measurements_sha256"] = json!(digest(bad_row.as_bytes()));
+        fixture.metadata(&metadata);
+        assert!(matches!(
+            verify(&fixture.output),
+            Err(ValidationError::ArtifactJson(_))
+        ));
+        let crlf = format!("{first}\r\n{remaining}");
+        fs::write(&measurements, &crlf).expect("write CRLF measurement");
+        metadata["measurements_sha256"] = json!(digest(crlf.as_bytes()));
+        fixture.metadata(&metadata);
+        assert!(
+            matches!(verify(&fixture.output), Err(ValidationError::Bundle(message)) if message.contains("non-LF"))
+        );
+        let mut inconsistent = row;
+        inconsistent["step"] = json!(6);
+        fs::write(&measurements, format!("{inconsistent}\n{remaining}"))
+            .expect("write off-cadence measurement");
+        assert!(
+            matches!(verify(&fixture.output), Err(ValidationError::Bundle(message)) if message.contains("invalid cadence"))
+        );
+        fs::write(&measurements, valid_measurements).expect("restore measurement file");
+        assert!(
+            matches!(verify(&fixture.output), Err(ValidationError::Bundle(message)) if message.contains("SHA-256 mismatch"))
+        );
+        fixture.metadata(&original);
+        let config = fixture.output.join("configuration.json");
+        write_json(&config, &json!({}));
+        assert!(
+            matches!(verify(&fixture.output), Err(ValidationError::Bundle(message)) if message.contains("differs from metadata"))
+        );
+    }
+
+    fn digest(bytes: &[u8]) -> String {
+        let mut digest = String::with_capacity(64);
+        for byte in Sha256::digest(bytes) {
+            write!(digest, "{byte:02x}").expect("format digest");
+        }
+        digest
+    }
+}
+
 /// Returns the current test thread name with path separators and
 /// reserved characters removed.
 fn safe_thread_name() -> String {

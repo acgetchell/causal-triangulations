@@ -198,6 +198,8 @@ pub mod cdt {
             EssEstimator, FoldedRankNormalizedSplitRhat, IntegratedAutocorrelationTime, MeanMcse,
             QuantileMcse, RankNormalizedSplitRhat, TailEss,
         };
+        #[cfg(feature = "cli")]
+        pub(crate) use markov_chain_monte_carlo::{Chain, DelayedStepError};
         pub use markov_chain_monte_carlo::{
             ChainId, StepOutcome, Trace, TraceError, TraceRecord, TraceStepOutcome,
         };
@@ -217,6 +219,9 @@ pub mod cdt {
     /// CDT triangulation state.
     #[path = "triangulation/state.rs"]
     pub mod triangulation;
+    /// Versioned periodic 1+1 validation bundles for external consumers.
+    #[cfg(feature = "cli")]
+    pub mod validation;
     /// Explicit modified-ensemble triangle-volume bias.
     pub mod volume_fixing;
 }
@@ -552,6 +557,8 @@ pub mod prelude {
         pub use crate::cdt::results::{
             Measurement, SimulationEvent, SimulationHistory, SimulationResultsBackend,
         };
+        #[cfg(feature = "cli")]
+        pub use crate::cdt::validation;
         pub use crate::config::{CdtConfig, CdtTopology, ValidatedCdtConfig};
         pub use crate::errors::{CdtError, CdtResult};
         pub use crate::geometry::traits::TriangulationQuery;
