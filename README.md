@@ -31,6 +31,7 @@ Illustration of a 1+1 CDT cylinder. Each spatial slice is a circle (S¹), and th
 - [Features](#-features)
 - [Quickstart](#-quickstart)
 - [Scientific Basis](#-scientific-basis)
+  - [Finite-volume validation](#finite-volume-validation)
 - [Documentation Map](#-documentation-map)
 - [Ecosystem](#-ecosystem)
 - [Benchmarking](#-benchmarking)
@@ -119,9 +120,26 @@ OnDemand.
 ## 🧪 Scientific Basis
 
 The [scientific basis][repo-docs-scientific-basis-md] owns [action calibration][scientific-action], [ensemble and volume behavior][scientific-ensemble],
-[Hilbert order for embedded proposal sites][scientific-hilbert], [validation limits][scientific-validation], and
-[downstream analysis responsibilities][scientific-responsibilities]. Move semantics and detailed-balance notes live in
+[Hilbert order for embedded proposal sites][scientific-hilbert], [validation limits][scientific-validation],
+and [downstream analysis responsibilities][scientific-responsibilities]. Move semantics and detailed-balance notes live in
 [the move guide][repo-docs-moves-md] and [the sampler guide][repo-docs-metropolis-md].
+
+### Finite-volume validation
+
+**All four tori passed the independent fixed-volume validation.** We computed the exact distribution of labeled spatial loop lengths from
+[Ambjørn and Loll’s 1998 transfer matrix][ambjorn-loll-transfer] and compared it with 32 fresh intrinsic 1+1 CDT chains, eight per torus.
+The chains recorded 17,203,373 visits to the target volumes in 72,351,744 scheduled measurements.
+
+| Time slices | Triangles | Profiles visited / admissible | 95% upper bound on total-variation distance | Moments passing |
+| ---: | ---: | ---: | ---: | ---: |
+| 4 | 32 | 35 / 35 | 0.00946 | 14 / 14 |
+| 4 | 40 | 165 / 165 | 0.02656 | 14 / 14 |
+| 4 | 48 | 455 / 455 | 0.02936 | 14 / 14 |
+| 8 | 64 | 6,435 / 6,435 | 0.01876 | 44 / 44 |
+
+All four distance bounds met the 0.05 limit. All 86 labeled means, variances, and covariances met their point tolerances and their joint 95% intervals
+covered the exact values. At 64 triangles the covariance of slices 2 and 3 was −0.039590 against −0.039838 exact, a 0.62% error within the 5% limit.
+See the [transfer-matrix prediction][scientific-transfer] and the [validation results, protocol history, and reproduction steps][finite-volume-report].
 
 ## 🗺️ Documentation Map
 
@@ -260,6 +278,9 @@ This project is licensed under the [BSD 3-Clause License][repo-license].
 [scientific-action]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md#action-calibration
 [scientific-ensemble]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md#ensemble-and-volume-behavior
 [scientific-validation]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md#what-the-crate-validates
+[scientific-transfer]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md#finite-volume-transfer-matrix-benchmark
+[finite-volume-report]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/finite-volume-validation.md
+[ambjorn-loll-transfer]: https://arxiv.org/pdf/hep-th/9805108#page=6
 [scientific-responsibilities]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md#user-responsibilities
 [scientific-backends]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/scientific-basis.md#geometry-backend-role
 [checkpoint-policy]: https://github.com/acgetchell/causal-triangulations/blob/main/docs/metropolis.md#serialized-checkpoint-compatibility

@@ -1,7 +1,7 @@
 # CDT Benchmarks
 
-This document describes the Criterion benchmark suites. For regression workflows, baselines, CI behavior, and report generation, see
-[`docs/BENCHMARKING.md`](../docs/BENCHMARKING.md).
+The Criterion suites measure performance. The opt-in finite-volume benchmark measures sampler agreement with the exact 1+1 CDT distribution.
+See [Benchmarking](../docs/BENCHMARKING.md) for regression workflows, baselines and report generation.
 
 ## Running Benchmarks
 
@@ -27,6 +27,17 @@ cargo bench validation
 ```
 
 Criterion writes HTML reports under `target/criterion/`.
+
+## Finite-volume scientific benchmark
+
+Run `cargo bench --locked --bench finite_volume`. The Rust target prints a fresh output directory, collects the chains, evaluates the exact
+reference and writes the joint decision to `assessment/report.json`. It exits successfully when all four conditions and both holdout panels pass.
+The [scientific report](../docs/finite-volume-validation.md) gives the tolerances, current results and instructions for rescoring existing traces.
+Use `cargo bench --locked --bench finite_volume -- confirm NEW_DIRECTORY` to reproduce the independently seeded production cohort
+with the frozen calibration.
+The default run uses the revised 64-triangle budget. Use `cargo bench --locked --bench finite_volume -- moment-controls NEW_DIRECTORY`
+to test joint interval coverage over all 86 labeled moments on fresh exact-law families.
+Use `budget-controls NEW_DIRECTORY` to reproduce the earlier comparison of measurement budgets with within-torus bands.
 
 ## CI Performance Suite
 

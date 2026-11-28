@@ -82,6 +82,27 @@
 //! ```
 
 // Module declarations (avoiding mod.rs files)
+// The standalone benchmark imports the library by its package name. Its bounded tests reuse that same source here.
+#[cfg(test)]
+extern crate self as causal_triangulations;
+
+#[cfg(test)]
+#[path = "../benches/finite_volume"]
+mod finite_volume {
+    mod acquire;
+    mod assessment;
+    mod bootstrap;
+    mod calibration;
+    mod data;
+    mod evidence;
+    mod oracle;
+    mod probability;
+    #[path = "../../tests/finite_volume/validation.rs"]
+    mod tests;
+
+    use evidence::{Error, file_hash, hex, write_json};
+}
+
 /// Configuration management for CDT simulations.
 pub mod config;
 

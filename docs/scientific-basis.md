@@ -15,6 +15,7 @@ For a notebook-first run, start with [`notebooks/00_quickstart.ipynb`](../notebo
 - [Ensemble And Volume Behavior](#ensemble-and-volume-behavior)
 - [Profile Conventions](#profile-conventions)
 - [What The Crate Validates](#what-the-crate-validates)
+  - [Finite-Volume Transfer Matrix Benchmark](#finite-volume-transfer-matrix-benchmark)
 - [CDT++ Construction Lesson](#cdt-construction-lesson)
 - [Effective Dimensional Observables](#effective-dimensional-observables)
 - [Move And Sampler Contract](#move-and-sampler-contract)
@@ -45,9 +46,9 @@ The simulation dimension is `2` (1+1 spacetime). Open strips have open space and
 least two slices. Toroidal initial data are periodic in both directions, χ = 0, with at least three vertices per slice and three slices. The input size is
 an initial count, not a fixed-volume constraint.
 
-Higher-dimensional CDT, automated λ scans, and the exact analytic ensemble-validation claim remain outside the current scope. Explicit volume fixing and
-dependence-aware chain diagnostics are available through the [chain-analysis workflow](ANALYZING.md). Mesh export and
-example notebook visualization already exist; further visualization workflows remain on the [roadmap](roadmap.md).
+The [finite-volume benchmark](#finite-volume-transfer-matrix-benchmark) tests the intrinsic sampler at four periodic 1+1 conditions.
+The [chain-analysis workflow](ANALYZING.md) describes explicit volume fixing and dependence-aware diagnostics. The
+[roadmap](roadmap.md) covers varying-volume coupling scans, higher-dimensional models and further visualization workflows.
 
 ## API Selection
 
@@ -133,7 +134,7 @@ triangle count. Convert counts to physical volumes only after choosing lattice s
 
 ## What The Crate Validates
 
-The validation contract is discrete and implementation-level. Constructors and simulation paths check:
+Constructors and simulation paths perform the following checks.
 
 - topology metadata and Euler-characteristic consistency for supported initial data;
 - foliation labels and slice-size constraints;
@@ -149,7 +150,7 @@ asymptotic scaling regime, or that a chosen observable analysis supports a parti
 | --- | --- |
 | Structural and proposal-bookkeeping checks | See [tests](testing.md), the [v0.1.1 checklist][claims], and [limits](#move-and-sampler-contract) |
 | Whole-embedding validation | The [published correction](audits/delaunay-periodic-realization.md#published-correction) links passing source and native CI evidence |
-| Analytic ensemble validation | Required [v0.2.0 quantitative gate](roadmap.md#primary-exact-benchmark); invariant checks do not establish the distribution |
+| Analytic ensemble validation | All four tori passed the [independent confirmation](finite-volume-validation.md#independent-production-confirmation) |
 | Reference implementation comparison | A separate [follow-up][reference-validation], not existing Rust validation evidence |
 | Continuum interpretation | Requires downstream mixing, scaling, fit-window, and uncertainty analyses |
 
@@ -162,6 +163,25 @@ periodic 1+1 parity. The [exact-ensemble benchmark][exact-validation] and the [e
 acceptance criteria. The bounded audit supplies evidence about the reference's stored topology and observable adjacency.
 
 [exact-validation]: roadmap.md#v020-exact-11-ensemble-validation
+
+### Finite-Volume Transfer Matrix Benchmark
+
+Ambjørn and Loll’s 1998 transfer matrix gives the weight for a circular spatial slice of one length to evolve into a slice of another length in one
+time step, with a vertex marked on the entrance loop. Multiplying those weights around periodic time and conditioning on the total triangle count gives
+an exact probability for each ordered sequence of spatial loop lengths. We restrict each loop to at least three spacelike links, as in the intrinsic
+sampler. The observable is the full sequence, with the time labels retained.
+See [the paper, §2, equation (17)](https://arxiv.org/pdf/hep-th/9805108#page=6) and [the crate’s marking convention](#intrinsic-periodic-cdt-measure).
+
+At four time slices and 40 triangles, all admissible triangulations have the same bare action, yet different numbers of gluings give each labeled
+profile. For example, the exact solution assigns 2.171% probability to the flat profile (5,5,5,5) and 0.0192% to the peaked profile (11,3,3,3).
+The Rust sampler visited both profiles and all 163 others at this volume. Comparing the full distribution tests the intrinsic move
+kernel, its acceptance probabilities and the marking correction together. The final independent run passed on the three four-slice tori and
+the eight-slice, 64-triangle torus. All 86 labeled moments met their point tolerances and the joint interval criterion.
+See the [four-condition results and uncertainty estimates](finite-volume-validation.md#results).
+
+At fixed volume the cosmological weight is common to every profile and cancels on normalization. Testing that coupling requires varying the volume.
+The paper’s continuum limit and its model allowing spatial topology change also require separate comparisons.
+See the [benchmark criteria](roadmap.md#primary-exact-benchmark).
 
 ## CDT++ Construction Lesson
 
@@ -262,7 +282,8 @@ At a fixed profile, interchanging adjacent unlike triangles moves individual Dow
 allocation of Down runs. Moving a Down triangle around the complete cycle changes the upper start by one while restoring the run lengths. Above
 the minimum length, the same interchanges can prepare a non-origin vertex for collapse by bringing together its two Up and two Down steps. Both
 orientations of volume change therefore connect all admissible profiles through the minimum profile under positive flip, add, and remove weights.
-The predeclared reachability checks and statistical comparison in #238 are still release validation gates.
+The preflight verified forward and reverse support for every labeled profile in all four benchmark conditions.
+The [finite-volume validation report](finite-volume-validation.md) records the separate evidence from sampling.
 
 For details, see:
 

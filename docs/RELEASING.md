@@ -27,8 +27,8 @@ Merge library and tool updates in a separate PR before starting the release. Run
 versions and pinned `uv` version throughout the release. If an update runs during the release,
 [recover the pinned environment](RECOVERING_RELEASES.md#recover-after-an-unintended-update).
 
-Use the [release tracker][release-issues] for the milestone's scientific claims, approvals, run links and checksums.
-Compare those claims with the [scientific basis](scientific-basis.md) and [roadmap](roadmap.md) before opening the release PR.
+Use the milestone's [release tracker][release-issues] to identify its scientific acceptance criteria. Compare the claims with the
+[scientific basis](scientific-basis.md) and [roadmap](roadmap.md). Verify results in the workflow runs and generated reports for the release commit.
 
 [release-issues]: https://github.com/acgetchell/causal-triangulations/issues?q=is%3Aissue+label%3Arelease
 
@@ -94,7 +94,7 @@ just performance-readme
 ```
 
 Review the README changes alongside the promoted report and raw run records. Back up the external acquisition directory printed by
-`just release-status`. Record its acquisition and publication digests in the release tracker.
+`just release-status`, including its acquisition and publication digests.
 If acquisition or promotion stops, [resume from the original evidence](RECOVERING_RELEASES.md#resume-benchmarks-or-report-promotion).
 
 ### 6. Commit the candidate
@@ -171,7 +171,7 @@ just release-evidence
 
 Check the printed SHA, CI run and attempt, signed crate checksum and benchmark acquisition. The main-push evidence covers repository tooling, the three
 native target jobs, the library-only build, slow tests, both clean Cargo package checks and the all-feature packaged public docs.
-Record these identities. Before creating the tag, [download and back up the signed CI artifact](RECOVERING_RELEASES.md#preserve-the-original-signed-evidence).
+Before creating the tag, [download and back up the signed CI artifact](RECOVERING_RELEASES.md#preserve-the-original-signed-evidence).
 If the artifact is unavailable or the selected attempt changed, [recover the signed CI evidence](RECOVERING_RELEASES.md#recover-signed-ci-evidence).
 
 ```bash
@@ -232,7 +232,7 @@ In **Actions → Publish to crates.io**, open the run titled `Publish <tag> to c
 Under **Review deployments**, select **crates-io**, choose
 **Approve and deploy**, and wait for `publish` to succeed. The publisher rechecks the original benchmark, native
 selection, tool identities, exact Cargo bytes and registry absence before obtaining a short-lived upload token. Cargo packages the same source again
-when it uploads. Record the original run and attempt in the [release tracker][release-issues].
+when it uploads.
 If dispatch, approval, or upload stops, [recover crates.io publication](RECOVERING_RELEASES.md#recover-cratesio-publication).
 
 ### 7. Verify the published crate
@@ -252,5 +252,5 @@ cargo add --manifest-path "$consumer/consumer/Cargo.toml" "$dependency"
 cargo check --locked --manifest-path "$consumer/consumer/Cargo.toml"
 ```
 
-Record the registry, downstream check and Zenodo version reached from the concept DOI in `CITATION.cff` before closing the release tracker.
+Verify the Zenodo version reached from the concept DOI in `CITATION.cff`. Close the release tracker once its publication and verification criteria pass.
 For a failed consumer check or a missing Zenodo record, [resume downstream verification](RECOVERING_RELEASES.md#recover-downstream-verification).

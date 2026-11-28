@@ -39,8 +39,8 @@ release-performance provenance.
 
 This evidence covers structural invariants and transition bookkeeping. The subsequent reverse-support counterexample in
 [#316](https://github.com/acgetchell/causal-triangulations/issues/316) prevents a complete coordinate-state reversibility claim. Chain mixing, continuum
-behavior, fixed-volume physics, finite-size scaling, and agreement with the exact transfer-matrix ensemble remain unestablished. The quantitative analytic
-ensemble gate remains [#238](https://github.com/acgetchell/causal-triangulations/issues/238) for v0.2.0.
+behavior, fixed-volume physics, finite-size scaling, and agreement with the exact transfer-matrix ensemble were outside the v0.1.1 evidence.
+The v0.2.0 [four-condition assessment](finite-volume-validation.md#results) supplies the subsequent finite-volume comparison.
 
 Completed maturity work includes:
 
@@ -65,7 +65,7 @@ The implementation provides optional volume control, spatial-loop measurements, 
 the periodic intrinsic sampler through Delaunay 0.8.5. The [#258 audit](audits/2d-cdt_sphere/README.md) defines the scope of the external reference.
 
 The [v0.2.0 release tracker](https://github.com/acgetchell/causal-triangulations/issues/335) owns readiness, including #316 review and integration,
-the [#238 exact-ensemble gate](#v020-exact-11-ensemble-validation), the required #165/#166 benchmark evidence, the
+the [exact-ensemble evidence from #238](#v020-exact-11-ensemble-validation), the required #165/#166 benchmark evidence, the
 [#276 external validation bundle](https://github.com/acgetchell/causal-triangulations/issues/276), and native package and provenance checks.
 
 <!-- Preserve the earlier exact-validation release-plan deep link. -->
@@ -74,8 +74,8 @@ the [#238 exact-ensemble gate](#v020-exact-11-ensemble-validation), the required
 
 ## v0.2.0 Exact 1+1 Ensemble Validation
 
-The next scientific objective is **analytically validated 1+1 CDT with circular spatial topology (S¹)**. It requires the original finite-lattice oracle,
-the necessary representation and sampler corrections, and the statistical criteria below.
+The final independent production run passed the fixed-volume transfer-matrix comparison on all four tori.
+The [scientific report](finite-volume-validation.md#results) records both independent confirmations and their protocols.
 
 Topology terminology is part of the scientific contract:
 
@@ -86,8 +86,8 @@ Topology terminology is part of the scientific contract:
 Use “1+1 CDT with circular spatial topology (S¹)” for the model. Do not call it “spherical 1+1 CDT”: that wording can confuse the topology of a
 spatial slice with the topology of the complete spacetime.
 
-The release gate is tracked by the exact transfer-matrix validation issue
-([#238](https://github.com/acgetchell/causal-triangulations/issues/238)). Its release-blocking prerequisites are spatial-loop measurement and artifacts
+The [v0.2.0 release issue #335](https://github.com/acgetchell/causal-triangulations/issues/335) owns validation of the exact transfer-matrix evidence
+and the decision to tag. The benchmark uses spatial-loop measurements and artifacts
 ([#237](https://github.com/acgetchell/causal-triangulations/issues/237)), soft volume fixing
 ([#142](https://github.com/acgetchell/causal-triangulations/issues/142)), autocorrelation analysis
 ([#165](https://github.com/acgetchell/causal-triangulations/issues/165)), and ESS/R-hat diagnostics
@@ -98,13 +98,13 @@ The release gate is tracked by the exact transfer-matrix validation issue
 The periodic validation chain uses the intrinsic triangle-gluing representation from [Delaunay #667][delaunay-gluings] and the
 transition probabilities from [#316](https://github.com/acgetchell/causal-triangulations/issues/316). The
 [intrinsic target](scientific-basis.md#intrinsic-periodic-cdt-measure) accounts for profile and marking weights.
-Issue #238 owns the preflight, benchmarks, and statistical acceptance criteria for the paper ensemble.
+The [implementation issue #238](https://github.com/acgetchell/causal-triangulations/issues/238) delivers the preflight, exact oracle, benchmark
+acquisitions, replay, and report. Its implementation PR can close it on merge after the required checks and review.
 
 [delaunay-gluings]: https://github.com/acgetchell/delaunay/issues/667
 
 The intrinsic kernel is callable via the Rust delayed sampler. The current CLI, checkpoints, and validation-chain export operate on embedded runs.
-The [#238 harness](https://github.com/acgetchell/causal-triangulations/issues/238) must acquire intrinsic measurements and the
-[#276 bundle](https://github.com/acgetchell/causal-triangulations/issues/276) must expose reproducible external invocation and artifacts.
+The [#276 bundle](https://github.com/acgetchell/causal-triangulations/issues/276) owns reproducible external invocation and artifacts.
 
 ### Validation hierarchy
 
@@ -113,8 +113,8 @@ The project distinguishes four different claims:
 1. **Structural validation.** Existing validators and tests establish combinatorial, manifold, topology, foliation, causality, embedding, rollback, and
    geometric invariants. These checks prove that states are admissible CDT triangulations; they do not prove that the Markov chain samples the intended
    probability distribution.
-2. **Analytic physics validation — v0.2.0.** The conventional 1+1 sampler must reproduce an exact CDT distribution within predeclared statistical tolerances.
-   This is an implementation-independent test of the sampled ensemble.
+2. **Analytic physics validation — v0.2.0.** The final independent confirmation passed the distribution and labeled-moment criteria at all four sizes.
+   The release tracker reviews the [finite-volume results](finite-volume-validation.md) for the v0.2.0 claim.
 3. **1+1 follow-up validation — v0.2.1.** After the fixed-volume analytic result is established, validate the cosmological-coupling normalization in the
    grand-canonical ensemble, separate public spatial-topology and temporal-boundary contracts, and compare the conventional sampler with Brunekreef's
    `2d-cdt`. This broadens the evidence without making the reference code the definition of the ensemble.
@@ -155,7 +155,7 @@ cannot test an action contribution that is constant within each fixed-`N2` secto
 
 ### Simulation and measurement contract
 
-The reproducible benchmark should use:
+The [Rust benchmark](finite-volume-validation.md#sampling-protocol) implements the following measurement contract:
 
 - periodic time, circular S¹ spatial slices, MCMC temperature 1, and the conventional reversible move policy;
 - fixed-volume conditions at `T = 4` with `N2 = 32, 40, 48` and at `T = 8` with `N2 = 64`, subject to a preflight ergodicity/reachability check for the

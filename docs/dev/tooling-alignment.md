@@ -1254,3 +1254,13 @@ dependencies, command-line parsing methods and the `cdt` binary. Existing defaul
 select `default-features = false` while retaining configuration, simulation, checkpoint and analysis APIs. The example logger is also a development dependency
 so library examples remain runnable without enabling the companion CLI. CLI tests are feature-gated; scientific configuration tests remain unconditional.
 Validation must cover library-only compilation and tests, default/all-feature CLI behavior, and an external library consumer without default features.
+
+## Finite-ensemble validation workloads
+
+The native finite-volume correctness benchmark belongs in `benches/finite_volume/`. Cargo runs the sampler and analysis once per benchmark
+acquisition. A milestone can use the resulting report to assess its scientific claims. Routine tests exercise bounded fixtures.
+The Criterion series owns timings.
+
+The finite-volume target declares `bench = false`. Cargo includes it when explicitly selected with `--bench finite_volume`.
+The compile-only gate selects all bench targets. The acquisition directory retains the chains and reports, including a failed scientific decision.
+The spelling check recognizes the `num-rational` numerator accessor in Rust method calls.

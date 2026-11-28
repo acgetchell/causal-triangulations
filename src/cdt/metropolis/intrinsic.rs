@@ -5,7 +5,9 @@
 use super::helpers::count_to_f64;
 use crate::cdt::ergodic_moves::{MoveType, select_move_family_at};
 use crate::cdt::proposal_policy::CdtMoveFamilyDistribution;
+use crate::cdt::triangulation::CdtSimplexCounts;
 use crate::cdt::volume_fixing::VolumeFixingError;
+use crate::errors::CdtResult;
 use crate::geometry::backends::delaunay::{GluingDraft, IntrinsicGluing};
 use markov_chain_monte_carlo::{
     DelayedProposal, DiscreteProposalEndpoint, DiscreteProposalRatio, DiscreteProposalRatioError,
@@ -166,6 +168,27 @@ impl IntrinsicCdtTriangulation {
     #[must_use]
     pub const fn triangle_count(&self) -> usize {
         self.gluing.counts().2
+    }
+
+    /// Counts vertex, edge and triangle occurrences in the validated gluing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::CdtError::InvalidSimplexCount`] if the backend reports a zero count.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use causal_triangulations::IntrinsicCdtTriangulation;
+    ///
+    /// let state = IntrinsicCdtTriangulation::from_spatial_loop_lengths(&[4; 4])?;
+    /// let counts = state.simplex_counts();
+    /// assert!(counts.is_ok_and(|n| (n.vertex_count(), n.edge_count(), n.triangle_count()) == (16, 48, 32)));
+    /// # Ok::<(), causal_triangulations::IntrinsicCdtError>(())
+    /// ```
+    pub fn simplex_counts(&self) -> CdtResult<CdtSimplexCounts> {
+        let (vertices, edges, triangles) = self.counts();
+        CdtSimplexCounts::try_new(vertices, edges, triangles)
     }
 
     /// Returns the vertex, edge, and triangle counts used by the CDT action.

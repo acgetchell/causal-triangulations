@@ -139,8 +139,9 @@ guard.
 Volume fixing is disabled by default. The `(1,3)` and `(3,1)` kernels change volume, so accepted moves may change vertex and simplex counts. The default target
 is the grand-canonical, unfixed-volume ensemble specified by the action. Opt-in quadratic triangle-volume fixing is available for toroidal 1+1 CDT through
 `VolumeFixing::quadratic_triangles` or the paired `--target-triangles` and `--volume-fixing-strength` CLI options. It adds `epsilon * (N2 - target)^2` to the
-action; it is a soft bias, not a clamp or a fixed-volume transition kernel. The [scientific evidence limits](scientific-basis.md) apply to both targets: current
-proposal implementation does not yet establish exact ensemble sampling.
+action. Volume can still change between proposals. Conditioning the intrinsic sampler's measurements on the target triangle count gives the
+fixed-volume profile distribution tested on four periodic tori. The marginal distribution of total volume requires a separate comparison.
+See the [finite-volume results](finite-volume-validation.md#results) and [scientific scope](scientific-basis.md#finite-volume-transfer-matrix-benchmark).
 
 This is a valid 1+1 CDT setting rather than an implementation accident. Israel and Lindner use a 1+1 CDT Monte Carlo model where add/remove moves satisfy
 detailed balance and the cosmological constant controls whether the universe size is stable, shrinking, or diverging:

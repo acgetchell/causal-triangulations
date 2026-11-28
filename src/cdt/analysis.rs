@@ -3,8 +3,9 @@
 //! Dependence-aware analysis of complete cadence-aligned periodic CDT chains.
 //!
 //! Generic estimator mathematics is owned by `markov-chain-monte-carlo`.
-//! A diagnostic verdict establishes information adequacy only, never agreement
-//! with a physical ensemble. Exact-volume goodness-of-fit belongs to #238.
+//! The diagnostic verdict measures information adequacy. The finite-volume benchmark
+//! compares the intrinsic sampler with the exact conditional distribution.
+//! See the [scientific results](https://github.com/acgetchell/causal-triangulations/blob/main/docs/finite-volume-validation.md#results).
 //!
 //! # Examples
 //!
