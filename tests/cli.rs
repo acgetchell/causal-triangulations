@@ -54,13 +54,13 @@ mod validation {
         fn new() -> Self {
             let root = temp_output_dir("validation");
             fs::create_dir(&root).expect("fresh validation directory");
-            let config = root.join("input.json");
-            write_json(&config, &configuration());
-            Self {
-                config,
+            let fixture = Self {
+                config: root.join("input.json"),
                 output: root.join("bundle"),
                 root,
-            }
+            };
+            write_json(&fixture.config, &configuration());
+            fixture
         }
 
         fn acquire(&self) -> Value {
@@ -202,6 +202,10 @@ mod validation {
             ("measurement_cadence", json!(0)),
             ("warmup_steps", json!(u32::MAX)),
             ("unknown", json!(true)),
+            ("topology", json!({"periodic_time_spatial_circle": null})),
+            ("move_policy", json!({"uniform_move_family": null})),
+            ("action", json!(["regge_counts_v1", 0.0, 0.0, 0.0])),
+            ("volume_fixing", json!(["quadratic_triangles", 32, 0.05])),
         ] {
             let mut config = configuration();
             config[field] = bad;
@@ -309,6 +313,13 @@ mod validation {
             bytes.strip_suffix(b"\n").expect("LF-terminated manifest"),
         )
         .expect("remove final LF");
+        assert!(matches!(
+            verify(&fixture.output),
+            Err(ValidationError::Bundle(_))
+        ));
+        let mut crlf = bytes.strip_suffix(b"\n").expect("manifest body").to_vec();
+        crlf.extend_from_slice(b"\r\n");
+        fs::write(&manifest, crlf).expect("write CRLF manifest");
         assert!(matches!(
             verify(&fixture.output),
             Err(ValidationError::Bundle(_))
@@ -421,6 +432,13 @@ mod validation {
             verify(&fixture.output),
             Err(ValidationError::ArtifactJson(_))
         ));
+        let crlf = format!("{first}\r\n{remaining}");
+        fs::write(&measurements, &crlf).expect("write CRLF measurement");
+        metadata["measurements_sha256"] = json!(digest(crlf.as_bytes()));
+        fixture.metadata(&metadata);
+        assert!(
+            matches!(verify(&fixture.output), Err(ValidationError::Bundle(message)) if message.contains("non-LF"))
+        );
         let mut inconsistent = row;
         inconsistent["step"] = json!(6);
         fs::write(&measurements, format!("{inconsistent}\n{remaining}"))

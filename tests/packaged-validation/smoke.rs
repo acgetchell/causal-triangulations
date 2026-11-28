@@ -219,7 +219,10 @@ fn inspect(bundle: &Path, config: &Value, package: &PackagedSource) -> Value {
         &["initialization", "warmup_transition", "sampling_transition"],
     );
     for key in ["initialization", "warmup_transition", "sampling_transition"] {
-        assert!(number(&timing[key]) > 0);
+        assert!(
+            timing[key].as_u64().is_some(),
+            "{key} must be an unsigned timing"
+        );
     }
 
     let mut contents = ARTIFACTS

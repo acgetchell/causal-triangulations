@@ -14,7 +14,7 @@ use crate::{
     IntrinsicCdtTriangulation, McmcError, StepOutcome, VolumeFixing, VolumeFixingError,
 };
 use rand::{SeedableRng, rngs::Xoshiro256PlusPlus};
-use serde::de::{MapAccess, Visitor, value::MapAccessDeserializer};
+use serde::de::{IntoDeserializer, MapAccess, Visitor, value::MapAccessDeserializer};
 use serde::{Deserialize, Deserializer, Serialize};
 use std::fmt;
 use std::fs;
@@ -127,13 +127,17 @@ struct ContractProbe {
 #[serde(deny_unknown_fields)]
 struct Configuration {
     contract_version: String,
+    #[serde(deserialize_with = "deserialize_literal")]
     topology: Topology,
     time_slices: usize,
     minimum_loop_length: usize,
     initial_spatial_loop_lengths: Vec<usize>,
+    #[serde(deserialize_with = "deserialize_object")]
     action: Action,
     temperature: f64,
+    #[serde(deserialize_with = "deserialize_literal")]
     move_policy: MovePolicy,
+    #[serde(deserialize_with = "deserialize_object")]
     volume_fixing: Fixing,
     warmup_steps: u32,
     measurement_cadence: u32,
@@ -310,6 +314,15 @@ fn decode_object<'de, T: Deserialize<'de>>(input: &'de [u8]) -> serde_json::Resu
     let record = deserialize_object(&mut deserializer)?;
     deserializer.end()?;
     Ok(record)
+}
+
+/// Accepts string literals for unit enums without admitting map representations.
+fn deserialize_literal<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(String::deserialize(deserializer)?.into_deserializer())
 }
 
 /// Disallows positional records while leaving field checks to the target type.

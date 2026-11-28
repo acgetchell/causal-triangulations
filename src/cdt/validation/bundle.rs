@@ -287,9 +287,9 @@ impl<'a> Writer<'a> {
 pub fn verify(directory: &Path) -> Result<(), ValidationError> {
     let raw_metadata =
         fs::read(directory.join(METADATA)).map_err(io_error("read metadata.json"))?;
-    if !raw_metadata.ends_with(b"\n") {
+    if !has_lf_terminator(&raw_metadata) {
         return Err(ValidationError::Bundle(
-            "metadata.json must end with LF".to_owned(),
+            "metadata.json must use LF line endings and end with LF".to_owned(),
         ));
     }
     let version: MetadataVersion = decode_object(&raw_metadata)?;
@@ -407,9 +407,9 @@ impl TraceReader {
             .take(max_bytes)
             .read_until(b'\n', &mut self.buffer)
             .map_err(io_error(self.name))?;
-        if !self.buffer.ends_with(b"\n") {
+        if !has_lf_terminator(&self.buffer) {
             return Err(ValidationError::Bundle(format!(
-                "{} has an incomplete or oversized line {}",
+                "{} has an incomplete, oversized, or non-LF line {}",
                 self.name, self.line
             )));
         }
@@ -431,6 +431,11 @@ impl TraceReader {
         }
         check_sha256(self.name, expected_sha256, &hex(&self.sha.finalize()))
     }
+}
+
+/// Rejects raw carriage returns, which JSON strings must encode as escapes.
+fn has_lf_terminator(bytes: &[u8]) -> bool {
+    bytes.ends_with(b"\n") && !bytes.contains(&b'\r')
 }
 
 fn check_sha256(name: &str, expected: &str, actual: &str) -> Result<(), ValidationError> {
