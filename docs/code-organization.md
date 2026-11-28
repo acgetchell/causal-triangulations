@@ -42,6 +42,19 @@ causal-triangulations/
 │   ├── CODEOWNERS
 │   └── dependabot.yml
 ├── benches/
+│   ├── finite_volume/
+│   │   ├── acquire.rs
+│   │   ├── assessment.rs
+│   │   ├── bootstrap.rs
+│   │   ├── build.rs
+│   │   ├── calibration.rs
+│   │   ├── data.rs
+│   │   ├── evidence.rs
+│   │   ├── final-confirmation-report.json
+│   │   ├── main.rs
+│   │   ├── moment_controls.rs
+│   │   ├── oracle.rs
+│   │   └── probability.rs
 │   ├── support/
 │   │   └── or_abort.rs
 │   ├── allocation_profile.rs
@@ -105,6 +118,7 @@ causal-triangulations/
 │   ├── BENCHMARKING.md
 │   ├── code-organization.md
 │   ├── error-diagnostics.md
+│   ├── finite-volume-validation.md
 │   ├── foliation.md
 │   ├── metropolis.md
 │   ├── moves.md
@@ -207,6 +221,8 @@ causal-triangulations/
 │   │   ├── test_release_evidence.py
 │   │   ├── test_shared_adoption.py
 │   │   └── test_shared_tooling.py
+│   ├── finite_volume/
+│   │   └── validation.rs
 │   ├── cli.rs
 │   ├── error_diagnostics.rs
 │   ├── integration_tests.rs
@@ -295,7 +311,7 @@ enforce this boundary against new CDT-local generic acceptance draws or manual a
 - `docs/audits/delaunay-periodic-realization.md` — minimized geometry-validator failure, independent exact-rational witness, and upstream repair boundary.
 - `tests/` — CLI, integration, physics, property-based, property-configuration, regression, slow-debug, project-rule, and consumer tooling tests, with shared
   property-test configuration under `tests/common/` and Python consumer contracts under `tests/tooling/`.
-- `benches/` — Criterion benchmark harnesses and CI performance suites, with shared fail-fast fixture setup support under `benches/support/`.
+- `benches/` — Criterion timing suites, allocation assertions, and the opt-in Rust finite-volume scientific benchmark in `finite_volume/`.
 - `docs/` — user guides, architecture notes, development rules, and release/testing/performance documentation.
   [The documentation index](README.md) maps their owners; [documentation policy](dev/DEVELOPING.md#documentation-and-command-policy) defines guide naming.
 - `tooling/` — benchmark measurement, example validation, report and README publication contracts, signed release evidence and draft asset policies.
@@ -458,7 +474,12 @@ estimator identities, original units, sample/split counts, block-selection polic
 
 `examples/validation_diagnostics.rs` demonstrates raw chain round trips and report export. `tests/validation_analysis.rs` covers independent edge-incidence
 measurements, fixed/bare production fixtures, checkpoint continuation, transport failures, and synthetic dependence/convergence controls.
-The complete exact-oracle matrix and external bundle freeze remain separate follow-up work; see [chain analysis](ANALYZING.md).
+The [finite-volume writeup](finite-volume-validation.md) explains the development run, both independent confirmations, and the exact reference distributions.
+`benches/finite_volume/final-confirmation-report.json` records the final confirmation under the four-torus rule.
+`moment_controls.rs` scores synthetic cohorts from the exact law. The writeup identifies the [archived evidence](finite-volume-validation.md#retained-evidence).
+The build script in `benches/finite_volume/` captures Cargo's compiler and enumerates Rust inputs for the benchmark's source digest.
+`src/lib.rs` wires the bounded finite-volume tests into the library test target. The standalone Cargo benchmark owns full acquisition and scoring.
+[Chain analysis](ANALYZING.md) covers the embedded analysis API.
 
 ### `geometry/traits.rs` — Backend-neutral interface
 

@@ -11,6 +11,7 @@ ESS, MCSE, and R-hat calculations delegate to the published `markov-chain-monte-
 - [Diagnostic policies](#diagnostic-policies)
 - [Timing](#timing)
 - [Runnable example](#runnable-example)
+- [Exact transfer-matrix comparison](#exact-transfer-matrix-comparison)
 - [Evidence boundaries](#evidence-boundaries)
 
 ## Volume fixing
@@ -91,11 +92,10 @@ requires matching physical conditions, warmup, cadence, producer version, and sa
 
 `at_exact_triangles(target)` selects exact target-volume rows offline and retains their original steps. It never includes neighboring volumes.
 A bias depending only on total N2 is constant within each exact-N2 sector: its factor cancels between the conditional distribution's numerator and
-normalizer. This establishes why conditioning removes this bias mathematically; agreement of the implemented chain with that conditional ensemble still
-requires the independent oracle in #238.
+normalizer. The [finite-volume validation report](finite-volume-validation.md) tests the intrinsic sampler against that conditional distribution.
 
 Filtered target-volume visits generally have irregular spacing. Do not feed them to a regular-cadence ACF estimator as if they were adjacent draws.
-The adapter exposes full-cadence volume, profile, and joint target/profile indicators for the dependence-aware ratio analysis planned in #238.
+The adapter exposes full-cadence volume, profile, and joint target/profile indicators for dependence-aware ratio estimates.
 
 ## Diagnostic policies
 
@@ -138,6 +138,12 @@ The [example](../examples/validation_diagnostics.rs) runs one flat and one nonun
 `diagnostics.json`. Its small workloads demonstrate the interface and deliberately do not satisfy the eight-chain production policy. They establish
 no mixing or ensemble-agreement claim. The external bundle/process contract will be frozen separately in #276.
 
+## Exact transfer-matrix comparison
+
+The first independent confirmation missed one covariance tolerance at 64 triangles. The final confirmation used eight fresh chains at each of four
+torus sizes and passed all four profile-distribution tests and all 86 labeled-moment criteria. The report gives the joint decision and replay commands.
+See the [results](finite-volume-validation.md#results) and [reproduction instructions](finite-volume-validation.md#reproducing-the-results).
+
 ## Evidence boundaries
 
 The focused integration tests independently count spacelike edges, test the action/bias/temperature boundary, retain rejected states through complete
@@ -145,9 +151,9 @@ cadence, exercise fixed and unfixed production fixtures, and compare serialized 
 independence, positive correlation, location separation, scale separation, tied data, and explicit unavailable outcomes. Generic estimator mathematics
 remains tested upstream.
 
-[The exact comparison harness](https://github.com/acgetchell/causal-triangulations/issues/238) owns the four-condition, eight-chain-per-condition
-benchmark and calibrated total-variation and goodness-of-fit calculations. The [release tracker](https://github.com/acgetchell/causal-triangulations/issues/335)
-owns the resulting evidence for #165 and #166. See the [roadmap](roadmap.md#v020-validated-11-cdt-baseline) and [scientific basis](scientific-basis.md).
+The [v0.2.0 tracker](https://github.com/acgetchell/causal-triangulations/issues/335) owns release review of the finite-volume evidence,
+the #165/#166 diagnostics and the external bundle from #276.
+See the [roadmap](roadmap.md#v020-validated-11-cdt-baseline) and [scientific basis](scientific-basis.md).
 
 The geometry adapter uses published Delaunay 0.8.5. Periodic containment, local edits, realization
 validation, and exact snapshot restoration remain delegated through the geometry adapter. Raw TDS Delaunay reports are Euclidean; periodic Level 5

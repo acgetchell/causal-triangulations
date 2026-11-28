@@ -1,8 +1,12 @@
 # Performance Testing
 
-CDT keeps its scientific workloads in `benches/` and delegates measurement orchestration, evidence, comparisons, and report publication to
+CDT keeps its performance workloads in `benches/` and delegates measurement orchestration, evidence, comparisons, and report publication to
 `research-repo-tools`. The September 2026 tooling migration deliberately retires historical reports and legacy formats. New measurements form a fresh series;
 old GitHub Release assets remain remote historical records and are not selected by the new recipes.
+
+Run `cargo bench --locked --bench finite_volume` for the scientific comparison with the exact 1+1 transfer-matrix distribution.
+The target is opt-in. To inspect its four decisions or to rescore existing traces, see the
+[finite-volume results](finite-volume-validation.md#results) and [reproduction instructions](finite-volume-validation.md#reproducing-the-results).
 
 ## Local baseline and comparison
 

@@ -21,6 +21,7 @@ This page owns bibliographic records and stable citation anchors. Model assumpti
 | 1+1 model and critical coupling | [Ambjørn and Loll][refs-mh] and [exact benchmarks][refs-exact] |
 | Action | [Regge calculus](#regge-calculus-and-discrete-action): original formulation and background |
 | CDT framework | [Original CDT framework](#original-cdt-framework) and [reviews](#comprehensive-reviews): physics foundations |
+| Finite-volume uncertainty | [Block resampling and Monte Carlo coverage](#block-resampling-and-monte-carlo-coverage) and [multiple testing](#multiple-testing) |
 | Geometry backend | [Delaunay](#computational-geometry-and-delaunay-triangulations): implementation dependency with its own bibliography |
 | Local moves | [Alexander and Pachner](#ergodic-moves-and-alexander-moves): combinatorial foundations, not a proof of constrained-kernel ergodicity |
 | Profiles and dimensions | [Volume and dimension studies][refs-observables]: scientific definitions and studies |
@@ -186,11 +187,30 @@ See also Ambjørn and Loll (1998) under [Metropolis-Hastings Algorithm in CDT](#
 [Comprehensive Reviews](#comprehensive-reviews). The conversion from their triangle-volume coupling to this crate's edge-count action, including the
 temperature and boundary qualifications, is documented under [Action Calibration](docs/scientific-basis.md#action-calibration).
 
+### Block Resampling and Monte Carlo Coverage
+
+- Vehtari, A., A. Gelman, D. Simpson, B. Carpenter and P.-C. Bürkner. “Rank-Normalization, Folding, and Localization: An Improved
+  R-hat for Assessing Convergence of MCMC.” _Bayesian Analysis_ (2021). Rank-based split R-hat and effective sample size diagnostics.
+  [10.1214/20-BA1221](https://doi.org/10.1214/20-BA1221)
+- Künsch, H. R. "The Jackknife and the Bootstrap for General Stationary Observations." _The Annals of Statistics_ 17, no. 3 (1989), 1217–1241.
+  Blocks preserve local dependence in resampling a stationary series. [10.1214/aos/1176347265](https://doi.org/10.1214/aos/1176347265)
+- Wilson, E. B. "Probable Inference, the Law of Succession, and Statistical Inference." _Journal of the American Statistical Association_
+  22, no. 158 (1927), 209–212. The score interval quantifies uncertainty in a binomial proportion.
+  [10.1080/01621459.1927.10502953](https://doi.org/10.1080/01621459.1927.10502953)
+
 ### Multiple Testing
+
+- NIST/SEMATECH. “Bonferroni's method.” _e-Handbook of Statistical Methods_, §7.4.7.3.
+  The union bound gives a simultaneous confidence level by allocating the total error probability across a prespecified family.
+  [NIST handbook](https://itl.nist.gov/div898/handbook/prc/section4/prc473.htm)
 
 - Holm, S. "A Simple Sequentially Rejective Multiple Test Procedure." _Scandinavian Journal of Statistics_ 6, no. 2 (1979): 65–70.
   Primary record: [JSTOR 4615733](https://www.jstor.org/stable/4615733). The step-down procedure compares ordered p-values against
   `alpha / (m - i + 1)` and stops at the first non-rejection; it controls familywise error for the declared family of `m` tests.
+
+- Montiel Olea, J. L., and Plagborg-Møller, M. "Simultaneous confidence bands: Theory, implementation, and an application to SVARs."
+  _Journal of Applied Econometrics_ 34, no. 1 (2019), 1–17, published online in 2018. The sup-$t$ construction uses a maximum across standardized estimates.
+  [10.1002/jae.2656](https://doi.org/10.1002/jae.2656)
 
 ### Regge Calculus and Discrete Action
 

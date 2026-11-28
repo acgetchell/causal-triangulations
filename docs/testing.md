@@ -30,7 +30,8 @@ assumed matching return atoms.
 The current suite replays the [#316 counterexample](scientific-basis.md#move-and-sampler-contract) and requires zero embedded return probability. Fixed-mixture
 tests sum the two policy components `Move22` and `EdgeFlip` when they realize the same edit. Intrinsic cyclic-word tests independently enumerate small-torus
 transition rows and detailed-balance fluxes. The Hilbert-order regression compares family order after exact geometry reconstruction and reversed site
-discovery. The [statistical ensemble gate](roadmap.md#v020-analytic-acceptance-criteria) remains separate.
+discovery. Run `cargo test --locked --lib finite_volume::` for bounded checks of the exact oracle, trace integrity, bootstrap and calibration.
+The full scientific comparison uses the [opt-in Cargo benchmark](finite-volume-validation.md#reproducing-the-results).
 
 ## Property-Test Case Controls
 

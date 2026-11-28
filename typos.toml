@@ -6,6 +6,8 @@ extend-ignore-re = [
     "https?://[^\\s]+",
     # Ignore dimensional notation like <2D>, <3D>, <Nd>
     "<[0-9]*[Dd]>",
+    # Exact numerator accessor from num-rational.
+    '\.numer\(\)',
 ]
 
 [files]

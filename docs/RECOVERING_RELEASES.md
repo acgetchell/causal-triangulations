@@ -208,7 +208,7 @@ complete main-push evidence.
 A complete CI rerun produces a new build record. Reuse the retained benchmark acquisition while its provenance still verifies for the candidate.
 
 - **Before evidence acceptance.** If the original main-push run can be rerun, use **Re-run all jobs**. Wait for the complete attempt on the same SHA.
-  Review it as new evidence and record the signer, run, attempt, artifact ID and digests. A matching crate checksum establishes that the bytes match.
+  Review the signer, run, attempt, artifact ID and digests in the new evidence. A matching crate checksum establishes that the bytes match.
   The attempt and attestation still have their own identities. Resume at [accept the evidence](RELEASING.md#2-accept-the-evidence-and-push-the-annotated-tag).
 - **After evidence acceptance.** Preserve the existing `selection.json`, `acceptance.json`, and any receipts issued from them. The release recipes recheck
   the selected attempt and artifact against GitHub. A backup preserves the evidence for audit. If the original hosted evidence is unavailable or the attempt
@@ -225,8 +225,8 @@ In GitHub Actions, open the accepted CI run and download `cargo-package-<run>-<a
 `validation.json`, and `validation.sigstore.json`. Compare the ZIP's SHA-256 with `artifact.digest` in the retained `selection.json`.
 If download or checksum verification fails, [inspect the original artifact and attempt](#recover-signed-ci-evidence) before tagging.
 
-Back up the verified ZIP, `selection.json`, and `acceptance.json` outside the release owner directory. Record the commit, run and attempt, signer, artifact
-ID, ZIP SHA-256, and crate SHA-256. Keep the benchmark acquisition, raw samples, and acquisition and publication digests with their own provenance.
+Back up the verified ZIP, `selection.json`, and `acceptance.json` outside the release owner directory. Keep the benchmark acquisition, raw samples,
+and acquisition and publication digests with their own provenance.
 
 Once the backup verifies, resume at tag creation in [accept the evidence and push the tag](RELEASING.md#2-accept-the-evidence-and-push-the-annotated-tag).
 If a tag already exists, [reconcile it](#reconcile-the-tag-push) first.
@@ -326,8 +326,8 @@ maintainer reconciliation.
 
 If the registry checksum agrees and the fresh consumer check failed, keep the diagnostic and verify the exact crate pin and supported Rust toolchain.
 After resolving a local tool or registry access failure, resume at the fresh Cargo consumer commands in
-[verify the published crate](RELEASING.md#7-verify-the-published-crate). If the verified package fails in a supported fresh consumer, record the failure
-in the release tracker and prepare the correction under a new version.
+[verify the published crate](RELEASING.md#7-verify-the-published-crate). If the verified package fails in a supported fresh consumer, retain the diagnostic
+and prepare the correction under a new version.
 
 If the consumer check already passed, keep its result and resume at the Zenodo check in [verify the published crate](RELEASING.md#7-verify-the-published-crate).
 Check for the version under the concept DOI in `CITATION.cff`. Leave the release tracker open while the version record is missing or incorrect.

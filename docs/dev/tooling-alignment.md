@@ -499,7 +499,9 @@ The `commit-check` graph previously selected release Rust tests through both `te
 selections contain the same 755 tests across 12 binaries. Make `test-release` depend on `test-rust-ci` and retain its release-profile doctests. Just then
 coalesces the runnable Rust suite within `commit-check`, while debug and release doctests remain distinct evidence. A dry-run regression protects both
 standalone release validation and pre-commit composition. The pre-commit gate also compiles benchmarks before runtime tests, so a benchmark compilation
-failure stops before those workloads.
+failure stops before those workloads. The finite-volume target opts out of the default benchmark set. A separate
+`cargo bench --workspace --no-run --bench finite_volume` invocation compiles its executable. Combining the named target with `--benches`
+on the pinned toolchain selects the default set and omits that executable.
 
 Both defects belong to CDT's consumer-owned aggregate recipes. The published `research-repo-tools` 0.1.7 template supplies a minimal `ci: check` wrapper and
 does not own CDT's Rust test selections or notebook execution inventory, so these changes require no new upstream issue or shared-package update.
@@ -1254,3 +1256,13 @@ dependencies, command-line parsing methods and the `cdt` binary. Existing defaul
 select `default-features = false` while retaining configuration, simulation, checkpoint and analysis APIs. The example logger is also a development dependency
 so library examples remain runnable without enabling the companion CLI. CLI tests are feature-gated; scientific configuration tests remain unconditional.
 Validation must cover library-only compilation and tests, default/all-feature CLI behavior, and an external library consumer without default features.
+
+## Finite-ensemble validation workloads
+
+The native finite-volume correctness benchmark belongs in `benches/finite_volume/`. Cargo runs the sampler and analysis once per benchmark
+acquisition. A milestone can use the resulting report to assess its scientific claims. Routine tests exercise bounded fixtures.
+The Criterion series owns timings.
+
+The finite-volume target declares `bench = false`. Cargo includes it when explicitly selected with `--bench finite_volume`.
+The compile-only gate selects all bench targets. The acquisition directory retains the chains and reports, including a failed scientific decision.
+The spelling check recognizes the `num-rational` numerator accessor in Rust method calls.
