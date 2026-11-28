@@ -354,6 +354,15 @@ mod validation {
                 Err(ValidationError::Bundle(_))
             ));
         }
+        for version in ["", " \t"] {
+            let mut metadata = original.clone();
+            metadata["build"]["release_lock_dependencies"]["delaunay"] = json!(version);
+            fixture.metadata(&metadata);
+            assert!(matches!(
+                verify(&fixture.output),
+                Err(ValidationError::Bundle(_))
+            ));
+        }
         let mut metadata = original.clone();
         metadata["build"]["release_lock_dependencies"]["delaunay"] = json!("0.8.6");
         fixture.metadata(&metadata);

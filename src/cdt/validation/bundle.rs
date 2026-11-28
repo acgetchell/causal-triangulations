@@ -303,12 +303,15 @@ pub fn verify(directory: &Path) -> Result<(), ValidationError> {
     let metadata: Metadata = decode_object(&raw_metadata)?;
     let dependencies = &metadata.build.release_lock_dependencies;
     if dependencies.len() != SAMPLER_DEPENDENCIES.len()
-        || !SAMPLER_DEPENDENCIES
-            .iter()
-            .all(|name| dependencies.contains_key(*name))
+        || !SAMPLER_DEPENDENCIES.iter().all(|name| {
+            dependencies
+                .get(*name)
+                .is_some_and(|version| !version.trim().is_empty())
+        })
     {
         return Err(ValidationError::Bundle(
-            "metadata release lock must identify all four sampler dependencies".to_owned(),
+            "metadata release lock must identify all four sampler dependencies and their versions"
+                .to_owned(),
         ));
     }
     check_contract(&metadata.configuration.contract_version)?;
