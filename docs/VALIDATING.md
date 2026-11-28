@@ -128,34 +128,40 @@ A killed process or failed write can leave partial files without `metadata.json`
 From the reviewed v0.2.0 release tree, use the pinned compiler and a shell with `tar`.
 
 ```bash
-repo=$PWD
-work=$(mktemp -d)
-version=0.2.0
-host=$(rustc -vV | awk '$1 == "host:" { print $2 }')
-cargo package --locked --target-dir "$work/package-build"
-archive="$work/package-build/package/causal-triangulations-$version.crate"
-tar -xzf "$archive" -C "$work"
-packed="$work/causal-triangulations-$version"
-cargo +1.100.0 build --locked --release --manifest-path "$packed/Cargo.toml" \
-  --target-dir "$work/cli-build" --bin cdt-validation
-cargo +1.100.0 new --vcs none --bin "$work/consumer"
-cp "$repo/tests/packaged-validation/smoke.rs" "$work/consumer/src/main.rs"
-cp "$packed/Cargo.lock" "$work/consumer/Cargo.lock"
-cat >> "$work/consumer/Cargo.toml" <<EOF
+(
+  set -euo pipefail
+  repo=$PWD
+  work=$(mktemp -d)
+  version=0.2.0
+  host=$(rustc -vV | awk '$1 == "host:" { print $2 }')
+  cargo package --locked --target "$host" --target-dir "$work/package-build"
+  archive="$work/package-build/package/causal-triangulations-$version.crate"
+  tar -xzf "$archive" -C "$work"
+  packed="$work/causal-triangulations-$version"
+  cargo +1.100.0 build --locked --release --target "$host" --manifest-path "$packed/Cargo.toml" \
+    --target-dir "$work/cli-build" --bin cdt-validation
+  binary="$work/cli-build/$host/release/cdt-validation"
+  case "$host" in
+    *-windows-*) binary="$binary.exe" ;;
+  esac
+  cargo +1.100.0 new --vcs none --bin "$work/consumer"
+  cp "$repo/tests/packaged-validation/smoke.rs" "$work/consumer/src/main.rs"
+  cp "$packed/Cargo.lock" "$work/consumer/Cargo.lock"
+  cat >> "$work/consumer/Cargo.toml" <<EOF
 causal-triangulations = { path = "../causal-triangulations-$version" }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 sha2 = "0.11"
 EOF
-(
-  cd "$work/consumer" || exit
+  cd "$work/consumer"
   cargo +1.100.0 metadata --format-version 1 --filter-platform "$host" > /dev/null
   cargo +1.100.0 metadata --locked --format-version 1 --filter-platform "$host" > "$work/resolution.json"
-  cargo +1.100.0 run --locked --release -- \
-    "$work/cli-build/release/cdt-validation" "$archive" "$work/smoke" "$work/resolution.json"
-) > "$work/packaged-validation.json"
+  cargo +1.100.0 run --locked --release --target "$host" -- \
+    "$binary" "$archive" "$work/smoke" "$work/resolution.json" > "$work/packaged-validation.json"
+  printf '%s\n' "$work/packaged-validation.json"
+)
 ```
 
-On Windows, use the `cdt-validation.exe` executable. Retain the report, Cargo and rustc identities, and exact source commit. Record the
+Retain the report, Cargo and rustc identities, and exact source commit. Record the
 `.crate` filename and checksum, contract and artifact schema versions, tested dependency resolution and build profile, and fixture result.
 The clean consumer seeds its first resolution from the archived lock to preserve sampler dependency versions. It replays the flat fixture
 using the same downstream build.

@@ -4,6 +4,21 @@
 //!
 //! The [external validation guide](https://github.com/acgetchell/causal-triangulations/blob/main/docs/VALIDATING.md)
 //! defines the JSON and CSV formats and the released command's exit statuses.
+//! The `cli` Cargo feature enables this module.
+//!
+//! # Examples
+//!
+//! The same API can run and verify a bundle from an external Rust project.
+//!
+//! ```
+//! use causal_triangulations::prelude::simulation::validation::{self, ValidationError};
+//! use std::path::Path;
+//!
+//! fn acquire_bundle(config: &Path, output: &Path) -> Result<(), ValidationError> {
+//!     validation::run(config, output)?;
+//!     validation::verify(output)
+//! }
+//! ```
 
 mod bundle;
 
