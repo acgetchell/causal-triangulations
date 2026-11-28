@@ -405,13 +405,14 @@ published normalizers and labeled covariances without regenerating the 32-chain 
 
 ### Replay the saved production traces
 
-Obtain `reserved-production-confirmation/` from the [experiment archive](#retained-evidence). From that directory, run
-`shasum -a 256 -c SHA256SUMS` to verify the original files. Point `acquisition` at the directory containing `acquisition.json`
-and the four torus directories. The output directory must be new.
+Obtain `reserved-production-confirmation/` from the [experiment archive](#retained-evidence).
+From the repository root, set `acquisition` to the directory containing `acquisition.json` and the four torus directories.
+The output directory must be new.
 
 ```bash
 acquisition=/path/to/reserved-production-confirmation
-cargo bench --locked --bench finite_volume -- assess "$acquisition" target/finite-volume-replay
+(cd "$acquisition" && shasum -a 256 -c SHA256SUMS) &&
+  cargo bench --locked --bench finite_volume -- assess "$acquisition" target/finite-volume-replay
 ```
 
 The archived per-torus manifests (`native-v1`) predate per-chain hashes. Replay recomputes scalar diagnostics from the full cadence
