@@ -140,6 +140,7 @@ cargo +1.100.0 build --locked --release --manifest-path "$packed/Cargo.toml" \
   --target-dir "$work/cli-build" --bin cdt-validation
 cargo +1.100.0 new --vcs none --bin "$work/consumer"
 cp "$repo/tests/packaged-validation/smoke.rs" "$work/consumer/src/main.rs"
+cp "$packed/Cargo.lock" "$work/consumer/Cargo.lock"
 cat >> "$work/consumer/Cargo.toml" <<EOF
 causal-triangulations = { path = "../causal-triangulations-$version" }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
@@ -147,7 +148,7 @@ sha2 = "0.11"
 EOF
 (
   cd "$work/consumer" || exit
-  cargo +1.100.0 generate-lockfile
+  cargo +1.100.0 metadata --format-version 1 --filter-platform "$host" > /dev/null
   cargo +1.100.0 metadata --locked --format-version 1 --filter-platform "$host" > "$work/resolution.json"
   cargo +1.100.0 run --locked --release -- \
     "$work/cli-build/release/cdt-validation" "$archive" "$work/smoke" "$work/resolution.json"
@@ -156,6 +157,8 @@ EOF
 
 On Windows, use the `cdt-validation.exe` executable. Retain the report, Cargo and rustc identities, and exact source commit. Record the
 `.crate` filename and checksum, contract and artifact schema versions, tested dependency resolution and build profile, and fixture result.
+The clean consumer seeds its first resolution from the archived lock to preserve sampler dependency versions. It replays the flat fixture
+using the same downstream build.
 The standalone consumer checks the documented formats, exact-volume conditioning, outcomes, failure codes, and seeded replay at bounded
 chain lengths. #238 owns the independent statistical evidence. #335 owns acceptance of the report for the reviewed release candidate and
 later crates.io verification.

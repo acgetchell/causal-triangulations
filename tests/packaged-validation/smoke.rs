@@ -87,7 +87,7 @@ fn main() {
     assert!(totals.into_iter().all(|count| count > 0));
     let (config, config_path, original) = first.expect("flat condition");
     let replay = output.join("flat-replay");
-    invoke(binary, Some(&config_path), &replay, 0, "");
+    validation::run(&config_path, &replay).expect("replay with the same downstream build");
     invoke(binary, None, &replay, 0, "");
     inspect(&replay, &config, &package);
     for filename in ARTIFACTS {
@@ -208,7 +208,8 @@ fn inspect(bundle: &Path, config: &Value, package: &PackagedSource) -> Value {
     assert_eq!(build["debug"], "false");
     assert_eq!(
         build["release_lock_dependencies"],
-        json!(package.sampler_dependencies)
+        json!(package.sampler_dependencies),
+        "seed the standalone project from the archived supplier Cargo.lock"
     );
     assert_eq!(build["release_lock_sha256"], package.lock_sha256);
     let timing = &metadata["timing_ns"];
