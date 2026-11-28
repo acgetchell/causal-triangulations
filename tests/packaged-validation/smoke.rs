@@ -388,14 +388,36 @@ fn negative_cases(
     stale_checksum["measurements_sha256"] = json!("0".repeat(64));
     write_json(&partial.join("metadata.json"), &stale_checksum);
     invoke(binary, None, &partial, 4, "invalid_bundle");
+
+    // Accept a proposal before the first measurement, then require the next
+    // interval of self-loops to preserve that first profile.
     let steps = usize::try_from(WARMUP + MEASUREMENTS * CADENCE).expect("fixture step count");
-    let all_self_loops = format!("outcome\n{}", "N\n".repeat(steps));
-    fs::write(&transitions, &all_self_loops).expect("replace outcomes with self-loops");
+    let second_interval_holds = format!("outcome\nA\n{}", "N\n".repeat(steps - 1));
+    fs::write(&transitions, &second_interval_holds).expect("write transition fixture");
+    let mut measurement_rows = std::str::from_utf8(&full_trace)
+        .expect("measurement JSONL")
+        .splitn(3, '\n');
+    let first = measurement_rows.next().expect("first measurement");
+    measurement_rows.next().expect("second measurement");
+    let remaining = measurement_rows.next().expect("remaining measurements");
+    let mut second: Value = serde_json::from_str(first).expect("first measurement JSON");
+    second["step"] = json!(WARMUP + 2 * CADENCE);
+    let length = &mut second["spatial_loop_lengths"][0];
+    *length = json!(number(length) + 1);
+    let vertices = number(&second["n0"]) + 1;
+    second["n0"] = json!(vertices);
+    second["n1"] = json!(3 * vertices);
+    second["n2"] = json!(2 * vertices);
+    let changing_profile = format!("{first}\n{second}\n{remaining}");
+    fs::write(partial.join("measurements.jsonl"), &changing_profile)
+        .expect("write measurement fixture");
     let mut inconsistent = original_metadata.clone();
-    inconsistent["transitions_sha256"] = json!(sha256(all_self_loops.as_bytes()));
+    inconsistent["transitions_sha256"] = json!(sha256(second_interval_holds.as_bytes()));
+    inconsistent["measurements_sha256"] = json!(sha256(changing_profile.as_bytes()));
     write_json(&partial.join("metadata.json"), &inconsistent);
     invoke(binary, None, &partial, 4, "invalid_bundle");
     fs::write(&transitions, full_transitions).expect("restore transition file");
+    fs::write(partial.join("measurements.jsonl"), full_trace).expect("restore measurements");
     let mut unsupported = original_metadata;
     unsupported["artifact_schema_version"] = json!(2);
     write_json(&partial.join("metadata.json"), &unsupported);

@@ -345,15 +345,28 @@ mod validation {
         for dependencies in [
             json!({}),
             json!({"delaunay":"0.8.5","la-stack":"0.5.4","markov-chain-monte-carlo":"0.5.3","unknown":"0.1.0"}),
+            json!(["0.8.5", "0.5.4", "0.5.3", "0.10.4"]),
         ] {
             let mut metadata = original.clone();
             metadata["build"]["release_lock_dependencies"] = dependencies;
             fixture.metadata(&metadata);
             assert!(matches!(
                 verify(&fixture.output),
-                Err(ValidationError::Bundle(_))
+                Err(ValidationError::ArtifactJson(_))
             ));
         }
+        let manifest_text = std::str::from_utf8(&bytes).expect("UTF-8 manifest");
+        let duplicate = manifest_text.replacen(
+            r#""release_lock_dependencies":{"#,
+            r#""release_lock_dependencies":{"delaunay":"0.8.6","#,
+            1,
+        );
+        assert_ne!(duplicate, manifest_text);
+        fs::write(&manifest, duplicate).expect("write duplicate sampler dependency");
+        assert!(matches!(
+            verify(&fixture.output),
+            Err(ValidationError::ArtifactJson(_))
+        ));
         for version in ["", " \t"] {
             let mut metadata = original.clone();
             metadata["build"]["release_lock_dependencies"]["delaunay"] = json!(version);
@@ -424,6 +437,12 @@ mod validation {
         let (first, remaining) = valid_measurements
             .split_once('\n')
             .expect("first measurement");
+        let spaced = format!(" {first}\n{remaining}");
+        fs::write(&measurements, &spaced).expect("write noncompact measurement");
+        metadata = original.clone();
+        metadata["measurements_sha256"] = json!(digest(spaced.as_bytes()));
+        fixture.metadata(&metadata);
+        verify(&fixture.output).expect("accept whitespace within the measurement line limit");
         let row: Value = serde_json::from_str(first).expect("first measurement JSON");
         let positional = json!([
             row["step"],

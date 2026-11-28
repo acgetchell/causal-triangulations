@@ -96,7 +96,7 @@ The identifier `periodic-labelled-inverse-automorphism/v1` refers to the [exact 
 | `configuration` | The complete normalized input, including run and chain identity, start profile, and seed. |
 | `configuration_sha256`, `measurements_sha256`, `transitions_sha256` | Lowercase hex SHA-256 of the corresponding file bytes, including the final LF. Hash the file directly. |
 | `oracle_compatibility`, `seed_policy` | `periodic-labelled-inverse-automorphism/v1` and `xoshiro256plusplus-seed-from-u64-single-stream/v1`. |
-| `build` | Strings `crate_version` (also the executable version), `rustc` (verbose compiler identity), `target`, `profile` (Cargo profile family), `opt_level`, `debug`, and `release_lock_sha256`. The object `release_lock_dependencies` maps `delaunay`, `la-stack`, `markov-chain-monte-carlo`, and `rand` to their supplier lock versions. |
+| `build` | Strings `crate_version` (also the executable version), `rustc` (verbose compiler identity), `target`, `profile` (Cargo profile family), `opt_level`, `debug`, and `release_lock_sha256`. The object `release_lock_dependencies` contains one nonblank supplier lock version each for `delaunay`, `la-stack`, `markov-chain-monte-carlo`, and `rand`. |
 | `timing_ns` | Unsigned integer nanoseconds. `initialization` covers state, chain, proposal and RNG setup. `warmup_transition` and `sampling_transition` sum time inside individual sampler calls. Measurements, serialization, hashing, and external tracking happen outside these intervals. |
 
 The supplier lock identifies the dependencies of the executable built with `--locked`. When embedding the Rust runner, retain the
@@ -121,6 +121,7 @@ human-readable `message`. A failed transition also reports `step`.
 
 Verify before using a bundle. Verification checks schema, configuration, digests, transition count, cadence, and the torus count identities.
 It also checks that each interval with zero accepted proposals preserves the previous profile.
+The verifier accepts horizontal JSON whitespace in measurement rows as long as each row fits within `160 + 21 * time_slices` bytes, including LF.
 A killed process or failed write can leave partial files without `metadata.json`. Restart into a new directory. Existing directories are rejected.
 
 ## Test the release candidate

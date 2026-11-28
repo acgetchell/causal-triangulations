@@ -62,7 +62,19 @@ struct Build {
     opt_level: String,
     debug: String,
     release_lock_sha256: String,
-    release_lock_dependencies: BTreeMap<String, String>,
+    #[serde(deserialize_with = "deserialize_object")]
+    release_lock_dependencies: ReleaseLockDependencies,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ReleaseLockDependencies {
+    delaunay: String,
+    #[serde(rename = "la-stack")]
+    la_stack: String,
+    #[serde(rename = "markov-chain-monte-carlo")]
+    markov_chain_monte_carlo: String,
+    rand: String,
 }
 
 impl Build {
@@ -95,11 +107,11 @@ impl Build {
                 }
             }
         }
-        if dependencies.len() != SAMPLER_DEPENDENCIES.len() {
-            return Err(ValidationError::Bundle(
-                "incomplete sampler dependency list in the release lock".to_owned(),
-            ));
-        }
+        let mut version = |name| {
+            dependencies.remove(name).ok_or_else(|| {
+                ValidationError::Bundle(format!("no version for {name} in the release lock"))
+            })
+        };
         Ok(Self {
             crate_version: env!("CARGO_PKG_VERSION").to_owned(),
             rustc: include_str!(concat!(env!("OUT_DIR"), "/finite_volume_rustc.txt"))
@@ -110,7 +122,12 @@ impl Build {
             opt_level: env!("CDT_BUILD_OPT_LEVEL").to_owned(),
             debug: env!("CDT_BUILD_DEBUG").to_owned(),
             release_lock_sha256: hex(&Sha256::digest(RELEASE_LOCK.as_bytes())),
-            release_lock_dependencies: dependencies,
+            release_lock_dependencies: ReleaseLockDependencies {
+                delaunay: version("delaunay")?,
+                la_stack: version("la-stack")?,
+                markov_chain_monte_carlo: version("markov-chain-monte-carlo")?,
+                rand: version("rand")?,
+            },
         })
     }
 }
@@ -301,17 +318,18 @@ pub fn verify(directory: &Path) -> Result<(), ValidationError> {
         )));
     }
     let metadata: Metadata = decode_object(&raw_metadata)?;
-    let dependencies = &metadata.build.release_lock_dependencies;
-    if dependencies.len() != SAMPLER_DEPENDENCIES.len()
-        || !SAMPLER_DEPENDENCIES.iter().all(|name| {
-            dependencies
-                .get(*name)
-                .is_some_and(|version| !version.trim().is_empty())
-        })
+    let ReleaseLockDependencies {
+        delaunay,
+        la_stack,
+        markov_chain_monte_carlo,
+        rand,
+    } = &metadata.build.release_lock_dependencies;
+    if [delaunay, la_stack, markov_chain_monte_carlo, rand]
+        .into_iter()
+        .any(|version| version.trim().is_empty())
     {
         return Err(ValidationError::Bundle(
-            "metadata release lock must identify all four sampler dependencies and their versions"
-                .to_owned(),
+            "supplier dependency versions must be nonblank".to_owned(),
         ));
     }
     check_contract(&metadata.configuration.contract_version)?;
