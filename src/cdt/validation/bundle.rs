@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
@@ -229,7 +229,13 @@ impl<'a> Writer<'a> {
             spatial_loop_lengths: state.spatial_loop_lengths().collect(),
         };
         row.validate(step, self.time_slices)?;
-        serde_json::to_writer(&mut self.measurements, &row)?;
+        serde_json::to_writer(&mut self.measurements, &row).map_err(|error| {
+            if error.is_io() {
+                io_error("write measurements.jsonl")(error.into())
+            } else {
+                ValidationError::ArtifactJson(error)
+            }
+        })?;
         self.measurements
             .write_all(b"\n")
             .map_err(io_error("write measurements.jsonl"))
@@ -310,71 +316,102 @@ pub fn verify(directory: &Path) -> Result<(), ValidationError> {
         &hex(&Sha256::digest(&raw_config)),
     )?;
 
-    verify_lines(
-        directory,
-        TRANSITIONS,
-        &metadata.transitions_sha256,
-        u64::from(steps) + 1,
-        |index, line| {
-            if (index == 0 && line == TRANSITION_HEADER)
-                || (index > 0 && matches!(line, b"A\n" | b"R\n" | b"N\n"))
-            {
-                Ok(())
-            } else {
-                Err(ValidationError::Bundle(format!(
-                    "invalid transition CSV at line {}",
-                    index + 1
-                )))
-            }
-        },
-    )?;
-    verify_lines(
-        directory,
-        MEASUREMENTS,
-        &metadata.measurements_sha256,
-        u64::from(config.measurements),
-        |index, line| {
-            let step = (index + 1) * u64::from(config.measurement_cadence)
-                + u64::from(config.warmup_steps);
-            let step = u32::try_from(step)
-                .map_err(|_| ValidationError::Bundle("invalid measurement clock".to_owned()))?;
-            let row: Measurement = serde_json::from_slice(line)?;
-            row.validate(step, config.time_slices)
-        },
-    )
+    verify_traces(directory, &metadata, steps)
 }
 
-/// Reads and validates the same bytes that feed each artifact's digest.
-fn verify_lines(
-    directory: &Path,
+/// Checks both schedules together so self-loops cannot change the profile.
+fn verify_traces(directory: &Path, metadata: &Metadata, steps: u32) -> Result<(), ValidationError> {
+    let config = &metadata.configuration;
+    let mut transitions = TraceReader::new(directory, TRANSITIONS)?;
+    let mut measurements = TraceReader::new(directory, MEASUREMENTS)?;
+    if transitions.line(TRANSITION_HEADER.len() as u64)? != TRANSITION_HEADER {
+        return Err(ValidationError::Bundle(
+            "invalid transition CSV header".to_owned(),
+        ));
+    }
+    // Reserve up to 20 decimal digits per count and loop length, plus separators
+    // and field names. The checked starting volume bounds the number of slices.
+    let measurement_bytes = 160 + 21 * config.time_slices as u64;
+    let mut previous = config.initial_spatial_loop_lengths.clone();
+    let mut accepted_since_measurement = false;
+    for step in 1..=steps {
+        match transitions.line(2)? {
+            b"A\n" => accepted_since_measurement = true,
+            b"R\n" | b"N\n" => (),
+            _ => {
+                return Err(ValidationError::Bundle(format!(
+                    "invalid transition outcome at step {step}"
+                )));
+            }
+        }
+        if config.measurement_due(step) {
+            let row: Measurement = serde_json::from_slice(measurements.line(measurement_bytes)?)?;
+            row.validate(step, config.time_slices)?;
+            if !accepted_since_measurement && row.spatial_loop_lengths != previous {
+                return Err(ValidationError::Bundle(format!(
+                    "profile changed without an accepted proposal at step {step}"
+                )));
+            }
+            previous = row.spatial_loop_lengths;
+            accepted_since_measurement = false;
+        }
+    }
+    transitions.finish(&metadata.transitions_sha256)?;
+    measurements.finish(&metadata.measurements_sha256)
+}
+
+/// Hashes exactly the bytes verified while enforcing the format's line limits.
+struct TraceReader {
     name: &'static str,
-    expected_sha256: &str,
-    count: u64,
-    mut validate_line: impl FnMut(u64, &[u8]) -> Result<(), ValidationError>,
-) -> Result<(), ValidationError> {
-    let mut reader = open(directory, name)?;
-    let mut sha = Sha256::new();
-    let mut line = Vec::new();
-    for index in 0..count {
-        line.clear();
-        reader
-            .read_until(b'\n', &mut line)
-            .map_err(io_error(name))?;
-        if !line.ends_with(b"\n") {
+    reader: BufReader<File>,
+    sha: Sha256,
+    buffer: Vec<u8>,
+    line: u64,
+}
+
+impl TraceReader {
+    fn new(directory: &Path, name: &'static str) -> Result<Self, ValidationError> {
+        Ok(Self {
+            name,
+            reader: open(directory, name)?,
+            sha: Sha256::new(),
+            buffer: Vec::new(),
+            line: 0,
+        })
+    }
+
+    fn line(&mut self, max_bytes: u64) -> Result<&[u8], ValidationError> {
+        self.buffer.clear();
+        self.line += 1;
+        self.reader
+            .by_ref()
+            .take(max_bytes)
+            .read_until(b'\n', &mut self.buffer)
+            .map_err(io_error(self.name))?;
+        if !self.buffer.ends_with(b"\n") {
             return Err(ValidationError::Bundle(format!(
-                "{name} is incomplete at line {}",
-                index + 1
+                "{} has an incomplete or oversized line {}",
+                self.name, self.line
             )));
         }
-        validate_line(index, &line)?;
-        sha.update(&line);
+        self.sha.update(&self.buffer);
+        Ok(&self.buffer)
     }
-    if !reader.fill_buf().map_err(io_error(name))?.is_empty() {
-        return Err(ValidationError::Bundle(format!(
-            "{name} contains extra rows"
-        )));
+
+    fn finish(mut self, expected_sha256: &str) -> Result<(), ValidationError> {
+        if !self
+            .reader
+            .fill_buf()
+            .map_err(io_error(self.name))?
+            .is_empty()
+        {
+            return Err(ValidationError::Bundle(format!(
+                "{} contains extra rows",
+                self.name
+            )));
+        }
+        check_sha256(self.name, expected_sha256, &hex(&self.sha.finalize()))
     }
-    check_sha256(name, expected_sha256, &hex(&sha.finalize()))
 }
 
 fn check_sha256(name: &str, expected: &str, actual: &str) -> Result<(), ValidationError> {

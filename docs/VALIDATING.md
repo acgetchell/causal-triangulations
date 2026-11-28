@@ -47,6 +47,13 @@ cdt-validation run --config flat.json --output flat-bundle
 cdt-validation verify --output flat-bundle
 ```
 
+From an unpacked crate, run the local executable through Cargo. Supply the paths to your configuration and new bundle directory.
+
+```bash
+cargo run --locked --release --bin cdt-validation -- run --config flat.json --output flat-bundle
+cargo run --locked --release --bin cdt-validation -- verify --output flat-bundle
+```
+
 Each key is required. The runner rejects unknown or duplicate keys. The output directory must be new and its parent must exist.
 
 | Field | Valid values and interpretation |
@@ -71,7 +78,7 @@ Contract `cdt/periodic-1p1-validation/v1` uses artifact schema `1`. A bundle con
 | File | Contents |
 | --- | --- |
 | `configuration.json` | The validated configuration as one compact JSON object followed by LF. Input property order and whitespace do not affect its digest. |
-| `measurements.jsonl` | One JSON object and LF at each scheduled step. Fields are `step`, `n0`, `n1`, `n2`, and `spatial_loop_lengths`. Counts are unsigned integers. |
+| `measurements.jsonl` | One compact JSON object and LF at each scheduled step. Fields are `step`, `n0`, `n1`, `n2`, and `spatial_loop_lengths`. Counts are unsigned integers. |
 | `transitions.csv` | Header `outcome` and one row per proposal step, including warmup. The first data row is step 1. Values are `A` (accepted), `R` (concrete proposal rejected), and `N` (no proposal). |
 | `metadata.json` | One JSON object and LF written after the other files are flushed. Its presence marks completion. |
 
@@ -113,6 +120,7 @@ human-readable `message`. A failed transition also reports `step`.
 | 5 | `incompatible_schema` |
 
 Verify before using a bundle. Verification checks schema, configuration, digests, transition count, cadence, and the torus count identities.
+It also checks that each interval with zero accepted proposals preserves the previous profile.
 A killed process or failed write can leave partial files without `metadata.json`. Restart into a new directory. Existing directories are rejected.
 
 ## Test the release candidate

@@ -24,6 +24,7 @@ const ARTIFACTS: [&str; 3] = [
 struct PackagedSource {
     version: String,
     lock_sha256: String,
+    sampler_dependencies: BTreeMap<String, String>,
 }
 
 fn main() {
@@ -77,7 +78,7 @@ fn main() {
                 invoke(binary, Some(&config_path), &directory, 0, "");
             }
             invoke(binary, None, &directory, 0, "");
-            let result = inspect(&directory, &config, &package, &resolution);
+            let result = inspect(&directory, &config, &package);
             totals[0] += number(&result["target_visits"]);
             totals[1] += number(&result["measurements"]) - number(&result["target_visits"]);
             conditions.push(result);
@@ -88,7 +89,7 @@ fn main() {
     let replay = output.join("flat-replay");
     invoke(binary, Some(&config_path), &replay, 0, "");
     invoke(binary, None, &replay, 0, "");
-    inspect(&replay, &config, &package, &resolution);
+    inspect(&replay, &config, &package);
     for filename in ARTIFACTS {
         assert_eq!(
             read(&original.join(filename)),
@@ -152,7 +153,7 @@ fn config(slices: usize, target: usize, profile: Vec<usize>, chain: &str, seed: 
     })
 }
 
-fn inspect(bundle: &Path, config: &Value, package: &PackagedSource, resolution: &Value) -> Value {
+fn inspect(bundle: &Path, config: &Value, package: &PackagedSource) -> Value {
     let metadata = read_json(&bundle.join("metadata.json"));
     fields(
         &metadata,
@@ -205,32 +206,10 @@ fn inspect(bundle: &Path, config: &Value, package: &PackagedSource, resolution: 
     assert_eq!(build["profile"], "release");
     assert_eq!(build["opt_level"], "3");
     assert_eq!(build["debug"], "false");
-    let versions = &build["release_lock_dependencies"];
-    let sampler_names = ["delaunay", "la-stack", "markov-chain-monte-carlo", "rand"];
-    fields(versions, &sampler_names);
-    let packages = resolution["packages"].as_array().expect("packages");
-    let native_dependencies = packages
-        .iter()
-        .filter_map(|package| {
-            let name = package["name"].as_str().expect("Cargo package name");
-            sampler_names.contains(&name).then(|| {
-                assert_eq!(
-                    package["source"],
-                    "registry+https://github.com/rust-lang/crates.io-index"
-                );
-                (
-                    name,
-                    package["version"]
-                        .as_str()
-                        .expect("Cargo dependency version"),
-                )
-            })
-        })
-        .collect::<BTreeMap<_, _>>();
-    assert_eq!(native_dependencies.len(), sampler_names.len());
-    for (name, resolved) in native_dependencies {
-        assert_eq!(versions[name], resolved);
-    }
+    assert_eq!(
+        build["release_lock_dependencies"],
+        json!(package.sampler_dependencies)
+    );
     assert_eq!(build["release_lock_sha256"], package.lock_sha256);
     let timing = &metadata["timing_ns"];
     fields(
@@ -373,6 +352,16 @@ fn negative_cases(
     fs::write(&trace, &full_trace[..full_trace.len() - 1]).expect("truncate trace");
     invoke(binary, None, &partial, 4, "invalid_bundle");
     fs::write(&trace, full_trace).expect("restore trace");
+    let transitions = partial.join("transitions.csv");
+    fs::write(&transitions, b"outcome\nNNNNNNNN\n").expect("write oversized transition");
+    invoke(binary, None, &partial, 4, "invalid_bundle");
+    let steps = usize::try_from(WARMUP + MEASUREMENTS * CADENCE).expect("fixture step count");
+    let all_self_loops = format!("outcome\n{}", "N\n".repeat(steps));
+    fs::write(&transitions, &all_self_loops).expect("replace outcomes with self-loops");
+    let mut inconsistent = read_json(&partial.join("metadata.json"));
+    inconsistent["transitions_sha256"] = json!(sha256(all_self_loops.as_bytes()));
+    write_json(&partial.join("metadata.json"), &inconsistent);
+    invoke(binary, None, &partial, 4, "invalid_bundle");
     let mut unsupported = read_json(&partial.join("metadata.json"));
     unsupported["artifact_schema_version"] = json!(2);
     write_json(&partial.join("metadata.json"), &unsupported);
@@ -380,7 +369,8 @@ fn negative_cases(
     json!({
         "corrupt_configuration": 2, "zero_cadence": 2, "configuration_schema": 5,
         "failed_chain_initialization": 3, "missing_completion_manifest": 4, "existing_output": 4,
-        "truncated_trace": 4, "artifact_schema": 5,
+        "truncated_trace": 4, "oversized_transition_row": 4, "inconsistent_self_loops": 4,
+        "artifact_schema": 5,
     })
 }
 
@@ -436,12 +426,52 @@ fn packaged_source(resolution: &Value) -> PackagedSource {
         manifest.with_file_name("Cargo.toml.orig").is_file(),
         "expected a Cargo archive"
     );
+    let dependencies = resolution["resolve"]["nodes"]
+        .as_array()
+        .expect("Cargo resolve nodes")
+        .iter()
+        .find(|node| node["id"] == package["id"])
+        .expect("packaged dependency node")["deps"]
+        .as_array()
+        .expect("packaged dependency edges");
+    let sampler_dependencies = ["delaunay", "la-stack", "markov-chain-monte-carlo", "rand"]
+        .into_iter()
+        .map(|name| {
+            let dependency = dependencies
+                .iter()
+                .find(|edge| {
+                    edge["name"] == name.replace('-', "_")
+                        && edge["dep_kinds"]
+                            .as_array()
+                            .expect("dependency kinds")
+                            .iter()
+                            .any(|kind| kind["kind"].is_null())
+                })
+                .expect("sampler dependency edge");
+            let resolved = packages
+                .iter()
+                .find(|package| package["id"] == dependency["pkg"])
+                .expect("resolved sampler package");
+            assert_eq!(
+                resolved["source"],
+                "registry+https://github.com/rust-lang/crates.io-index"
+            );
+            (
+                name.to_owned(),
+                resolved["version"]
+                    .as_str()
+                    .expect("resolved version")
+                    .to_owned(),
+            )
+        })
+        .collect();
     PackagedSource {
         version: package["version"]
             .as_str()
             .expect("packaged version")
             .to_owned(),
         lock_sha256: sha256(&read(&manifest.with_file_name("Cargo.lock"))),
+        sampler_dependencies,
     }
 }
 

@@ -156,6 +156,12 @@ enum Fixing {
 }
 
 impl Configuration {
+    /// Uses the same proposal clock for both acquisition and verification.
+    const fn measurement_due(&self, step: u32) -> bool {
+        step > self.warmup_steps
+            && (step - self.warmup_steps).is_multiple_of(self.measurement_cadence)
+    }
+
     /// Establishes the invariants needed by the step clock and target.
     fn validate(&self) -> Result<(CdtTarget, u32, u64), ValidationError> {
         let invalid = |message: &str| ValidationError::Configuration(message.to_owned());
@@ -261,9 +267,7 @@ pub fn run(config_path: &Path, output: &Path) -> Result<(), ValidationError> {
         };
         timing.record(step <= config.warmup_steps, elapsed);
         artifacts.transition(code)?;
-        if step > config.warmup_steps
-            && (step - config.warmup_steps).is_multiple_of(config.measurement_cadence)
-        {
+        if config.measurement_due(step) {
             artifacts.measure(step, chain.state())?;
         }
     }
