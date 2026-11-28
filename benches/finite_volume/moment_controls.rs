@@ -6,6 +6,7 @@ use super::acquire::{CONDITIONS, Cohort, Condition};
 use super::assessment::{Moment, moments};
 use super::bootstrap::{MomentCoverage, PRODUCTION_REPLICATES, Sample, sample};
 use super::calibration::{Generator, HOLDOUT, error_rate_acceptable};
+use super::evidence::{BUILD_RUSTC, build_source_hash};
 use super::oracle::Oracle;
 use super::{Error, file_hash, write_json};
 use rand::{SeedableRng, rngs::Xoshiro256PlusPlus};
@@ -155,7 +156,8 @@ pub fn budget_controls(path: &Path) -> Result<(), Error> {
             "block_rows":super::data::BLOCK,"bootstrap_replicates":PRODUCTION_REPLICATES,
             "design":"Eight chains. Each independent four-row group hits with probability 1/4; its profile is drawn by exact integer weight.",
             "budget_rule":"Test a fresh fourfold panel when >=12 of 100 cohorts miss any covariance point tolerance.",
-            "binary_sha256":executable,"conditions":summaries,"planned_covariance_budget_passed":covariance_budget_passed,
+            "binary_sha256":executable,"build_rustc":BUILD_RUSTC,"source_tree_sha256":build_source_hash(),
+            "conditions":summaries,"planned_covariance_budget_passed":covariance_budget_passed,
             "planned_full_rule_passed":full_rule_passed,
             "seed_rule":"3,000,000,000 * budget factor + 10,000 * triangles + trial index 0..99",
         }),
@@ -267,7 +269,8 @@ pub fn family_controls(path: &Path) -> Result<(), Error> {
         "procedure":"Bonferroni: 5%/4 per torus, applied to the within-torus bootstrap maximum. Pair both methods on identical samples and replicates.",
         "endpoint":"Count a family once when any labeled interval misses. Count point misses and the full moment rule separately.",
         "decision":"Flag 12 or more interval misses or 12 or more full-rule misses in either fixed panel of 100. Report both panels.",
-        "binary_sha256":file_hash(&std::env::current_exe()?)?, "checkout":super::checkout(),
+        "binary_sha256":file_hash(&std::env::current_exe()?)?, "runtime_checkout":super::checkout(),
+        "build_rustc":BUILD_RUSTC, "source_tree_sha256":build_source_hash(),
         "cargo_lock_sha256":hash(include_bytes!("../../Cargo.lock")),
         "source_sha256":{
             "acquire.rs":hash(include_bytes!("acquire.rs")), "assessment.rs":hash(include_bytes!("assessment.rs")),

@@ -33,9 +33,10 @@ Criterion writes HTML reports under `target/criterion/`.
 Run `cargo bench --locked --bench finite_volume`. The Rust target prints a fresh output directory, collects the chains, evaluates the exact
 reference and writes the joint decision to `assessment/report.json`. It exits successfully when all four conditions and both holdout panels pass.
 The [scientific report](../docs/finite-volume-validation.md) gives the tolerances, current results and instructions for rescoring existing traces.
-Use `cargo bench --locked --bench finite_volume -- confirm NEW_DIRECTORY` to reproduce the independently seeded production cohort
-with the frozen calibration.
-The default run uses the revised 64-triangle budget. Use `cargo bench --locked --bench finite_volume -- moment-controls NEW_DIRECTORY`
+Use `cargo bench --locked --bench finite_volume -- run NEW_DIRECTORY` to repeat the final 32 production chains with the published
+seeds, revised 64-triangle budget, and four-torus moment intervals. The default command uses the same cohort.
+Use `confirm NEW_DIRECTORY` to repeat the first independent confirmation with its earlier seeds, budget, and per-torus intervals.
+Use `cargo bench --locked --bench finite_volume -- moment-controls NEW_DIRECTORY`
 to test joint interval coverage over all 86 labeled moments on fresh exact-law families.
 Use `budget-controls NEW_DIRECTORY` to reproduce the earlier comparison of measurement budgets with within-torus bands.
 

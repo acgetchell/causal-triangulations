@@ -60,7 +60,8 @@ fn run(path: &Path, cohort: Cohort) -> Result<(), Error> {
 /// Fit the prospective histogram controls, including both held-out families, using synthetic data only.
 fn calibrate(path: &Path) -> Result<(), Error> {
     std::fs::create_dir(path)?;
-    let mut nulls = Vec::new();
+    let mut holdouts = Vec::new();
+    let mut transfers = Vec::new();
     let mut fits = Vec::new();
     let mut passed = true;
     for c in Cohort::Precision.conditions() {
@@ -69,21 +70,32 @@ fn calibrate(path: &Path) -> Result<(), Error> {
             c.folder(),
             c.draws
         );
-        let fit = calibration::Calibration::new(c, &oracle::Oracle::new(c)?)?;
+        let oracle = oracle::Oracle::new(c)?;
+        let fit = calibration::Calibration::new(c, &oracle)?;
         let value = serde_json::to_value(&fit)?;
         let digest = hex(&Sha256::digest(serde_json::to_vec(&value)?));
         write_json(&path.join(format!("{}.json", c.folder())), &value)?;
         let matches_reference = digest == c.reference.calibration_sha256;
         fits.push(serde_json::json!({"condition":c,"sha256":digest,"controls_passed":fit.passed(),"matches_reference":matches_reference}));
         passed &= fit.passed() && matches_reference;
-        nulls.push(fit.panels.map(|p| p.null.p_values));
+        transfers.push(calibration::BudgetTransfer::new(c, &oracle, &fit)?);
+        holdouts.push(fit.panels.each_ref().map(calibration::Panel::scores));
     }
-    let families = assessment::heldout_families_rejected(&nulls);
+    let families = assessment::heldout_families_rejected(&holdouts);
     passed &= families.into_iter().all(calibration::error_rate_acceptable);
+    let transfers = transfers
+        .try_into()
+        .map_err(|_| Error::Invalid("expected four transfer controls".into()))?;
+    let panels = assessment::transfer_summary(&transfers);
+    passed &= panels
+        .iter()
+        .flatten()
+        .all(assessment::BudgetSummary::passed);
     let report = path.join("report.json");
     write_json(
         &report,
-        &serde_json::json!({"fits":fits,"heldout_families_rejected":families,"passed":passed}),
+        &serde_json::json!({"fits":fits,"heldout_families_rejected":families,
+            "frozen_holdout_scores":holdouts,"bootstrap_budget_trials":transfers,"bootstrap_budget_controls":panels,"passed":passed}),
     )?;
     if passed {
         Ok(())

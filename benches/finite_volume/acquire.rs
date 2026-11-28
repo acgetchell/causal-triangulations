@@ -2,20 +2,23 @@
 
 //! Acquire intrinsic chains at the four declared fixed-volume comparison conditions.
 
+use super::data::{Diagnostic, full_cadence_diagnostics};
+use super::evidence::HashingIo;
 use causal_triangulations::prelude::action::{VolumeFixing, VolumeFixingError};
-use causal_triangulations::prelude::errors::{IntrinsicCdtError, McmcError};
+use causal_triangulations::prelude::errors::{IntrinsicCdtError, McmcError, SimplexCountField};
 use causal_triangulations::prelude::simulation::{
-    ActionConfig, CdtError, CdtTarget, Chain, DelayedProposal, IntrinsicCdtProposal,
-    IntrinsicCdtTriangulation,
+    ActionConfig, CdtError, CdtSimplexCounts, CdtTarget, Chain, DelayedProposal,
+    IntrinsicCdtProposal, IntrinsicCdtTriangulation,
 };
 use flate2::{Compression, write::GzEncoder};
-use markov_chain_monte_carlo::{CombinedRhat, DelayedStepError, EssEstimate, EssEstimator};
+use markov_chain_monte_carlo::DelayedStepError;
 use rand::{SeedableRng, rngs::Xoshiro256PlusPlus};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeSet, VecDeque};
 use std::fs::File;
 use std::io::{BufWriter, Write};
+use std::num::TryFromIntError;
 use std::path::Path;
 use thiserror::Error;
 
@@ -136,8 +139,41 @@ pub enum Error {
     Initialization(#[from] McmcError),
     #[error(transparent)]
     Step(#[from] DelayedStepError<IntrinsicCdtError>),
-    #[error("the state violates the closed CDT count identities or the declared time extent")]
-    Counts,
+    #[error("step {step}: expected {expected} slices, observed {actual}")]
+    TimeExtent {
+        step: u32,
+        expected: usize,
+        actual: usize,
+    },
+    #[error("step {step}, slice {slice}: expected at least 3 links, observed {actual}")]
+    ShortLoop {
+        step: u32,
+        slice: usize,
+        actual: usize,
+    },
+    #[error("step {step}, slice {slice}: length {actual} exceeds the u32 measurement range")]
+    SliceLengthOutOfRange {
+        step: u32,
+        slice: usize,
+        actual: usize,
+        #[source]
+        source: TryFromIntError,
+    },
+    #[error("step {step}: {field} count {actual} exceeds the u32 measurement range")]
+    CountOutOfRange {
+        step: u32,
+        field: SimplexCountField,
+        actual: usize,
+        #[source]
+        source: TryFromIntError,
+    },
+    #[error("step {step}: expected {expected} {field}, observed {actual}")]
+    CountMismatch {
+        step: u32,
+        field: SimplexCountField,
+        expected: u64,
+        actual: u32,
+    },
     #[error("failed to witness positive forward and reverse support for every target profile")]
     Reachability,
     #[error("an acquisition worker panicked")]
@@ -172,7 +208,7 @@ struct Acquisition<'a> {
     cadence: u32,
     chains: &'a [Run],
     crate_version: &'static str,
-    diagnostics: Vec<serde_json::Value>,
+    diagnostics: Vec<Diagnostic>,
     draws_per_chain: u32,
     family_policy: &'static str,
     reachable_profiles: BTreeSet<Profile>,
@@ -183,32 +219,84 @@ struct Acquisition<'a> {
 
 /// Reads the backend's face count independently of the labeled loop lengths.
 fn measure(state: &IntrinsicCdtTriangulation, step: u32, slices: usize) -> Result<Draw, Error> {
-    let lengths = state.spatial_loop_lengths();
-    if lengths.len() != slices {
-        return Err(Error::Counts);
-    }
-    let profile = lengths
-        .map(u32::try_from)
-        .collect::<Result<Profile, _>>()
-        .map_err(|_| Error::Counts)?;
-    let counts = state.simplex_counts()?;
-    let vertices = u32::try_from(counts.vertex_count()).map_err(|_| Error::Counts)?;
-    let edges = u32::try_from(counts.edge_count()).map_err(|_| Error::Counts)?;
-    let triangles = u32::try_from(counts.triangle_count()).map_err(|_| Error::Counts)?;
-    if profile.iter().any(|&length| length < 3)
-        || profile.iter().copied().map(u64::from).sum::<u64>() != u64::from(vertices)
-        || 2 * u64::from(vertices) != u64::from(triangles)
-        || 3 * u64::from(vertices) != u64::from(edges)
-    {
-        return Err(Error::Counts);
-    }
-    Ok(Draw {
-        edges,
-        profile,
+    Draw::from_counts(
         step,
-        triangles,
-        vertices,
-    })
+        slices,
+        state.spatial_loop_lengths(),
+        state.simplex_counts()?,
+    )
+}
+
+impl Draw {
+    pub(super) fn from_counts(
+        step: u32,
+        slices: usize,
+        lengths: impl ExactSizeIterator<Item = usize>,
+        counts: CdtSimplexCounts,
+    ) -> Result<Self, Error> {
+        if lengths.len() != slices {
+            return Err(Error::TimeExtent {
+                step,
+                expected: slices,
+                actual: lengths.len(),
+            });
+        }
+        let profile = lengths
+            .enumerate()
+            .map(|(slice, actual)| {
+                if actual < 3 {
+                    return Err(Error::ShortLoop {
+                        step,
+                        slice,
+                        actual,
+                    });
+                }
+                u32::try_from(actual).map_err(|source| Error::SliceLengthOutOfRange {
+                    step,
+                    slice,
+                    actual,
+                    source,
+                })
+            })
+            .collect::<Result<Profile, _>>()?;
+        let count = |field, actual: usize| {
+            u32::try_from(actual).map_err(|source| Error::CountOutOfRange {
+                step,
+                field,
+                actual,
+                source,
+            })
+        };
+        let vertices = count(SimplexCountField::Vertices, counts.vertex_count())?;
+        let edges = count(SimplexCountField::Edges, counts.edge_count())?;
+        let triangles = count(SimplexCountField::Triangles, counts.triangle_count())?;
+        let total_length = profile.iter().copied().map(u64::from).sum();
+        for (field, expected, actual) in [
+            (SimplexCountField::Vertices, total_length, vertices),
+            (
+                SimplexCountField::Triangles,
+                2 * u64::from(vertices),
+                triangles,
+            ),
+            (SimplexCountField::Edges, 3 * u64::from(vertices), edges),
+        ] {
+            if expected != u64::from(actual) {
+                return Err(Error::CountMismatch {
+                    step,
+                    field,
+                    expected,
+                    actual,
+                });
+            }
+        }
+        Ok(Self {
+            edges,
+            profile,
+            step,
+            triangles,
+            vertices,
+        })
+    }
 }
 
 /// Builds a tree of actual reversible insertions from the minimum torus to each profile.
@@ -287,36 +375,23 @@ fn sample(
 }
 
 /// Diagnoses the full-cadence volume and each labeled slice with upstream estimators.
-fn diagnostics(runs: &[Run], slices: u32) -> Vec<serde_json::Value> {
-    std::iter::once("N2".to_owned())
-        .chain((0..slices).map(|i| format!("l{i}")))
-        .enumerate()
-        .map(|(i, name)| {
-            let series: Vec<Vec<_>> = runs
-                .iter()
-                .map(|run| {
-                    run.draws
-                        .iter()
-                        .map(|row| {
-                            f64::from(if i == 0 {
-                                row.triangles
-                            } else {
-                                row.profile[i - 1]
-                            })
+fn diagnostics(runs: &[Run], slices: u32) -> Vec<Diagnostic> {
+    full_cadence_diagnostics(slices, |i| {
+        runs.iter()
+            .map(|run| {
+                run.draws
+                    .iter()
+                    .map(|row| {
+                        f64::from(if i == 0 {
+                            row.triangles
+                        } else {
+                            row.profile[i - 1]
                         })
-                        .collect()
-                })
-                .collect();
-            let chains: Vec<_> = series.iter().map(Vec::as_slice).collect();
-            let rhat = CombinedRhat::estimate(&chains)
-                .ok()
-                .and_then(CombinedRhat::value);
-            let ess = EssEstimate::estimate(&chains, EssEstimator::Bulk)
-                .ok()
-                .map(EssEstimate::value);
-            json!({"observable": name, "combined_rhat": rhat, "bulk_ess": ess})
-        })
-        .collect()
+                    })
+                    .collect()
+            })
+            .collect()
+    })
 }
 
 /// Store blocks of 256 cadence rows per JSON line so replay only needs one block at a time.
@@ -326,15 +401,16 @@ fn write_chunked(path: &Path, record: &Acquisition<'_>) -> Result<(), Error> {
     for run in record.chains {
         let file = format!("chain-{}.jsonl.gz", run.seed);
         let mut writer = GzEncoder::new(
-            BufWriter::new(File::create_new(path.join(&file))?),
+            HashingIo::new(BufWriter::new(File::create_new(path.join(&file))?)),
             Compression::fast(),
         );
         for block in run.draws.chunks(256) {
             serde_json::to_writer(&mut writer, block)?;
             writer.write_all(b"\n")?;
         }
-        writer.finish()?.flush()?;
-        chains.push(json!({"seed":run.seed, "initial":run.initial, "file":file}));
+        let mut compressed = writer.finish()?;
+        compressed.flush()?;
+        chains.push(json!({"seed":run.seed, "initial":run.initial, "file":file, "sha256":compressed.digest()}));
     }
     let mut header = BufWriter::new(File::create_new(path.join("manifest.json"))?);
     serde_json::to_writer(
@@ -408,7 +484,7 @@ pub fn acquire(condition: Condition, path: &Path) -> Result<(), Error> {
         reachable_profiles: reachable,
         rng: "Xoshiro256PlusPlus",
         schema: format!(
-            "intrinsic-t{}-n{}/native-v1",
+            "intrinsic-t{}-n{}/native-v2",
             condition.slices, condition.triangles
         ),
         temperature: 1.0,

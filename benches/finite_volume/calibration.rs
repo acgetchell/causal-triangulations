@@ -4,7 +4,7 @@
 
 use super::Error;
 use super::acquire::Condition;
-use super::bootstrap::{quantile95, sample};
+use super::bootstrap::{PRODUCTION_REPLICATES, quantile95, sample};
 use super::data::{BLOCK, Blocks};
 use super::oracle::Oracle;
 use super::probability::PValue;
@@ -106,14 +106,20 @@ impl<'a> Generator<'a> {
     fn experiment(&self, seed: u64, biased: bool) -> Result<Control, Error> {
         let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
         let blocks = self.blocks(&mut rng, biased);
-        let s = sample(
-            &blocks,
-            &self.oracle.probabilities,
-            None,
-            rng.random(),
-            REPLICAS,
-        )
-        .ok_or_else(|| Error::Invalid("synthetic control had insufficient information".into()))?;
+        self.observe(&blocks, rng.random(), biased, REPLICAS)
+    }
+
+    fn observe(
+        &self,
+        blocks: &Blocks,
+        seed: u64,
+        biased: bool,
+        replicas: u16,
+    ) -> Result<Control, Error> {
+        let s =
+            sample(blocks, &self.oracle.probabilities, None, seed, replicas).ok_or_else(|| {
+                Error::Invalid("synthetic control had insufficient information".into())
+            })?;
         if s.radius <= 0.0 {
             return Err(Error::Invalid(
                 "synthetic control has zero bootstrap radius".into(),
@@ -146,11 +152,83 @@ impl<'a> Generator<'a> {
 #[derive(Serialize)]
 pub struct Holdout {
     pub p_values: Vec<PValue>,
+    // Derived during the frozen fit. Its historical digest covers calibrated values only.
+    #[serde(skip)]
+    raw_p_values: Vec<PValue>,
     pub rejected: usize,
     radius_misses: usize,
     tv_bound_misses: usize,
     true_tv: f64,
     passed: bool,
+}
+
+#[derive(Clone, Copy, Serialize)]
+pub struct GoodnessOfFit {
+    pub raw: PValue,
+    pub calibrated: PValue,
+}
+
+impl Holdout {
+    fn paired_p_values(&self) -> Vec<GoodnessOfFit> {
+        self.raw_p_values
+            .iter()
+            .zip(&self.p_values)
+            .map(|(&raw, &calibrated)| GoodnessOfFit { raw, calibrated })
+            .collect()
+    }
+}
+
+#[derive(Clone, Copy, Serialize)]
+pub struct TransferTrial {
+    pub p: GoodnessOfFit,
+    pub radius_missed: bool,
+}
+
+#[derive(Serialize)]
+pub struct BudgetTransfer {
+    pub first_null_seed: u64,
+    pub first_biased_seed: u64,
+    pub replicates: [u16; 2],
+    pub null: Vec<[TransferTrial; 2]>,
+    pub biased: Vec<[TransferTrial; 2]>,
+}
+
+impl BudgetTransfer {
+    pub fn new(c: Condition, oracle: &Oracle, fit: &Calibration) -> Result<Self, Error> {
+        let generator = Generator::new(c, oracle)?;
+        let first_null_seed = 30_000_000_000 + 10_000 * u64::from(c.triangles);
+        let trials = 2 * u64::from(HOLDOUT_TRIALS);
+        let first_biased_seed = first_null_seed + trials;
+        let replicates = [REPLICAS, PRODUCTION_REPLICATES];
+        let panel = |first, biased| {
+            (first..first + trials)
+                .into_par_iter()
+                .map(|seed| {
+                    let mut rng = Xoshiro256PlusPlus::seed_from_u64(seed);
+                    let blocks = generator.blocks(&mut rng, biased);
+                    let bootstrap_seed = rng.random();
+                    let score = |budget| {
+                        let control = generator.observe(&blocks, bootstrap_seed, biased, budget)?;
+                        Ok::<_, Error>(TransferTrial {
+                            p: GoodnessOfFit {
+                                raw: control.raw_p,
+                                calibrated: fit.p(control.raw_p),
+                            },
+                            radius_missed: control.error > fit.multiplier * control.radius,
+                        })
+                    };
+                    Ok([score(replicates[0])?, score(replicates[1])?])
+                })
+                .collect::<Result<Vec<_>, Error>>()
+        };
+        Ok(Self {
+            first_null_seed,
+            first_biased_seed,
+            replicates,
+            null: panel(first_null_seed, false)?,
+            biased: panel(first_biased_seed, true)?,
+        })
+    }
 }
 
 #[derive(Serialize)]
@@ -165,6 +243,21 @@ pub struct Calibration {
 pub struct Panel {
     pub null: Holdout,
     pub biased: Holdout,
+}
+
+#[derive(Serialize)]
+pub struct PanelScores {
+    pub null: Vec<GoodnessOfFit>,
+    pub biased: Vec<GoodnessOfFit>,
+}
+
+impl Panel {
+    pub fn scores(&self) -> PanelScores {
+        PanelScores {
+            null: self.null.paired_p_values(),
+            biased: self.biased.paired_p_values(),
+        }
+    }
 }
 
 fn rank(raw: PValue, training: &[PValue]) -> PValue {
@@ -225,6 +318,7 @@ impl Calibration {
                 };
             Holdout {
                 p_values,
+                raw_p_values: controls.iter().map(|control| control.raw_p).collect(),
                 rejected,
                 radius_misses,
                 tv_bound_misses,

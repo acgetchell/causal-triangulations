@@ -4,7 +4,9 @@
 
 use super::acquire::{CONDITIONS, Cohort, Condition};
 use super::bootstrap::{MomentCoverage, PRODUCTION_REPLICATES, Sample, sample, simultaneous};
-use super::calibration::{Calibration, HOLDOUT, error_rate_acceptable};
+use super::calibration::{
+    BudgetTransfer, Calibration, GoodnessOfFit, HOLDOUT, Panel, PanelScores, error_rate_acceptable,
+};
 use super::data::{self, Diagnostic};
 use super::evidence::{BUILD_RUSTC, build_source_hash};
 use super::oracle::Oracle;
@@ -33,15 +35,79 @@ pub fn holm(values: Family<PValue>) -> Family<PValue> {
     adjusted
 }
 
-pub fn heldout_families_rejected(nulls: &[[Vec<PValue>; 2]]) -> [usize; 2] {
+fn family_rejections(family: Family<GoodnessOfFit>) -> (bool, bool) {
+    let rejects = |ps| holm(ps).into_iter().any(|p| p <= PValue::ALPHA);
+    (
+        rejects(family.map(|p| p.raw)),
+        rejects(family.map(|p| p.calibrated)),
+    )
+}
+
+pub fn heldout_families_rejected(scores: &[[PanelScores; 2]]) -> [usize; 2] {
     [0, 1].map(|panel| {
         (0..HOLDOUT)
             .filter(|&i| {
-                holm(std::array::from_fn(|j| nulls[j][panel][i]))
-                    .iter()
-                    .any(|&p| p <= PValue::ALPHA)
+                let (raw, calibrated) =
+                    family_rejections(std::array::from_fn(|j| scores[j][panel].null[i]));
+                raw || calibrated
             })
             .count()
+    })
+}
+
+#[derive(Serialize)]
+pub struct BudgetSummary {
+    raw_holm_rejections: usize,
+    calibrated_holm_rejections: usize,
+    combined_holm_rejections: usize,
+    null_radius_misses: Family<usize>,
+    biased_radius_misses: Family<usize>,
+}
+
+impl BudgetSummary {
+    pub fn passed(&self) -> bool {
+        error_rate_acceptable(self.combined_holm_rejections)
+            && self
+                .null_radius_misses
+                .into_iter()
+                .chain(self.biased_radius_misses)
+                .all(error_rate_acceptable)
+    }
+}
+
+/// Rows are independent panels, columns are the training and production bootstrap budgets.
+pub fn transfer_summary(tori: &Family<BudgetTransfer>) -> [[BudgetSummary; 2]; 2] {
+    std::array::from_fn(|panel| {
+        std::array::from_fn(|budget| {
+            let range = panel * HOLDOUT..(panel + 1) * HOLDOUT;
+            let mut raw_holm_rejections = 0;
+            let mut calibrated_holm_rejections = 0;
+            let mut combined_holm_rejections = 0;
+            for i in range.clone() {
+                let (raw, calibrated) =
+                    family_rejections(tori.each_ref().map(|t| t.null[i][budget].p));
+                raw_holm_rejections += usize::from(raw);
+                calibrated_holm_rejections += usize::from(calibrated);
+                combined_holm_rejections += usize::from(raw || calibrated);
+            }
+            BudgetSummary {
+                raw_holm_rejections,
+                calibrated_holm_rejections,
+                combined_holm_rejections,
+                null_radius_misses: tori.each_ref().map(|t| {
+                    range
+                        .clone()
+                        .filter(|&i| t.null[i][budget].radius_missed)
+                        .count()
+                }),
+                biased_radius_misses: tori.each_ref().map(|t| {
+                    range
+                        .clone()
+                        .filter(|&i| t.biased[i][budget].radius_missed)
+                        .count()
+                }),
+            }
+        })
     })
 }
 
@@ -129,6 +195,7 @@ struct Outcome {
     condition: Condition,
     normalizer: u64,
     diagnostics: Vec<Diagnostic>,
+    conditioned_information: data::ConditionedInformation,
     observation: Option<Observation>,
     controls_passed: bool,
     null_rejected: [usize; 2],
@@ -140,15 +207,22 @@ struct Outcome {
     acquisition_sha256: BTreeMap<String, String>,
 }
 
+struct Evaluated {
+    outcome: Outcome,
+    holdouts: [PanelScores; 2],
+    transfer: BudgetTransfer,
+}
+
 fn evaluate(
     dir: &Path,
     output: &Path,
     c: Condition,
     coverage: MomentCoverage,
-) -> Result<(Outcome, [Vec<PValue>; 2]), Error> {
+) -> Result<Evaluated, Error> {
     eprintln!("{}: checking cadence traces and exact weights", c.folder());
     let o = Oracle::new(c)?;
     let raw = data::load(&dir.join(c.folder()), c, &o)?;
+    let conditioned_information = data::ConditionedInformation::new(&raw.blocks, c, &o);
     let s = sample(
         &raw.blocks,
         &o.probabilities,
@@ -169,6 +243,8 @@ fn evaluate(
             c.folder()
         )));
     }
+    eprintln!("{}: checking fresh paired-budget holdouts", c.folder());
+    let transfer = BudgetTransfer::new(c, &o, &control)?;
     let visit_counts = s.as_ref().map(|s| &s.counts);
     let profiles = o
         .profiles
@@ -198,6 +274,7 @@ fn evaluate(
         normalizer: o.normalizer,
         observation,
         diagnostics: raw.diagnostics,
+        conditioned_information,
         controls_passed: control.passed(),
         null_rejected: control.panels.each_ref().map(|p| p.null.rejected),
         biased_rejected: control.panels.each_ref().map(|p| p.biased.rejected),
@@ -207,7 +284,11 @@ fn evaluate(
         detail_sha256: file_hash(&detail)?,
         acquisition_sha256: raw.hashes,
     };
-    Ok((result, control.panels.map(|p| p.null.p_values)))
+    Ok(Evaluated {
+        outcome: result,
+        holdouts: control.panels.each_ref().map(Panel::scores),
+        transfer,
+    })
 }
 
 pub fn declared_design(metadata: &serde_json::Value) -> Option<(Cohort, MomentCoverage)> {
@@ -270,13 +351,25 @@ pub fn assess(dir: &Path, output: &Path) -> Result<(), Error> {
         .ok_or_else(|| Error::Invalid("acquisition does not cover the declared matrix".into()))?;
     std::fs::create_dir(output)?;
     let mut outcomes = Vec::new();
-    let mut nulls = Vec::new();
+    let mut holdouts = Vec::new();
+    let mut transfers = Vec::new();
     for c in cohort.conditions() {
-        let (result, controls) = evaluate(dir, output, c, coverage)?;
-        outcomes.push(result);
-        nulls.push(controls);
+        let evaluated = evaluate(dir, output, c, coverage)?;
+        outcomes.push(evaluated.outcome);
+        holdouts.push(evaluated.holdouts);
+        transfers.push(evaluated.transfer);
     }
-    let rejected = heldout_families_rejected(&nulls);
+    let transfers: Family<_> = transfers
+        .try_into()
+        .map_err(|_| Error::Invalid("expected four transfer controls".into()))?;
+    let transfer = transfer_summary(&transfers);
+    let transfer_passed = transfer.iter().flatten().all(BudgetSummary::passed);
+    write_json(
+        &output.join("bootstrap-budget-controls.json"),
+        &json!({"conditions":cohort.conditions(), "frozen_holdout_scores":holdouts,
+            "trials":transfers, "panels":transfer, "passed":transfer_passed}),
+    )?;
+    let rejected = heldout_families_rejected(&holdouts);
     let family_control_passed = rejected.into_iter().all(error_rate_acceptable);
     let probabilities: Option<Vec<_>> = outcomes
         .iter()
@@ -291,6 +384,9 @@ pub fn assess(dir: &Path, output: &Path) -> Result<(), Error> {
             if let Some(s) = &r.observation
                 && let Some(m) = &s.moments
                 && r.diagnostics.iter().all(Diagnostic::sufficient)
+                && r.conditioned_information.sufficient()
+                && transfer_passed
+                && family_control_passed
             {
                 r.status = if r.controls_passed
                     && p > PValue::ALPHA
@@ -305,12 +401,14 @@ pub fn assess(dir: &Path, output: &Path) -> Result<(), Error> {
             }
         }
     }
-    let passed = family_control_passed && outcomes.iter().all(|r| r.status == Status::Pass);
+    let passed = transfer_passed
+        && family_control_passed
+        && outcomes.iter().all(|r| r.status == Status::Pass);
     let source_hash = |bytes: &[u8]| super::hex(&Sha256::digest(bytes));
     write_json(
         &output.join("report.json"),
         &json!({
-            "schema": if coverage == MomentCoverage::FourTorusFamily95 { "finite-volume-benchmark/v4" } else { "finite-volume-benchmark/v3" },
+            "schema":"finite-volume-benchmark/v5",
             "moment_interval_scope": coverage, "acquisition": metadata,
             "analysis_binary_sha256": file_hash(&std::env::current_exe()?)?,
             "analysis_build_rustc": BUILD_RUSTC,
@@ -325,6 +423,8 @@ pub fn assess(dir: &Path, output: &Path) -> Result<(), Error> {
                 "probability.rs": source_hash(include_bytes!("probability.rs")),
             },
             "block_rows": data::BLOCK,
+            "bootstrap_budget_controls":transfer,"bootstrap_budget_controls_passed":transfer_passed,
+            "bootstrap_budget_controls_sha256":file_hash(&output.join("bootstrap-budget-controls.json"))?,
             "conditions": outcomes, "panels": ["original", "confirmation"],
             "heldout_families_rejected": rejected, "heldout_families_per_panel": HOLDOUT,
             "family_control_passed": family_control_passed, "passed": passed

@@ -499,7 +499,9 @@ The `commit-check` graph previously selected release Rust tests through both `te
 selections contain the same 755 tests across 12 binaries. Make `test-release` depend on `test-rust-ci` and retain its release-profile doctests. Just then
 coalesces the runnable Rust suite within `commit-check`, while debug and release doctests remain distinct evidence. A dry-run regression protects both
 standalone release validation and pre-commit composition. The pre-commit gate also compiles benchmarks before runtime tests, so a benchmark compilation
-failure stops before those workloads.
+failure stops before those workloads. The finite-volume target opts out of the default benchmark set. A separate
+`cargo bench --workspace --no-run --bench finite_volume` invocation compiles its executable. Combining the named target with `--benches`
+on the pinned toolchain selects the default set and omits that executable.
 
 Both defects belong to CDT's consumer-owned aggregate recipes. The published `research-repo-tools` 0.1.7 template supplies a minimal `ci: check` wrapper and
 does not own CDT's Rust test selections or notebook execution inventory, so these changes require no new upstream issue or shared-package update.

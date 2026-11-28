@@ -113,6 +113,7 @@ bench-compare baseline="last":
 # Compile all benchmark harnesses with warnings denied.
 bench-compile:
     CARGO_BUILD_WARNINGS=deny {{ _run }} cargo bench --workspace --no-run --benches
+    CARGO_BUILD_WARNINGS=deny {{ _run }} cargo bench --workspace --no-run --bench finite_volume
 
 # Produce the correctness-gated current release signal.
 bench-latest: benchmark-input-check

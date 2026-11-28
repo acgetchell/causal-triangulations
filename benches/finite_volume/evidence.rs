@@ -20,6 +20,21 @@ pub enum Error {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Json(#[from] serde_json::Error),
+    #[error("chain {seed} in {path}, measurement {measurement}: {source}")]
+    TraceRow {
+        seed: u64,
+        path: PathBuf,
+        measurement: usize,
+        #[source]
+        source: super::data::RowError,
+    },
+    #[error("chain {seed} in {path}: expected SHA-256 {expected}, read {actual}")]
+    TraceDigest {
+        seed: u64,
+        path: PathBuf,
+        expected: String,
+        actual: String,
+    },
     #[error("{0}")]
     Invalid(String),
     #[error("scientific acceptance criteria unmet; see {0}")]
@@ -40,21 +55,21 @@ pub fn hex(bytes: &[u8]) -> String {
 }
 
 pub fn file_hash(path: &Path) -> Result<String, Error> {
-    let mut reader = HashingReader::new(File::open(path)?);
+    let mut reader = HashingIo::new(File::open(path)?);
     std::io::copy(&mut reader, &mut std::io::sink())?;
     Ok(reader.digest())
 }
 
-/// Hash the bytes supplied to the caller, including gzip headers and trailers.
-pub struct HashingReader<R> {
-    input: R,
+/// Hash exactly the bytes read or written, including gzip headers and trailers.
+pub struct HashingIo<T> {
+    inner: T,
     hash: Sha256,
 }
 
-impl<R> HashingReader<R> {
-    pub fn new(input: R) -> Self {
+impl<T> HashingIo<T> {
+    pub fn new(inner: T) -> Self {
         Self {
-            input,
+            inner,
             hash: Sha256::new(),
         }
     }
@@ -64,11 +79,23 @@ impl<R> HashingReader<R> {
     }
 }
 
-impl<R: Read> Read for HashingReader<R> {
+impl<R: Read> Read for HashingIo<R> {
     fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        let count = self.input.read(buffer)?;
+        let count = self.inner.read(buffer)?;
         self.hash.update(&buffer[..count]);
         Ok(count)
+    }
+}
+
+impl<W: Write> Write for HashingIo<W> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        let count = self.inner.write(buffer)?;
+        self.hash.update(&buffer[..count]);
+        Ok(count)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
     }
 }
 

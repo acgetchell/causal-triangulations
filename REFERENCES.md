@@ -189,6 +189,9 @@ temperature and boundary qualifications, is documented under [Action Calibration
 
 ### Block Resampling and Monte Carlo Coverage
 
+- Vehtari, A., A. Gelman, D. Simpson, B. Carpenter and P.-C. Bürkner. “Rank-Normalization, Folding, and Localization: An Improved
+  R-hat for Assessing Convergence of MCMC.” _Bayesian Analysis_ (2021). Rank-based split R-hat and effective sample size diagnostics.
+  [10.1214/20-BA1221](https://doi.org/10.1214/20-BA1221)
 - Künsch, H. R. "The Jackknife and the Bootstrap for General Stationary Observations." _The Annals of Statistics_ 17, no. 3 (1989), 1217–1241.
   Blocks preserve local dependence in resampling a stationary series. [10.1214/aos/1176347265](https://doi.org/10.1214/aos/1176347265)
 - Wilson, E. B. "Probable Inference, the Law of Succession, and Statistical Inference." _Journal of the American Statistical Association_

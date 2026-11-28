@@ -140,8 +140,8 @@ no mixing or ensemble-agreement claim. The external bundle/process contract will
 
 ## Exact transfer-matrix comparison
 
-The independent confirmation used eight fresh chains at each of four torus sizes. All four passed the profile-distribution tests.
-One covariance at 64 triangles missed its point tolerance. The report gives the joint decision and commands to rescore retained measurements.
+The first independent confirmation missed one covariance tolerance at 64 triangles. The final confirmation used eight fresh chains at each of four
+torus sizes and passed all four profile-distribution tests and all 86 labeled-moment criteria. The report gives the joint decision and replay commands.
 See the [results](finite-volume-validation.md#results) and [reproduction instructions](finite-volume-validation.md#reproducing-the-results).
 
 ## Evidence boundaries

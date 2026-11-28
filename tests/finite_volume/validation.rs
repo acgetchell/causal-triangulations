@@ -4,13 +4,21 @@
 
 use super::Error;
 use super::acquire::{self, CONDITIONS, Cohort, Condition, Draw};
-use super::assessment::{assess, collector_identified, declared_design, holm, moments};
+use super::assessment::{
+    BudgetSummary, assess, collector_identified, declared_design, heldout_families_rejected, holm,
+    moments, transfer_summary,
+};
 use super::bootstrap::{MomentCoverage, sample, simultaneous};
-use super::calibration::{Calibration, error_rate_acceptable};
-use super::data::{self, Diagnostic};
+use super::calibration::{
+    BudgetTransfer, Calibration, Generator, GoodnessOfFit, HOLDOUT, PanelScores, TransferTrial,
+    error_rate_acceptable,
+};
+use super::data::{self, Diagnostic, RowError};
 use super::oracle::Oracle;
 use super::probability::PValue;
+use crate::{CdtSimplexCounts, SimplexCountField};
 use la_stack::{BigInt, BigRational};
+use rand::{SeedableRng, rngs::Xoshiro256PlusPlus};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
@@ -213,6 +221,63 @@ fn exact_centering_preserves_rare_visits_above_binary64_integer_precision() -> R
 }
 
 #[test]
+fn collector_identifies_the_failed_geometry_invariant() {
+    let measure = |slices, profile: [usize; 4], vertices, edges, triangles| {
+        let counts =
+            CdtSimplexCounts::try_new(vertices, edges, triangles).expect("positive counts");
+        Draw::from_counts(16_400, slices, profile.into_iter(), counts)
+    };
+    let profile = [3, 4, 4, 4];
+    let draw = measure(4, profile, 15, 45, 30).expect("consistent off-target draw");
+    assert_eq!(
+        (draw.step, draw.vertices, draw.edges, draw.triangles),
+        (16_400, 15, 45, 30)
+    );
+    assert_eq!(draw.profile, [3, 4, 4, 4]);
+    assert!(matches!(
+        measure(8, profile, 15, 45, 30),
+        Err(acquire::Error::TimeExtent {
+            step: 16_400,
+            expected: 8,
+            actual: 4
+        })
+    ));
+    assert!(matches!(
+        measure(4, [3, 2, 4, 4], 13, 39, 26),
+        Err(acquire::Error::ShortLoop {
+            step: 16_400,
+            slice: 1,
+            actual: 2
+        })
+    ));
+    for (vertices, edges, triangles, field, expected, actual) in [
+        (14, 42, 28, SimplexCountField::Vertices, 15, 14),
+        (15, 45, 29, SimplexCountField::Triangles, 30, 29),
+        (15, 44, 30, SimplexCountField::Edges, 45, 44),
+    ] {
+        assert!(matches!(measure(4, profile, vertices, edges, triangles),
+            Err(acquire::Error::CountMismatch { step: 16_400, field: failed, expected: wanted, actual: found })
+            if (failed, wanted, found) == (field, expected, actual)));
+    }
+}
+
+#[test]
+#[cfg(target_pointer_width = "64")]
+fn collector_distinguishes_unrepresentable_measurements_from_bad_geometry() {
+    let oversized = u32::MAX as usize + 1;
+    let counts = CdtSimplexCounts::try_new(15, 45, 30).expect("positive counts");
+    assert!(
+        matches!(Draw::from_counts(32, 4, [3, 4, oversized, 4].into_iter(), counts),
+        Err(acquire::Error::SliceLengthOutOfRange { step: 32, slice: 2, actual, .. }) if actual == oversized)
+    );
+    let counts = CdtSimplexCounts::try_new(15, oversized, 30).expect("positive counts");
+    assert!(
+        matches!(Draw::from_counts(32, 4, [3, 4, 4, 4].into_iter(), counts),
+        Err(acquire::Error::CountOutOfRange { step: 32, field: SimplexCountField::Edges, actual, .. }) if actual == oversized)
+    );
+}
+
+#[test]
 fn malformed_off_sector_geometry_is_rejected_before_conditioning() {
     let c = CONDITIONS[0];
     let mut row = Draw {
@@ -225,9 +290,23 @@ fn malformed_off_sector_geometry_is_rejected_before_conditioning() {
     let support = HashMap::new();
     assert!(matches!(data::count_row(&row, c, 0, &support), Ok(None)));
     row.edges = 44;
-    assert!(data::count_row(&row, c, 0, &support).is_err());
+    assert!(matches!(
+        data::count_row(&row, c, 0, &support),
+        Err(RowError::Field {
+            field: "edges",
+            expected: 45,
+            actual: 44
+        })
+    ));
     row.edges = 45;
-    assert!(data::count_row(&row, c, 1, &support).is_err());
+    assert!(matches!(
+        data::count_row(&row, c, 1, &support),
+        Err(RowError::Field {
+            field: "step",
+            expected: 16_416,
+            actual: 16_400
+        })
+    ));
 }
 
 #[test]
@@ -246,7 +325,7 @@ fn assessment_rejects_an_incomplete_acquisition_before_writing_output() -> Resul
 }
 
 #[test]
-fn acquisition_round_trip_rejects_a_truncated_trace() -> Result<(), Error> {
+fn acquisition_round_trip_binds_diagnostics_and_rejects_corrupt_traces() -> Result<(), Error> {
     let c = Condition {
         draws: 256,
         ..CONDITIONS[0]
@@ -263,8 +342,50 @@ fn acquisition_round_trip_rejects_a_truncated_trace() -> Result<(), Error> {
         assert_eq!(*digest, super::hex(&Sha256::digest(bytes)), "{name}");
     }
     assert_eq!(data.diagnostics.len(), 5);
-    let file = path.join(format!("chain-{}.jsonl.gz", c.first_seed));
-    let trace = std::fs::OpenOptions::new().write(true).open(file)?;
+    let first = format!("chain-{}.jsonl.gz", c.first_seed);
+    let second = format!("chain-{}.jsonl.gz", c.first_seed + 1);
+    let file = path.join(&first);
+    let original = std::fs::read(&file)?;
+    std::fs::copy(path.join(&second), &file)?;
+    assert!(
+        matches!(data::load(&path, c, &oracle), Err(Error::TraceDigest {
+        seed, path: bad_file, expected, actual
+    }) if seed == c.first_seed && bad_file == file && expected == data.hashes[&first] && actual == data.hashes[&second])
+    );
+
+    let manifest_path = path.join("manifest.json");
+    let mut manifest: serde_json::Value = serde_json::from_slice(&std::fs::read(&manifest_path)?)?;
+    for chain in manifest["chains"].as_array_mut().expect("chain list") {
+        chain.as_object_mut().expect("chain entry").remove("sha256");
+    }
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest)?)?;
+    assert!(matches!(
+        data::load(&path, c, &oracle),
+        Err(Error::Invalid(_))
+    ));
+
+    // An archive without hashes must use the rows even when its old scalar results look valid.
+    manifest["schema"] = format!("intrinsic-{}/native-v1", c.folder()).into();
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest)?)?;
+    assert_ne!(data::load(&path, c, &oracle)?.diagnostics, data.diagnostics);
+    std::fs::write(&file, &original)?;
+    assert_eq!(data::load(&path, c, &oracle)?.diagnostics, data.diagnostics);
+
+    let mut rows: Vec<Draw> =
+        serde_json::from_reader(flate2::read::GzDecoder::new(original.as_slice()))?;
+    let expected_edges = u64::from(rows[1].edges);
+    rows[1].edges -= 1;
+    let mut writer = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    serde_json::to_writer(&mut writer, &rows)?;
+    std::fs::write(&file, writer.finish()?)?;
+    assert!(
+        matches!(data::load(&path, c, &oracle), Err(Error::TraceRow {
+        seed, path: bad_file, measurement: 2, source: RowError::Field { field: "edges", expected, actual }
+    }) if seed == c.first_seed && bad_file == file && expected == expected_edges && actual == expected_edges - 1)
+    );
+
+    std::fs::write(&file, original)?;
+    let trace = std::fs::OpenOptions::new().write(true).open(&file)?;
     trace.set_len(trace.metadata()?.len() / 2)?;
     drop(trace);
     assert!(data::load(&path, c, &oracle).is_err());
@@ -405,4 +526,95 @@ fn small_p_values_and_inadequate_information_affect_the_decision() {
     assert!(diagnostic.sufficient());
     diagnostic.bulk_ess = None;
     assert!(!diagnostic.sufficient());
+}
+
+#[test]
+fn holdouts_count_the_union_of_the_two_holm_decisions_once_per_family() {
+    let large = PValue::empirical(199, 199);
+    let small = PValue::empirical(0, 199);
+    let accepted = GoodnessOfFit {
+        raw: large,
+        calibrated: large,
+    };
+    let trial = TransferTrial {
+        p: accepted,
+        radius_missed: false,
+    };
+    let mut tori = CONDITIONS.map(|_| BudgetTransfer {
+        first_null_seed: 0,
+        first_biased_seed: 200,
+        replicates: [199, 1999],
+        null: vec![[trial; 2]; 2 * HOLDOUT],
+        biased: vec![[trial; 2]; 2 * HOLDOUT],
+    });
+    // Raw only, calibrated only, and both on different tori in the same family.
+    tori[0].null[0][1].p.raw = small;
+    tori[1].null[1][1].p.calibrated = small;
+    tori[2].null[2][1].p.raw = small;
+    tori[3].null[2][1].p.calibrated = small;
+    let holdouts = tori.each_ref().map(|torus| {
+        std::array::from_fn(|panel| {
+            let range = panel * HOLDOUT..(panel + 1) * HOLDOUT;
+            PanelScores {
+                null: torus.null[range.clone()]
+                    .iter()
+                    .map(|row| row[1].p)
+                    .collect(),
+                biased: torus.biased[range].iter().map(|row| row[1].p).collect(),
+            }
+        })
+    });
+    assert_eq!(heldout_families_rejected(&holdouts), [3, 0]);
+    for row in &mut tori[2].biased[HOLDOUT..HOLDOUT + 11] {
+        row[1].radius_missed = true;
+    }
+    let panels = transfer_summary(&tori);
+    assert!(panels.iter().flatten().all(BudgetSummary::passed));
+    let counts = serde_json::json!(panels);
+    assert_eq!(counts[0][0]["combined_holm_rejections"], 0);
+    assert_eq!(counts[0][1]["raw_holm_rejections"], 2);
+    assert_eq!(counts[0][1]["calibrated_holm_rejections"], 2);
+    assert_eq!(counts[0][1]["combined_holm_rejections"], 3);
+    tori[2].biased[HOLDOUT + 11][1].radius_missed = true;
+    let panels = transfer_summary(&tori);
+    assert!(panels[1][0].passed());
+    assert!(!panels[1][1].passed());
+    assert_eq!(
+        serde_json::json!(panels)[1][1]["biased_radius_misses"],
+        serde_json::json!([0, 0, 12, 0])
+    );
+}
+
+#[test]
+fn conditioned_information_requires_occupied_blocks_and_varying_slice_indicators()
+-> Result<(), Error> {
+    let c = Condition {
+        draws: 256 * 512,
+        ..CONDITIONS[0]
+    };
+    let oracle = Oracle::new(c)?;
+    let generator = Generator::new(c, &oracle)?;
+    let mut rng = Xoshiro256PlusPlus::seed_from_u64(487);
+    let mut blocks = generator.blocks(&mut rng, false);
+    assert!(data::ConditionedInformation::new(&blocks, c, &oracle).sufficient());
+    for block in &mut blocks[0][49..] {
+        block.clear();
+    }
+    let sparse = data::ConditionedInformation::new(&blocks, c, &oracle);
+    assert_eq!(
+        serde_json::json!(sparse)["occupied_blocks_per_chain"][0],
+        49
+    );
+    assert!(!sparse.sufficient());
+
+    let flat = oracle
+        .profiles
+        .binary_search(&c.start(0))
+        .expect("admissible flat");
+    let blocks = vec![vec![vec![(flat, 256)]; 512]; 8];
+    let constant = data::ConditionedInformation::new(&blocks, c, &oracle);
+    assert!(!constant.sufficient());
+    let json = serde_json::json!(constant);
+    assert!(json["profile_indicators"][0]["bulk_ess"].is_null());
+    Ok(())
 }
